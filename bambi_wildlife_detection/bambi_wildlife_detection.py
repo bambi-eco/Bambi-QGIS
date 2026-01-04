@@ -43,7 +43,7 @@ class BambiWildlifeDetection:
 
         # Declare instance attributes
         self.actions = []
-        self.menu = self.tr('&BAMBI Wildlife Detection')
+        self.menu = self.tr('&Bambi - QGIS Integration')
         self.toolbar = self.iface.addToolBar('BambiWildlifeDetection')
         self.toolbar.setObjectName('BambiWildlifeDetection')
         
@@ -117,16 +117,16 @@ class BambiWildlifeDetection:
         # Add main action to show/hide the dock widget
         self.dock_widget_action = self.add_action(
             icon_path,
-            text=self.tr('BAMBI Wildlife Detection'),
+            text=self.tr('Bambi - QGIS Integration'),
             callback=self.toggle_dock_widget,
             parent=self.iface.mainWindow(),
             checkable=True,
-            status_tip=self.tr('Open BAMBI Wildlife Detection panel'))
+            status_tip=self.tr('Open Bambi - QGIS Integration panel'))
 
     def unload(self):
         """Removes the plugin menu item and icon from QGIS GUI."""
         for action in self.actions:
-            self.iface.removePluginMenu(self.tr('&BAMBI Wildlife Detection'), action)
+            self.iface.removePluginMenu(self.tr('&Bambi - QGIS Integration'), action)
             self.iface.removeToolBarIcon(action)
         
         # Remove the toolbar

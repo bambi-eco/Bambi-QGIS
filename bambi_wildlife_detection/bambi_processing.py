@@ -157,10 +157,10 @@ class BambiProcessor:
                 f"Error: {str(e)}"
             )
             raise RuntimeError(error_msg)
-        
+
     def extract_frames(self, config: Dict[str, Any], progress_fn=None, log_fn=None):
         """Extract frames from drone videos with configurable sample rate.
-        
+
         :param config: Configuration dictionary
         :param progress_fn: Progress callback function
         :param log_fn: Logging callback function
@@ -170,7 +170,7 @@ class BambiProcessor:
         import numpy as np
         from typing import Any, List
         from pyproj import CRS, Transformer
-        
+
         # Import bambi modules
         from bambi.video.calibrated_video_frame_accessor import CalibratedVideoFrameAccessor
         from bambi.webgl.timed_pose_extractor import TimedPoseExtractor
@@ -181,10 +181,10 @@ class BambiProcessor:
         from bambi.airdata.air_data_interpolator import AirDataTimeInterpolator
         from bambi.srt.srt_parser import SrtParser
         from bambi.airdata.air_data_parser import AirDataParser
-        
+
         if log_fn:
             log_fn("Initializing frame extraction...")
-            
+
         target_folder = config["target_folder"]
         video_paths = config["video_paths"]
         srt_paths = config["srt_paths"]
@@ -192,272 +192,102 @@ class BambiProcessor:
         calibration_path = config["calibration_path"]
         camera_name = config.get("camera", "T")
         target_epsg = config.get("target_epsg", 32633)
-        sample_rate = config.get("sample_rate", 1)  # Extract every Nth frame
-        
+        path_to_dem_json = config.get("ortho_dem_metadata_path")
+
         # Create target folder and frames subfolder
         os.makedirs(target_folder, exist_ok=True)
         frames_folder = os.path.join(target_folder, "frames")
         os.makedirs(frames_folder, exist_ok=True)
-        
+
         # Setup coordinate transformer
         input_crs = CRS.from_epsg(4326)
         target_crs = CRS.from_epsg(target_epsg)
+
         rel_transformer = Transformer.from_crs(input_crs, target_crs)
-        
-        # Load calibration
-        if log_fn:
-            log_fn(f"Loading calibration from {calibration_path}")
-            
-        with open(calibration_path, 'r') as f:
+        with open(path_to_dem_json, "r") as f:
+            dem_json = json.load(f)
+
+        origin = dem_json["origin_wgs84"]
+
+        ad_origin = AirDataFrame()
+        ad_origin.latitude = origin["latitude"]
+        ad_origin.longitude = origin["longitude"]
+        ad_origin.altitude = origin["altitude"]
+
+        with open(calibration_path) as f:
             calibration_res = json.load(f)
-            
-        # Get origin from DEM if available
-        dem_path = config.get("dem_path")
-        origin = None
-        dem_origin_data = None
-        
-        if dem_path:
-            dem_json_path = dem_path.replace(".gltf", ".json").replace(".glb", ".json")
-            if os.path.exists(dem_json_path):
-                with open(dem_json_path, 'r') as f:
-                    dem_json = json.load(f)
-                if "origin_wgs84" in dem_json:
-                    dem_origin_data = dem_json["origin_wgs84"]
-                    origin = AirDataFrame()
-                    origin.latitude = dem_origin_data.get("latitude")
-                    origin.longitude = dem_origin_data.get("longitude")
-                    origin.altitude = dem_origin_data.get("altitude", 0)
-                    if log_fn:
-                        log_fn(f"Using origin from DEM: {origin.latitude}, {origin.longitude}")
-        
-        # Create frame accessor
+
+        # prepare the required objects for extracting the video frames
         accessor = CalibratedVideoFrameAccessor(calibration_res)
-        camera = Camera.from_string(camera_name)
-        drone = Drone.M30T
-        
+        extractor = TimedPoseExtractor(
+            accessor,
+            rel_transformer=rel_transformer,
+            camera_name=Camera.from_string(camera_name)
+        )
         if log_fn:
-            log_fn(f"Extracting frames from {len(video_paths)} video(s) with sample rate {sample_rate}...")
-            
-        if progress_fn:
-            progress_fn(5)
-        
-        # Parse SRT files to get frame timestamps
-        srt_parser = SrtParser()
-        all_srt_frames = []
-        frame_to_video = []
-        
-        for vid_idx, srt_path in enumerate(srt_paths):
-            frames = srt_parser.parse(srt_path)
-            from dateutil import tz
-            timezone = tz.gettz('Europe/Vienna')
-            for frame in frames:
-                frame.timestamp = frame.timestamp.replace(tzinfo=timezone)
-            all_srt_frames.extend(frames)
-            frame_to_video.extend([vid_idx] * len(frames))
-        
-        if log_fn:
-            log_fn(f"Parsed {len(all_srt_frames)} SRT frames")
-        
-        # Parse AirData
-        ad_parser = AirDataParser()
-        ad_frames = ad_parser.parse(airdata_path)
-        
-        # Get first SRT timestamp for AirData alignment
-        first_srt_timestamp = all_srt_frames[0].timestamp if all_srt_frames else None
-        
-        if progress_fn:
-            progress_fn(10)
-        
-        # Extract frames with sampling
-        image_files: List[str] = []
-        image_timestamps: List[datetime.datetime] = []
-        sampled_srt_frames: List[Any] = []
-        
-        total_frames = len(all_srt_frames)
-        frames_to_extract = list(range(0, total_frames, sample_rate))
-        
-        if log_fn:
-            log_fn(f"Will extract {len(frames_to_extract)} of {total_frames} frames (sample rate: {sample_rate})")
-        
-        current_video_idx = -1
-        cap = None
-        
-        for extract_idx, frame_idx in enumerate(frames_to_extract):
-            video_idx = frame_to_video[frame_idx]
-            
-            # Open new video if needed
-            if video_idx != current_video_idx:
-                if cap is not None:
-                    cap.release()
-                cap = cv2.VideoCapture(video_paths[video_idx])
-                current_video_idx = video_idx
-                if log_fn:
-                    log_fn(f"Processing video {video_idx + 1}/{len(video_paths)}: {os.path.basename(video_paths[video_idx])}")
-            
-            # Calculate frame position within current video
-            frames_before = sum(1 for i, v in enumerate(frame_to_video[:frame_idx]) if v == video_idx)
-            local_frame_idx = frame_idx - (frame_to_video.index(video_idx) if video_idx in frame_to_video else 0)
-            
-            # Seek to frame
-            cap.set(cv2.CAP_PROP_POS_FRAMES, local_frame_idx)
-            ret, frame = cap.read()
-            
-            if not ret:
-                if log_fn:
-                    log_fn(f"Warning: Could not read frame {frame_idx}")
-                continue
-            
-            # Undistort frame
-            undistorted = accessor.undistort(frame)
-            
-            # Get SRT frame info
-            srt_frame = all_srt_frames[frame_idx]
-            
-            # Save frame
-            filename = f"{len(image_files):06d}-{frame_idx}-{srt_frame.id}.jpg"
-            filepath = os.path.join(frames_folder, filename)
-            cv2.imwrite(filepath, undistorted)
-            
-            image_files.append(filename)
-            image_timestamps.append(srt_frame.timestamp)
-            sampled_srt_frames.append(srt_frame)
-            
-            # Update progress
-            if progress_fn and extract_idx % 20 == 0:
-                progress = 10 + int((extract_idx / len(frames_to_extract)) * 70)
-                progress_fn(min(progress, 80))
-        
-        if cap is not None:
-            cap.release()
-        
-        if progress_fn:
-            progress_fn(80)
-        
-        if log_fn:
-            log_fn(f"Extracted {len(image_files)} frames, building poses.json...")
-        
-        # Interpolate AirData for extracted frame timestamps
-        try:
-            interpolator = AirDataTimeInterpolator(ad_frames)
-            interpolated_frames = interpolator(image_timestamps)
-        except Exception as e:
-            if log_fn:
-                log_fn(f"Warning: AirData interpolation failed: {e}, using SRT data only")
-            interpolated_frames = None
-        
-        # Build origin
-        if origin is not None:
-            origin_transformed = rel_transformer.transform(origin.latitude, origin.longitude)
-            origin_altitude = origin.altitude or 0
-        else:
-            # Use first frame as origin
-            if interpolated_frames and interpolated_frames[0]:
-                origin = AirDataFrame()
-                origin.latitude = interpolated_frames[0].latitude
-                origin.longitude = interpolated_frames[0].longitude
-                origin.altitude = interpolated_frames[0].altitude or 0
-            elif sampled_srt_frames:
-                origin = AirDataFrame()
-                origin.latitude = sampled_srt_frames[0].latitude
-                origin.longitude = sampled_srt_frames[0].longitude
-                origin.altitude = sampled_srt_frames[0].altitude or 0
-            origin_transformed = rel_transformer.transform(origin.latitude, origin.longitude)
-            origin_altitude = origin.altitude or 0
-        
-        # Build poses
-        images_data: List[dict] = []
-        
-        for i, (image_file, timestamp) in enumerate(zip(image_files, image_timestamps)):
-            # Get frame data from interpolated AirData or SRT
-            if interpolated_frames and i < len(interpolated_frames):
-                frame_data = interpolated_frames[i]
-                lat = frame_data.latitude
-                lon = frame_data.longitude
-                alt = frame_data.altitude or 0
-                gimbal_pitch = frame_data.gimbal_pitch or -90
-                compass_heading = frame_data.compass_heading or 0
-            else:
-                srt_frame = sampled_srt_frames[i]
-                lat = srt_frame.latitude
-                lon = srt_frame.longitude
-                alt = srt_frame.altitude or 0
-                gimbal_pitch = getattr(srt_frame, 'gimbal_pitch', -90) or -90
-                compass_heading = getattr(srt_frame, 'compass_heading', 0) or 0
-            
-            frame_coord = rel_transformer.transform(lat, lon)
-            location = [
-                frame_coord[0] - origin_transformed[0],
-                frame_coord[1] - origin_transformed[1],
-                alt - origin_altitude,
-            ]
-            
-            rotation = [
-                (float(gimbal_pitch) + 90) % 360,
-                0,  # roll
-                compass_heading if compass_heading else 0.0,
-            ]
-            
-            current_dict = {
-                "imagefile": f"frames/{image_file}",
-                "location": location,
-                "rotation": rotation,
-                "lat": lat,
-                "lng": lon,
-                "timestamp": timestamp.isoformat() if timestamp else None,
-            }
-            
-            # Add fovy from calibration if available
-            if hasattr(accessor, 'undistortion_parameters') and accessor.undistortion_parameters.fovy:
-                current_dict["fovy"] = (accessor.undistortion_parameters.fovy,)
-            else:
-                current_dict["fovy"] = (50.0,)  # Default FOV
-            
-            images_data.append(current_dict)
-        
-        # Write mask image
-        mask_filename = f"mask_{camera_name.lower()}.png"
-        mask_path = os.path.join(target_folder, mask_filename)
-        try:
-            sr = SensorResolution(drone, camera)
-            mask = accessor.create_distortion_mask(sr.width, sr.height)
-            mask[mask < 255] = 0
-            cv2.imwrite(mask_path, mask)
-        except Exception as e:
-            if log_fn:
-                log_fn(f"Warning: Could not create mask: {e}")
-            mask_filename = None
-        
-        # Build final poses dict
-        poses_result = {
-            "images": images_data,
-            "origin": {
-                "latitude": origin.latitude,
-                "longitude": origin.longitude,
-                "altitude": origin.altitude
-            },
-            "drone": Drone.product_name(drone) if drone else "Unknown",
-            "camera": Camera.fullname(camera) if camera else "Unknown",
-            "samplingRate": sample_rate,
-        }
-        
-        if mask_filename:
-            poses_result["mask"] = mask_filename
-        
-        # Write poses.json
+            log_fn("Extracting frames...")
+        # now lets start the hard video frame mining
+        extractor.extract(
+            frames_folder, airdata_path, video_paths, srt_paths, origin=ad_origin, include_gps=True
+        )
+        if os.path.exists(os.path.join(target_folder, "poses.json")):
+            os.remove(os.path.join(target_folder, "poses.json"))
+        if os.path.exists(os.path.join(target_folder, "mask_T.png")):
+            os.remove(os.path.join(target_folder, "mask_T.png"))
+        if os.path.exists(os.path.join(target_folder, "mask_W.png")):
+            os.remove(os.path.join(target_folder, "mask_W.png"))
+
+        os.rename(os.path.join(frames_folder, "poses.json"), os.path.join(target_folder, "poses.json"))
+        if os.path.exists(os.path.join(frames_folder, "mask_T.png")):
+            os.rename(os.path.join(frames_folder, "mask_T.png"), os.path.join(target_folder, "mask_T.png"))
+        if os.path.exists(os.path.join(frames_folder, "mask_W.png")):
+            os.rename(os.path.join(frames_folder, "mask_W.png"), os.path.join(target_folder, "mask_W.png"))
+
+        sample_rate = config["sample_rate"]
+        skip = config.get("skip", 0)
+        limit = config.get("limit", -1)
+
         poses_file = os.path.join(target_folder, "poses.json")
-        with open(poses_file, 'w', encoding='utf-8') as f:
-            json.dump(poses_result, f, indent=2)
-        
-        if progress_fn:
-            progress_fn(95)
-        
-        if log_fn:
-            log_fn(f"Successfully extracted {len(image_files)} frames with sample rate {sample_rate}")
-            log_fn(f"Output: {poses_file}")
-        
-        if progress_fn:
-            progress_fn(100)
-    
+        with open(poses_file, 'r') as f:
+            poses = json.load(f)
+
+        images = poses.get("images", [])
+        new_images = []
+        kept_count = 0
+
+        for idx, image_info in enumerate(images):
+            imagefile = image_info.get("imagefile")
+            if not imagefile:
+                continue
+
+            image_path = os.path.join(target_folder, "frames", imagefile)
+
+            if not os.path.exists(image_path):
+                if log_fn:
+                    log_fn(f"Warning: Image not found: {image_path}")
+                continue
+
+            # Skip initial frames
+            if idx < skip:
+                os.remove(image_path)
+                continue
+
+            # Check if we've hit the limit
+            if limit > 0 and kept_count >= limit:
+                os.remove(image_path)
+                continue
+
+            # Apply sample rate (relative to post-skip index)
+            if (idx - skip) % sample_rate != 0:
+                os.remove(image_path)
+            else:
+                new_images.append(image_info)
+                kept_count += 1
+
+        poses["images"] = new_images
+        with open(poses_file, 'w') as f:
+            json.dump(poses, f)
+
     def run_flight_route(self, config: Dict[str, Any], progress_fn=None, log_fn=None):
         """Generate a flight route polyline layer from camera positions.
         
@@ -698,7 +528,7 @@ class BambiProcessor:
                 if not imagefile:
                     continue
                     
-                image_path = os.path.join(target_folder, imagefile)
+                image_path = os.path.join(target_folder, "frames", imagefile)
                 log_fn(f"Detecting frame {idx} / {total_frames}: {image_path}")
                 
                 if not os.path.exists(image_path):
@@ -2448,7 +2278,7 @@ class BambiProcessor:
         
         for i, img_info in enumerate(valid_images):
             image_file = img_info.get("imagefile")
-            image_path = os.path.join(target_folder, image_file)
+            image_path = os.path.join(target_folder, "frames", image_file)
             
             if not os.path.exists(image_path):
                 if log_fn and i < 3:
@@ -3044,7 +2874,7 @@ class BambiProcessor:
                 # Get image info
                 img_info = all_images[frame_idx]
                 image_file = img_info.get("imagefile")
-                image_path = os.path.join(target_folder, image_file)
+                image_path = os.path.join(target_folder, "frames", image_file)
                 
                 if not os.path.exists(image_path):
                     if log_fn and i < 5:

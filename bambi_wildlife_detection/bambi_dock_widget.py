@@ -9,6 +9,7 @@ This module contains the main dock widget UI for the plugin.
 import os
 import json
 from typing import Optional, Dict, Any
+import sys
 
 from qgis.PyQt.QtCore import Qt, QThread, pyqtSignal
 from qgis.PyQt.QtWidgets import (
@@ -38,7 +39,7 @@ class BambiDockWidget(QDockWidget):
         :param iface: QGIS interface instance
         :param parent: Parent widget
         """
-        super().__init__("BAMBI Wildlife Detection", parent)
+        super().__init__("Bambi - QGIS Integration", parent)
         self.iface = iface
         self.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
         
@@ -203,6 +204,18 @@ class BambiDockWidget(QDockWidget):
         self.sample_rate_spin.setValue(10)
         self.sample_rate_spin.setToolTip("Extract every Nth frame")
         frame_layout.addRow("Sample Rate:", self.sample_rate_spin)
+
+        self.skip_spin = QSpinBox()
+        self.skip_spin.setRange(0, 2147483647)
+        self.skip_spin.setValue(0)
+        self.skip_spin.setToolTip("Skip n frames")
+        frame_layout.addRow("Skip frames:", self.skip_spin)
+
+        self.limit_spin = QSpinBox()
+        self.limit_spin.setRange(-1, 2147483647)
+        self.limit_spin.setValue(-1)
+        self.limit_spin.setToolTip("Limit to n frames")
+        frame_layout.addRow("Limit frames:", self.limit_spin)
         
         self.camera_combo = QComboBox()
         self.camera_combo.addItems(["T - Thermal", "W - Wide"])
@@ -296,6 +309,13 @@ class BambiDockWidget(QDockWidget):
         correction_layout.addRow(rot_row)
         
         correction_tab_layout.addWidget(correction_group)
+        
+        # Save correction button
+        save_correction_btn = QPushButton("Save Correction to JSON...")
+        save_correction_btn.setToolTip("Save the current translation and rotation values to a JSON file")
+        save_correction_btn.clicked.connect(self.save_correction_values)
+        correction_tab_layout.addWidget(save_correction_btn)
+        
         correction_tab_layout.addStretch()
         
         # ----- Sub-Tab 3: Tracking -----
@@ -917,6 +937,8 @@ class BambiDockWidget(QDockWidget):
             
             # Frame extraction
             "sample_rate": self.sample_rate_spin.value(),
+            "skip": self.skip_spin.value(),
+            "limit": self.limit_spin.value(),
             "camera": "T" if self.camera_combo.currentIndex() == 0 else "W",
             
             # Detection
@@ -1173,6 +1195,70 @@ class BambiDockWidget(QDockWidget):
             
         except Exception as e:
             self.log(f"Warning: Could not load correction.json: {e}")
+    
+    def save_correction_values(self):
+        """Save correction values to a JSON file.
+        
+        Saves the current translation and rotation values from the UI
+        to a user-selected JSON file.
+        """
+        # Get save file path
+        default_path = ""
+        target_folder = self.target_folder_edit.text()
+        if target_folder and os.path.exists(target_folder):
+            default_path = os.path.join(target_folder, "correction.json")
+        elif self.correction_path_edit.text():
+            default_path = self.correction_path_edit.text()
+        
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, 
+            "Save Correction JSON", 
+            default_path, 
+            "JSON Files (*.json)"
+        )
+        
+        if not file_path:
+            return  # User cancelled
+        
+        # Ensure .json extension
+        if not file_path.lower().endswith('.json'):
+            file_path += '.json'
+        
+        # Build correction data
+        correction_data = {
+            "translation": {
+                "x": self.trans_x_spin.value(),
+                "y": self.trans_y_spin.value(),
+                "z": self.trans_z_spin.value()
+            },
+            "rotation": {
+                "x": self.rot_x_spin.value(),
+                "y": self.rot_y_spin.value(),
+                "z": self.rot_z_spin.value()
+            }
+        }
+        
+        try:
+            with open(file_path, 'w') as f:
+                json.dump(correction_data, f, indent=4)
+            
+            # Update the correction path field
+            self.correction_path_edit.setText(file_path)
+            
+            self.log(f"Saved correction values to: {os.path.basename(file_path)}")
+            QMessageBox.information(
+                self, 
+                "Success", 
+                f"Correction values saved to:\n{file_path}"
+            )
+            
+        except Exception as e:
+            self.log(f"Error saving correction.json: {e}")
+            QMessageBox.critical(
+                self, 
+                "Error", 
+                f"Failed to save correction file:\n{str(e)}"
+            )
             
     def browse_target_folder(self):
         folder = QFileDialog.getExistingDirectory(
