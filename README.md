@@ -1,4 +1,4 @@
-# BAMBI Wildlife Detection QGIS Plugin
+# BAMBI QGIS Plugin
 
 [![QGIS](https://img.shields.io/badge/QGIS-3.22+-green.svg)](https://qgis.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/license/mit)
