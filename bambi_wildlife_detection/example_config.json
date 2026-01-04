@@ -1,0 +1,78 @@
+{
+    "description": "Example configuration for BAMBI Wildlife Detection plugin",
+    
+    "inputs": {
+        "video_paths": [
+            "/path/to/video1.MP4",
+            "/path/to/video2.MP4"
+        ],
+        "srt_paths": [
+            "/path/to/video1.SRT",
+            "/path/to/video2.SRT"
+        ],
+        "airdata_path": "/path/to/air_data.csv",
+        "dem_path": "/path/to/dem_mesh.gltf",
+        "calibration_path": "/path/to/calibration.json",
+        "target_folder": "/path/to/output"
+    },
+    
+    "frame_extraction": {
+        "sample_rate": 10,
+        "camera": "T"
+    },
+    
+    "detection": {
+        "model_path": null,
+        "min_confidence": 0.5,
+        "labels": ["animal"]
+    },
+    
+    "correction": {
+        "translation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+        },
+        "rotation": {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+        }
+    },
+    
+    "tracking": {
+        "_comment": "Tracker backend options: builtin, boxmot_deepocsort, boxmot_botsort, boxmot_strongsort, boxmot_ocsort, boxmot_bytetrack, georef_native, georef_hybrid",
+        "tracker_id": "builtin",
+        
+        "_reid_comment": "ReID model options: osnet (standard), wildlife (HuggingFace), custom (provide custom_reid_path)",
+        "reid_model": "osnet",
+        "custom_reid_path": null,
+        
+        "_params_comment": "JSON string with tracker-specific parameters. Only valid parameters are forwarded.",
+        "tracker_params_json": "{\"max_age\": 30}",
+        
+        "_builtin_comment": "Parameters below are for the built-in tracker only",
+        "iou_threshold": 0.3,
+        "max_age": -1,
+        "max_center_distance": 0.2,
+        "tracker_mode": "HUNGARIAN",
+        "class_aware": true,
+        "interpolate": true
+    },
+    
+    "orthomosaic": {
+        "ground_resolution": 0.05,
+        "dem_metadata_path": null,
+        "blend_mode": "integral",
+        "use_all_frames": true,
+        "start_frame": null,
+        "end_frame": null,
+        "crop_to_content": true,
+        "create_overviews": true,
+        "max_tile_size": 8192
+    },
+    
+    "output": {
+        "target_epsg": 32633
+    }
+}

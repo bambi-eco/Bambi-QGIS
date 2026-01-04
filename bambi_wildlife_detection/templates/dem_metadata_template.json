@@ -1,0 +1,19 @@
+{
+    "description": "Example DEM metadata file (accompanies the GLTF mesh)",
+    
+    "origin": [500000.0, 5200000.0, 0.0],
+    
+    "origin_wgs84": {
+        "latitude": 47.0,
+        "longitude": 14.0,
+        "altitude": 500.0
+    },
+    
+    "crs": "EPSG:32633",
+    
+    "notes": {
+        "origin_description": "Local coordinate system origin [x, y, z] in the target CRS",
+        "origin_wgs84_description": "Same origin in WGS84 coordinates",
+        "mesh_coordinates": "The GLTF mesh vertices are in local coordinates relative to origin"
+    }
+}

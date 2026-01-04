@@ -1,0 +1,25 @@
+[general]
+name=BAMBI Wildlife Detection
+qgisMinimumVersion=3.22
+description=Detect and track wildlife in drone thermal videos with geo-referencing
+version=1.0.0
+author=Christoph Praschl
+email=christoph.praschl@fh-hagenberg.at
+
+about=A comprehensive QGIS plugin for wildlife detection and tracking in drone videos.
+    Features include:
+    - Frame extraction from drone videos with configurable sample rate
+    - Animal detection using YOLO models (auto-download from HuggingFace)
+    - Geo-referencing of detections using DEM and camera metadata
+    - Multi-object tracking with configurable parameters
+    - Automatic creation of polygon layers for tracks in QGIS
+
+tracker=https://github.com/cpraschl/bambi-qgis-plugin/issues
+repository=https://github.com/cpraschl/bambi-qgis-plugin
+tags=wildlife,detection,tracking,drone,thermal,YOLO,geo-referencing
+
+homepage=https://github.com/cpraschl/bambi-qgis-plugin
+category=Analysis
+icon=icons/icon.png
+experimental=True
+deprecated=False

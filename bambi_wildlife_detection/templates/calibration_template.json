@@ -1,0 +1,19 @@
+{
+    "description": "Example camera calibration file for thermal camera",
+    "camera": "DJI M30T Thermal",
+    
+    "mtx": [
+        [500.0, 0.0, 320.0],
+        [0.0, 500.0, 256.0],
+        [0.0, 0.0, 1.0]
+    ],
+    
+    "dist": [0.0, 0.0, 0.0, 0.0, 0.0],
+    
+    "notes": {
+        "mtx_description": "Camera intrinsic matrix [[fx, 0, cx], [0, fy, cy], [0, 0, 1]]",
+        "dist_description": "Distortion coefficients [k1, k2, p1, p2, k3]",
+        "fx_fy": "Focal lengths in pixels",
+        "cx_cy": "Principal point (optical center) in pixels"
+    }
+}
