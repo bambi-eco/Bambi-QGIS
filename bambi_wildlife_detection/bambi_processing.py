@@ -604,13 +604,27 @@ class BambiProcessor:
         with open(poses_file, 'r') as f:
             poses = json.load(f)
             
-        # Get input resolution from first image
+        # Get input resolution from first extracted frame
+        input_resolution = None
         first_image = poses["images"][0]
-        if "fovy" in first_image:
-            # Assuming square images from calibration
-            input_resolution = Resolution(512, 512)  # Will be updated from actual images
-        else:
-            input_resolution = Resolution(512, 512)
+        first_image_file = first_image.get("imagefile", "")
+        if first_image_file:
+            first_image_path = os.path.join(target_folder, "frames", first_image_file)
+            if os.path.exists(first_image_path):
+                import cv2
+                img = cv2.imread(first_image_path)
+                if img is not None:
+                    input_resolution = Resolution(img.shape[1], img.shape[0])
+                    if log_fn:
+                        log_fn(f"Input resolution from frame: {img.shape[1]}x{img.shape[0]}")
+        
+        # Fallback to config or default
+        if input_resolution is None:
+            res_width = config.get("input_resolution_width", 640)
+            res_height = config.get("input_resolution_height", 512)
+            input_resolution = Resolution(res_width, res_height)
+            if log_fn:
+                log_fn(f"Using configured resolution: {res_width}x{res_height}")
             
         # Load detections
         detections_file = os.path.join(target_folder, "detections", "detections.txt")
@@ -796,16 +810,21 @@ class BambiProcessor:
         with open(poses_file, 'r') as f:
             poses = json.load(f)
             
-        # Get input resolution from first image
-        first_image_path = os.path.join(target_folder, poses["images"][0].get("imagefile", ""))
-        if os.path.exists(first_image_path):
-            img = cv2.imread(first_image_path)
-            if img is not None:
-                input_resolution = Resolution(img.shape[1], img.shape[0])
-            else:
-                input_resolution = Resolution(512, 512)
-        else:
-            input_resolution = Resolution(512, 512)
+        # Get input resolution from first extracted frame
+        input_resolution = None
+        first_image_file = poses["images"][0].get("imagefile", "")
+        if first_image_file:
+            first_image_path = os.path.join(target_folder, "frames", first_image_file)
+            if os.path.exists(first_image_path):
+                img = cv2.imread(first_image_path)
+                if img is not None:
+                    input_resolution = Resolution(img.shape[1], img.shape[0])
+        
+        # Fallback to config or default
+        if input_resolution is None:
+            res_width = config.get("input_resolution_width", 640)
+            res_height = config.get("input_resolution_height", 512)
+            input_resolution = Resolution(res_width, res_height)
             
         if log_fn:
             log_fn(f"Input resolution: {input_resolution.width}x{input_resolution.height}")
@@ -1309,7 +1328,7 @@ class BambiProcessor:
         reid_model_str = config.get("reid_model", "osnet")
         custom_reid_path = config.get("custom_reid_path", "")
         tracker_params_json = config.get("tracker_params_json", "")
-        interpolate = config.get("interpolate", True)
+        interpolate = False # config.get("interpolate", True)
         
         # Map ReID model string to enum
         reid_model_map = {
