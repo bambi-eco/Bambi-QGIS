@@ -39,29 +39,6 @@ A comprehensive QGIS plugin for detecting and tracking wildlife in drone thermal
 - **Full QGIS Integration** — Automatically add all outputs as styled layers to QGIS
 
 ---
-
-## Screenshots
-
-### Plugin Interface
-
-![Input Tab](images/input_tab.png)
-
-![Configuration Tab](images/config_tab.png)
-
-![Processing Tab](images/processing_tab.png)
-
-### Output Examples
-
-![Detection Results](images/detection_results.png)
-*<!-- TODO: Add screenshot showing detection bounding boxes on thermal image -->*
-
-![Track Visualization](images/tracks_qgis.png)
-*<!-- TODO: Add screenshot of animal tracks displayed in QGIS -->*
-
-![Orthomosaic Output](images/orthomosaic.png)
-
----
-
 ## Requirements
 
 ### Data Requirements
@@ -82,14 +59,14 @@ A comprehensive QGIS plugin for detecting and tracking wildlife in drone thermal
 The plugin requires the **BAMBI Detection Framework** and the **ALFS-PY** framework. Install them using pip within the **OSGeo4W Shell** (Windows) or your QGIS Python environment:
 
 ```bash
-# Install BAMBI Detection Framework (required)
-pip install git+https://github.com/bambi-eco/bambi_detection.git
-
 # Install ALFS-PY Framework (required)
 pip install git+https://github.com/bambi-eco/alfs_py.git
+
+# Install BAMBI Detection Framework (required)
+pip install git+https://github.com/bambi-eco/bambi_detection.git
 ```
 
-Additional dependencies (typically installed automatically):
+Additional dependencies (installed automatically via above dependencies):
 
 ```bash
 pip install ultralytics          # YOLO detection
@@ -178,6 +155,16 @@ You need the following files for a complete processing workflow:
 | DEM (GLTF) | `.gltf` | Digital Elevation Model with metadata JSON |
 | Calibration | `.json` | Camera intrinsic parameters |
 
+![Input Tab](images/input_tab.png)
+
+---
+
+## Configuration
+
+Before starting the actual processing, you can set different configurations like sample rates, skip or limit frames, as well as correction factors or tracking settings.
+
+![Configuration Tab](images/config_tab.png)
+
 ---
 
 ## Processing Pipeline
@@ -198,6 +185,8 @@ Creates a polyline showing the drone's flight path from extracted camera positio
 
 **Outputs:** `flight_route.geojson` — can be added to QGIS as a vector layer
 
+![Track Visualization](images/route.png)
+
 ### Step 3: Detect Animals
 
 Runs YOLO-based detection on all extracted frames. The default model is automatically downloaded from HuggingFace.
@@ -210,17 +199,27 @@ Projects pixel-space detections to real-world coordinates using the DEM.
 
 **Outputs:** `georeferenced/georeferenced.txt` with world coordinates
 
+![Detection Results](images/detection_results.png)
+
 ### Step 5: Track Animals
 
 Associates detections across frames into continuous tracks.
 
 **Outputs:** `tracks/tracks.csv` with track IDs and trajectories
 
+![Track Visualization](images/tracks_qgis.png)
+
 ### Step 6: Calculate Field of View
 
-Computes the camera footprint polygon for each frame.
+Computes the camera footprint polygon for each frame or for the whole flight.
 
 **Outputs:** `fov/` folder with per-frame and merged FoV polygons
+
+![Track Visualization](images/fov.png)
+
+![Track Visualization](images/flight_fov.png)
+
+
 
 ### Step 7: Generate Orthomosaic
 
@@ -228,11 +227,15 @@ Creates a georeferenced orthomosaic by projecting all frames onto the DEM.
 
 **Outputs:** `orthomosaic/orthomosaic.tif` (Cloud-Optimized GeoTIFF)
 
+![Orthomosaic Output](images/orthomosaic.png)
+
 ### Step 8: Export Frames as GeoTIFF
 
 Exports individual frames as georeferenced GeoTIFFs for detailed analysis.
 
 **Outputs:** `geotiffs/` folder with per-frame GeoTIFFs
+
+![Orthomosaic Output](images/geotiff.png)
 
 ---
 
@@ -366,7 +369,8 @@ target_folder/
 │   ├── frame_000010.jpg
 │   └── ...
 ├── poses.json                 # Camera poses for each frame
-├── flight_route.geojson       # Drone flight path
+├── flight_route       
+│   └── flight_route.geojson   # Drone flight path
 ├── detections/
 │   └── detections.txt         # Raw YOLO detections
 ├── georeferenced/
@@ -383,12 +387,13 @@ target_folder/
 │   └── ...
 └── models/
     └── thermal_animal_detector.pt
+    └── osnet_x0_5_bambi_thermal_omni.pt
 ```
 
 ---
 ## Citation
 
-If you use this framework in your research, please cite:
+If you use this plugin in your research, please cite:
 
 ```bibtex
 @Article{praschlGeoReferencedTracking,
@@ -414,8 +419,8 @@ See [LICENSE](LICENSE) for details.
 
 ### Dependencies
 
-- [BAMBI Detection Framework](https://github.com/bambi-eco/bambi_detection)
 - [ALFS-PY Framework](https://github.com/bambi-eco/alfs_py)
+- [BAMBI Detection Framework](https://github.com/bambi-eco/bambi_detection)
 - [Ultralytics YOLO](https://github.com/ultralytics/ultralytics)
 - [BoxMOT](https://github.com/mikel-brostrom/boxmot) (optional)
 - [Geo-Referenced Tracking](https://github.com/bambi-eco/Geo-Referenced-Tracking) (optional)

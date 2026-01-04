@@ -1719,7 +1719,13 @@ class BambiDockWidget(QDockWidget):
         self.refresh_status_btn.setEnabled(enabled)
         
     def add_tracks_to_qgis(self):
-        """Add tracked animals as polygon layers to QGIS."""
+        """Add tracked animals as polyline paths with final bounding box to QGIS.
+        
+        Visualization shows:
+        - A polyline connecting all bounding box centers (movement path)
+        - Only the final bounding box as a polygon
+        - Polyline rendered above polygon for visibility
+        """
         config = self.get_config()
         tracks_folder = os.path.join(config["target_folder"], "tracks")
         
@@ -1754,7 +1760,44 @@ class BambiDockWidget(QDockWidget):
             root = QgsProject.instance().layerTreeRoot()
             group = root.addGroup("BAMBI Wildlife Tracks")
             
+            # Create combined layers for all tracks
+            # Final positions layer (polygons) - added first so it renders below
+            final_pos_layer = QgsVectorLayer(
+                "Polygon?crs=" + target_crs.authid(), 
+                "Final Positions", 
+                "memory"
+            )
+            final_pos_provider = final_pos_layer.dataProvider()
+            final_pos_provider.addAttributes([
+                QgsField("track_id", QVariant.Int),
+                QgsField("source_file", QVariant.String),
+                QgsField("frame", QVariant.Int),
+                QgsField("confidence", QVariant.Double),
+                QgsField("class_id", QVariant.Int),
+                QgsField("num_detections", QVariant.Int)
+            ])
+            final_pos_layer.updateFields()
+            
+            # Track paths layer (polylines) - added second so it renders above
+            paths_layer = QgsVectorLayer(
+                "LineString?crs=" + target_crs.authid(), 
+                "Track Paths", 
+                "memory"
+            )
+            paths_provider = paths_layer.dataProvider()
+            paths_provider.addAttributes([
+                QgsField("track_id", QVariant.Int),
+                QgsField("source_file", QVariant.String),
+                QgsField("start_frame", QVariant.Int),
+                QgsField("end_frame", QVariant.Int),
+                QgsField("num_detections", QVariant.Int),
+                QgsField("avg_confidence", QVariant.Double)
+            ])
+            paths_layer.updateFields()
+            
             total_tracks = 0
+            final_pos_features = []
+            path_features = []
             
             for track_file in track_files:
                 tracks = self.load_tracks_from_csv(track_file)
@@ -1767,59 +1810,81 @@ class BambiDockWidget(QDockWidget):
                 for track_id, detections in tracks.items():
                     if len(detections) < 2:
                         continue  # Skip single-detection tracks
-                        
-                    # Create polygon layer for this track
-                    layer_name = f"Track_{file_basename}_{track_id}"
-                    layer = QgsVectorLayer("Polygon?crs=" + target_crs.authid(), layer_name, "memory")
                     
-                    provider = layer.dataProvider()
+                    # Sort detections by frame to ensure proper path order
+                    detections_sorted = sorted(detections, key=lambda d: d['frame'])
                     
-                    # Add fields
-                    provider.addAttributes([
-                        QgsField("track_id", QVariant.Int),
-                        QgsField("frame", QVariant.Int),
-                        QgsField("confidence", QVariant.Double),
-                        QgsField("class_id", QVariant.Int),
-                        QgsField("interpolated", QVariant.Int)
+                    # Calculate bounding box centers for the path
+                    center_points = []
+                    for det in detections_sorted:
+                        center_x = (det['x1'] + det['x2']) / 2.0
+                        center_y = (det['y1'] + det['y2']) / 2.0
+                        center_points.append(QgsPointXY(center_x, center_y))
+                    
+                    # Create polyline feature for track path
+                    path_feat = QgsFeature()
+                    path_feat.setGeometry(QgsGeometry.fromPolylineXY(center_points))
+                    
+                    # Calculate average confidence
+                    avg_conf = sum(d['confidence'] for d in detections_sorted) / len(detections_sorted)
+                    
+                    path_feat.setAttributes([
+                        track_id,
+                        file_basename,
+                        detections_sorted[0]['frame'],  # start frame
+                        detections_sorted[-1]['frame'],  # end frame
+                        len(detections_sorted),
+                        round(avg_conf, 4)
                     ])
-                    layer.updateFields()
+                    path_features.append(path_feat)
                     
-                    # Add features (bounding boxes as polygons)
-                    features = []
-                    for det in detections:
-                        feat = QgsFeature()
-                        
-                        # Create polygon from bounding box
-                        points = [
-                            QgsPointXY(det['x1'], det['y1']),
-                            QgsPointXY(det['x2'], det['y1']),
-                            QgsPointXY(det['x2'], det['y2']),
-                            QgsPointXY(det['x1'], det['y2']),
-                            QgsPointXY(det['x1'], det['y1'])  # Close the polygon
-                        ]
-                        feat.setGeometry(QgsGeometry.fromPolygonXY([points]))
-                        
-                        feat.setAttributes([
-                            track_id,
-                            det['frame'],
-                            det['confidence'],
-                            det['class_id'],
-                            det.get('interpolated', 0)
-                        ])
-                        features.append(feat)
-                        
-                    provider.addFeatures(features)
-                    layer.updateExtents()
+                    # Create polygon feature for final bounding box only
+                    final_det = detections_sorted[-1]
+                    final_feat = QgsFeature()
                     
-                    # Add layer to project and group
-                    QgsProject.instance().addMapLayer(layer, False)
-                    group.addLayer(layer)
+                    points = [
+                        QgsPointXY(final_det['x1'], final_det['y1']),
+                        QgsPointXY(final_det['x2'], final_det['y1']),
+                        QgsPointXY(final_det['x2'], final_det['y2']),
+                        QgsPointXY(final_det['x1'], final_det['y2']),
+                        QgsPointXY(final_det['x1'], final_det['y1'])  # Close the polygon
+                    ]
+                    final_feat.setGeometry(QgsGeometry.fromPolygonXY([points]))
+                    
+                    final_feat.setAttributes([
+                        track_id,
+                        file_basename,
+                        final_det['frame'],
+                        final_det['confidence'],
+                        final_det['class_id'],
+                        len(detections_sorted)
+                    ])
+                    final_pos_features.append(final_feat)
+                    
                     total_tracks += 1
+            
+            # Add features to layers
+            final_pos_provider.addFeatures(final_pos_features)
+            final_pos_layer.updateExtents()
+            
+            paths_provider.addFeatures(path_features)
+            paths_layer.updateExtents()
+            
+            # Add layers to project and group
+            # Order matters: first added = rendered below, last added = rendered above
+            QgsProject.instance().addMapLayer(final_pos_layer, False)
+            group.addLayer(final_pos_layer)
+            
+            QgsProject.instance().addMapLayer(paths_layer, False)
+            group.addLayer(paths_layer)
+            
+            # Apply default styling
+            self._style_track_layers(final_pos_layer, paths_layer)
                     
-            self.log(f"Added {total_tracks} track layers to QGIS")
+            self.log(f"Added {total_tracks} tracks to QGIS (paths + final positions)")
             self.update_status("add_layers", "🟢 Completed")
             
-            # Zoom to tracks extent
+            # Refresh canvas
             if total_tracks > 0:
                 self.iface.mapCanvas().refresh()
                 
@@ -1827,6 +1892,43 @@ class BambiDockWidget(QDockWidget):
             self.log(f"Error adding layers: {str(e)}")
             self.update_status("add_layers", "🔴 Error")
             QMessageBox.critical(self, "Error", f"Failed to add tracks: {str(e)}")
+    
+    def _style_track_layers(self, final_pos_layer, paths_layer):
+        """Apply default styling to track visualization layers.
+        
+        :param final_pos_layer: Polygon layer with final bounding boxes
+        :param paths_layer: Line layer with track paths
+        """
+        from qgis.core import (
+            QgsSymbol, QgsFillSymbol, QgsLineSymbol,
+            QgsSingleSymbolRenderer
+        )
+        
+        try:
+            # Style final positions (semi-transparent red fill)
+            final_symbol = QgsFillSymbol.createSimple({
+                'color': '255,100,100,100',  # Semi-transparent red
+                'outline_color': '255,0,0,255',  # Solid red outline
+                'outline_width': '0.5'
+            })
+            final_pos_layer.setRenderer(QgsSingleSymbolRenderer(final_symbol))
+            
+            # Style track paths (bold colored line)
+            path_symbol = QgsLineSymbol.createSimple({
+                'color': '0,100,255,255',  # Blue
+                'width': '1.0',
+                'capstyle': 'round',
+                'joinstyle': 'round'
+            })
+            paths_layer.setRenderer(QgsSingleSymbolRenderer(path_symbol))
+            
+            # Trigger repaint
+            final_pos_layer.triggerRepaint()
+            paths_layer.triggerRepaint()
+            
+        except Exception as e:
+            # Styling is optional, don't fail if it doesn't work
+            self.log(f"Note: Could not apply default styling: {e}")
             
     def load_tracks_from_csv(self, csv_path: str) -> Dict[int, list]:
         """Load tracks from a CSV file."""

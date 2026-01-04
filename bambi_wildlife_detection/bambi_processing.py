@@ -1328,7 +1328,7 @@ class BambiProcessor:
         reid_model_str = config.get("reid_model", "osnet")
         custom_reid_path = config.get("custom_reid_path", "")
         tracker_params_json = config.get("tracker_params_json", "")
-        interpolate = False # config.get("interpolate", True)
+        interpolate = config.get("interpolate", True)
         
         # Map ReID model string to enum
         reid_model_map = {
