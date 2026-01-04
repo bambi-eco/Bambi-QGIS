@@ -48,8 +48,25 @@ class BambiDockWidget(QDockWidget):
         self.worker = None
         self.worker_thread = None
         
+        # Track if initial check has been done
+        self._initial_check_done = False
+        
         # Setup UI
         self.setup_ui()
+    
+    def showEvent(self, event):
+        """Handle widget show event to check for existing layers."""
+        super().showEvent(event)
+        
+        # Check for existing QGIS layers when first shown
+        if not self._initial_check_done:
+            self._initial_check_done = True
+            self._check_existing_qgis_layers()
+            
+            # Also check target folder if already set
+            target_folder = self.target_folder_edit.text().strip()
+            if target_folder and os.path.isdir(target_folder):
+                self._check_existing_outputs(target_folder)
         
     def setup_ui(self):
         """Setup the user interface."""
@@ -159,6 +176,7 @@ class BambiDockWidget(QDockWidget):
         
         self.target_folder_edit = QLineEdit()
         self.target_folder_edit.setPlaceholderText("Target folder for all outputs")
+        self.target_folder_edit.editingFinished.connect(self._on_target_folder_changed)
         target_browse_btn = QPushButton("Browse...")
         target_browse_btn.clicked.connect(self.browse_target_folder)
         target_row = QHBoxLayout()
@@ -759,6 +777,12 @@ class BambiDockWidget(QDockWidget):
         self.progress_bar.setValue(0)
         processing_layout.addWidget(self.progress_bar)
         
+        # Refresh Status button
+        self.refresh_status_btn = QPushButton("🔄 Refresh Status")
+        self.refresh_status_btn.setToolTip("Check for existing outputs and QGIS layers to update status indicators")
+        self.refresh_status_btn.clicked.connect(self._refresh_all_statuses)
+        processing_layout.addWidget(self.refresh_status_btn)
+        
         # Log output
         log_group = QGroupBox("Log Output")
         log_layout = QVBoxLayout(log_group)
@@ -1115,6 +1139,9 @@ class BambiDockWidget(QDockWidget):
                         self.log(f"Created target folder: {qgis_folder}")
                     except Exception as e:
                         self.log(f"Warning: Could not create qgis folder: {e}")
+                else:
+                    # Check for existing outputs if folder already exists
+                    self._check_existing_outputs(qgis_folder)
                 
     def browse_srts(self):
         files, _ = QFileDialog.getOpenFileNames(
@@ -1265,6 +1292,124 @@ class BambiDockWidget(QDockWidget):
             self, "Select Target Folder")
         if folder:
             self.target_folder_edit.setText(folder)
+            self._check_existing_outputs(folder)
+            
+    def _check_existing_outputs(self, target_folder: str):
+        """Check for existing output subfolders and update status labels accordingly.
+        
+        This method checks if the target folder and its expected subfolders exist,
+        and marks the corresponding processing steps as 'Completed' if outputs are found.
+        
+        :param target_folder: Path to the target folder
+        """
+        if not target_folder or not os.path.isdir(target_folder):
+            return
+            
+        # Define the mapping between subfolders and their corresponding status updates
+        # Format: (subfolder_name, status_step_key, additional_check_file)
+        # additional_check_file is optional - if specified, the file must also exist
+        folder_status_mapping = [
+            ("frames", "extract_frames", "poses.json"),  # frames folder + poses.json
+            ("flight_route", "flight_route", None),
+            ("detections", "detection", None),
+            ("georeferenced", "georeference", None),
+            ("tracks", "tracking", None),
+            ("fov", "calculate_fov", None),
+            ("orthomosaic", "orthomosaic", None),
+            ("geotiffs", "export_geotiffs", None),
+        ]
+        
+        completed_count = 0
+        
+        for subfolder, status_key, check_file in folder_status_mapping:
+            subfolder_path = os.path.join(target_folder, subfolder)
+            
+            # Check if subfolder exists
+            if os.path.isdir(subfolder_path):
+                # If there's an additional file to check, verify it exists
+                if check_file:
+                    # Check file can be in subfolder or in target folder
+                    check_path_subfolder = os.path.join(subfolder_path, check_file)
+                    check_path_target = os.path.join(target_folder, check_file)
+                    
+                    if not os.path.isfile(check_path_subfolder) and not os.path.isfile(check_path_target):
+                        continue
+                
+                # Check if subfolder has any content (not empty)
+                if os.listdir(subfolder_path):
+                    self.update_status(status_key, "🟢 Completed")
+                    completed_count += 1
+        
+        if completed_count > 0:
+            self.log(f"Detected {completed_count} completed processing step(s) in target folder")
+        
+        # Also check for existing QGIS layers
+        self._check_existing_qgis_layers()
+    
+    def _check_existing_qgis_layers(self):
+        """Check for existing BAMBI layers in QGIS and update status labels accordingly.
+        
+        This method checks if specific BAMBI layers or layer groups already exist
+        in the current QGIS project and marks the corresponding 'Add to QGIS' steps
+        as completed.
+        """
+        root = QgsProject.instance().layerTreeRoot()
+        
+        # Get all existing layer group names
+        existing_groups = set()
+        for child in root.children():
+            if hasattr(child, 'name'):
+                existing_groups.add(child.name())
+        
+        # Get all existing layer names
+        existing_layers = set()
+        for layer in QgsProject.instance().mapLayers().values():
+            existing_layers.add(layer.name())
+        
+        # Define mapping: (check_type, check_name, status_key)
+        # check_type: "group" to check layer groups, "layer" to check layer names
+        layer_status_mapping = [
+            ("group", "BAMBI Flight Route", "add_flight_route"),
+            ("group", "BAMBI Frame Detections", "add_frame_detections"),
+            ("group", "BAMBI Wildlife Tracks", "add_layers"),
+            ("group", "BAMBI FoV Polygons", "add_fov"),
+            ("layer", "BAMBI FoV Coverage (Merged)", "add_merged_fov"),
+            ("layer", "BAMBI Orthomosaic", "add_ortho"),
+            ("group", "BAMBI Frame GeoTIFFs", "add_geotiffs"),
+        ]
+        
+        added_count = 0
+        
+        for check_type, check_name, status_key in layer_status_mapping:
+            if check_type == "group":
+                if check_name in existing_groups:
+                    self.update_status(status_key, "🟢 Added")
+                    added_count += 1
+            elif check_type == "layer":
+                if check_name in existing_layers:
+                    self.update_status(status_key, "🟢 Added")
+                    added_count += 1
+        
+        if added_count > 0:
+            self.log(f"Detected {added_count} existing BAMBI layer(s) in QGIS project")
+    
+    def _on_target_folder_changed(self):
+        """Handle target folder path change from manual text editing."""
+        folder = self.target_folder_edit.text().strip()
+        if folder and os.path.isdir(folder):
+            self._check_existing_outputs(folder)
+    
+    def _refresh_all_statuses(self):
+        """Refresh all status indicators by checking outputs and QGIS layers."""
+        self.log("Refreshing status indicators...")
+        
+        # Check target folder outputs
+        target_folder = self.target_folder_edit.text().strip()
+        if target_folder and os.path.isdir(target_folder):
+            self._check_existing_outputs(target_folder)
+        else:
+            # Still check QGIS layers even without target folder
+            self._check_existing_qgis_layers()
             
     def browse_model(self):
         file, _ = QFileDialog.getOpenFileName(
@@ -1571,6 +1716,7 @@ class BambiDockWidget(QDockWidget):
         self.add_ortho_btn.setEnabled(enabled)
         self.add_geotiffs_btn.setEnabled(enabled)
         self.add_flight_route_btn.setEnabled(enabled)
+        self.refresh_status_btn.setEnabled(enabled)
         
     def add_tracks_to_qgis(self):
         """Add tracked animals as polygon layers to QGIS."""

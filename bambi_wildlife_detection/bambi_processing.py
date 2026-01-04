@@ -1999,7 +1999,7 @@ class BambiProcessor:
         
         for i, img_info in enumerate(images):
             image_file = img_info.get("imagefile")
-            image_path = os.path.join(target_folder, image_file)
+            image_path = os.path.join(target_folder, "frames", image_file)
             
             if not os.path.exists(image_path):
                 continue
@@ -3105,7 +3105,7 @@ class BambiProcessor:
             
             # Periodic status update
             if log_fn and (i + 1) % 50 == 0:
-                log_fn(f"Exported {exported_count}/{i + 1} frames...")
+                log_fn(f"Exported {exported_count}/{total_frames} frames...")
         
         if log_fn:
             log_fn(f"Successfully exported {exported_count} of {total_frames} frames")
