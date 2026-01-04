@@ -1,7 +1,7 @@
 # BAMBI Wildlife Detection QGIS Plugin
 
 [![QGIS](https://img.shields.io/badge/QGIS-3.22+-green.svg)](https://qgis.org)
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/license/mit)
 [![Python 3.9+](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
 
 A comprehensive QGIS plugin for detecting and tracking wildlife in drone thermal videos with full geo-referencing support.
@@ -37,9 +37,6 @@ A comprehensive QGIS plugin for detecting and tracking wildlife in drone thermal
 - **Orthomosaic Generation** — Create georeferenced orthomosaic from extracted frames
 - **GeoTIFF Export** — Export individual frames as georeferenced GeoTIFFs
 - **Full QGIS Integration** — Automatically add all outputs as styled layers to QGIS
-
-![Feature Highlights](images/feature_highlights.png)
-*<!-- TODO: Add collage showing detection, tracking, and orthomosaic outputs -->*
 
 ---
 
