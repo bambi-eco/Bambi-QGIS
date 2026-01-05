@@ -1295,13 +1295,13 @@ class BambiProcessor:
             progress_fn(100)
             
     def _run_advanced_tracking(self, config: Dict[str, Any], tracker_manager, progress_fn=None, log_fn=None):
-        """Run advanced tracking with BoxMOT or GeoRef backends.
+        """Run advanced tracking with BoxMOT or GeoRef backends in pixel space.
         
-        This method handles:
-        - Loading frames and detections
-        - Creating the appropriate tracker
-        - Running frame-by-frame tracking with the tracker's update method
-        - Handling geo-referenced vs standard tracking
+        This method:
+        1. Loads pixel-space detections from detections.txt
+        2. Runs frame-by-frame tracking purely in pixel coordinates
+        3. Outputs pixel-space tracks to tracks/tracks_pixel.csv
+        4. Calls geo-referencing to convert tracks to world coordinates
         """
         from .tracker_manager import TrackerBackend, ReIDModel
         import numpy as np
@@ -1310,25 +1310,22 @@ class BambiProcessor:
         from dataclasses import dataclass
         
         @dataclass
-        class Detection:
-            source_id: int
+        class PixelTrack:
             frame: int
+            track_id: int
             x1: float
             y1: float
-            z1: float
             x2: float
             y2: float
-            z2: float
             conf: float
             cls: int
-            interpolated: int = 0
         
         target_folder = config["target_folder"]
         tracker_id = config.get("tracker_id", "builtin")
         reid_model_str = config.get("reid_model", "osnet")
         custom_reid_path = config.get("custom_reid_path", "")
         tracker_params_json = config.get("tracker_params_json", "")
-        interpolate = config.get("interpolate", True)
+        interpolate = False # config.get("interpolate", True)
         
         # Map ReID model string to enum
         reid_model_map = {
@@ -1366,13 +1363,6 @@ class BambiProcessor:
         if log_fn:
             log_fn(f"Tracker created with backend: {backend.value}")
             
-        # Load georeferenced detections
-        georef_folder = os.path.join(target_folder, "georeferenced")
-        georef_file = os.path.join(georef_folder, "georeferenced.txt")
-        
-        if not os.path.exists(georef_file):
-            raise FileNotFoundError("Georeferenced detections not found")
-            
         # Load poses.json for frame information
         poses_file = os.path.join(target_folder, "poses.json")
         if not os.path.exists(poses_file):
@@ -1382,74 +1372,95 @@ class BambiProcessor:
             poses_data = json.load(f)
             
         images = poses_data.get("images", [])
-        frame_to_path = {}
-        for img in images:
-            frame_idx = img.get("frame_index", img.get("id", 0))
-            frame_to_path[frame_idx] = img.get("path", "")
-            
-        # Parse detections file
-        frames_geo: Dict[int, List] = defaultdict(list)
         
-        with open(georef_file, 'r', encoding='utf-8') as f:
+        # Build frame index to image path mapping
+        frame_to_path = {}
+        for idx, img in enumerate(images):
+            frame_idx = img.get("frame_index", idx)
+            imagefile = img.get("imagefile", "")
+            if imagefile:
+                frame_to_path[frame_idx] = os.path.join(target_folder, "frames", imagefile)
+                
+        # Load pixel-space detections from detections.txt
+        detections_file = os.path.join(target_folder, "detections", "detections.txt")
+        if not os.path.exists(detections_file):
+            raise FileNotFoundError("Detections file not found - run detection first")
+            
+        frames_pixel: Dict[int, List] = defaultdict(list)
+        
+        with open(detections_file, 'r', encoding='utf-8') as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith('#'):
                     continue
                 parts = line.split()
-                if len(parts) >= 10:
-                    idx = int(parts[0])
-                    frame = int(parts[1])
-                    det = {
-                        'source_id': idx,
-                        'frame': frame,
-                        'x1': float(parts[2]),
-                        'y1': float(parts[3]),
-                        'z1': float(parts[4]),
-                        'x2': float(parts[5]),
-                        'y2': float(parts[6]),
-                        'z2': float(parts[7]),
-                        'conf': float(parts[8]),
-                        'cls': int(parts[9])
-                    }
-                    frames_geo[frame].append(det)
-                    
-        # Also load pixel-space detections if available
-        detections_folder = os.path.join(target_folder, "detections")
-        frames_pixel: Dict[int, List] = defaultdict(list)
-        
-        for det_file in os.listdir(detections_folder) if os.path.exists(detections_folder) else []:
-            if det_file.endswith(".txt"):
-                try:
-                    # Extract frame number from filename
-                    frame_num = int(det_file.replace(".txt", "").split("_")[-1])
-                    det_path = os.path.join(detections_folder, det_file)
-                    
-                    with open(det_path, 'r') as f:
-                        for line in f:
-                            parts = line.strip().split()
-                            if len(parts) >= 5:
-                                frames_pixel[frame_num].append({
-                                    'cls': int(parts[0]),
-                                    'x1': float(parts[1]),
-                                    'y1': float(parts[2]),
-                                    'x2': float(parts[3]),
-                                    'y2': float(parts[4]),
-                                    'conf': float(parts[5]) if len(parts) > 5 else 0.5
-                                })
-                except (ValueError, IndexError):
-                    continue
-                    
+                if len(parts) >= 6:
+                    try:
+                        frame = int(parts[0])
+                        frames_pixel[frame].append({
+                            'x1': float(parts[1]),
+                            'y1': float(parts[2]),
+                            'x2': float(parts[3]),
+                            'y2': float(parts[4]),
+                            'conf': float(parts[5]),
+                            'cls': int(parts[6]) if len(parts) > 6 else 0
+                        })
+                    except (ValueError, IndexError):
+                        continue
+                        
         if log_fn:
-            log_fn(f"Loaded {sum(len(v) for v in frames_geo.values())} geo detections in {len(frames_geo)} frames")
+            log_fn(f"Loaded {sum(len(v) for v in frames_pixel.values())} pixel detections in {len(frames_pixel)} frames")
+        
+        # Check if this is a geo-referenced tracker that needs geodets
+        is_geo_tracker = backend in [TrackerBackend.GEOREF_NATIVE, TrackerBackend.GEOREF_HYBRID]
+        frames_geo: Dict[int, List] = defaultdict(list)
+        
+        if is_geo_tracker:
+            # Load geo-referenced detections for GeoNative/GeoHybrid trackers
+            georef_folder = os.path.join(target_folder, "georeferenced")
+            georef_file = os.path.join(georef_folder, "georeferenced.txt")
+            
+            if os.path.exists(georef_file):
+                with open(georef_file, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith('#'):
+                            continue
+                        parts = line.split()
+                        if len(parts) >= 10:
+                            try:
+                                idx = int(parts[0])
+                                frame = int(parts[1])
+                                frames_geo[frame].append({
+                                    'source_id': idx,
+                                    'frame': frame,
+                                    'x1': float(parts[2]),
+                                    'y1': float(parts[3]),
+                                    'z1': float(parts[4]),
+                                    'x2': float(parts[5]),
+                                    'y2': float(parts[6]),
+                                    'z2': float(parts[7]),
+                                    'conf': float(parts[8]),
+                                    'cls': int(parts[9])
+                                })
+                            except (ValueError, IndexError):
+                                continue
+                                
+                if log_fn:
+                    log_fn(f"Loaded {sum(len(v) for v in frames_geo.values())} geo detections for geo-tracker")
+            else:
+                if log_fn:
+                    log_fn("Warning: Geo-referenced detections not found - geo tracker may not work optimally")
             
         if progress_fn:
-            progress_fn(20)
+            progress_fn(15)
             
         # Run tracking frame by frame
-        all_frames = sorted(set(frames_geo.keys()) | set(frames_pixel.keys()))
-        results = []
-        
-        is_geo_tracker = backend in [TrackerBackend.GEOREF_NATIVE, TrackerBackend.GEOREF_HYBRID]
+        all_frames = sorted(frames_pixel.keys())
+        if not all_frames:
+            raise RuntimeError("No detections found to track")
+            
+        pixel_tracks = []  # List of PixelTrack
         
         for fidx, frame_num in enumerate(all_frames):
             # Load the frame image
@@ -1458,61 +1469,46 @@ class BambiProcessor:
             
             if frame_path and os.path.exists(frame_path):
                 img = cv2.imread(frame_path)
-            elif frame_path:
-                # Try relative path from target folder
-                full_path = os.path.join(target_folder, frame_path)
-                if os.path.exists(full_path):
-                    img = cv2.imread(full_path)
                     
             if img is None:
                 # Create dummy image if we can't load the actual frame
                 img = np.zeros((480, 640, 3), dtype=np.uint8)
                 
-            # Get detections for this frame
-            geo_dets = frames_geo.get(frame_num, [])
+            # Get pixel detections for this frame
             pixel_dets = frames_pixel.get(frame_num, [])
             
-            # Build detection arrays
-            if pixel_dets:
-                # Use pixel detections [x1, y1, x2, y2, conf, cls]
+            if not pixel_dets:
+                # No detections - still call tracker to age tracks
+                dets = np.empty((0, 6))
+            else:
+                # Build detection array [x1, y1, x2, y2, conf, cls]
                 dets = np.array([
                     [d['x1'], d['y1'], d['x2'], d['y2'], d['conf'], d['cls']]
                     for d in pixel_dets
                 ])
-            elif geo_dets:
-                # Create dummy pixel detections from geo detections
-                # This is a fallback - we use geo coords as pixel coords
-                dets = np.array([
-                    [0, 0, 100, 100, d['conf'], d['cls']]  # Placeholder pixel coords
-                    for d in geo_dets
-                ])
-            else:
-                dets = np.empty((0, 6))
-                
-            # Build geo detection array for geo-referenced trackers
-            geodets = None
-            if geo_dets and is_geo_tracker:
-                # Format: [source_id, frame_id, x1, y1, z1, x2, y2, z2, conf, cls]
-                geodets = np.array([
-                    [d['source_id'], d['frame'], d['x1'], d['y1'], d['z1'],
-                     d['x2'], d['y2'], d['z2'], d['conf'], d['cls']]
-                    for d in geo_dets
-                ])
                 
             # Call the tracker's update method
             try:
-                if is_geo_tracker and geodets is not None:
-                    # Geo-referenced tracker workaround for BoxMOT v16+ decorator compatibility
-                    # The @per_class_decorator doesn't forward extra kwargs, so we set them
-                    # as instance attributes that the update method can read from self
+                if is_geo_tracker:
+                    # Build geodets array for GeoNative/GeoHybrid trackers
+                    # Format: [source_id, frame_id, x1, y1, z1, x2, y2, z2, conf, cls]
+                    geo_dets = frames_geo.get(frame_num, [])
+                    if geo_dets:
+                        geodets = np.array([
+                            [d['source_id'], d['frame'], d['x1'], d['y1'], d['z1'],
+                             d['x2'], d['y2'], d['z2'], d['conf'], d['cls']]
+                            for d in geo_dets
+                        ])
+                    else:
+                        geodets = None
+                    
+                    # Forward geodets via instance attribute (BoxMOT decorator workaround)
                     tracker._current_frame_index = frame_num
                     tracker._current_geodets = geodets
-                    # Call update with only the standard BoxMOT parameters
                     tracks = tracker.update(dets, img)
                 else:
                     # Standard BoxMOT tracker
                     tracks = tracker.update(dets, img)
-                    
             except Exception as e:
                 if log_fn:
                     log_fn(f"Warning: Tracker update failed at frame {frame_num}: {e}")
@@ -1523,74 +1519,310 @@ class BambiProcessor:
             if len(tracks) > 0:
                 for track in tracks:
                     if len(track) >= 7:
-                        track_id = int(track[4])
-                        
-                        # Find corresponding geo detection
-                        geo_det = None
-                        if geo_dets:
-                            det_ind = int(track[7]) if len(track) > 7 else -1
-                            if 0 <= det_ind < len(geo_dets):
-                                geo_det = geo_dets[det_ind]
-                            else:
-                                # Find by matching (fallback)
-                                for gd in geo_dets:
-                                    if abs(gd['conf'] - track[5]) < 0.01:
-                                        geo_det = gd
-                                        break
-                                        
-                        if geo_det:
-                            det_obj = Detection(
-                                source_id=geo_det['source_id'],
-                                frame=frame_num,
-                                x1=geo_det['x1'],
-                                y1=geo_det['y1'],
-                                z1=geo_det['z1'],
-                                x2=geo_det['x2'],
-                                y2=geo_det['y2'],
-                                z2=geo_det['z2'],
-                                conf=geo_det['conf'],
-                                cls=geo_det['cls'],
-                                interpolated=0
-                            )
-                            results.append((frame_num, track_id, det_obj))
+                        pixel_tracks.append(PixelTrack(
+                            frame=frame_num,
+                            track_id=int(track[4]),
+                            x1=float(track[0]),
+                            y1=float(track[1]),
+                            x2=float(track[2]),
+                            y2=float(track[3]),
+                            conf=float(track[5]),
+                            cls=int(track[6])
+                        ))
                             
             if progress_fn and fidx % 50 == 0:
-                progress = 20 + int((fidx / len(all_frames)) * 60)
-                progress_fn(min(progress, 85))
+                progress = 15 + int((fidx / len(all_frames)) * 50)
+                progress_fn(min(progress, 65))
                 
-        # Sort results
-        results.sort(key=lambda r: (r[0], r[1]))
+        # Sort by frame, then track_id
+        pixel_tracks.sort(key=lambda t: (t.frame, t.track_id))
         
         # Interpolate missing frames if enabled
-        if interpolate and results:
+        if interpolate and pixel_tracks:
             if log_fn:
                 log_fn("Interpolating missing frames...")
-            results = self._interpolate_tracks(results, Detection)
+            pixel_tracks = self._interpolate_pixel_tracks(pixel_tracks, PixelTrack)
             
         if progress_fn:
-            progress_fn(90)
+            progress_fn(70)
             
-        # Create output folder and write results
+        # Create output folder and write pixel-space tracks
         tracks_folder = os.path.join(target_folder, "tracks")
         os.makedirs(tracks_folder, exist_ok=True)
         
-        output_file = os.path.join(tracks_folder, "tracks.csv")
+        pixel_output_file = os.path.join(tracks_folder, "tracks_pixel.csv")
         
-        with open(output_file, 'w', encoding='utf-8') as f:
-            for frame, tid, d in results:
-                f.write(f"{frame:08d},{tid},{d.x1:.6f},{d.y1:.6f},{d.z1:.6f},"
-                       f"{d.x2:.6f},{d.y2:.6f},{d.z2:.6f},"
-                       f"{d.conf:.6f},{d.cls},{d.interpolated}\n")
+        with open(pixel_output_file, 'w', encoding='utf-8') as f:
+            f.write("# frame,track_id,x1,y1,x2,y2,conf,cls,interpolated\n")
+            for t in pixel_tracks:
+                interp = getattr(t, 'interpolated', 0)
+                f.write(f"{t.frame},{t.track_id},{t.x1:.2f},{t.y1:.2f},"
+                       f"{t.x2:.2f},{t.y2:.2f},{t.conf:.4f},{t.cls},{interp}\n")
                        
         # Count unique tracks
-        unique_tracks = set(r[1] for r in results)
+        unique_tracks = set(t.track_id for t in pixel_tracks)
         
         if log_fn:
-            log_fn(f"Advanced tracking complete: {len(unique_tracks)} tracks, {len(results)} total detections")
+            log_fn(f"Pixel tracking complete: {len(unique_tracks)} tracks, {len(pixel_tracks)} detections")
+            log_fn(f"Saved to: {pixel_output_file}")
             log_fn(f"Backend used: {backend.value}")
             
         if progress_fn:
+            progress_fn(75)
+            
+        # Now geo-reference the tracks
+        if log_fn:
+            log_fn("Geo-referencing tracks...")
+            
+        self.run_georeference_tracks(config, progress_fn, log_fn, start_progress=75)
+        
+        if progress_fn:
             progress_fn(100)
+            
+    def _interpolate_pixel_tracks(self, tracks: List, track_class) -> List:
+        """Interpolate missing frames within each pixel-space track."""
+        from collections import defaultdict
+        
+        # Group by track_id
+        track_dict: Dict[int, List] = defaultdict(list)
+        for t in tracks:
+            track_dict[t.track_id].append(t)
+            
+        # Sort each track by frame
+        for tid in track_dict:
+            track_dict[tid].sort(key=lambda x: x.frame)
+            
+        new_tracks = []
+        
+        for tid, seq in track_dict.items():
+            if len(seq) < 2:
+                new_tracks.extend(seq)
+                continue
+                
+            for i in range(len(seq) - 1):
+                new_tracks.append(seq[i])
+                
+                t1, t2 = seq[i], seq[i + 1]
+                gap = t2.frame - t1.frame
+                
+                if gap > 1:
+                    # Interpolate
+                    for j in range(1, gap):
+                        alpha = j / gap
+                        interp_track = track_class(
+                            frame=t1.frame + j,
+                            track_id=tid,
+                            x1=t1.x1 + alpha * (t2.x1 - t1.x1),
+                            y1=t1.y1 + alpha * (t2.y1 - t1.y1),
+                            x2=t1.x2 + alpha * (t2.x2 - t1.x2),
+                            y2=t1.y2 + alpha * (t2.y2 - t1.y2),
+                            conf=(t1.conf + t2.conf) / 2,
+                            cls=t1.cls
+                        )
+                        interp_track.interpolated = 1
+                        new_tracks.append(interp_track)
+                        
+            # Add last track
+            new_tracks.append(seq[-1])
+            
+        return new_tracks
+    
+    def run_georeference_tracks(self, config: Dict[str, Any], progress_fn=None, log_fn=None, start_progress: int = 0):
+        """Geo-reference pixel-space tracks using DEM.
+        
+        This converts pixel bounding boxes in tracks to world coordinates using
+        the same projection pipeline as detection geo-referencing.
+        
+        :param config: Configuration dictionary
+        :param progress_fn: Progress callback function  
+        :param log_fn: Logging callback function
+        :param start_progress: Starting progress value (for integration with tracking)
+        """
+        import numpy as np
+        
+        from pyproj import CRS, Transformer
+        from pyrr import Vector3, Quaternion
+        from trimesh import Trimesh
+        
+        from alfspy.core.rendering import Resolution, Camera
+        from alfspy.render.render import read_gltf, process_render_data, make_mgl_context, release_all
+        from bambi.util.projection_util import label_to_world_coordinates
+        
+        target_folder = config["target_folder"]
+        dem_path = config["dem_path"]
+        
+        # Correction factors
+        translation = config.get("translation", {"x": 0, "y": 0, "z": 0})
+        rotation = config.get("rotation", {"x": 0, "y": 0, "z": 0})
+        
+        if log_fn:
+            log_fn("Loading DEM and poses for track geo-referencing...")
+            
+        # Load pixel tracks
+        tracks_folder = os.path.join(target_folder, "tracks")
+        pixel_tracks_file = os.path.join(tracks_folder, "tracks_pixel.csv")
+        
+        if not os.path.exists(pixel_tracks_file):
+            raise FileNotFoundError("Pixel tracks not found - run tracking first")
+            
+        pixel_tracks = []
+        with open(pixel_tracks_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                parts = line.split(',')
+                if len(parts) >= 8:
+                    try:
+                        pixel_tracks.append({
+                            'frame': int(parts[0]),
+                            'track_id': int(parts[1]),
+                            'x1': float(parts[2]),
+                            'y1': float(parts[3]),
+                            'x2': float(parts[4]),
+                            'y2': float(parts[5]),
+                            'conf': float(parts[6]),
+                            'cls': int(parts[7]),
+                            'interpolated': int(parts[8]) if len(parts) > 8 else 0
+                        })
+                    except (ValueError, IndexError):
+                        continue
+                        
+        if not pixel_tracks:
+            raise RuntimeError("No pixel tracks found to geo-reference")
+            
+        if log_fn:
+            log_fn(f"Loaded {len(pixel_tracks)} pixel track entries")
+            
+        # Load DEM metadata
+        dem_json_path = dem_path.replace(".gltf", ".json").replace(".glb", ".json")
+        with open(dem_json_path, 'r') as f:
+            dem_json = json.load(f)
+            
+        x_offset = dem_json["origin"][0]
+        y_offset = dem_json["origin"][1]
+        z_offset = dem_json["origin"][2]
+        
+        # Load poses
+        poses_file = os.path.join(target_folder, "poses.json")
+        with open(poses_file, 'r') as f:
+            poses = json.load(f)
+            
+        # Get input resolution from first extracted frame
+        input_resolution = None
+        first_image = poses["images"][0]
+        first_image_file = first_image.get("imagefile", "")
+        if first_image_file:
+            first_image_path = os.path.join(target_folder, "frames", first_image_file)
+            if os.path.exists(first_image_path):
+                import cv2
+                img = cv2.imread(first_image_path)
+                if img is not None:
+                    input_resolution = Resolution(img.shape[1], img.shape[0])
+                    if log_fn:
+                        log_fn(f"Input resolution: {img.shape[1]}x{img.shape[0]}")
+        
+        if input_resolution is None:
+            res_width = config.get("input_resolution_width", 640)
+            res_height = config.get("input_resolution_height", 512)
+            input_resolution = Resolution(res_width, res_height)
+            if log_fn:
+                log_fn(f"Using configured resolution: {res_width}x{res_height}")
+        
+        if progress_fn:
+            progress_fn(start_progress + 5)
+            
+        # Load DEM mesh
+        ctx = None
+        georef_tracks = []
+        
+        try:
+            mesh_data, texture_data = read_gltf(dem_path)
+            tri_mesh = Trimesh(vertices=mesh_data.vertices, faces=mesh_data.indices)
+            mesh_data, texture_data = process_render_data(mesh_data, texture_data)
+            
+            cor_rotation_eulers = Vector3([rotation['x'], rotation['y'], rotation['z']], dtype='f4')
+            cor_translation = Vector3([translation['x'], translation['y'], translation['z']], dtype='f4')
+            
+            total_tracks = len(pixel_tracks)
+            failed_count = 0
+            
+            for idx, pt in enumerate(pixel_tracks):
+                frame_idx = pt['frame']
+                
+                if frame_idx >= len(poses["images"]):
+                    failed_count += 1
+                    continue
+                    
+                image_metadata = poses["images"][frame_idx]
+                
+                # Get camera for this frame
+                fovy = image_metadata.get("fovy", [50])[0]
+                position = Vector3(image_metadata["location"])
+                rot = image_metadata["rotation"]
+                rotation_eulers = (Vector3(
+                    [np.deg2rad(val % 360.0) for val in rot]) - cor_rotation_eulers) * -1
+                position += cor_translation
+                rotation_quat = Quaternion.from_eulers(rotation_eulers)
+                
+                camera = Camera(fovy=fovy, aspect_ratio=1.0, position=position, rotation=rotation_quat)
+                
+                # Project bounding box corners to world coordinates
+                x1, y1, x2, y2 = pt['x1'], pt['y1'], pt['x2'], pt['y2']
+                label_coords = [x1, y1, x2, y1, x2, y2, x1, y2]
+                
+                try:
+                    world_coords = label_to_world_coordinates(
+                        label_coords, input_resolution, tri_mesh, camera
+                    )
+                    
+                    if len(world_coords) > 0:
+                        xx = world_coords[:, 0] + x_offset
+                        yy = world_coords[:, 1] + y_offset
+                        zz = world_coords[:, 2] + z_offset
+                        
+                        georef_tracks.append({
+                            'frame': pt['frame'],
+                            'track_id': pt['track_id'],
+                            'x1': min(xx), 'y1': min(yy), 'z1': min(zz),
+                            'x2': max(xx), 'y2': max(yy), 'z2': max(zz),
+                            'conf': pt['conf'],
+                            'cls': pt['cls'],
+                            'interpolated': pt['interpolated']
+                        })
+                    else:
+                        failed_count += 1
+                except Exception as e:
+                    failed_count += 1
+                    continue
+                    
+                if progress_fn and idx % 100 == 0:
+                    progress = start_progress + 5 + int((idx / total_tracks) * 18)
+                    progress_fn(min(progress, start_progress + 23))
+                    
+        finally:
+            if ctx:
+                release_all(ctx)
+            del mesh_data
+            del texture_data
+            del tri_mesh
+            
+        # Write geo-referenced tracks
+        output_file = os.path.join(tracks_folder, "tracks.csv")
+        
+        with open(output_file, 'w', encoding='utf-8') as f:
+            for gt in georef_tracks:
+                f.write(f"{gt['frame']:08d},{gt['track_id']},{gt['x1']:.6f},{gt['y1']:.6f},{gt['z1']:.6f},"
+                       f"{gt['x2']:.6f},{gt['y2']:.6f},{gt['z2']:.6f},"
+                       f"{gt['conf']:.6f},{gt['cls']},{gt['interpolated']}\n")
+                       
+        unique_tracks = set(gt['track_id'] for gt in georef_tracks)
+        
+        if log_fn:
+            log_fn(f"Geo-referenced {len(georef_tracks)} track entries ({len(unique_tracks)} unique tracks)")
+            if failed_count > 0:
+                log_fn(f"Warning: Failed to geo-reference {failed_count} entries")
+            log_fn(f"Saved to: {output_file}")
             
     def _interpolate_tracks(self, results: List, detection_class) -> List:
         """Interpolate missing frames within each track."""

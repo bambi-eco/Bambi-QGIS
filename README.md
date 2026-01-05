@@ -66,22 +66,11 @@ pip install git+https://github.com/bambi-eco/alfs_py.git
 pip install git+https://github.com/bambi-eco/bambi_detection.git
 ```
 
-Additional dependencies (installed automatically via above dependencies):
-
-```bash
-pip install ultralytics          # YOLO detection
-pip install huggingface_hub      # Model downloads
-pip install pyproj               # Coordinate transformations
-pip install pyrr                 # 3D math utilities
-pip install trimesh              # 3D mesh handling
-pip install scipy                # Scientific computing
-pip install rasterio             # GeoTIFF I/O
-pip install moderngl             # GPU-accelerated rendering
-```
-
 ### Optional: Extended Tracking Capabilities
 
 The plugin includes simple geo-based tracking strategies out of the box. For advanced tracking algorithms, you can optionally install additional packages within the **QGIS OSGeo4W Shell**:
+
+![Install from ZIP](images/trackers.png)
 
 #### BoxMOT Trackers
 
