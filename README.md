@@ -31,7 +31,8 @@ A comprehensive QGIS plugin for detecting and tracking wildlife in drone thermal
 - **Frame Extraction** — Extract frames from drone thermal videos with configurable sample rate
 - **Flight Route Visualization** — Generate and display the drone flight path as a polyline layer
 - **Animal Detection** — YOLO-based wildlife detection with automatic model download from HuggingFace
-- **Geo-referencing** — Project detections onto a Digital Elevation Model (DEM) for real-world coordinates
+- **Prompt based Segmentations** — Segmentations using Roboflow's SAM3 API
+- **Geo-referencing** — Project detections/segmentations onto a Digital Elevation Model (DEM) for real-world coordinates
 - **Multi-Object Tracking** — Track animals across frames with multiple backend options
 - **Field of View Calculation** — Calculate camera footprints for each frame with custom mask support
 - **Orthomosaic Generation** — Create georeferenced orthomosaic from extracted frames
@@ -59,11 +60,11 @@ A comprehensive QGIS plugin for detecting and tracking wildlife in drone thermal
 The plugin requires the **BAMBI Detection Framework** and the **ALFS-PY** framework. Install them using pip within the **OSGeo4W Shell** (Windows) or your QGIS Python environment:
 
 ```bash
-# Install ALFS-PY Framework (required)
-pip install git+https://github.com/bambi-eco/alfs_py.git
-
 # Install BAMBI Detection Framework (required)
 pip install git+https://github.com/bambi-eco/bambi_detection.git
+
+# Install ALFS-PY Framework (required)
+pip install git+https://github.com/bambi-eco/alfs_py.git
 ```
 
 ### Optional: Extended Tracking Capabilities
@@ -226,57 +227,108 @@ Exports individual frames as georeferenced GeoTIFFs for detailed analysis.
 
 ![Orthomosaic Output](images/geotiff.png)
 
+### Step 9: Object Segmentation
+
+Segements individual objects from the aerial images (recommended on RGB only).
+
+**Outputs:** `segmentation/` folder with pixel based segmentations
+
+### Step 10: Geo-Reference Object Segmentation
+
+Geo-Reference segmented objects.
+
+**Outputs:** `segmentation/` folder with coordinate based segmentations.
+
+![Segmentation Output](images/segmentations.png)
+
 ---
 
 ## Configuration
 
+### Extraction Settings
+
+| Parameter    | Description                                   | Default     |
+|--------------|-----------------------------------------------|-------------|
+| Sample Rate  | Sample rate of extracted video frames         | 10          |
+| Skip Frames  | Number of frames that will be skipped         | 0           |
+| Limit Frames | Limit number of frames that will be extracted | -1          |
+| Camera       | Camera selector (for dual-camera drones)      | T (thermal) |
+
 ### Detection Settings
 
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| Model Path | Custom YOLO model (auto-downloads if empty) | HuggingFace default |
-| Confidence | Detection confidence threshold | 0.25 |
-| Camera | Camera selector (for dual-camera drones) | T (thermal) |
+| Parameter    | Description                                             | Default             |
+|--------------|---------------------------------------------------------|---------------------|
+| Model Path   | Custom YOLO model (auto-downloads if empty)             | HuggingFace default |
+| Confidence   | Detection confidence threshold                          | 0.25                |
+| Skip Frames  | Number of frames, where detection will be applied       | 0                   |
+| Limit Frames | Limit number of frames, where detection will be applied | -1                  |
+
+### Position Correction
+
+| Parameter   | Description                                         | Default |
+|-------------|-----------------------------------------------------|---------|
+| Translation | Translational correction factors on all axis        | 0       |
+| Rotation    | Rotational (radians) correction factors on all axis | 0       |
 
 ### Tracking Backend Selection
 
 The plugin supports multiple tracking backends with different capabilities:
 
-| Backend | Description | Requirements |
-|---------|-------------|--------------|
-| **Built-in** | Simple geo-based IoU tracker | None (included) |
-| **BoxMOT** | DeepOCSORT, BoTSORT, StrongSORT, etc. | `pip install boxmot` |
-| **GeoRef Native** | Full tracking in geo-coordinates | Geo-Referenced-Tracking |
-| **GeoRef Hybrid** | Standard tracking + geo-recovery | Geo-Referenced-Tracking |
+| Backend           | Description                           | Requirements            |
+|-------------------|---------------------------------------|-------------------------|
+| **Built-in**      | Simple geo-based IoU tracker          | None (included)         |
+| **BoxMOT**        | DeepOCSORT, BoTSORT, StrongSORT, etc. | `pip install boxmot`    |
+| **GeoRef Native** | Full tracking in geo-coordinates      | Geo-Referenced-Tracking |
+| **GeoRef Hybrid** | Standard tracking + geo-recovery      | Geo-Referenced-Tracking |
 
 ### Built-in Tracker Parameters
 
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| IoU Threshold | Intersection over Union for matching | 0.3 |
-| Max Age | Frames without detection before track ends (-1 = unlimited) | -1 |
-| Max Center Distance | Maximum center distance in meters | 0.2 |
-| Tracker Mode | GREEDY, HUNGARIAN, CENTER, HUNGARIAN_CENTER | HUNGARIAN |
-| Class Aware | Only match same-class detections | True |
-| Interpolate | Fill gaps with interpolated positions | True |
+| Parameter           | Description                                                 | Default   |
+|---------------------|-------------------------------------------------------------|-----------|
+| IoU Threshold       | Intersection over Union for matching                        | 0.3       |
+| Max Age             | Frames without detection before track ends (-1 = unlimited) | -1        |
+| Max Center Distance | Maximum center distance in meters                           | 0.2       |
+| Tracker Mode        | GREEDY, HUNGARIAN, CENTER, HUNGARIAN_CENTER                 | HUNGARIAN |
+| Class Aware         | Only match same-class detections                            | True      |
+| Interpolate         | Fill gaps with interpolated positions                       | True      |
 
 ### ReID Model Selection (BoxMOT/GeoRef)
 
-| Model | Description |
-|-------|-------------|
-| **osnet** | Standard OSNet model (general purpose) |
-| **bambi** | Wildlife-specific ReID from HuggingFace |
-| **custom** | Your own ReID weights file |
+| Model      | Description                             |
+|------------|-----------------------------------------|
+| **osnet**  | Standard OSNet model (general purpose)  |
+| **bambi**  | Wildlife-specific ReID from HuggingFace |
+| **custom** | Your own ReID weights file              |
 
-### Orthomosaic Settings
+### Field of View Settings
 
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| Ground Resolution | Meters per pixel | 0.05 |
-| Blend Mode | INTEGRAL, FIRST, LAST, CENTER | INTEGRAL |
-| Frame Range | Subset of frames to include | All |
-| Crop to Content | Remove empty borders | True |
-| Create Overviews | Build pyramid levels | True |
+| Parameter        | Description                                                                | Default        |
+|------------------|----------------------------------------------------------------------------|----------------|
+| Custom Mask      | Either use a custom mask or the mask generated during the frame extraction | Extracted mask |
+| Simplify Epsilon | Epsilon factor used to simplify mask boundaries                            | 2              |
+| Skip Frames      | Number of frames, where detection will be applied                          | 0              |
+| Limit Frames     | Limit number of frames, where detection will be applied                    | -1             |
+
+### Orthomosaic/GeoTIFF Settings
+
+| Parameter         | Description                   | Default  |
+|-------------------|-------------------------------|----------|
+| Ground Resolution | Meters per pixel              | 0.05     |
+| Blend Mode        | INTEGRAL, FIRST, LAST, CENTER | INTEGRAL |
+| Frame Range       | Subset of frames to include   | All      |
+| Crop to Content   | Remove empty borders          | True     |
+| Create Overviews  | Build pyramid levels          | True     |
+
+### Segmentation Settings
+
+| Parameter            | Description                                             | Default |
+|----------------------|---------------------------------------------------------|---------|
+| API Key              | Roboflow API Key                                        | -       |
+| Text Prompts         | one per line in a text area                             | -       |
+| Confidence threshold | Threshold used to filter segmentations                  | All     |
+| Skip Frames          | Number of frames, where detection will be applied       | 0       |
+| Limit Frames         | Limit number of frames, where detection will be applied | -1      |
+
 
 ---
 

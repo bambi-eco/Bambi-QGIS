@@ -49,6 +49,10 @@ class ProcessingWorker(QObject):
                 self.processor.run_orthomosaic(self.config, self.progress.emit, self.log.emit)
             elif self.step == "export_geotiffs":
                 self.processor.run_export_geotiffs(self.config, self.progress.emit, self.log.emit)
+            elif self.step == "sam3_segmentation":
+                self.processor.run_sam3_segmentation(self.config, self.progress.emit, self.log.emit)
+            elif self.step == "sam3_georeference":
+                self.processor.run_sam3_georeference(self.config, self.progress.emit, self.log.emit)
             else:
                 raise ValueError(f"Unknown step: {self.step}")
                 
@@ -474,6 +478,10 @@ class BambiProcessor:
         model_path = config.get("model_path")
         min_confidence = config.get("min_confidence", 0.5)
         
+        # Frame filter options
+        skip_frames = config.get("detect_skip", 0)
+        limit_frames = config.get("detect_limit", -1)
+        
         # Download default model if not specified
         if not model_path:
             if log_fn:
@@ -500,7 +508,28 @@ class BambiProcessor:
             raise RuntimeError("No frames found in poses.json")
             
         if log_fn:
-            log_fn(f"Processing {total_frames} extracted frames (extraction sample rate was {extraction_sample_rate})")
+            log_fn(f"Found {total_frames} extracted frames (extraction sample rate was {extraction_sample_rate})")
+            
+        # Apply frame filters
+        frame_indices = list(range(total_frames))
+        
+        # Apply skip
+        if skip_frames > 0:
+            frame_indices = frame_indices[skip_frames:]
+            if log_fn:
+                log_fn(f"Skipping first {skip_frames} frames")
+        
+        # Apply limit
+        if limit_frames > 0:
+            frame_indices = frame_indices[:limit_frames]
+            if log_fn:
+                log_fn(f"Limiting to {limit_frames} frames")
+                
+        if len(frame_indices) == 0:
+            raise RuntimeError("No frames to process after applying filters")
+            
+        if log_fn:
+            log_fn(f"Processing {len(frame_indices)} frames after filtering")
             
         # Create output folder
         detections_folder = os.path.join(target_folder, "detections")
@@ -515,7 +544,7 @@ class BambiProcessor:
             verbose=False
         )
         
-        # Process ALL extracted frames (sampling was already done during extraction)
+        # Process filtered frames
         detection_results = []
         processed = 0
         
@@ -523,13 +552,15 @@ class BambiProcessor:
         output_file = os.path.join(detections_folder, "detections.txt")
         with open(output_file, 'w', encoding='utf-8') as f:
             f.write("# frame x1 y1 x2 y2 confidence class_id\n")
-            for idx, image_info in enumerate(images):
+            for idx in frame_indices:
+                image_info = images[idx]
                 imagefile = image_info.get("imagefile")
                 if not imagefile:
                     continue
                     
                 image_path = os.path.join(target_folder, "frames", imagefile)
-                log_fn(f"Detecting frame {idx} / {total_frames}: {image_path}")
+                if log_fn:
+                    log_fn(f"Detecting frame {idx} / {total_frames}: {image_path}")
                 
                 if not os.path.exists(image_path):
                     if log_fn:
@@ -551,7 +582,7 @@ class BambiProcessor:
                 processed += 1
                 
                 if progress_fn and processed % 10 == 0:
-                    progress = int((processed / total_frames) * 100)
+                    progress = int((processed / len(frame_indices)) * 100)
                     progress_fn(min(progress, 99))
                 
                        
@@ -792,6 +823,10 @@ class BambiProcessor:
         mask_path = config.get("fov_mask_path", "")
         mask_simplify_epsilon = config.get("mask_simplify_epsilon", 2.0)
         
+        # Frame filter options
+        skip_frames = config.get("fov_skip", 0)
+        limit_frames = config.get("fov_limit", -1)
+        
         if log_fn:
             log_fn("Starting FoV calculation...")
             log_fn("Loading DEM and poses data...")
@@ -877,8 +912,23 @@ class BambiProcessor:
             cor_rotation_eulers = Vector3([rotation['x'], rotation['y'], rotation['z']], dtype='f4')
             cor_translation = Vector3([translation['x'], translation['y'], translation['z']], dtype='f4')
             
+            # Apply frame filters
+            frame_indices = list(range(total_frames))
+            
+            # Apply skip
+            if skip_frames > 0:
+                frame_indices = frame_indices[skip_frames:]
+                if log_fn:
+                    log_fn(f"Skipping first {skip_frames} frames")
+            
+            # Apply limit
+            if limit_frames > 0:
+                frame_indices = frame_indices[:limit_frames]
+                if log_fn:
+                    log_fn(f"Limiting to {limit_frames} frames")
+            
             if log_fn:
-                log_fn(f"Calculating FoV for {total_frames} frames...")
+                log_fn(f"Calculating FoV for {len(frame_indices)} frames...")
             
             # Output file for FoV polygons
             output_file = os.path.join(fov_folder, "fov_polygons.txt")
@@ -887,7 +937,8 @@ class BambiProcessor:
                 f.write("# FoV polygon georeferenced data\n")
                 f.write("# Format: frame_idx num_points x1 y1 z1 x2 y2 z2 ...\n")
                 
-                for frame_idx, image_metadata in enumerate(poses["images"]):
+                for i, frame_idx in enumerate(frame_indices):
+                    image_metadata = poses["images"][frame_idx]
                     # Get camera for this frame
                     fovy = image_metadata.get("fovy", [50])[0]
                     position = Vector3(image_metadata["location"])
@@ -916,12 +967,12 @@ class BambiProcessor:
                     else:
                         f.write(f"{frame_idx} 0\n")
                     
-                    if progress_fn and frame_idx % 50 == 0:
-                        progress = 20 + int((frame_idx / total_frames) * 75)
+                    if progress_fn and i % 50 == 0:
+                        progress = 20 + int((i / len(frame_indices)) * 75)
                         progress_fn(min(progress, 95))
                         
-                    if log_fn and (frame_idx + 1) % 100 == 0:
-                        log_fn(f"Processed {frame_idx + 1}/{total_frames} frames...")
+                    if log_fn and (i + 1) % 100 == 0:
+                        log_fn(f"Processed {i + 1}/{len(frame_indices)} frames...")
                         
         finally:
             if ctx:
@@ -1325,7 +1376,7 @@ class BambiProcessor:
         reid_model_str = config.get("reid_model", "osnet")
         custom_reid_path = config.get("custom_reid_path", "")
         tracker_params_json = config.get("tracker_params_json", "")
-        interpolate = False # config.get("interpolate", True)
+        interpolate = config.get("interpolate", True)
         
         # Map ReID model string to enum
         reid_model_map = {
@@ -1950,6 +2001,7 @@ class BambiProcessor:
         crop_to_content = config.get("ortho_crop_to_content", True)
         create_overviews = config.get("ortho_create_overviews", True)
         max_tile_size = config.get("ortho_max_tile_size", 8192)
+        frame_step = config.get("ortho_frame_step", 1)
         
         if log_fn:
             log_fn(f"Ground resolution: {ground_resolution} m/px")
@@ -1958,6 +2010,8 @@ class BambiProcessor:
                 log_fn("Frame range: All frames")
             else:
                 log_fn(f"Frame range: {start_frame} to {end_frame}")
+            if frame_step > 1:
+                log_fn(f"Frame step: every {frame_step} frames")
         
         if progress_fn:
             progress_fn(5)
@@ -1984,6 +2038,12 @@ class BambiProcessor:
             images = [img for i, img in enumerate(images) if start_frame <= i <= end_frame]
             if log_fn:
                 log_fn(f"Filtered to {len(images)} images (frames {start_frame}-{end_frame})")
+        
+        # Apply frame step filter
+        if frame_step > 1:
+            images = images[::frame_step]
+            if log_fn:
+                log_fn(f"After frame step: {len(images)} images")
         
         if len(images) == 0:
             raise RuntimeError("No images remaining after filtering")
@@ -2977,12 +3037,15 @@ class BambiProcessor:
         dem_metadata_path = config.get("ortho_dem_metadata_path")
         apply_smoothing = config.get("geotiff_apply_smoothing", True)
         mesh_subsample = config.get("geotiff_mesh_subsample", 1)
+        frame_step = config.get("ortho_frame_step", 1)
         
         if log_fn:
             if use_all_frames:
                 log_fn("Frame range: All frames")
             else:
                 log_fn(f"Frame range: {start_frame} to {end_frame}")
+            if frame_step > 1:
+                log_fn(f"Frame step: every {frame_step} frames")
             log_fn(f"Output resolution: {ground_resolution} m/px")
         
         if progress_fn:
@@ -3022,6 +3085,12 @@ class BambiProcessor:
         for i in range(total_all):
             if use_all_frames or (start_frame <= i <= end_frame):
                 frame_indices.append(i)
+        
+        # Apply frame step filter
+        if frame_step > 1:
+            frame_indices = frame_indices[::frame_step]
+            if log_fn:
+                log_fn(f"After frame step: {len(frame_indices)} frames")
         
         if len(frame_indices) == 0:
             raise RuntimeError("No frames to export after filtering")
@@ -3442,5 +3511,440 @@ class BambiProcessor:
             cv2.imwrite(output_path, result_bgr)
             self._save_world_file(output_path, bounds, width, height)
             self._save_prj_file(output_path, crs_epsg, None)
+
+    # =========================================================================
+    # SAM3 SEGMENTATION
+    # =========================================================================
+
+    def run_sam3_segmentation(self, config: Dict[str, Any], progress_fn=None, log_fn=None):
+        """Run SAM3 segmentation on extracted frames using Roboflow Serverless API.
+
+        Expects:
+          config["target_folder"]
+          config["sam3_api_key"]
+          config["sam3_prompts"] (list[str])
+          config["sam3_confidence"] (float, default 0.5)
+          config["sam3_format"] (str: "polygon" | "rle" | "json", default "polygon")
+
+          Optional frame filters:
+            sam3_skip, sam3_limit, sam3_step
+        """
+        import os
+        import json
+        import base64
+        import requests
+
+        target_folder = config["target_folder"]
+        api_key = config.get("sam3_api_key", "")
+        prompts = config.get("sam3_prompts", [])
+        confidence = float(config.get("sam3_confidence", 0.5))
+        output_format = config.get("sam3_format", "polygon")  # FIX: was undefined in your code
+
+        # Frame filter options
+        skip_frames = int(config.get("sam3_skip", 0))
+        limit_frames = int(config.get("sam3_limit", -1))
+        frame_step = int(config.get("sam3_step", 1))
+
+        if not api_key:
+            raise ValueError("Roboflow API key is required for SAM3 segmentation")
+        if not prompts:
+            raise ValueError("At least one text prompt is required for SAM3 segmentation")
+        if frame_step < 1:
+            raise ValueError("sam3_step must be >= 1")
+
+        if log_fn:
+            log_fn(f"Starting SAM3 segmentation (serverless) with {len(prompts)} prompts: {prompts}")
+            log_fn(f"Confidence threshold: {confidence}")
+            log_fn(f"Output format: {output_format}")
+            if skip_frames > 0:
+                log_fn(f"Skipping first {skip_frames} frames")
+            if limit_frames > 0:
+                log_fn(f"Limiting to {limit_frames} frames")
+            if frame_step > 1:
+                log_fn(f"Frame step: every {frame_step} frames")
+
+        if progress_fn:
+            progress_fn(5)
+
+        # Load poses.json for frame information
+        poses_file = os.path.join(target_folder, "poses.json")
+        if not os.path.exists(poses_file):
+            raise FileNotFoundError("poses.json not found - run frame extraction first")
+
+        with open(poses_file, "r", encoding="utf-8") as f:
+            poses = json.load(f)
+
+        images = poses.get("images", [])
+        if not images:
+            raise ValueError("No frames found in poses.json")
+
+        # Create output folder
+        segmentation_folder = os.path.join(target_folder, "segmentation")
+        os.makedirs(segmentation_folder, exist_ok=True)
+
+        # Hosted SAM3 concept segmentation endpoint (serverless)
+        # Docs show: https://serverless.roboflow.com/sam3/concept_segment?api_key=... :contentReference[oaicite:3]{index=3}
+        endpoint = "https://serverless.roboflow.com/sam3/concept_segment"
+
+        # Build list of frame indices to process
+        total_frames = len(images)
+        frame_indices = list(range(total_frames))
+
+        if skip_frames > 0:
+            frame_indices = frame_indices[skip_frames:]
+        if limit_frames > 0:
+            frame_indices = frame_indices[:limit_frames]
+        if frame_step > 1:
+            frame_indices = frame_indices[::frame_step]
+
+        frames_to_process = frame_indices
+
+        if log_fn:
+            log_fn(f"Processing {len(frames_to_process)} frames after filtering...")
+
+        if progress_fn:
+            progress_fn(10)
+
+        def _encode_image_b64(path: str) -> str:
+            # Standard base64 (no data: prefix) is accepted in Roboflow Inference request image schema. :contentReference[oaicite:4]{index=4}
+            with open(path, "rb") as fimg:
+                return base64.b64encode(fimg.read()).decode("utf-8")
+
+        def _make_payload(image_b64: str) -> Dict[str, Any]:
+            # Matches the SAM3 concept_segment JSON structure from Roboflow docs. :contentReference[oaicite:5]{index=5}
+            return {
+                "format": output_format,
+                "output_prob_thresh": confidence,
+                # supported by the SAM3 request model :contentReference[oaicite:6]{index=6}
+                "image": {
+                    "type": "base64",
+                    "value": image_b64,
+                },
+                "prompts": [{"type": "text", "text": p} for p in prompts],
+            }
+
+        all_results = []
+
+        # Use a session for connection pooling
+        session = requests.Session()
+        headers = {"Content-Type": "application/json"}
+
+        for idx, frame_idx in enumerate(frames_to_process):
+            if frame_idx >= len(images):
+                continue
+
+            image_info = images[frame_idx]
+            imagefile = image_info.get("imagefile", "")
+            if not imagefile:
+                continue
+
+            image_path = os.path.join(target_folder, "frames", imagefile)
+            if not os.path.exists(image_path):
+                if log_fn:
+                    log_fn(f"Warning: Frame not found: {image_path}")
+                continue
+
+            try:
+                image_b64 = _encode_image_b64(image_path)
+                payload = _make_payload(image_b64)
+
+                # API key can be passed as query param (as shown in SAM3 serverless example). :contentReference[oaicite:7]{index=7}
+                resp = session.post(
+                    endpoint,
+                    params={"api_key": api_key},
+                    headers=headers,
+                    json=payload,
+                    timeout=(10, 120),  # connect/read timeouts
+                )
+                resp.raise_for_status()
+                resp_json = resp.json()
+
+                # Normalize into your existing output structure
+                frame_results = {
+                    "frame_idx": frame_idx,
+                    "imagefile": imagefile,
+                    "prompts": [],
+                }
+
+                for prompt_result in resp_json.get("prompt_results", []):
+                    echo = prompt_result.get("echo", {}) or {}
+                    prompt_text = (
+                            echo.get("text")
+                            or prompt_result.get("prompt")
+                            or prompt_result.get("text")
+                            or ""
+                    )
+
+                    prompt_data = {
+                        "prompt": prompt_text,
+                        "predictions": [],
+                    }
+
+                    for prediction in prompt_result.get("predictions", []):
+                        pred_data = {
+                            "confidence": float(prediction.get("confidence", 0.0)),
+                        }
+
+                        masks = prediction.get("masks", None)
+
+                        # For "polygon" format, masks is typically a list of polygons (list[list[points]]). :contentReference[oaicite:8]{index=8}
+                        if output_format == "polygon" and masks is not None:
+                            pred_data["polygons"] = masks
+                        else:
+                            # Keep raw masks for other formats (e.g., rle/json)
+                            if masks is not None:
+                                pred_data["masks"] = masks
+
+                        prompt_data["predictions"].append(pred_data)
+
+                    frame_results["prompts"].append(prompt_data)
+
+                all_results.append(frame_results)
+
+            except Exception as e:
+                if log_fn:
+                    log_fn(f"Warning: Failed to process frame {frame_idx}: {str(e)}")
+                continue
+
+            if progress_fn:
+                # 10..95 range
+                progress = 10 + int(((idx + 1) / max(1, len(frames_to_process))) * 85)
+                progress_fn(min(progress, 95))
+
+            if log_fn and (idx + 1) % 10 == 0:
+                log_fn(f"Processed {idx + 1}/{len(frames_to_process)} frames")
+
+        # Save results
+        output_file = os.path.join(segmentation_folder, "segmentation_pixel.json")
+        with open(output_file, "w", encoding="utf-8") as f:
+            json.dump(all_results, f, indent=2)
+
+        total_predictions = sum(
+            len(p.get("predictions", []))
+            for r in all_results
+            for p in r.get("prompts", [])
+        )
+
+        if log_fn:
+            log_fn(f"SAM3 segmentation complete: {len(all_results)} frames, {total_predictions} predictions")
+            log_fn(f"Results saved to: {output_file}")
+
+        if progress_fn:
+            progress_fn(100)
+
+    def run_sam3_georeference(self, config: Dict[str, Any], progress_fn=None, log_fn=None):
+        """Geo-reference SAM3 segmentation masks.
+        
+        Converts pixel polygon coordinates to world coordinates using the same
+        projection pipeline as FoV calculation.
+        
+        :param config: Configuration dictionary
+        :param progress_fn: Progress callback function
+        :param log_fn: Logging callback function
+        """
+        import numpy as np
+        
+        from pyproj import CRS, Transformer
+        from pyrr import Vector3, Quaternion
+        from trimesh import Trimesh
+        
+        from alfspy.core.rendering import Resolution, Camera
+        from alfspy.render.render import read_gltf, process_render_data, make_mgl_context, release_all
+        from bambi.util.projection_util import label_to_world_coordinates
+        
+        target_folder = config["target_folder"]
+        dem_path = config["dem_path"]
+        
+        # Correction factors
+        translation = config.get("translation", {"x": 0, "y": 0, "z": 0})
+        rotation = config.get("rotation", {"x": 0, "y": 0, "z": 0})
+        
+        if log_fn:
+            log_fn("Starting SAM3 geo-referencing...")
+            
+        # Load pixel segmentation results
+        segmentation_folder = os.path.join(target_folder, "segmentation")
+        pixel_file = os.path.join(segmentation_folder, "segmentation_pixel.json")
+        
+        if not os.path.exists(pixel_file):
+            raise FileNotFoundError("Pixel segmentation not found - run SAM3 segmentation first")
+            
+        with open(pixel_file, 'r', encoding='utf-8') as f:
+            pixel_results = json.load(f)
+            
+        if not pixel_results:
+            raise ValueError("No segmentation results found")
+            
+        if log_fn:
+            log_fn(f"Loaded {len(pixel_results)} frame results")
+            
+        # Load DEM metadata
+        dem_json_path = dem_path.replace(".gltf", ".json").replace(".glb", ".json")
+        with open(dem_json_path, 'r') as f:
+            dem_json = json.load(f)
+            
+        x_offset = dem_json["origin"][0]
+        y_offset = dem_json["origin"][1]
+        z_offset = dem_json["origin"][2]
+        
+        # Load poses
+        poses_file = os.path.join(target_folder, "poses.json")
+        with open(poses_file, 'r') as f:
+            poses = json.load(f)
+            
+        # Get input resolution from first extracted frame
+        input_resolution = None
+        first_image = poses["images"][0]
+        first_image_file = first_image.get("imagefile", "")
+        if first_image_file:
+            first_image_path = os.path.join(target_folder, "frames", first_image_file)
+            if os.path.exists(first_image_path):
+                import cv2
+                img = cv2.imread(first_image_path)
+                if img is not None:
+                    input_resolution = Resolution(img.shape[1], img.shape[0])
+                    if log_fn:
+                        log_fn(f"Input resolution: {img.shape[1]}x{img.shape[0]}")
+        
+        if input_resolution is None:
+            res_width = config.get("input_resolution_width", 640)
+            res_height = config.get("input_resolution_height", 512)
+            input_resolution = Resolution(res_width, res_height)
+            if log_fn:
+                log_fn(f"Using configured resolution: {res_width}x{res_height}")
+        
+        if progress_fn:
+            progress_fn(10)
+            
+        # Load DEM mesh
+        ctx = None
+        georef_results = []
+        
+        try:
+            mesh_data, texture_data = read_gltf(dem_path)
+            tri_mesh = Trimesh(vertices=mesh_data.vertices, faces=mesh_data.indices)
+            mesh_data, texture_data = process_render_data(mesh_data, texture_data)
+            
+            cor_rotation_eulers = Vector3([rotation['x'], rotation['y'], rotation['z']], dtype='f4')
+            cor_translation = Vector3([translation['x'], translation['y'], translation['z']], dtype='f4')
+            
+            total_frames = len(pixel_results)
+            failed_count = 0
+            
+            for idx, frame_result in enumerate(pixel_results):
+                frame_idx = frame_result['frame_idx']
+                
+                if frame_idx >= len(poses["images"]):
+                    failed_count += 1
+                    continue
+                    
+                image_metadata = poses["images"][frame_idx]
+                
+                # Get camera for this frame
+                fovy = image_metadata.get("fovy", [50])[0]
+                position = Vector3(image_metadata["location"])
+                rot = image_metadata["rotation"]
+                rotation_eulers = (Vector3(
+                    [np.deg2rad(val % 360.0) for val in rot]) - cor_rotation_eulers) * -1
+                position += cor_translation
+                rotation_quat = Quaternion.from_eulers(rotation_eulers)
+                
+                camera = Camera(fovy=fovy, aspect_ratio=1.0, position=position, rotation=rotation_quat)
+                
+                # Process each prompt's predictions
+                georef_frame = {
+                    'frame_idx': frame_idx,
+                    'imagefile': frame_result.get('imagefile', ''),
+                    'prompts': []
+                }
+                
+                for prompt_data in frame_result.get('prompts', []):
+                    georef_prompt = {
+                        'prompt': prompt_data.get('prompt', ''),
+                        'predictions': []
+                    }
+                    
+                    for pred in prompt_data.get('predictions', []):
+                        georef_pred = {
+                            'confidence': pred.get('confidence', 0),
+                            'world_polygons': []
+                        }
+                        
+                        # Process each polygon
+                        for polygon in pred.get('polygons', []):
+                            if not polygon:
+                                continue
+                                
+                            try:
+                                # Flatten polygon points to label format [x1,y1,x2,y2,...]
+                                if isinstance(polygon[0], (list, tuple)):
+                                    # List of [x, y] points
+                                    label_coords = []
+                                    for pt in polygon:
+                                        label_coords.extend([pt[0], pt[1]])
+                                else:
+                                    # Already flat
+                                    label_coords = polygon
+                                    
+                                # Project to world coordinates
+                                world_coords = label_to_world_coordinates(
+                                    label_coords, input_resolution, tri_mesh, camera
+                                )
+                                
+                                if len(world_coords) > 0:
+                                    # Apply offsets
+                                    world_polygon = []
+                                    for pt in world_coords:
+                                        world_polygon.append([
+                                            float(pt[0] + x_offset),
+                                            float(pt[1] + y_offset),
+                                            float(pt[2] + z_offset)
+                                        ])
+                                    georef_pred['world_polygons'].append(world_polygon)
+                                    
+                            except Exception as e:
+                                failed_count += 1
+                                continue
+                                
+                        if georef_pred['world_polygons']:
+                            georef_prompt['predictions'].append(georef_pred)
+                            
+                    if georef_prompt['predictions']:
+                        georef_frame['prompts'].append(georef_prompt)
+                        
+                if georef_frame['prompts']:
+                    georef_results.append(georef_frame)
+                    
+                if progress_fn and idx % 10 == 0:
+                    progress = 10 + int((idx / total_frames) * 85)
+                    progress_fn(min(progress, 95))
+                    
+        finally:
+            if ctx:
+                release_all(ctx)
+            del mesh_data
+            del texture_data
+            del tri_mesh
+            
+        # Save geo-referenced results
+        output_file = os.path.join(segmentation_folder, "segmentation_georef.json")
+        with open(output_file, 'w', encoding='utf-8') as f:
+            json.dump(georef_results, f, indent=2)
+            
+        # Count total predictions
+        total_predictions = sum(
+            len(p['predictions']) 
+            for r in georef_results 
+            for p in r['prompts']
+        )
+        
+        if log_fn:
+            log_fn(f"Geo-referenced {len(georef_results)} frames with {total_predictions} predictions")
+            if failed_count > 0:
+                log_fn(f"Warning: {failed_count} polygons failed to geo-reference")
+            log_fn(f"Saved to: {output_file}")
+            
+        if progress_fn:
+            progress_fn(100)
 
 

@@ -211,7 +211,7 @@ class BambiDockWidget(QDockWidget):
         # ----- Sub-Tab 1: Extraction & Detection -----
         extract_detect_tab = QWidget()
         extract_detect_layout = QVBoxLayout(extract_detect_tab)
-        config_sub_tabs.addTab(extract_detect_tab, "Extraction & Detection")
+        config_sub_tabs.addTab(extract_detect_tab, "Extraction/Detection")
         
         # Frame extraction parameters
         frame_group = QGroupBox("Frame Extraction")
@@ -260,6 +260,23 @@ class BambiDockWidget(QDockWidget):
         self.confidence_spin.setValue(0.5)
         self.confidence_spin.setToolTip("Minimum detection confidence")
         detection_layout.addRow("Min Confidence:", self.confidence_spin)
+        
+        # Detection frame filters
+        det_filter_label = QLabel("Frame Filters (optional):")
+        det_filter_label.setStyleSheet("font-weight: bold; margin-top: 8px;")
+        detection_layout.addRow(det_filter_label)
+        
+        self.detect_skip_spin = QSpinBox()
+        self.detect_skip_spin.setRange(0, 2147483647)
+        self.detect_skip_spin.setValue(0)
+        self.detect_skip_spin.setToolTip("Skip the first N frames before starting detection")
+        detection_layout.addRow("Skip Frames:", self.detect_skip_spin)
+        
+        self.detect_limit_spin = QSpinBox()
+        self.detect_limit_spin.setRange(-1, 2147483647)
+        self.detect_limit_spin.setValue(-1)
+        self.detect_limit_spin.setToolTip("Limit detection to N frames (-1 = no limit)")
+        detection_layout.addRow("Limit Frames:", self.detect_limit_spin)
         
         extract_detect_layout.addWidget(detection_group)
         extract_detect_layout.addStretch()
@@ -530,15 +547,32 @@ class BambiDockWidget(QDockWidget):
         self.mask_simplify_spin.setToolTip("Polygon simplification factor (higher = fewer points)")
         fov_layout.addRow("Simplify Epsilon:", self.mask_simplify_spin)
         
+        # FoV frame filters
+        fov_filter_label = QLabel("Frame Filters (optional):")
+        fov_filter_label.setStyleSheet("font-weight: bold; margin-top: 8px;")
+        fov_layout.addRow(fov_filter_label)
+        
+        self.fov_skip_spin = QSpinBox()
+        self.fov_skip_spin.setRange(0, 2147483647)
+        self.fov_skip_spin.setValue(0)
+        self.fov_skip_spin.setToolTip("Skip the first N frames before starting FoV calculation")
+        fov_layout.addRow("Skip Frames:", self.fov_skip_spin)
+        
+        self.fov_limit_spin = QSpinBox()
+        self.fov_limit_spin.setRange(-1, 2147483647)
+        self.fov_limit_spin.setValue(-1)
+        self.fov_limit_spin.setToolTip("Limit FoV calculation to N frames (-1 = no limit)")
+        fov_layout.addRow("Limit Frames:", self.fov_limit_spin)
+        
         fov_tab_layout.addWidget(fov_group)
         fov_tab_layout.addStretch()
         
         # ----- Sub-Tab 5: Orthomosaic -----
         ortho_tab = QWidget()
         ortho_tab_layout = QVBoxLayout(ortho_tab)
-        config_sub_tabs.addTab(ortho_tab, "Orthomosaic")
+        config_sub_tabs.addTab(ortho_tab, "Orthomosaic/GeoTiff")
         
-        ortho_group = QGroupBox("Orthomosaic Generation")
+        ortho_group = QGroupBox("Orthomosaic/GeoTIFF Generation")
         ortho_layout = QFormLayout(ortho_group)
         
         self.ortho_resolution_spin = QDoubleSpinBox()
@@ -615,8 +649,88 @@ class BambiDockWidget(QDockWidget):
         self.ortho_tile_size_spin.setToolTip("Maximum tile size for processing large images")
         ortho_layout.addRow("Max Tile Size:", self.ortho_tile_size_spin)
         
+        # Orthomosaic frame step (skip)
+        self.ortho_frame_step_spin = QSpinBox()
+        self.ortho_frame_step_spin.setRange(1, 100)
+        self.ortho_frame_step_spin.setValue(1)
+        self.ortho_frame_step_spin.setToolTip("Process every Nth frame (1 = all frames, 2 = every 2nd frame, etc.)")
+        ortho_layout.addRow("Frame Step:", self.ortho_frame_step_spin)
+        
         ortho_tab_layout.addWidget(ortho_group)
         ortho_tab_layout.addStretch()
+        
+        # ----- Sub-Tab 6: SAM3 Segmentation -----
+        sam3_tab = QWidget()
+        sam3_tab_layout = QVBoxLayout(sam3_tab)
+        config_sub_tabs.addTab(sam3_tab, "SAM3 Segmentation")
+        
+        sam3_api_group = QGroupBox("Roboflow API Configuration")
+        sam3_api_layout = QFormLayout(sam3_api_group)
+
+        self.sam3_api_key_edit = QLineEdit()
+        self.sam3_api_key_edit.setEchoMode(QLineEdit.Password)
+        self.sam3_api_key_edit.setPlaceholderText("Enter your Roboflow API key")
+        self.sam3_api_key_edit.setToolTip("Your Roboflow API key for SAM3 inference")
+        sam3_api_layout.addRow("API Key:", self.sam3_api_key_edit)
+
+        # Toggle to show/hide API key
+        self.show_api_key_check = QCheckBox("Show API key")
+        self.show_api_key_check.stateChanged.connect(self._toggle_api_key_visibility)
+        sam3_api_layout.addRow("", self.show_api_key_check)
+
+        sam3_tab_layout.addWidget(sam3_api_group)
+
+        sam3_prompts_group = QGroupBox("Segmentation Prompts")
+        sam3_prompts_layout = QVBoxLayout(sam3_prompts_group)
+        
+        prompts_info = QLabel("Enter text prompts (one per line) for objects to segment:")
+        prompts_info.setWordWrap(True)
+        sam3_prompts_layout.addWidget(prompts_info)
+        
+        self.sam3_prompts_edit = QTextEdit()
+        self.sam3_prompts_edit.setPlaceholderText("deer\nwild boar\nperson\ncar")
+        self.sam3_prompts_edit.setMaximumHeight(100)
+        self.sam3_prompts_edit.setToolTip("Text prompts for SAM3 segmentation. One prompt per line.")
+        sam3_prompts_layout.addWidget(self.sam3_prompts_edit)
+        
+        sam3_tab_layout.addWidget(sam3_prompts_group)
+
+        sam3_params_group = QGroupBox("Segmentation Parameters")
+        sam3_params_layout = QFormLayout(sam3_params_group)
+        
+        self.sam3_confidence_spin = QDoubleSpinBox()
+        self.sam3_confidence_spin.setRange(0.0, 1.0)
+        self.sam3_confidence_spin.setSingleStep(0.05)
+        self.sam3_confidence_spin.setValue(0.5)
+        self.sam3_confidence_spin.setDecimals(2)
+        self.sam3_confidence_spin.setToolTip("Minimum confidence threshold for segmentation masks")
+        sam3_params_layout.addRow("Confidence Threshold:", self.sam3_confidence_spin)
+        
+        # SAM3 frame filters
+        sam3_filter_label = QLabel("Frame Filters (optional):")
+        sam3_filter_label.setStyleSheet("font-weight: bold; margin-top: 8px;")
+        sam3_params_layout.addRow(sam3_filter_label)
+        
+        self.sam3_skip_spin = QSpinBox()
+        self.sam3_skip_spin.setRange(0, 2147483647)
+        self.sam3_skip_spin.setValue(0)
+        self.sam3_skip_spin.setToolTip("Skip the first N frames before starting segmentation")
+        sam3_params_layout.addRow("Skip Frames:", self.sam3_skip_spin)
+        
+        self.sam3_limit_spin = QSpinBox()
+        self.sam3_limit_spin.setRange(-1, 2147483647)
+        self.sam3_limit_spin.setValue(-1)
+        self.sam3_limit_spin.setToolTip("Limit segmentation to N frames (-1 = no limit)")
+        sam3_params_layout.addRow("Limit Frames:", self.sam3_limit_spin)
+        
+        self.sam3_step_spin = QSpinBox()
+        self.sam3_step_spin.setRange(1, 100)
+        self.sam3_step_spin.setValue(1)
+        self.sam3_step_spin.setToolTip("Process every Nth frame (1 = all frames, 2 = every 2nd frame, etc.)")
+        sam3_params_layout.addRow("Frame Step:", self.sam3_step_spin)
+
+        sam3_tab_layout.addWidget(sam3_params_group)
+        sam3_tab_layout.addStretch()
         
         # =====================================================================
         # MAIN TAB 3: PROCESSING
@@ -768,6 +882,35 @@ class BambiDockWidget(QDockWidget):
         add_geotiffs_row.addWidget(self.add_geotiffs_btn)
         add_geotiffs_row.addWidget(self.add_geotiffs_status)
         steps_btn_layout.addLayout(add_geotiffs_row)
+        # ----- Step 9: Run SAM3 Segmentation -----
+        step9_row = QHBoxLayout()
+        self.sam3_segment_btn = QPushButton("9. Run SAM3 Segmentation")
+        self.sam3_segment_btn.clicked.connect(self.run_sam3_segmentation)
+        self.sam3_segment_btn.setToolTip("Run SAM3 segmentation on extracted frames using Roboflow API")
+        self.sam3_segment_status = QLabel("⚪ Not started")
+        step9_row.addWidget(self.sam3_segment_btn)
+        step9_row.addWidget(self.sam3_segment_status)
+        steps_btn_layout.addLayout(step9_row)
+        
+        # ----- Step 10: Geo-Reference Segmentation -----
+        step10_row = QHBoxLayout()
+        self.sam3_georef_btn = QPushButton("10. Geo-Reference Segmentation")
+        self.sam3_georef_btn.clicked.connect(self.run_sam3_georeference)
+        self.sam3_georef_btn.setToolTip("Convert pixel segmentation masks to world coordinates")
+        self.sam3_georef_status = QLabel("⚪ Not started")
+        step10_row.addWidget(self.sam3_georef_btn)
+        step10_row.addWidget(self.sam3_georef_status)
+        steps_btn_layout.addLayout(step10_row)
+        
+        # -> Add SAM3 Segmentation to QGIS
+        add_sam3_row = QHBoxLayout()
+        self.add_sam3_btn = QPushButton("   → Add Segmentation to QGIS")
+        self.add_sam3_btn.clicked.connect(self.add_sam3_to_qgis)
+        self.add_sam3_btn.setToolTip("Add geo-referenced segmentation masks as QGIS layers")
+        self.add_sam3_status = QLabel("⚪")
+        add_sam3_row.addWidget(self.add_sam3_btn)
+        add_sam3_row.addWidget(self.add_sam3_status)
+        steps_btn_layout.addLayout(add_sam3_row)
         
         processing_layout.addWidget(steps_group)
         
@@ -968,6 +1111,8 @@ class BambiDockWidget(QDockWidget):
             # Detection
             "model_path": self.model_path_edit.text() or None,
             "min_confidence": self.confidence_spin.value(),
+            "detect_skip": self.detect_skip_spin.value() if hasattr(self, 'detect_skip_spin') else 0,
+            "detect_limit": self.detect_limit_spin.value() if hasattr(self, 'detect_limit_spin') else -1,
             
             # Correction factors
             "translation": {
@@ -1003,11 +1148,22 @@ class BambiDockWidget(QDockWidget):
             "ortho_crop_to_content": self.ortho_crop_check.isChecked(),
             "ortho_create_overviews": self.ortho_overviews_check.isChecked(),
             "ortho_max_tile_size": self.ortho_tile_size_spin.value(),
+            "ortho_frame_step": self.ortho_frame_step_spin.value() if hasattr(self, 'ortho_frame_step_spin') else 1,
             
             # Field of View
             "use_fov_mask": self.use_fov_mask_check.isChecked(),
             "fov_mask_path": self.fov_mask_path_edit.text() if hasattr(self, 'fov_mask_path_edit') else "",
-            "mask_simplify_epsilon": self.mask_simplify_spin.value() if hasattr(self, 'mask_simplify_spin') else 2.0
+            "mask_simplify_epsilon": self.mask_simplify_spin.value() if hasattr(self, 'mask_simplify_spin') else 2.0,
+            "fov_skip": self.fov_skip_spin.value() if hasattr(self, 'fov_skip_spin') else 0,
+            "fov_limit": self.fov_limit_spin.value() if hasattr(self, 'fov_limit_spin') else -1,
+            
+            # SAM3 Segmentation
+            "sam3_api_key": self.sam3_api_key_edit.text() if hasattr(self, 'sam3_api_key_edit') else "",
+            "sam3_prompts": [p.strip() for p in self.sam3_prompts_edit.toPlainText().split("\n") if p.strip()] if hasattr(self, 'sam3_prompts_edit') else [],
+            "sam3_confidence": self.sam3_confidence_spin.value() if hasattr(self, 'sam3_confidence_spin') else 0.5,
+            "sam3_skip": self.sam3_skip_spin.value() if hasattr(self, 'sam3_skip_spin') else 0,
+            "sam3_limit": self.sam3_limit_spin.value() if hasattr(self, 'sam3_limit_spin') else -1,
+            "sam3_step": self.sam3_step_spin.value() if hasattr(self, 'sam3_step_spin') else 1,
         }
         
     def validate_inputs(self, required_fields: list) -> bool:
@@ -1438,7 +1594,14 @@ class BambiDockWidget(QDockWidget):
     def toggle_ortho_frame_range(self, state):
         """Toggle the frame range controls based on checkbox state."""
         self.ortho_frame_range_widget.setEnabled(not state)
-        
+    
+    def _toggle_api_key_visibility(self, state):
+        """Toggle visibility of SAM3 API key."""
+        if state:
+            self.sam3_api_key_edit.setEchoMode(QLineEdit.Normal)
+        else:
+            self.sam3_api_key_edit.setEchoMode(QLineEdit.Password)
+
     def detect_frame_count(self):
         """Detect the number of available frames from poses.json."""
         config = self.get_config()
@@ -1604,6 +1767,251 @@ class BambiDockWidget(QDockWidget):
             
         self.start_worker("export_geotiffs")
     
+    def run_sam3_segmentation(self):
+        """Run SAM3 segmentation step."""
+        config = self.get_config()
+        
+        # Check if frames exist
+        poses_file = os.path.join(config["target_folder"], "poses.json")
+        
+        if not os.path.exists(poses_file):
+            QMessageBox.warning(
+                self,
+                "Missing Prerequisites",
+                "Frame extraction has not been completed.\nPlease run Step 1 first."
+            )
+            return
+            
+        # Check API key
+        if not config.get("sam3_api_key"):
+            QMessageBox.warning(
+                self,
+                "Missing API Key",
+                "Please enter your Roboflow API key in the SAM3 Segmentation configuration tab."
+            )
+            return
+
+        # Check prompts
+        if not config.get("sam3_prompts"):
+            QMessageBox.warning(
+                self,
+                "Missing Prompts",
+                "Please enter at least one text prompt in the SAM3 Segmentation configuration tab."
+            )
+            return
+            
+        self.start_worker("sam3_segmentation")
+        
+    def run_sam3_georeference(self):
+        """Run SAM3 geo-referencing step."""
+        config = self.get_config()
+        
+        # Check if pixel segmentation exists
+        segmentation_file = os.path.join(config["target_folder"], "segmentation", "segmentation_pixel.json")
+        
+        if not os.path.exists(segmentation_file):
+            QMessageBox.warning(
+                self,
+                "Missing Prerequisites",
+                "SAM3 segmentation has not been completed.\nPlease run Step 9 first."
+            )
+            return
+            
+        # Check DEM path
+        if not self.validate_inputs(["dem_path"]):
+            return
+            
+        self.start_worker("sam3_georeference")
+        
+    def add_sam3_to_qgis(self):
+        """Add SAM3 segmentation masks as QGIS layers.
+        
+        Creates a group per frame, with one layer per prompt within each frame.
+        This allows enabling/disabling individual frames.
+        """
+        config = self.get_config()
+        segmentation_folder = os.path.join(config["target_folder"], "segmentation")
+        georef_file = os.path.join(segmentation_folder, "segmentation_georef.json")
+        
+        if not os.path.exists(georef_file):
+            QMessageBox.warning(
+                self,
+                "Missing Prerequisites",
+                "SAM3 geo-referencing has not been completed.\nPlease run Step 10 first."
+            )
+            return
+            
+        try:
+            self.log("Adding SAM3 segmentation to QGIS...")
+            self.update_status("add_sam3", "🟡 Loading...")
+            
+            # Load geo-referenced results
+            with open(georef_file, 'r', encoding='utf-8') as f:
+                georef_results = json.load(f)
+                
+            if not georef_results:
+                QMessageBox.warning(self, "No Results", "No geo-referenced segmentation found.")
+                self.update_status("add_sam3", "🔴 No data")
+                return
+                
+            # Get target CRS
+            target_crs = QgsCoordinateReferenceSystem(f"EPSG:{config['target_epsg']}")
+            
+            # Collect all unique prompts for consistent coloring
+            all_prompts = set()
+            for frame_result in georef_results:
+                for prompt_data in frame_result.get('prompts', []):
+                    all_prompts.add(prompt_data.get('prompt', 'unknown'))
+                    
+            # Generate colors for prompts
+            prompt_colors = {}
+            colors = [
+                (255, 0, 0),      # Red
+                (0, 150, 0),      # Green
+                (0, 100, 255),    # Blue
+                (255, 165, 0),    # Orange
+                (128, 0, 128),    # Purple
+                (0, 200, 200),    # Cyan
+                (255, 105, 180),  # Pink
+                (139, 69, 19),    # Brown
+            ]
+            for idx, prompt in enumerate(sorted(all_prompts)):
+                prompt_colors[prompt] = colors[idx % len(colors)]
+            
+            # Check if there are many frames - warn user
+            num_frames = len(georef_results)
+            if num_frames > 50:
+                reply = QMessageBox.question(
+                    self,
+                    "Many Frames",
+                    f"Found {num_frames} frames with segmentation. Creating individual layer groups "
+                    f"for each may slow down QGIS.\n\nContinue with individual frame groups?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.Yes
+                )
+                if reply == QMessageBox.No:
+                    self.update_status("add_sam3", "⚪ Cancelled")
+                    return
+            
+            # Create main group
+            root = QgsProject.instance().layerTreeRoot()
+            main_group = root.addGroup("SAM3 Segmentation")
+            
+            total_polygons = 0
+            total_frames_added = 0
+            
+            # Process each frame
+            for frame_result in georef_results:
+                frame_idx = frame_result.get('frame_idx', 0)
+                prompts_data = frame_result.get('prompts', [])
+                
+                if not prompts_data:
+                    continue
+                    
+                # Create subgroup for this frame
+                frame_group = main_group.addGroup(f"Frame {frame_idx:04d}")
+                
+                # Create a layer for each prompt in this frame
+                for prompt_data in prompts_data:
+                    prompt = prompt_data.get('prompt', 'unknown')
+                    predictions = prompt_data.get('predictions', [])
+                    
+                    if not predictions:
+                        continue
+                    
+                    # Create layer for this prompt
+                    layer = QgsVectorLayer(
+                        "Polygon?crs=" + target_crs.authid(),
+                        prompt,
+                        "memory"
+                    )
+                    provider = layer.dataProvider()
+                    provider.addAttributes([
+                        QgsField("prompt", QVariant.String),
+                        QgsField("frame", QVariant.Int),
+                        QgsField("confidence", QVariant.Double),
+                        QgsField("polygon_idx", QVariant.Int)
+                    ])
+                    layer.updateFields()
+                    
+                    features = []
+                    
+                    for pred_idx, pred in enumerate(predictions):
+                        confidence = pred.get('confidence', 0)
+                        
+                        for poly_idx, world_polygon in enumerate(pred.get('world_polygons', [])):
+                            if len(world_polygon) < 3:
+                                continue
+                                
+                            # Create polygon points (use only x, y)
+                            points = [QgsPointXY(pt[0], pt[1]) for pt in world_polygon]
+                            
+                            # Close the polygon if not closed
+                            if points[0] != points[-1]:
+                                points.append(points[0])
+                                
+                            feat = QgsFeature()
+                            feat.setGeometry(QgsGeometry.fromPolygonXY([points]))
+                            feat.setAttributes([
+                                prompt,
+                                frame_idx,
+                                round(confidence, 4),
+                                poly_idx
+                            ])
+                            features.append(feat)
+                            total_polygons += 1
+                    
+                    if features:
+                        provider.addFeatures(features)
+                        layer.updateExtents()
+                        
+                        # Style the layer
+                        color = prompt_colors.get(prompt, (100, 100, 100))
+                        self._style_sam3_layer(layer, color)
+                        
+                        # Add to project and frame group
+                        QgsProject.instance().addMapLayer(layer, False)
+                        frame_group.addLayer(layer)
+                
+                # Collapse frame group by default
+                frame_group.setExpanded(False)
+                total_frames_added += 1
+                    
+            # Keep main group expanded
+            main_group.setExpanded(True)
+            
+            self.log(f"Added SAM3 segmentation to QGIS: {total_frames_added} frames, {total_polygons} polygons")
+            self.update_status("add_sam3", "🟢 Completed")
+            
+            # Refresh canvas
+            if total_polygons > 0:
+                self.iface.mapCanvas().refresh()
+                
+        except Exception as e:
+            self.log(f"Error adding SAM3 layers: {str(e)}")
+            self.update_status("add_sam3", "🔴 Error")
+            QMessageBox.critical(self, "Error", f"Failed to add SAM3 segmentation: {str(e)}")
+            
+    def _style_sam3_layer(self, layer, color: tuple):
+        """Apply styling to a SAM3 segmentation layer.
+        
+        :param layer: Polygon layer to style
+        :param color: RGB tuple like (255, 0, 0)
+        """
+        from qgis.core import QgsFillSymbol, QgsSingleSymbolRenderer
+        
+        try:
+            color_str = f"{color[0]},{color[1]},{color[2]}"
+            symbol = QgsFillSymbol.createSimple({
+                'color': f"{color_str},80",  # Semi-transparent fill
+                'outline_color': f"{color_str},255",
+                'outline_width': '0.8'
+            })
+            layer.setRenderer(QgsSingleSymbolRenderer(symbol))
+            layer.triggerRepaint()
+        except Exception:
+            pass
+    
     def run_flight_route(self):
         """Run flight route generation step."""
         config = self.get_config()
@@ -1694,7 +2102,10 @@ class BambiDockWidget(QDockWidget):
             "flight_route": self.flight_route_status,
             "add_ortho": self.add_ortho_status,
             "add_geotiffs": self.add_geotiffs_status,
-            "add_flight_route": self.add_flight_route_status
+            "add_flight_route": self.add_flight_route_status,
+            "sam3_segmentation": self.sam3_segment_status,
+            "sam3_georeference": self.sam3_georef_status,
+            "add_sam3": self.add_sam3_status
         }
         if step in status_map:
             status_map[step].setText(status)
@@ -1717,6 +2128,9 @@ class BambiDockWidget(QDockWidget):
         self.add_geotiffs_btn.setEnabled(enabled)
         self.add_flight_route_btn.setEnabled(enabled)
         self.refresh_status_btn.setEnabled(enabled)
+        self.sam3_segment_btn.setEnabled(enabled)
+        self.sam3_georef_btn.setEnabled(enabled)
+        self.add_sam3_btn.setEnabled(enabled)
         
     def add_tracks_to_qgis(self):
         """Add tracked animals as individual layer groups to QGIS.

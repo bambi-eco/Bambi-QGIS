@@ -13,6 +13,7 @@ about=A comprehensive QGIS plugin for wildlife detection and tracking in drone v
     - Geo-referencing of detections using DEM and camera metadata
     - Multi-object tracking with configurable parameters
     - Automatic creation of polygon layers for tracks in QGIS
+    - Automatic segmentation of objects using SAM3
 
 tracker=https://github.com/bambi-eco/Bambi-QGIS/issues
 repository=https://github.com/bambi-eco/Bambi-QGIS
