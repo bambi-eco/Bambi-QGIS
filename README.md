@@ -405,30 +405,36 @@ The plugin supports multiple tracking backends with different capabilities:
 
 ```
 target_folder/
-├── frames/                    # Extracted video frames
-│   ├── frame_000000.jpg
-│   ├── frame_000010.jpg
-│   └── ...
-├── poses.json                 # Camera poses for each frame
-├── flight_route       
-│   └── flight_route.geojson   # Drone flight path
-├── detections/
-│   └── detections.txt         # Raw YOLO detections
-├── georeferenced/
-│   └── georeferenced.txt      # Geo-referenced detections
-├── tracks/
-│   └── tracks.csv             # Animal tracks with IDs
-├── fov/
-│   ├── fov_polygons.geojson   # Per-frame FoV polygons
-│   └── merged_fov.geojson     # Combined coverage area
-├── orthomosaic/
-│   └── orthomosaic.tif        # Georeferenced mosaic
-├── geotiffs/
-│   ├── frame_000000.tiff      # Per-frame GeoTIFFs
-│   └── ...
-└── models/
-    └── thermal_animal_detector.pt
-    └── osnet_x0_5_bambi_thermal_omni.pt
+├── frames/                                 # Extracted video frames
+│   ├── frame_000000.jpg      
+│   ├── frame_000010.jpg      
+│   └── ...      
+├── poses.json                              # Camera poses for each frame
+├── mask_T.png                              # Thermal mask file (depending on camera during extraction phase)
+├── mask_W.png                              # RGB mask file (depending on camera during extraction phase)
+├── flight_route                    
+│   └── flight_route.geojson                # Drone flight path
+├── detections/             
+│   └── detections.txt                      # Raw YOLO detections
+├── georeferenced/      
+│   └── georeferenced.txt                   # Geo-referenced detections
+├── tracks/      
+│   └── tracks.csv                          # Animal tracks with IDs
+├── fov/      
+│   ├── fov_polygons.geojson                # Per-frame FoV polygons
+│   └── merged_fov.geojson                  # Combined coverage area
+├── orthomosaic/      
+│   └── orthomosaic.tif                     # Georeferenced mosaic
+├── geotiffs/      
+│   ├── frame_000000.tiff                   # Per-frame GeoTIFFs
+│   └── ...      
+├── segmentation/      
+│   ├── segmentation_pixel.json             # pixel based segmentation masks
+│   └── segmentation_georef.json            # geo-referenced segmentation masks
+└── models/ 
+    └── thermal_animal_detector.pt          # Bambi detection model
+    └── osnet_x0_5_bambi_thermal_omni.pt    # Bambi Re-ID model
+    └── osnet_x0_25_msmt17.pt               # BoxMOT defaul Re-ID model
 ```
 
 ---
