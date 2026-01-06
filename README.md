@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/license/mit)
 [![Python 3.9+](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
 
-A comprehensive QGIS plugin for detecting and tracking wildlife in drone thermal videos with full geo-referencing support.
+A comprehensive QGIS plugin for detecting and tracking wildlife in drone videos with full geo-referencing support.
 
 ![Plugin Overview](images/plugin_overview.png)
 
@@ -28,7 +28,7 @@ A comprehensive QGIS plugin for detecting and tracking wildlife in drone thermal
 
 ## Features
 
-- **Frame Extraction** — Extract frames from drone thermal videos with configurable sample rate
+- **Frame Extraction** — Extract frames from drone videos with configurable sample rate
 - **Flight Route Visualization** — Generate and display the drone flight path as a polyline layer
 - **Animal Detection** — YOLO-based wildlife detection with automatic model download from HuggingFace
 - **Prompt based Segmentations** — Segmentations using Roboflow's SAM3 API
@@ -97,9 +97,9 @@ Or visit: [https://github.com/bambi-eco/Geo-Referenced-Tracking](https://github.
 
 ## Installation
 
-### Method 1: Install from ZIP (Recommended)
+### Method 1: Install from ZIP (Re[dem_mesh_r2.json](../alfs_detection/testdata/haag/dem_mesh_r2.json)commended)
 
-1. Download the repository and zip the "bambi_wlidlife_detection" subfolder
+1. Download the repository and zip the "bambi_wildlife_detection" subfolder
 2. Open QGIS
 3. Go to **Plugins** → **Manage and Install Plugins...**
 4. Select the **Install from ZIP** tab
@@ -137,13 +137,13 @@ Or visit: [https://github.com/bambi-eco/Geo-Referenced-Tracking](https://github.
 
 You need the following files for a complete processing workflow:
 
-| File Type | Extension | Description |
-|-----------|-----------|-------------|
-| Video Files | `.MP4` | Drone thermal video recordings |
-| SRT Files | `.SRT` | Subtitle files with frame timestamps |
-| AirData CSV | `.csv` | Flight log exported from AirData |
-| DEM (GLTF) | `.gltf` | Digital Elevation Model with metadata JSON |
-| Calibration | `.json` | Camera intrinsic parameters |
+| File Type   | Extension         | Description                             |
+|-------------|-------------------|-----------------------------------------|
+| Video Files | `.MP4`            | Drone thermal video recordings          |
+| SRT Files   | `.SRT`            | Subtitle files with frame timestamps    |
+| AirData CSV | `.csv`            | Flight log exported from AirData        |
+| DEM         | `.gltf` or `.glb` | Digital Elevation Model + metadata JSON |
+| Calibration | `.json`           | Camera intrinsic parameters             |
 
 ![Input Tab](images/input_tab.png)
 
@@ -151,7 +151,7 @@ You need the following files for a complete processing workflow:
 
 ## Configuration
 
-Before starting the actual processing, you can set different configurations like sample rates, skip or limit frames, as well as correction factors or tracking settings.
+Before starting the actual processes, you can set different individual configurations like sample rates, skip or limit frames, as well as correction factors or tracking settings.
 
 ![Configuration Tab](images/config_tab.png)
 
@@ -159,15 +159,15 @@ Before starting the actual processing, you can set different configurations like
 
 ## Processing Pipeline
 
-The plugin provides an 8-step processing pipeline. Execute steps in order using the **Processing** tab
+The plugin provides an 10-step processing pipeline. Execute steps in order using the **Processing** tab
 
 ![Processing Tab](images/processing_tab.png)
 
 ### Step 1: Extract Frames
 
-Extracts and undistorts frames from drone videos based on the configured sample rate.
+Extracts and undistorts thermal and/or RGB frames from drone videos.
 
-**Outputs:** `frames/` folder with JPG images and `poses.json`
+**Outputs:** `frames_t/` / `frames_w` folder with JPG images and `poses.json`
 
 ### Step 2: Generate Flight Route
 
@@ -243,95 +243,6 @@ Geo-Reference segmented objects.
 
 ---
 
-## Configuration
-
-### Extraction Settings
-
-| Parameter    | Description                                   | Default     |
-|--------------|-----------------------------------------------|-------------|
-| Sample Rate  | Sample rate of extracted video frames         | 10          |
-| Skip Frames  | Number of frames that will be skipped         | 0           |
-| Limit Frames | Limit number of frames that will be extracted | -1          |
-| Camera       | Camera selector (for dual-camera drones)      | T (thermal) |
-
-### Detection Settings
-
-| Parameter    | Description                                             | Default             |
-|--------------|---------------------------------------------------------|---------------------|
-| Model Path   | Custom YOLO model (auto-downloads if empty)             | HuggingFace default |
-| Confidence   | Detection confidence threshold                          | 0.25                |
-| Skip Frames  | Number of frames, where detection will be applied       | 0                   |
-| Limit Frames | Limit number of frames, where detection will be applied | -1                  |
-
-### Position Correction
-
-| Parameter   | Description                                         | Default |
-|-------------|-----------------------------------------------------|---------|
-| Translation | Translational correction factors on all axis        | 0       |
-| Rotation    | Rotational (radians) correction factors on all axis | 0       |
-
-### Tracking Backend Selection
-
-The plugin supports multiple tracking backends with different capabilities:
-
-| Backend           | Description                           | Requirements            |
-|-------------------|---------------------------------------|-------------------------|
-| **Built-in**      | Simple geo-based IoU tracker          | None (included)         |
-| **BoxMOT**        | DeepOCSORT, BoTSORT, StrongSORT, etc. | `pip install boxmot`    |
-| **GeoRef Native** | Full tracking in geo-coordinates      | Geo-Referenced-Tracking |
-| **GeoRef Hybrid** | Standard tracking + geo-recovery      | Geo-Referenced-Tracking |
-
-### Built-in Tracker Parameters
-
-| Parameter           | Description                                                 | Default   |
-|---------------------|-------------------------------------------------------------|-----------|
-| IoU Threshold       | Intersection over Union for matching                        | 0.3       |
-| Max Age             | Frames without detection before track ends (-1 = unlimited) | -1        |
-| Max Center Distance | Maximum center distance in meters                           | 0.2       |
-| Tracker Mode        | GREEDY, HUNGARIAN, CENTER, HUNGARIAN_CENTER                 | HUNGARIAN |
-| Class Aware         | Only match same-class detections                            | True      |
-| Interpolate         | Fill gaps with interpolated positions                       | True      |
-
-### ReID Model Selection (BoxMOT/GeoRef)
-
-| Model      | Description                             |
-|------------|-----------------------------------------|
-| **osnet**  | Standard OSNet model (general purpose)  |
-| **bambi**  | Wildlife-specific ReID from HuggingFace |
-| **custom** | Your own ReID weights file              |
-
-### Field of View Settings
-
-| Parameter        | Description                                                                | Default        |
-|------------------|----------------------------------------------------------------------------|----------------|
-| Custom Mask      | Either use a custom mask or the mask generated during the frame extraction | Extracted mask |
-| Simplify Epsilon | Epsilon factor used to simplify mask boundaries                            | 2              |
-| Skip Frames      | Number of frames, where detection will be applied                          | 0              |
-| Limit Frames     | Limit number of frames, where detection will be applied                    | -1             |
-
-### Orthomosaic/GeoTIFF Settings
-
-| Parameter         | Description                   | Default  |
-|-------------------|-------------------------------|----------|
-| Ground Resolution | Meters per pixel              | 0.05     |
-| Blend Mode        | INTEGRAL, FIRST, LAST, CENTER | INTEGRAL |
-| Frame Range       | Subset of frames to include   | All      |
-| Crop to Content   | Remove empty borders          | True     |
-| Create Overviews  | Build pyramid levels          | True     |
-
-### Segmentation Settings
-
-| Parameter            | Description                                             | Default |
-|----------------------|---------------------------------------------------------|---------|
-| API Key              | Roboflow API Key                                        | -       |
-| Text Prompts         | one per line in a text area                             | -       |
-| Confidence threshold | Threshold used to filter segmentations                  | All     |
-| Skip Frames          | Number of frames, where detection will be applied       | 0       |
-| Limit Frames         | Limit number of frames, where detection will be applied | -1      |
-
-
----
-
 ## Input File Formats
 
 ### Calibration JSON
@@ -347,7 +258,7 @@ The plugin supports multiple tracking backends with different capabilities:
 
 ```json
 {
-    "origin": [x_offset, y_offset, z_offset],
+    "origin": [UTM_x, UTM_y, UTM_z],
     "origin_wgs84": {
         "latitude": 47.xxx,
         "longitude": 14.xxx,
@@ -372,7 +283,7 @@ The plugin supports multiple tracking backends with different capabilities:
 ### Model Download Fails
 
 - Check your internet connection
-- Download manually from [HuggingFace](https://huggingface.co/cpraschl/bambi-thermal-detection)
+- Download manually from HuggingFace: [Detection (thermal_animal_detector.pt)](https://huggingface.co/cpraschl/bambi-thermal-detection), [Re-ID (osnet_x0_5_bambi_thermal_omni.pt)](https://huggingface.co/cpraschl/bambi-thermal-omni)
 - Place the `.pt` file in `target_folder/models/`
 
 ### Geo-referencing Issues

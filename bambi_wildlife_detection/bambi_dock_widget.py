@@ -95,27 +95,75 @@ class BambiDockWidget(QDockWidget):
         input_layout = QVBoxLayout(input_tab)
         main_tabs.addTab(input_tab, "Input")
         
-        # Video inputs
-        video_group = QGroupBox("Video Inputs")
-        video_layout = QFormLayout(video_group)
+        # Thermal Video inputs
+        thermal_group = QGroupBox("Thermal Video Inputs")
+        thermal_layout = QFormLayout(thermal_group)
         
-        self.video_paths_edit = QLineEdit()
-        self.video_paths_edit.setPlaceholderText("Comma-separated paths to video files")
-        video_browse_btn = QPushButton("Browse...")
-        video_browse_btn.clicked.connect(self.browse_videos)
-        video_row = QHBoxLayout()
-        video_row.addWidget(self.video_paths_edit)
-        video_row.addWidget(video_browse_btn)
-        video_layout.addRow("Videos:", video_row)
+        self.thermal_video_paths_edit = QLineEdit()
+        self.thermal_video_paths_edit.setPlaceholderText("Comma-separated paths to thermal video files (_T_)")
+        thermal_video_browse_btn = QPushButton("Browse...")
+        thermal_video_browse_btn.clicked.connect(self.browse_thermal_videos)
+        thermal_video_row = QHBoxLayout()
+        thermal_video_row.addWidget(self.thermal_video_paths_edit)
+        thermal_video_row.addWidget(thermal_video_browse_btn)
+        thermal_layout.addRow("Videos:", thermal_video_row)
         
-        self.srt_paths_edit = QLineEdit()
-        self.srt_paths_edit.setPlaceholderText("Comma-separated paths to SRT files")
-        srt_browse_btn = QPushButton("Browse...")
-        srt_browse_btn.clicked.connect(self.browse_srts)
-        srt_row = QHBoxLayout()
-        srt_row.addWidget(self.srt_paths_edit)
-        srt_row.addWidget(srt_browse_btn)
-        video_layout.addRow("SRT Files:", srt_row)
+        self.thermal_srt_paths_edit = QLineEdit()
+        self.thermal_srt_paths_edit.setPlaceholderText("Comma-separated paths to thermal SRT files (_T_)")
+        thermal_srt_browse_btn = QPushButton("Browse...")
+        thermal_srt_browse_btn.clicked.connect(self.browse_thermal_srts)
+        thermal_srt_row = QHBoxLayout()
+        thermal_srt_row.addWidget(self.thermal_srt_paths_edit)
+        thermal_srt_row.addWidget(thermal_srt_browse_btn)
+        thermal_layout.addRow("SRT Files:", thermal_srt_row)
+        
+        self.thermal_calibration_path_edit = QLineEdit()
+        self.thermal_calibration_path_edit.setPlaceholderText("Path to T_calib.json")
+        thermal_calib_browse_btn = QPushButton("Browse...")
+        thermal_calib_browse_btn.clicked.connect(self.browse_thermal_calibration)
+        thermal_calib_row = QHBoxLayout()
+        thermal_calib_row.addWidget(self.thermal_calibration_path_edit)
+        thermal_calib_row.addWidget(thermal_calib_browse_btn)
+        thermal_layout.addRow("Calibration:", thermal_calib_row)
+        
+        input_layout.addWidget(thermal_group)
+        
+        # RGB Video inputs
+        rgb_group = QGroupBox("RGB Video Inputs")
+        rgb_layout = QFormLayout(rgb_group)
+        
+        self.rgb_video_paths_edit = QLineEdit()
+        self.rgb_video_paths_edit.setPlaceholderText("Comma-separated paths to RGB video files (_W_ or _V_)")
+        rgb_video_browse_btn = QPushButton("Browse...")
+        rgb_video_browse_btn.clicked.connect(self.browse_rgb_videos)
+        rgb_video_row = QHBoxLayout()
+        rgb_video_row.addWidget(self.rgb_video_paths_edit)
+        rgb_video_row.addWidget(rgb_video_browse_btn)
+        rgb_layout.addRow("Videos:", rgb_video_row)
+        
+        self.rgb_srt_paths_edit = QLineEdit()
+        self.rgb_srt_paths_edit.setPlaceholderText("Comma-separated paths to RGB SRT files (_W_ or _V_)")
+        rgb_srt_browse_btn = QPushButton("Browse...")
+        rgb_srt_browse_btn.clicked.connect(self.browse_rgb_srts)
+        rgb_srt_row = QHBoxLayout()
+        rgb_srt_row.addWidget(self.rgb_srt_paths_edit)
+        rgb_srt_row.addWidget(rgb_srt_browse_btn)
+        rgb_layout.addRow("SRT Files:", rgb_srt_row)
+        
+        self.rgb_calibration_path_edit = QLineEdit()
+        self.rgb_calibration_path_edit.setPlaceholderText("Path to W_calib.json")
+        rgb_calib_browse_btn = QPushButton("Browse...")
+        rgb_calib_browse_btn.clicked.connect(self.browse_rgb_calibration)
+        rgb_calib_row = QHBoxLayout()
+        rgb_calib_row.addWidget(self.rgb_calibration_path_edit)
+        rgb_calib_row.addWidget(rgb_calib_browse_btn)
+        rgb_layout.addRow("Calibration:", rgb_calib_row)
+        
+        input_layout.addWidget(rgb_group)
+        
+        # Common inputs
+        common_group = QGroupBox("Flight Log")
+        common_layout = QFormLayout(common_group)
         
         self.airdata_path_edit = QLineEdit()
         self.airdata_path_edit.setPlaceholderText("Path to AirData CSV file")
@@ -124,9 +172,9 @@ class BambiDockWidget(QDockWidget):
         airdata_row = QHBoxLayout()
         airdata_row.addWidget(self.airdata_path_edit)
         airdata_row.addWidget(airdata_browse_btn)
-        video_layout.addRow("AirData CSV:", airdata_row)
+        common_layout.addRow("AirData CSV:", airdata_row)
         
-        input_layout.addWidget(video_group)
+        input_layout.addWidget(common_group)
         
         # Geo-referencing data
         geo_group = QGroupBox("Geo-referencing Data")
@@ -149,15 +197,6 @@ class BambiDockWidget(QDockWidget):
         dem_meta_row.addWidget(self.dem_metadata_path_edit)
         dem_meta_row.addWidget(dem_meta_browse_btn)
         geo_layout.addRow("DEM Metadata:", dem_meta_row)
-        
-        self.calibration_path_edit = QLineEdit()
-        self.calibration_path_edit.setPlaceholderText("Path to calibration JSON file")
-        calib_browse_btn = QPushButton("Browse...")
-        calib_browse_btn.clicked.connect(self.browse_calibration)
-        calib_row = QHBoxLayout()
-        calib_row.addWidget(self.calibration_path_edit)
-        calib_row.addWidget(calib_browse_btn)
-        geo_layout.addRow("Calibration:", calib_row)
         
         self.correction_path_edit = QLineEdit()
         self.correction_path_edit.setPlaceholderText("Path to correction.json (auto-detected)")
@@ -208,38 +247,10 @@ class BambiDockWidget(QDockWidget):
         config_sub_tabs = QTabWidget()
         config_layout.addWidget(config_sub_tabs)
         
-        # ----- Sub-Tab 1: Extraction & Detection -----
-        extract_detect_tab = QWidget()
-        extract_detect_layout = QVBoxLayout(extract_detect_tab)
-        config_sub_tabs.addTab(extract_detect_tab, "Extraction/Detection")
-        
-        # Frame extraction parameters
-        frame_group = QGroupBox("Frame Extraction")
-        frame_layout = QFormLayout(frame_group)
-        
-        self.sample_rate_spin = QSpinBox()
-        self.sample_rate_spin.setRange(1, 100)
-        self.sample_rate_spin.setValue(10)
-        self.sample_rate_spin.setToolTip("Extract every Nth frame")
-        frame_layout.addRow("Sample Rate:", self.sample_rate_spin)
-
-        self.skip_spin = QSpinBox()
-        self.skip_spin.setRange(0, 2147483647)
-        self.skip_spin.setValue(0)
-        self.skip_spin.setToolTip("Skip n frames")
-        frame_layout.addRow("Skip frames:", self.skip_spin)
-
-        self.limit_spin = QSpinBox()
-        self.limit_spin.setRange(-1, 2147483647)
-        self.limit_spin.setValue(-1)
-        self.limit_spin.setToolTip("Limit to n frames")
-        frame_layout.addRow("Limit frames:", self.limit_spin)
-        
-        self.camera_combo = QComboBox()
-        self.camera_combo.addItems(["T - Thermal", "W - Wide"])
-        frame_layout.addRow("Camera:", self.camera_combo)
-        
-        extract_detect_layout.addWidget(frame_group)
+        # ----- Sub-Tab 1: Detection -----
+        detect_tab = QWidget()
+        detect_tab_layout = QVBoxLayout(detect_tab)
+        config_sub_tabs.addTab(detect_tab, "Detection")
         
         # Detection parameters
         detection_group = QGroupBox("Detection")
@@ -278,8 +289,14 @@ class BambiDockWidget(QDockWidget):
         self.detect_limit_spin.setToolTip("Limit detection to N frames (-1 = no limit)")
         detection_layout.addRow("Limit Frames:", self.detect_limit_spin)
         
-        extract_detect_layout.addWidget(detection_group)
-        extract_detect_layout.addStretch()
+        self.detect_sample_rate_spin = QSpinBox()
+        self.detect_sample_rate_spin.setRange(1, 100)
+        self.detect_sample_rate_spin.setValue(1)
+        self.detect_sample_rate_spin.setToolTip("Process every Nth frame (1 = all frames)")
+        detection_layout.addRow("Sample Rate:", self.detect_sample_rate_spin)
+        
+        detect_tab_layout.addWidget(detection_group)
+        detect_tab_layout.addStretch()
         
         # ----- Sub-Tab 2: Position Correction -----
         correction_tab = QWidget()
@@ -564,6 +581,12 @@ class BambiDockWidget(QDockWidget):
         self.fov_limit_spin.setToolTip("Limit FoV calculation to N frames (-1 = no limit)")
         fov_layout.addRow("Limit Frames:", self.fov_limit_spin)
         
+        self.fov_sample_rate_spin = QSpinBox()
+        self.fov_sample_rate_spin.setRange(1, 100)
+        self.fov_sample_rate_spin.setValue(1)
+        self.fov_sample_rate_spin.setToolTip("Calculate FoV for every Nth frame (1 = all frames)")
+        fov_layout.addRow("Sample Rate:", self.fov_sample_rate_spin)
+        
         fov_tab_layout.addWidget(fov_group)
         fov_tab_layout.addStretch()
         
@@ -743,22 +766,44 @@ class BambiDockWidget(QDockWidget):
         steps_group = QGroupBox("Processing Steps")
         steps_btn_layout = QVBoxLayout(steps_group)
         
-        # ----- Step 1: Extract Frames -----
-        step1_row = QHBoxLayout()
-        self.extract_btn = QPushButton("1. Extract Frames")
-        self.extract_btn.clicked.connect(self.run_extract_frames)
-        self.extract_status = QLabel("⚪ Not started")
-        step1_row.addWidget(self.extract_btn)
-        step1_row.addWidget(self.extract_status)
-        steps_btn_layout.addLayout(step1_row)
+        # ----- Step 1a: Extract Thermal Frames -----
+        step1a_row = QHBoxLayout()
+        self.extract_thermal_btn = QPushButton("1a. Extract Thermal Frames")
+        self.extract_thermal_btn.clicked.connect(self.run_extract_thermal_frames)
+        self.extract_thermal_btn.setToolTip("Extract frames from thermal videos (_T_) to frames_t/")
+        self.extract_thermal_status = QLabel("⚪ Not started")
+        step1a_row.addWidget(self.extract_thermal_btn)
+        step1a_row.addWidget(self.extract_thermal_status)
+        steps_btn_layout.addLayout(step1a_row)
+        
+        # ----- Step 1b: Extract RGB Frames -----
+        step1b_row = QHBoxLayout()
+        self.extract_rgb_btn = QPushButton("1b. Extract RGB Frames")
+        self.extract_rgb_btn.clicked.connect(self.run_extract_rgb_frames)
+        self.extract_rgb_btn.setToolTip("Extract frames from RGB videos (_W_/_V_) to frames_w/")
+        self.extract_rgb_status = QLabel("⚪ Not started")
+        step1b_row.addWidget(self.extract_rgb_btn)
+        step1b_row.addWidget(self.extract_rgb_status)
+        steps_btn_layout.addLayout(step1b_row)
+        
+        # Separator after extraction
+        separator1 = QFrame()
+        separator1.setFrameShape(QFrame.HLine)
+        separator1.setFrameShadow(QFrame.Sunken)
+        steps_btn_layout.addWidget(separator1)
         
         # ----- Step 2: Generate Flight Route -----
         step2_row = QHBoxLayout()
         self.flight_route_btn = QPushButton("2. Generate Flight Route")
         self.flight_route_btn.clicked.connect(self.run_flight_route)
         self.flight_route_btn.setToolTip("Generate flight route polyline from camera positions")
+        self.flight_route_camera_combo = QComboBox()
+        self.flight_route_camera_combo.addItems(["T - Thermal", "W - RGB"])
+        self.flight_route_camera_combo.setFixedWidth(100)
+        self.flight_route_camera_combo.setToolTip("Select camera source for poses")
         self.flight_route_status = QLabel("⚪ Not started")
         step2_row.addWidget(self.flight_route_btn)
+        step2_row.addWidget(self.flight_route_camera_combo)
         step2_row.addWidget(self.flight_route_status)
         steps_btn_layout.addLayout(step2_row)
         
@@ -775,8 +820,13 @@ class BambiDockWidget(QDockWidget):
         step3_row = QHBoxLayout()
         self.detect_btn = QPushButton("3. Detect Animals")
         self.detect_btn.clicked.connect(self.run_detection)
+        self.detection_camera_combo = QComboBox()
+        self.detection_camera_combo.addItems(["T - Thermal", "W - RGB"])
+        self.detection_camera_combo.setFixedWidth(100)
+        self.detection_camera_combo.setToolTip("Select camera source for frames")
         self.detect_status = QLabel("⚪ Not started")
         step3_row.addWidget(self.detect_btn)
+        step3_row.addWidget(self.detection_camera_combo)
         step3_row.addWidget(self.detect_status)
         steps_btn_layout.addLayout(step3_row)
         
@@ -822,8 +872,13 @@ class BambiDockWidget(QDockWidget):
         self.calculate_fov_btn = QPushButton("6. Calculate Field of View")
         self.calculate_fov_btn.clicked.connect(self.run_calculate_fov)
         self.calculate_fov_btn.setToolTip("Calculate and save camera FoV footprints for each frame")
+        self.fov_camera_combo = QComboBox()
+        self.fov_camera_combo.addItems(["T - Thermal", "W - RGB"])
+        self.fov_camera_combo.setFixedWidth(100)
+        self.fov_camera_combo.setToolTip("Select camera source for poses and calibration")
         self.calculate_fov_status = QLabel("⚪ Not started")
         step6_row.addWidget(self.calculate_fov_btn)
+        step6_row.addWidget(self.fov_camera_combo)
         step6_row.addWidget(self.calculate_fov_status)
         steps_btn_layout.addLayout(step6_row)
         
@@ -851,8 +906,13 @@ class BambiDockWidget(QDockWidget):
         step7_row = QHBoxLayout()
         self.ortho_btn = QPushButton("7. Generate Orthomosaic")
         self.ortho_btn.clicked.connect(self.run_orthomosaic)
+        self.ortho_camera_combo = QComboBox()
+        self.ortho_camera_combo.addItems(["T - Thermal", "W - RGB"])
+        self.ortho_camera_combo.setFixedWidth(100)
+        self.ortho_camera_combo.setToolTip("Select camera source for frames and poses")
         self.ortho_status = QLabel("⚪ Not started")
         step7_row.addWidget(self.ortho_btn)
+        step7_row.addWidget(self.ortho_camera_combo)
         step7_row.addWidget(self.ortho_status)
         steps_btn_layout.addLayout(step7_row)
         
@@ -869,8 +929,13 @@ class BambiDockWidget(QDockWidget):
         step8_row = QHBoxLayout()
         self.export_geotiffs_btn = QPushButton("8. Export Frames as GeoTIFF")
         self.export_geotiffs_btn.clicked.connect(self.run_export_geotiffs)
+        self.geotiff_camera_combo = QComboBox()
+        self.geotiff_camera_combo.addItems(["T - Thermal", "W - RGB"])
+        self.geotiff_camera_combo.setFixedWidth(100)
+        self.geotiff_camera_combo.setToolTip("Select camera source for frames and poses")
         self.export_geotiffs_status = QLabel("⚪ Not started")
         step8_row.addWidget(self.export_geotiffs_btn)
+        step8_row.addWidget(self.geotiff_camera_combo)
         step8_row.addWidget(self.export_geotiffs_status)
         steps_btn_layout.addLayout(step8_row)
         
@@ -887,8 +952,13 @@ class BambiDockWidget(QDockWidget):
         self.sam3_segment_btn = QPushButton("9. Run SAM3 Segmentation")
         self.sam3_segment_btn.clicked.connect(self.run_sam3_segmentation)
         self.sam3_segment_btn.setToolTip("Run SAM3 segmentation on extracted frames using Roboflow API")
+        self.sam3_camera_combo = QComboBox()
+        self.sam3_camera_combo.addItems(["T - Thermal", "W - RGB"])
+        self.sam3_camera_combo.setFixedWidth(100)
+        self.sam3_camera_combo.setToolTip("Select camera source for frames and poses")
         self.sam3_segment_status = QLabel("⚪ Not started")
         step9_row.addWidget(self.sam3_segment_btn)
+        step9_row.addWidget(self.sam3_camera_combo)
         step9_row.addWidget(self.sam3_segment_status)
         steps_btn_layout.addLayout(step9_row)
         
@@ -1090,29 +1160,31 @@ class BambiDockWidget(QDockWidget):
         epsg = int(crs_text.split(":")[1].split(" ")[0])
         
         return {
-            # Inputs
-            "video_paths": [p.strip() for p in self.video_paths_edit.text().split(",") if p.strip()],
-            "srt_paths": [p.strip() for p in self.srt_paths_edit.text().split(",") if p.strip()],
+            # Thermal inputs
+            "thermal_video_paths": [p.strip() for p in self.thermal_video_paths_edit.text().split(",") if p.strip()],
+            "thermal_srt_paths": [p.strip() for p in self.thermal_srt_paths_edit.text().split(",") if p.strip()],
+            "thermal_calibration_path": self.thermal_calibration_path_edit.text(),
+            
+            # RGB inputs
+            "rgb_video_paths": [p.strip() for p in self.rgb_video_paths_edit.text().split(",") if p.strip()],
+            "rgb_srt_paths": [p.strip() for p in self.rgb_srt_paths_edit.text().split(",") if p.strip()],
+            "rgb_calibration_path": self.rgb_calibration_path_edit.text(),
+            
+            # Common inputs
             "airdata_path": self.airdata_path_edit.text(),
             "dem_path": self.dem_path_edit.text(),
-            "calibration_path": self.calibration_path_edit.text(),
             "correction_path": self.correction_path_edit.text(),
             
             # Output
             "target_folder": self.target_folder_edit.text(),
             "target_epsg": epsg,
             
-            # Frame extraction
-            "sample_rate": self.sample_rate_spin.value(),
-            "skip": self.skip_spin.value(),
-            "limit": self.limit_spin.value(),
-            "camera": "T" if self.camera_combo.currentIndex() == 0 else "W",
-            
             # Detection
             "model_path": self.model_path_edit.text() or None,
             "min_confidence": self.confidence_spin.value(),
             "detect_skip": self.detect_skip_spin.value() if hasattr(self, 'detect_skip_spin') else 0,
             "detect_limit": self.detect_limit_spin.value() if hasattr(self, 'detect_limit_spin') else -1,
+            "detect_sample_rate": self.detect_sample_rate_spin.value() if hasattr(self, 'detect_sample_rate_spin') else 1,
             
             # Correction factors
             "translation": {
@@ -1156,6 +1228,7 @@ class BambiDockWidget(QDockWidget):
             "mask_simplify_epsilon": self.mask_simplify_spin.value() if hasattr(self, 'mask_simplify_spin') else 2.0,
             "fov_skip": self.fov_skip_spin.value() if hasattr(self, 'fov_skip_spin') else 0,
             "fov_limit": self.fov_limit_spin.value() if hasattr(self, 'fov_limit_spin') else -1,
+            "fov_sample_rate": self.fov_sample_rate_spin.value() if hasattr(self, 'fov_sample_rate_spin') else 1,
             
             # SAM3 Segmentation
             "sam3_api_key": self.sam3_api_key_edit.text() if hasattr(self, 'sam3_api_key_edit') else "",
@@ -1164,6 +1237,14 @@ class BambiDockWidget(QDockWidget):
             "sam3_skip": self.sam3_skip_spin.value() if hasattr(self, 'sam3_skip_spin') else 0,
             "sam3_limit": self.sam3_limit_spin.value() if hasattr(self, 'sam3_limit_spin') else -1,
             "sam3_step": self.sam3_step_spin.value() if hasattr(self, 'sam3_step_spin') else 1,
+            
+            # Camera selections for processing steps
+            "flight_route_camera": "T" if self.flight_route_camera_combo.currentIndex() == 0 else "W",
+            "detection_camera": "T" if self.detection_camera_combo.currentIndex() == 0 else "W",
+            "fov_camera": "T" if self.fov_camera_combo.currentIndex() == 0 else "W",
+            "ortho_camera": "T" if self.ortho_camera_combo.currentIndex() == 0 else "W",
+            "geotiff_camera": "T" if self.geotiff_camera_combo.currentIndex() == 0 else "W",
+            "sam3_camera": "T" if self.sam3_camera_combo.currentIndex() == 0 else "W",
         }
         
     def validate_inputs(self, required_fields: list) -> bool:
@@ -1172,11 +1253,14 @@ class BambiDockWidget(QDockWidget):
         missing = []
         
         field_labels = {
-            "video_paths": "Video files",
-            "srt_paths": "SRT files",
+            "thermal_video_paths": "Thermal video files",
+            "thermal_srt_paths": "Thermal SRT files",
+            "thermal_calibration_path": "Thermal calibration file",
+            "rgb_video_paths": "RGB video files",
+            "rgb_srt_paths": "RGB SRT files",
+            "rgb_calibration_path": "RGB calibration file",
             "airdata_path": "AirData CSV",
             "dem_path": "DEM file",
-            "calibration_path": "Calibration file",
             "target_folder": "Target folder"
         }
         
@@ -1195,115 +1279,178 @@ class BambiDockWidget(QDockWidget):
         return True
         
     # Browse functions
-    def browse_videos(self):
+    def browse_thermal_videos(self):
+        """Browse for thermal video files and auto-detect related files."""
         files, _ = QFileDialog.getOpenFileNames(
-            self, "Select Video Files", "", "Video Files (*.mp4 *.MP4 *.avi *.mov)")
+            self, "Select Thermal Video Files", "", "Video Files (*.mp4 *.MP4 *.avi *.mov)")
         if files:
-            self.video_paths_edit.setText(", ".join(files))
+            # Filter for thermal videos (containing _T_)
+            thermal_files = [f for f in files if '_T_' in os.path.basename(f).upper()]
+            if not thermal_files:
+                thermal_files = files  # Use all if no _T_ pattern found
+                
+            self.thermal_video_paths_edit.setText(", ".join(thermal_files))
             
             # Get the folder of the first video
-            video_folder = os.path.dirname(files[0])
+            video_folder = os.path.dirname(thermal_files[0])
             
-            # Auto-populate SRT paths
-            srts = [f.replace(".MP4", ".SRT").replace(".mp4", ".srt") for f in files]
+            # Auto-populate thermal SRT paths
+            srts = [f.replace(".MP4", ".SRT").replace(".mp4", ".srt") for f in thermal_files]
             existing_srts = [s for s in srts if os.path.exists(s)]
             if existing_srts:
-                self.srt_paths_edit.setText(", ".join(existing_srts))
-                self.log(f"Auto-detected {len(existing_srts)} SRT file(s)")
+                self.thermal_srt_paths_edit.setText(", ".join(existing_srts))
+                self.log(f"Auto-detected {len(existing_srts)} thermal SRT file(s)")
             
-            # Get list of all files in folder for auto-detection
-            try:
-                folder_files = os.listdir(video_folder)
-            except Exception as e:
-                self.log(f"Warning: Could not list folder contents: {e}")
-                folder_files = []
+            # Auto-detect T_calib.json
+            if not self.thermal_calibration_path_edit.text():
+                t_calib_path = os.path.join(video_folder, "T_calib.json")
+                if os.path.exists(t_calib_path):
+                    self.thermal_calibration_path_edit.setText(t_calib_path)
+                    self.log(f"Auto-detected thermal calibration: T_calib.json")
             
-            # Auto-detect AirData CSV (first CSV in folder)
-            if not self.airdata_path_edit.text():
-                csv_files = [f for f in folder_files if f.lower().endswith('.csv')]
-                if csv_files:
-                    csv_path = os.path.join(video_folder, csv_files[0])
-                    self.airdata_path_edit.setText(csv_path)
-                    self.log(f"Auto-detected AirData CSV: {csv_files[0]}")
-            
-            # Auto-detect DEM GLTF/GLB (first GLTF or GLB in folder)
-            if not self.dem_path_edit.text():
-                dem_files = [f for f in folder_files if f.lower().endswith(('.gltf', '.glb'))]
-                if dem_files:
-                    dem_path = os.path.join(video_folder, dem_files[0])
-                    self.dem_path_edit.setText(dem_path)
-                    self.log(f"Auto-detected DEM: {dem_files[0]}")
-                    
-                    # Also auto-detect DEM metadata JSON (same name with .json suffix)
-                    dem_base = os.path.splitext(dem_files[0])[0]
-                    json_name = dem_base + ".json"
-                    json_path = os.path.join(video_folder, json_name)
-                    if os.path.exists(json_path):
-                        self.dem_metadata_path_edit.setText(json_path)
-                        self.log(f"Auto-detected DEM metadata: {json_name}")
-                    else:
-                        # Try common naming patterns
-                        for suffix in ["_mesh.json", "_dem.json", "_metadata.json"]:
-                            alt_path = os.path.join(video_folder, dem_base + suffix)
-                            if os.path.exists(alt_path):
-                                self.dem_metadata_path_edit.setText(alt_path)
-                                self.log(f"Auto-detected DEM metadata: {dem_base + suffix}")
-                                break
-            
-            # Auto-detect calibration JSON (look for file with "calib" in name)
-            if not self.calibration_path_edit.text():
-                json_files = [f for f in folder_files if f.lower().endswith('.json')]
-                calib_files = [f for f in json_files if 'calib' in f.lower()]
-                if calib_files:
-                    calib_path = os.path.join(video_folder, calib_files[0])
-                    self.calibration_path_edit.setText(calib_path)
-                    self.log(f"Auto-detected calibration: {calib_files[0]}")
-                else:
-                    # Fallback: check JSON files for calibration structure
-                    dem_metadata = os.path.basename(self.dem_metadata_path_edit.text()) if self.dem_metadata_path_edit.text() else ""
-                    for json_file in json_files:
-                        # Skip DEM metadata and correction files
-                        if json_file == dem_metadata or json_file.lower() == 'correction.json':
-                            continue
-                        json_path = os.path.join(video_folder, json_file)
-                        try:
-                            with open(json_path, 'r') as f:
-                                data = json.load(f)
-                            if 'mtx' in data or 'camera_matrix' in data or 'dist' in data:
-                                self.calibration_path_edit.setText(json_path)
-                                self.log(f"Auto-detected calibration: {json_file}")
-                                break
-                        except:
-                            continue
-            
-            # Auto-detect correction.json and load values
-            if not self.correction_path_edit.text():
-                correction_path = os.path.join(video_folder, "correction.json")
-                if os.path.exists(correction_path):
-                    self.correction_path_edit.setText(correction_path)
-                    self.load_correction_values(correction_path)
-            
-            # Auto-set target folder to "qgis" subfolder
-            if not self.target_folder_edit.text():
-                qgis_folder = os.path.join(video_folder, "qgis")
-                self.target_folder_edit.setText(qgis_folder)
-                self.log(f"Auto-set target folder: qgis/")
-                # Create the folder if it doesn't exist
-                if not os.path.exists(qgis_folder):
-                    try:
-                        os.makedirs(qgis_folder, exist_ok=True)
-                        self.log(f"Created target folder: {qgis_folder}")
-                    except Exception as e:
-                        self.log(f"Warning: Could not create qgis folder: {e}")
-                else:
-                    # Check for existing outputs if folder already exists
-                    self._check_existing_outputs(qgis_folder)
+            # Auto-detect common files if not already set
+            self._auto_detect_common_files(video_folder)
                 
-    def browse_srts(self):
+    def browse_rgb_videos(self):
+        """Browse for RGB video files and auto-detect related files."""
         files, _ = QFileDialog.getOpenFileNames(
-            self, "Select SRT Files", "", "SRT Files (*.srt *.SRT)")
+            self, "Select RGB Video Files", "", "Video Files (*.mp4 *.MP4 *.avi *.mov)")
         if files:
-            self.srt_paths_edit.setText(", ".join(files))
+            # Filter for RGB videos (containing _W_ or _V_)
+            rgb_files = [f for f in files if '_W_' in os.path.basename(f).upper() or '_V_' in os.path.basename(f).upper()]
+            if not rgb_files:
+                rgb_files = files  # Use all if no _W_ or _V_ pattern found
+                
+            self.rgb_video_paths_edit.setText(", ".join(rgb_files))
+            
+            # Get the folder of the first video
+            video_folder = os.path.dirname(rgb_files[0])
+            
+            # Auto-populate RGB SRT paths
+            srts = [f.replace(".MP4", ".SRT").replace(".mp4", ".srt") for f in rgb_files]
+            existing_srts = [s for s in srts if os.path.exists(s)]
+            if existing_srts:
+                self.rgb_srt_paths_edit.setText(", ".join(existing_srts))
+                self.log(f"Auto-detected {len(existing_srts)} RGB SRT file(s)")
+            
+            # Auto-detect W_calib.json
+            if not self.rgb_calibration_path_edit.text():
+                w_calib_path = os.path.join(video_folder, "W_calib.json")
+                if os.path.exists(w_calib_path):
+                    self.rgb_calibration_path_edit.setText(w_calib_path)
+                    self.log(f"Auto-detected RGB calibration: W_calib.json")
+            
+            # Auto-detect common files if not already set
+            self._auto_detect_common_files(video_folder)
+            
+    def _auto_detect_common_files(self, video_folder: str):
+        """Auto-detect common input files from video folder.
+        
+        :param video_folder: Folder containing video files
+        """
+        # Get list of all files in folder for auto-detection
+        try:
+            folder_files = os.listdir(video_folder)
+        except Exception as e:
+            self.log(f"Warning: Could not list folder contents: {e}")
+            folder_files = []
+        
+        # Auto-detect AirData CSV (first CSV in folder)
+        if not self.airdata_path_edit.text():
+            csv_files = [f for f in folder_files if f.lower().endswith('.csv')]
+            if csv_files:
+                csv_path = os.path.join(video_folder, csv_files[0])
+                self.airdata_path_edit.setText(csv_path)
+                self.log(f"Auto-detected AirData CSV: {csv_files[0]}")
+        
+        # Auto-detect DEM GLTF/GLB (first GLTF or GLB in folder)
+        if not self.dem_path_edit.text():
+            dem_files = [f for f in folder_files if f.lower().endswith(('.gltf', '.glb'))]
+            if dem_files:
+                dem_path = os.path.join(video_folder, dem_files[0])
+                self.dem_path_edit.setText(dem_path)
+                self.log(f"Auto-detected DEM: {dem_files[0]}")
+                
+                # Also auto-detect DEM metadata JSON (same name with .json suffix)
+                dem_base = os.path.splitext(dem_files[0])[0]
+                json_name = dem_base + ".json"
+                json_path = os.path.join(video_folder, json_name)
+                if os.path.exists(json_path):
+                    self.dem_metadata_path_edit.setText(json_path)
+                    self.log(f"Auto-detected DEM metadata: {json_name}")
+                else:
+                    # Try common naming patterns
+                    for suffix in ["_mesh.json", "_dem.json", "_metadata.json"]:
+                        alt_path = os.path.join(video_folder, dem_base + suffix)
+                        if os.path.exists(alt_path):
+                            self.dem_metadata_path_edit.setText(alt_path)
+                            self.log(f"Auto-detected DEM metadata: {dem_base + suffix}")
+                            break
+        
+        # Auto-detect thermal calibration if not set
+        if not self.thermal_calibration_path_edit.text():
+            t_calib_path = os.path.join(video_folder, "T_calib.json")
+            if os.path.exists(t_calib_path):
+                self.thermal_calibration_path_edit.setText(t_calib_path)
+                self.log(f"Auto-detected thermal calibration: T_calib.json")
+        
+        # Auto-detect RGB calibration if not set
+        if not self.rgb_calibration_path_edit.text():
+            w_calib_path = os.path.join(video_folder, "W_calib.json")
+            if os.path.exists(w_calib_path):
+                self.rgb_calibration_path_edit.setText(w_calib_path)
+                self.log(f"Auto-detected RGB calibration: W_calib.json")
+        
+        # Auto-detect correction.json and load values
+        if not self.correction_path_edit.text():
+            correction_path = os.path.join(video_folder, "correction.json")
+            if os.path.exists(correction_path):
+                self.correction_path_edit.setText(correction_path)
+                self.load_correction_values(correction_path)
+        
+        # Auto-set target folder to "qgis" subfolder
+        if not self.target_folder_edit.text():
+            qgis_folder = os.path.join(video_folder, "qgis")
+            self.target_folder_edit.setText(qgis_folder)
+            self.log(f"Auto-set target folder: qgis/")
+            # Create the folder if it doesn't exist
+            if not os.path.exists(qgis_folder):
+                try:
+                    os.makedirs(qgis_folder, exist_ok=True)
+                    self.log(f"Created target folder: {qgis_folder}")
+                except Exception as e:
+                    self.log(f"Warning: Could not create qgis folder: {e}")
+            else:
+                # Check for existing outputs if folder already exists
+                self._check_existing_outputs(qgis_folder)
+
+    def browse_thermal_srts(self):
+        """Browse for thermal SRT files."""
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Select Thermal SRT Files", "", "SRT Files (*.srt *.SRT)")
+        if files:
+            self.thermal_srt_paths_edit.setText(", ".join(files))
+            
+    def browse_rgb_srts(self):
+        """Browse for RGB SRT files."""
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Select RGB SRT Files", "", "SRT Files (*.srt *.SRT)")
+        if files:
+            self.rgb_srt_paths_edit.setText(", ".join(files))
+            
+    def browse_thermal_calibration(self):
+        """Browse for thermal calibration JSON file."""
+        file, _ = QFileDialog.getOpenFileName(
+            self, "Select Thermal Calibration JSON", "", "JSON Files (*.json)")
+        if file:
+            self.thermal_calibration_path_edit.setText(file)
+            
+    def browse_rgb_calibration(self):
+        """Browse for RGB calibration JSON file."""
+        file, _ = QFileDialog.getOpenFileName(
+            self, "Select RGB Calibration JSON", "", "JSON Files (*.json)")
+        if file:
+            self.rgb_calibration_path_edit.setText(file)
             
     def browse_airdata(self):
         file, _ = QFileDialog.getOpenFileName(
@@ -1330,12 +1477,6 @@ class BambiDockWidget(QDockWidget):
                         self.dem_metadata_path_edit.setText(alt_path)
                         self.log(f"Auto-detected DEM metadata: {alt_path}")
                         break
-            
-    def browse_calibration(self):
-        file, _ = QFileDialog.getOpenFileName(
-            self, "Select Calibration JSON", "", "JSON Files (*.json)")
-        if file:
-            self.calibration_path_edit.setText(file)
             
     def browse_correction(self):
         """Browse for correction.json file and load its values."""
@@ -1461,11 +1602,28 @@ class BambiDockWidget(QDockWidget):
         if not target_folder or not os.path.isdir(target_folder):
             return
             
+        completed_count = 0
+        
+        # Check for thermal frame extraction
+        frames_t_path = os.path.join(target_folder, "frames_t")
+        poses_t_path = os.path.join(target_folder, "poses_t.json")
+        
+        if os.path.isdir(frames_t_path) and os.listdir(frames_t_path) and os.path.isfile(poses_t_path):
+            self.update_status("extract_thermal_frames", "🟢 Completed")
+            completed_count += 1
+        
+        # Check for RGB frame extraction
+        frames_w_path = os.path.join(target_folder, "frames_w")
+        poses_w_path = os.path.join(target_folder, "poses_w.json")
+        
+        if os.path.isdir(frames_w_path) and os.listdir(frames_w_path) and os.path.isfile(poses_w_path):
+            self.update_status("extract_rgb_frames", "🟢 Completed")
+            completed_count += 1
+            
         # Define the mapping between subfolders and their corresponding status updates
         # Format: (subfolder_name, status_step_key, additional_check_file)
         # additional_check_file is optional - if specified, the file must also exist
         folder_status_mapping = [
-            ("frames", "extract_frames", "poses.json"),  # frames folder + poses.json
             ("flight_route", "flight_route", None),
             ("detections", "detection", None),
             ("georeferenced", "georeference", None),
@@ -1474,8 +1632,6 @@ class BambiDockWidget(QDockWidget):
             ("orthomosaic", "orthomosaic", None),
             ("geotiffs", "export_geotiffs", None),
         ]
-        
-        completed_count = 0
         
         for subfolder, status_key, check_file in folder_status_mapping:
             subfolder_path = os.path.join(target_folder, subfolder)
@@ -1641,27 +1797,71 @@ class BambiDockWidget(QDockWidget):
             QMessageBox.warning(self, "Error", f"Failed to read poses.json: {str(e)}")
             
     # Processing functions
-    def run_extract_frames(self):
-        """Run frame extraction step."""
-        if not self.validate_inputs(["video_paths", "srt_paths", "airdata_path", 
-                                     "calibration_path", "target_folder"]):
+    def run_extract_thermal_frames(self):
+        """Run frame extraction for thermal modality."""
+        config = self.get_config()
+        
+        # Check if thermal inputs are provided
+        if not (config.get("thermal_video_paths") and 
+                config.get("thermal_srt_paths") and 
+                config.get("thermal_calibration_path")):
+            QMessageBox.warning(
+                self,
+                "Missing Thermal Inputs",
+                "Please provide thermal video inputs:\n\n"
+                "• Thermal video files\n"
+                "• Thermal SRT files\n"
+                "• Thermal calibration file (T_calib.json)"
+            )
+            return
+        
+        # Validate common inputs
+        if not self.validate_inputs(["airdata_path", "target_folder"]):
             return
             
-        self.start_worker("extract_frames")
+        self.start_worker("extract_thermal_frames")
+        
+    def run_extract_rgb_frames(self):
+        """Run frame extraction for RGB modality."""
+        config = self.get_config()
+        
+        # Check if RGB inputs are provided
+        if not (config.get("rgb_video_paths") and 
+                config.get("rgb_srt_paths") and 
+                config.get("rgb_calibration_path")):
+            QMessageBox.warning(
+                self,
+                "Missing RGB Inputs",
+                "Please provide RGB video inputs:\n\n"
+                "• RGB video files\n"
+                "• RGB SRT files\n"
+                "• RGB calibration file (W_calib.json)"
+            )
+            return
+        
+        # Validate common inputs
+        if not self.validate_inputs(["airdata_path", "target_folder"]):
+            return
+            
+        self.start_worker("extract_rgb_frames")
         
     def run_detection(self):
         """Run animal detection step."""
         config = self.get_config()
+        camera = config.get("detection_camera", "T")
         
-        # Check if frames exist
-        frames_folder = config["target_folder"]
-        poses_file = os.path.join(frames_folder, "poses.json")
+        # Check if frames exist for selected camera
+        target_folder = config["target_folder"]
+        frames_folder = os.path.join(target_folder, f"frames_{'t' if camera == 'T' else 'w'}")
+        poses_file = os.path.join(target_folder, f"poses_{'t' if camera == 'T' else 'w'}.json")
         
-        if not os.path.exists(poses_file):
+        if not os.path.exists(poses_file) or not os.path.exists(frames_folder):
+            camera_name = "Thermal" if camera == "T" else "RGB"
             QMessageBox.warning(
                 self,
                 "Missing Prerequisites",
-                "Frame extraction has not been completed.\nPlease run Step 1 first."
+                f"{camera_name} frame extraction has not been completed.\n"
+                f"Please run Step 1{'a' if camera == 'T' else 'b'} first."
             )
             return
             
@@ -1690,15 +1890,19 @@ class BambiDockWidget(QDockWidget):
     def run_calculate_fov(self):
         """Run Field of View calculation step."""
         config = self.get_config()
+        camera = config.get("fov_camera", "T")
         
-        # Check if poses exist
-        poses_file = os.path.join(config["target_folder"], "poses.json")
+        # Check if poses exist for selected camera
+        target_folder = config["target_folder"]
+        poses_file = os.path.join(target_folder, f"poses_{'t' if camera == 'T' else 'w'}.json")
         
         if not os.path.exists(poses_file):
+            camera_name = "Thermal" if camera == "T" else "RGB"
             QMessageBox.warning(
                 self,
                 "Missing Prerequisites",
-                "Frame extraction has not been completed.\nPlease run Step 1 first."
+                f"{camera_name} frame extraction has not been completed.\n"
+                f"Please run Step 1{'a' if camera == 'T' else 'b'} first."
             )
             return
             
@@ -1728,15 +1932,20 @@ class BambiDockWidget(QDockWidget):
     def run_orthomosaic(self):
         """Run orthomosaic generation step."""
         config = self.get_config()
+        camera = config.get("ortho_camera", "T")
         
-        # Check if frames exist
-        poses_file = os.path.join(config["target_folder"], "poses.json")
+        # Check if frames exist for selected camera
+        target_folder = config["target_folder"]
+        poses_file = os.path.join(target_folder, f"poses_{'t' if camera == 'T' else 'w'}.json")
+        frames_folder = os.path.join(target_folder, f"frames_{'t' if camera == 'T' else 'w'}")
         
-        if not os.path.exists(poses_file):
+        if not os.path.exists(poses_file) or not os.path.exists(frames_folder):
+            camera_name = "Thermal" if camera == "T" else "RGB"
             QMessageBox.warning(
                 self,
                 "Missing Prerequisites",
-                "Frame extraction has not been completed.\nPlease run Step 1 first."
+                f"{camera_name} frame extraction has not been completed.\n"
+                f"Please run Step 1{'a' if camera == 'T' else 'b'} first."
             )
             return
             
@@ -1749,15 +1958,20 @@ class BambiDockWidget(QDockWidget):
     def run_export_geotiffs(self):
         """Run frame GeoTIFF export step."""
         config = self.get_config()
+        camera = config.get("geotiff_camera", "T")
         
-        # Check if frames exist
-        poses_file = os.path.join(config["target_folder"], "poses.json")
+        # Check if frames exist for selected camera
+        target_folder = config["target_folder"]
+        poses_file = os.path.join(target_folder, f"poses_{'t' if camera == 'T' else 'w'}.json")
+        frames_folder = os.path.join(target_folder, f"frames_{'t' if camera == 'T' else 'w'}")
         
-        if not os.path.exists(poses_file):
+        if not os.path.exists(poses_file) or not os.path.exists(frames_folder):
+            camera_name = "Thermal" if camera == "T" else "RGB"
             QMessageBox.warning(
                 self,
                 "Missing Prerequisites",
-                "Frame extraction has not been completed.\nPlease run Step 1 first."
+                f"{camera_name} frame extraction has not been completed.\n"
+                f"Please run Step 1{'a' if camera == 'T' else 'b'} first."
             )
             return
             
@@ -1770,15 +1984,20 @@ class BambiDockWidget(QDockWidget):
     def run_sam3_segmentation(self):
         """Run SAM3 segmentation step."""
         config = self.get_config()
+        camera = config.get("sam3_camera", "T")
         
-        # Check if frames exist
-        poses_file = os.path.join(config["target_folder"], "poses.json")
+        # Check if frames exist for selected camera
+        target_folder = config["target_folder"]
+        poses_file = os.path.join(target_folder, f"poses_{'t' if camera == 'T' else 'w'}.json")
+        frames_folder = os.path.join(target_folder, f"frames_{'t' if camera == 'T' else 'w'}")
         
-        if not os.path.exists(poses_file):
+        if not os.path.exists(poses_file) or not os.path.exists(frames_folder):
+            camera_name = "Thermal" if camera == "T" else "RGB"
             QMessageBox.warning(
                 self,
                 "Missing Prerequisites",
-                "Frame extraction has not been completed.\nPlease run Step 1 first."
+                f"{camera_name} frame extraction has not been completed.\n"
+                f"Please run Step 1{'a' if camera == 'T' else 'b'} first."
             )
             return
             
@@ -2015,15 +2234,19 @@ class BambiDockWidget(QDockWidget):
     def run_flight_route(self):
         """Run flight route generation step."""
         config = self.get_config()
+        camera = config.get("flight_route_camera", "T")
         
-        # Check if frames exist
-        poses_file = os.path.join(config["target_folder"], "poses.json")
+        # Check if poses exist for selected camera
+        target_folder = config["target_folder"]
+        poses_file = os.path.join(target_folder, f"poses_{'t' if camera == 'T' else 'w'}.json")
         
         if not os.path.exists(poses_file):
+            camera_name = "Thermal" if camera == "T" else "RGB"
             QMessageBox.warning(
                 self,
                 "Missing Prerequisites",
-                "Frame extraction has not been completed.\nPlease run Step 1 first."
+                f"{camera_name} frame extraction has not been completed.\n"
+                f"Please run Step 1{'a' if camera == 'T' else 'b'} first."
             )
             return
             
@@ -2088,7 +2311,8 @@ class BambiDockWidget(QDockWidget):
     def update_status(self, step: str, status: str):
         """Update the status label for a step."""
         status_map = {
-            "extract_frames": self.extract_status,
+            "extract_thermal_frames": self.extract_thermal_status,
+            "extract_rgb_frames": self.extract_rgb_status,
             "detection": self.detect_status,
             "georeference": self.georef_status,
             "add_frame_detections": self.frame_detections_status,
@@ -2112,7 +2336,8 @@ class BambiDockWidget(QDockWidget):
             
     def set_buttons_enabled(self, enabled: bool):
         """Enable or disable all processing buttons."""
-        self.extract_btn.setEnabled(enabled)
+        self.extract_thermal_btn.setEnabled(enabled)
+        self.extract_rgb_btn.setEnabled(enabled)
         self.detect_btn.setEnabled(enabled)
         self.georef_btn.setEnabled(enabled)
         self.add_frame_detections_btn.setEnabled(enabled)

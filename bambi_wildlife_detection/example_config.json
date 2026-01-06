@@ -2,23 +2,33 @@
     "description": "Example configuration for BAMBI Wildlife Detection plugin",
     
     "inputs": {
-        "video_paths": [
-            "/path/to/video1.MP4",
-            "/path/to/video2.MP4"
+        "thermal_video_paths": [
+            "/path/to/video1_T_001.MP4",
+            "/path/to/video2_T_002.MP4"
         ],
-        "srt_paths": [
-            "/path/to/video1.SRT",
-            "/path/to/video2.SRT"
+        "thermal_srt_paths": [
+            "/path/to/video1_T_001.SRT",
+            "/path/to/video2_T_002.SRT"
         ],
+        "thermal_calibration_path": "/path/to/T_calib.json",
+        
+        "rgb_video_paths": [
+            "/path/to/video1_W_001.MP4",
+            "/path/to/video2_W_002.MP4"
+        ],
+        "rgb_srt_paths": [
+            "/path/to/video1_W_001.SRT",
+            "/path/to/video2_W_002.SRT"
+        ],
+        "rgb_calibration_path": "/path/to/W_calib.json",
+        
         "airdata_path": "/path/to/air_data.csv",
         "dem_path": "/path/to/dem_mesh.gltf",
-        "calibration_path": "/path/to/calibration.json",
         "target_folder": "/path/to/output"
     },
     
     "frame_extraction": {
-        "sample_rate": 10,
-        "camera": "T"
+        "_comment": "Extraction is now automatic for both thermal (frames_t) and RGB (frames_w) based on provided inputs"
     },
     
     "detection": {
