@@ -28,16 +28,16 @@ A comprehensive QGIS plugin for detecting and tracking wildlife in drone videos 
 
 ## Features
 
-- **Frame Extraction** — Extract frames from drone videos with configurable sample rate
-- **Flight Route Visualization** — Generate and display the drone flight path as a polyline layer
-- **Animal Detection** — YOLO-based wildlife detection with automatic model download from HuggingFace
-- **Prompt based Segmentations** — Segmentations using Roboflow's SAM3 API
-- **Geo-referencing** — Project detections/segmentations onto a Digital Elevation Model (DEM) for real-world coordinates
-- **Multi-Object Tracking** — Track animals across frames with multiple backend options
-- **Field of View Calculation** — Calculate camera footprints for each frame with custom mask support
-- **Orthomosaic Generation** — Create georeferenced orthomosaic from extracted frames
-- **GeoTIFF Export** — Export individual frames as georeferenced GeoTIFFs
-- **Full QGIS Integration** — Automatically add all outputs as styled layers to QGIS
+- **Frame Extraction**: Extract frames from drone videos with configurable sample rate
+- **Flight Route Visualization**: Generate and display the drone flight path as a polyline layer
+- **Animal Detection**: YOLO-based wildlife detection with automatic model download from HuggingFace
+- **Prompt based Segmentations**: Segmentations using Roboflow's SAM3 API
+- **Geo-referencing**: Project detections/segmentations onto a Digital Elevation Model (DEM) for real-world coordinates
+- **Multi-Object Tracking**: Track animals across frames with multiple backend options
+- **Field of View Calculation**: Calculate camera footprints for each frame with custom mask support
+- **Orthomosaic Generation**: Create georeferenced orthomosaic from extracted frames
+- **GeoTIFF Export**: Export individual frames as georeferenced GeoTIFFs
+- **Full QGIS Integration**: Automatically add all outputs as styled layers to QGIS
 
 ---
 ## Requirements
@@ -175,7 +175,7 @@ Extracts and undistorts thermal and/or RGB frames from drone videos.
 
 Creates a polyline showing the drone's flight path from extracted camera positions.
 
-**Outputs:** `flight_route.geojson` — can be added to QGIS as a vector layer
+**Outputs:** `flight_route.geojson` can be added to QGIS as a vector layer
 
 ![Track Visualization](images/route.png)
 
