@@ -313,6 +313,31 @@ Geo-Reference segmented objects.
   - Reduce the orthomosaic resolution
   - Decrease the max tile size parameter
 
+### Problems installing dependencies
+
+If you are installing the dependencies using above's command you have to install Git and add it to the the OSGeo4W Shell's path.
+On windows you can e.g. edit the `OSGeo4W.bat` file and include the set command:
+
+```text
+@echo off
+rem Root OSGEO4W home dir to the same directory this script exists in
+call "%~dp0\bin\o4w_env.bat"
+set "PATH=C:\Users\<username>\AppData\Local\Programs\Git\cmd\;%PATH%"
+
+rem List available o4w programs
+rem but only if osgeo4w called without parameters
+@echo on
+@if [%1]==[] (echo run o-help for a list of available commands & cd /d "%~dp0" & cmd.exe /k) else (cmd /c "%*")
+```
+
+Alternatively, you can download both repositories and unzip them.
+Using pip you can install them directly, using the projects' paths.
+
+```shell
+pip install <path>/alfs_py
+pip install <path>/alfs_detection
+```
+
 ---
 
 ## Project Structure
