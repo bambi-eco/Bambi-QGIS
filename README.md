@@ -151,7 +151,7 @@ You need the following files for a complete processing workflow:
 
 ## Configuration
 
-Before starting the actual processes, you can set different individual configurations like sample rates, skip or limit frames, as well as correction factors or tracking settings.
+Before starting the actual processes, you can set different individual configurations like sample rates, skip or limit frames, as well as correction factors (required for geo-referencing), as well as many additional settings.
 
 ![Configuration Tab](images/config_tab.png)
 
@@ -168,6 +168,8 @@ The plugin provides an 10-step processing pipeline. Execute steps in order using
 Extracts and undistorts thermal and/or RGB frames from drone videos.
 
 **Outputs:** `frames_t/` / `frames_w` folder with JPG images and `poses.json`
+
+**Note:** Depending on the length of the input video(s) this process may take some time, and unfortunately the progress bar won't update in between.
 
 ### Step 2: Generate Flight Route
 
@@ -306,9 +308,10 @@ Geo-Reference segmented objects.
 
 ### Memory Issues with Large Datasets
 
-- Reduce the orthomosaic resolution
-- Use a smaller frame range
-- Decrease the max tile size parameter
+- Reduce the number of frames at each processing step, backup the results and repeat the step with different setting
+- For creating orthomosaics/geotiffs also:
+  - Reduce the orthomosaic resolution
+  - Decrease the max tile size parameter
 
 ---
 
@@ -316,11 +319,16 @@ Geo-Reference segmented objects.
 
 ```
 target_folder/
-├── frames/                                 # Extracted video frames
+├── frames_t/                               # Extracted thermal video frames
 │   ├── frame_000000.jpg      
 │   ├── frame_000010.jpg      
 │   └── ...      
-├── poses.json                              # Camera poses for each frame
+├── frames_w/                               # Extracted RGB video frames
+│   ├── frame_000000.jpg      
+│   ├── frame_000010.jpg      
+│   └── ...      
+├── poses_t.json                            # Camera poses for each thermal frame
+├── poses_w.json                            # Camera poses for each RGB frame
 ├── mask_T.png                              # Thermal mask file (depending on camera during extraction phase)
 ├── mask_W.png                              # RGB mask file (depending on camera during extraction phase)
 ├── flight_route                    
