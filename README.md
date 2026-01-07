@@ -340,7 +340,9 @@ pip install <path>/alfs_detection
 
 ---
 
-## Project Structure
+## Output Structure
+
+When running all processes the target folder will look something like:
 
 ```
 target_folder/

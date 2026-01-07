@@ -600,7 +600,7 @@ class BambiProcessor:
         )
 
         # Process filtered frames
-        detection_results = []
+        detection_results = 0
         processed = 0
 
         # Write detection results
@@ -630,6 +630,7 @@ class BambiProcessor:
                 boxes = detector.detect_frame(idx, frame)
 
                 for box in boxes:
+                    detection_results += 1
                     f.write(f"{idx} {box.start_x:.2f} {box.start_y:.2f} "
                             f"{box.end_x:.2f} {box.end_y:.2f} {box.propability:.4f} "
                             f"{box.label}\n")
@@ -641,7 +642,7 @@ class BambiProcessor:
                     progress_fn(min(progress, 99))
 
         if log_fn:
-            log_fn(f"Detection complete: {len(detection_results)} detections in {processed} frames")
+            log_fn(f"Detection complete: {detection_results} detections in {processed} frames")
 
         if progress_fn:
             progress_fn(100)
