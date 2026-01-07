@@ -28,7 +28,7 @@ A comprehensive QGIS plugin for detecting and tracking wildlife in drone videos 
 
 ## Features
 
-- **Frame Extraction**: Extract frames from drone videos with configurable sample rate
+- **Frame Extraction**: Extract frames from drone videos
 - **Flight Route Visualization**: Generate and display the drone flight path as a polyline layer
 - **Animal Detection**: YOLO-based wildlife detection with automatic model download from HuggingFace
 - **Prompt based Segmentations**: Segmentations using Roboflow's SAM3 API
