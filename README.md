@@ -17,7 +17,7 @@ A comprehensive QGIS plugin for detecting and tracking wildlife in drone videos 
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Usage](#usage)
-- [Processing Pipeline](#processing-pipeline)
+- [Processing Pipeline](#processing-pipeline)[mail.json](../../../Users/P41743/Desktop/mail.json)
 - [Configuration](#configuration)
 - [Input File Formats](#input-file-formats)
 - [Troubleshooting](#troubleshooting)

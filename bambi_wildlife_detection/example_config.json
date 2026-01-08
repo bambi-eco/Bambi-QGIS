@@ -47,7 +47,22 @@
             "x": 0.0,
             "y": 0.0,
             "z": 0.0
-        }
+        },
+        "_additional_comment": "Optional frame-range specific corrections that override the default",
+        "additional": [
+            {
+                "start": 100,
+                "end": 300,
+                "translation": {"x": 0.0, "y": 0.0, "z": 2.0},
+                "rotation": {"x": 0.0, "y": 0.0, "z": 5.0}
+            },
+            {
+                "start": 301,
+                "end": 500,
+                "translation": {"x": 0.0, "y": 0.0, "z": 8.0},
+                "rotation": {"x": 0.0, "y": 0.0, "z": 3.0}
+            }
+        ]
     },
     
     "tracking": {

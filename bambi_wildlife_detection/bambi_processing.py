@@ -77,6 +77,37 @@ class BambiProcessor:
         """Initialize the processor."""
         pass
 
+    @staticmethod
+    def get_correction_for_frame(frame_idx: int, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Get the appropriate correction factors for a given frame index.
+
+        This method checks if there's a frame-range specific correction that
+        applies to the given frame index. If found, returns that correction;
+        otherwise returns the default correction.
+
+        :param frame_idx: The frame index to get correction for
+        :param config: The configuration dictionary containing correction factors
+        :return: Dictionary with 'translation' and 'rotation' keys
+        """
+        # Get default correction
+        default_correction = {
+            "translation": config.get("translation", {"x": 0, "y": 0, "z": 0}),
+            "rotation": config.get("rotation", {"x": 0, "y": 0, "z": 0})
+        }
+
+        # Check additional corrections
+        additional = config.get("additional_corrections", [])
+        for add_corr in additional:
+            start = add_corr.get("start", 0)
+            end = add_corr.get("end", float('inf'))
+            if start <= frame_idx <= end:
+                return {
+                    "translation": add_corr.get("translation", {"x": 0, "y": 0, "z": 0}),
+                    "rotation": add_corr.get("rotation", {"x": 0, "y": 0, "z": 0})
+                }
+
+        return default_correction
+
     def download_default_model(self, target_folder: str, log_fn=None) -> str:
         """Download the default model from HuggingFace.
 
@@ -677,10 +708,6 @@ class BambiProcessor:
         # Set frames folder based on camera selection
         frames_folder = os.path.join(target_folder, f"frames_{camera_suffix}")
 
-        # Correction factors
-        translation = config.get("translation", {"x": 0, "y": 0, "z": 0})
-        rotation = config.get("rotation", {"x": 0, "y": 0, "z": 0})
-
         if log_fn:
             log_fn(f"Loading DEM and {camera_name} poses data...")
 
@@ -773,9 +800,6 @@ class BambiProcessor:
 
             # Process each detection
             georeferenced = []
-            cor_rotation_eulers = Vector3([rotation['x'], rotation['y'], rotation['z']], dtype='f4')
-            cor_translation = Vector3([translation['x'], translation['y'], translation['z']], dtype='f4')
-
             total_dets = len(detections)
 
             for idx, det in enumerate(detections):
@@ -783,6 +807,13 @@ class BambiProcessor:
 
                 if frame_idx >= len(poses["images"]):
                     continue
+
+                # Get frame-specific correction factors
+                correction = self.get_correction_for_frame(frame_idx, config)
+                translation = correction["translation"]
+                rotation = correction["rotation"]
+                cor_rotation_eulers = Vector3([rotation['x'], rotation['y'], rotation['z']], dtype='f4')
+                cor_translation = Vector3([translation['x'], translation['y'], translation['z']], dtype='f4')
 
                 image_metadata = poses["images"][frame_idx]
 
@@ -881,10 +912,6 @@ class BambiProcessor:
         dem_path = config["dem_path"]
         target_epsg = config.get("target_epsg", 32633)
 
-        # Correction factors
-        translation = config.get("translation", {"x": 0, "y": 0, "z": 0})
-        rotation = config.get("rotation", {"x": 0, "y": 0, "z": 0})
-
         # FoV mask options
         use_fov_mask = config.get("use_fov_mask", False)
         mask_path = config.get("fov_mask_path", "")
@@ -981,8 +1008,6 @@ class BambiProcessor:
 
             # Process each frame
             total_frames = len(poses["images"])
-            cor_rotation_eulers = Vector3([rotation['x'], rotation['y'], rotation['z']], dtype='f4')
-            cor_translation = Vector3([translation['x'], translation['y'], translation['z']], dtype='f4')
 
             # Apply frame filters (start/end frame, then sample rate)
             if use_all_frames:
@@ -1013,6 +1038,13 @@ class BambiProcessor:
                 f.write("# Format: frame_idx num_points x1 y1 z1 x2 y2 z2 ...\n")
 
                 for i, frame_idx in enumerate(frame_indices):
+                    # Get frame-specific correction factors
+                    correction = self.get_correction_for_frame(frame_idx, config)
+                    translation = correction["translation"]
+                    rotation = correction["rotation"]
+                    cor_rotation_eulers = Vector3([rotation['x'], rotation['y'], rotation['z']], dtype='f4')
+                    cor_translation = Vector3([translation['x'], translation['y'], translation['z']], dtype='f4')
+
                     image_metadata = poses["images"][frame_idx]
                     # Get camera for this frame
                     fovy = image_metadata.get("fovy", [50])[0]
@@ -1791,10 +1823,6 @@ class BambiProcessor:
         # Set frames folder based on camera selection
         frames_folder = os.path.join(target_folder, f"frames_{camera_suffix}")
 
-        # Correction factors
-        translation = config.get("translation", {"x": 0, "y": 0, "z": 0})
-        rotation = config.get("rotation", {"x": 0, "y": 0, "z": 0})
-
         if log_fn:
             log_fn(f"Loading DEM and {camera_name} poses for track geo-referencing...")
 
@@ -1881,9 +1909,6 @@ class BambiProcessor:
             tri_mesh = Trimesh(vertices=mesh_data.vertices, faces=mesh_data.indices)
             mesh_data, texture_data = process_render_data(mesh_data, texture_data)
 
-            cor_rotation_eulers = Vector3([rotation['x'], rotation['y'], rotation['z']], dtype='f4')
-            cor_translation = Vector3([translation['x'], translation['y'], translation['z']], dtype='f4')
-
             total_tracks = len(pixel_tracks)
             failed_count = 0
 
@@ -1893,6 +1918,13 @@ class BambiProcessor:
                 if frame_idx >= len(poses["images"]):
                     failed_count += 1
                     continue
+
+                # Get frame-specific correction factors
+                correction = self.get_correction_for_frame(frame_idx, config)
+                translation = correction["translation"]
+                rotation = correction["rotation"]
+                cor_rotation_eulers = Vector3([rotation['x'], rotation['y'], rotation['z']], dtype='f4')
+                cor_translation = Vector3([translation['x'], translation['y'], translation['z']], dtype='f4')
 
                 image_metadata = poses["images"][frame_idx]
 
@@ -2129,9 +2161,13 @@ class BambiProcessor:
         if log_fn:
             log_fn(f"Found {total_images} images in poses.json")
 
+        # Add original frame indices to each image info before filtering
+        for i, img in enumerate(images):
+            img["_original_frame_idx"] = i
+
         # Apply frame filter
         if not use_all_frames and start_frame is not None and end_frame is not None:
-            images = [img for i, img in enumerate(images) if start_frame <= i <= end_frame]
+            images = [img for img in images if start_frame <= img["_original_frame_idx"] <= end_frame]
             if log_fn:
                 log_fn(f"Filtered to {len(images)} images (frames {start_frame}-{end_frame})")
 
@@ -2378,25 +2414,7 @@ class BambiProcessor:
             if mask_img is not None:
                 mask = TextureData(CtxShot._cvt_img(mask_img))
 
-        # 3. Prepare Corrections
-        correction_translation = config.get("translation", {"x": 0, "y": 0, "z": 0})
-        correction_rotation = config.get("rotation", {"x": 0, "y": 0, "z": 0})
-
-        cor_translation = Vector3([
-            correction_translation.get('x', 0),
-            correction_translation.get('y', 0),
-            correction_translation.get('z', 0)
-        ], dtype='f4')
-
-        cor_rotation_eulers = Vector3([
-            np.deg2rad(correction_rotation.get('x', 0)),
-            np.deg2rad(correction_rotation.get('y', 0)),
-            np.deg2rad(correction_rotation.get('z', 0))
-        ], dtype='f4')
-        cor_quat = Quaternion.from_eulers(cor_rotation_eulers)
-        correction = Transform(cor_translation, cor_quat)
-
-        # 4. Load Shots
+        # 3. Load Shots with per-frame corrections
         if log_fn:
             log_fn(f"Loading {len(images)} shots...")
 
@@ -2409,6 +2427,26 @@ class BambiProcessor:
 
             if not os.path.exists(image_path):
                 continue
+
+            # Get frame-specific correction factors using original frame index
+            frame_idx = img_info.get("_original_frame_idx", i)
+            correction_data = self.get_correction_for_frame(frame_idx, config)
+            correction_translation = correction_data["translation"]
+            correction_rotation = correction_data["rotation"]
+
+            cor_translation = Vector3([
+                correction_translation.get('x', 0),
+                correction_translation.get('y', 0),
+                correction_translation.get('z', 0)
+            ], dtype='f4')
+
+            cor_rotation_eulers = Vector3([
+                correction_rotation.get('x', 0),
+                correction_rotation.get('y', 0),
+                correction_rotation.get('z', 0)
+            ], dtype='f4')
+            cor_quat = Quaternion.from_eulers(cor_rotation_eulers)
+            correction = Transform(cor_translation, cor_quat)
 
             location = img_info.get("location", [0, 0, 0])
             rotation = img_info.get("rotation", [0, 0, 0])
@@ -2443,7 +2481,7 @@ class BambiProcessor:
         if not shots:
             raise RuntimeError("No valid shots loaded")
 
-        # 5. Compute Global Bounds (Merging Mesh AABB + Shot AABB)
+        # 4. Compute Global Bounds (Merging Mesh AABB + Shot AABB)
         # Using the helper logic from orthomosaic.py
         shot_positions = np.array([shot.camera.transform.position for shot in shots])
 
@@ -2618,12 +2656,21 @@ class BambiProcessor:
         if log_fn:
             log_fn("Using simplified orthomosaic generation...")
 
-        # Collect all image positions
+        # Collect all image positions (with corrections applied)
         positions = []
         valid_images = []
 
-        for img_info in images:
-            location = img_info.get("location", [0, 0, 0])
+        for i, img_info in enumerate(images):
+            location = list(img_info.get("location", [0, 0, 0]))
+            
+            # Apply frame-specific correction for bounds calculation
+            frame_idx = img_info.get("_original_frame_idx", i)
+            correction = self.get_correction_for_frame(frame_idx, config)
+            cor_translation = correction["translation"]
+            location[0] += cor_translation.get('x', 0)
+            location[1] += cor_translation.get('y', 0)
+            location[2] += cor_translation.get('z', 0)
+            
             # Accept any location (even 0,0 might be valid for local coords)
             positions.append((location[0], location[1], location[2]))
             valid_images.append(img_info)
@@ -2702,8 +2749,15 @@ class BambiProcessor:
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGBA)
             img[:, :, 3] = 255
 
-            # Get position
-            location = img_info.get("location", [0, 0, 0])
+            # Get position and apply frame-specific correction
+            frame_idx = img_info.get("_original_frame_idx", i)
+            correction = self.get_correction_for_frame(frame_idx, config)
+            cor_translation = correction["translation"]
+
+            location = list(img_info.get("location", [0, 0, 0]))
+            location[0] += cor_translation.get('x', 0)
+            location[1] += cor_translation.get('y', 0)
+            location[2] += cor_translation.get('z', 0)
             altitude = abs(location[2]) if location[2] != 0 else default_altitude
 
             # Get FOV
@@ -3326,8 +3380,24 @@ class BambiProcessor:
                 if isinstance(fovy, list):
                     fovy = fovy[0]
 
-                # Apply rotation correction and convert to radians
-                rotation_rad = np.deg2rad((rotation_deg % 360.0)) * -1
+                # Get frame-specific correction factors
+                correction = self.get_correction_for_frame(frame_idx, config)
+                cor_translation = correction["translation"]
+                cor_rotation = correction["rotation"]
+
+                # Apply translation correction
+                position[0] += cor_translation.get('x', 0)
+                position[1] += cor_translation.get('y', 0)
+                position[2] += cor_translation.get('z', 0)
+
+                # Convert rotation to radians, apply correction (in radians), then negate
+                # Following the same pattern as other geo-referencing methods
+                cor_rotation_eulers = np.array([
+                    cor_rotation.get('x', 0),
+                    cor_rotation.get('y', 0),
+                    cor_rotation.get('z', 0)
+                ])
+                rotation_rad = (np.deg2rad(rotation_deg % 360.0) - cor_rotation_eulers) * -1
                 rotation = Quaternion.from_eulers(rotation_rad)
                 rotation_matrix = np.array(rotation.matrix33)
 
@@ -3877,10 +3947,6 @@ class BambiProcessor:
         # Set frames folder based on camera selection
         frames_folder = os.path.join(target_folder, f"frames_{camera_suffix}")
 
-        # Correction factors
-        translation = config.get("translation", {"x": 0, "y": 0, "z": 0})
-        rotation = config.get("rotation", {"x": 0, "y": 0, "z": 0})
-
         if log_fn:
             log_fn(f"Starting SAM3 geo-referencing for {camera_name} frames...")
 
@@ -3947,9 +4013,6 @@ class BambiProcessor:
             tri_mesh = Trimesh(vertices=mesh_data.vertices, faces=mesh_data.indices)
             mesh_data, texture_data = process_render_data(mesh_data, texture_data)
 
-            cor_rotation_eulers = Vector3([rotation['x'], rotation['y'], rotation['z']], dtype='f4')
-            cor_translation = Vector3([translation['x'], translation['y'], translation['z']], dtype='f4')
-
             total_frames = len(pixel_results)
             failed_count = 0
 
@@ -3959,6 +4022,13 @@ class BambiProcessor:
                 if frame_idx >= len(poses["images"]):
                     failed_count += 1
                     continue
+
+                # Get frame-specific correction factors
+                correction = self.get_correction_for_frame(frame_idx, config)
+                translation = correction["translation"]
+                rotation = correction["rotation"]
+                cor_rotation_eulers = Vector3([rotation['x'], rotation['y'], rotation['z']], dtype='f4')
+                cor_translation = Vector3([translation['x'], translation['y'], translation['z']], dtype='f4')
 
                 image_metadata = poses["images"][frame_idx]
 
