@@ -23,7 +23,8 @@ from qgis.PyQt.QtGui import QFont, QColor
 from qgis.core import (
     QgsProject, QgsVectorLayer, QgsCoordinateReferenceSystem,
     QgsFeature, QgsGeometry, QgsPointXY, QgsField, QgsRasterLayer,
-    QgsLineSymbol, QgsMarkerSymbol
+    QgsLineSymbol, QgsMarkerSymbol, QgsPalLayerSettings, QgsTextFormat,
+    QgsVectorLayerSimpleLabeling, QgsTextBufferSettings
 )
 from qgis.PyQt.QtCore import QVariant
 
@@ -797,6 +798,43 @@ class BambiDockWidget(QDockWidget):
 
         sam3_tab_layout.addWidget(sam3_params_group)
         sam3_tab_layout.addStretch()
+
+        # ----- Sub-Tab 7: Flight Route Visualization -----
+        flight_route_tab = QWidget()
+        flight_route_tab_layout = QVBoxLayout(flight_route_tab)
+        config_sub_tabs.addTab(flight_route_tab, "Flight Route")
+
+        flight_route_viz_group = QGroupBox("Flight Route Visualization")
+        flight_route_viz_layout = QFormLayout(flight_route_viz_group)
+
+        # Frame markers enable checkbox
+        self.frame_markers_enabled_check = QCheckBox()
+        self.frame_markers_enabled_check.setChecked(True)
+        self.frame_markers_enabled_check.setToolTip(
+            "Enable displaying text markers at every N-th camera position"
+        )
+        self.frame_markers_enabled_check.stateChanged.connect(self._toggle_frame_marker_interval)
+        flight_route_viz_layout.addRow("Show Frame Markers:", self.frame_markers_enabled_check)
+
+        # Frame marker interval
+        self.frame_marker_interval_spin = QSpinBox()
+        self.frame_marker_interval_spin.setRange(1, 10000)
+        self.frame_marker_interval_spin.setValue(100)
+        self.frame_marker_interval_spin.setToolTip(
+            "Display a text marker every N frames (e.g., 100 shows markers at frame 100, 200, 300, ...)"
+        )
+        flight_route_viz_layout.addRow("Marker Interval (N):", self.frame_marker_interval_spin)
+
+        # Include frame 0 checkbox
+        self.frame_marker_include_zero_check = QCheckBox()
+        self.frame_marker_include_zero_check.setChecked(False)
+        self.frame_marker_include_zero_check.setToolTip(
+            "Include a marker at frame 0 (the starting position)"
+        )
+        flight_route_viz_layout.addRow("Include Frame 0:", self.frame_marker_include_zero_check)
+
+        flight_route_tab_layout.addWidget(flight_route_viz_group)
+        flight_route_tab_layout.addStretch()
 
         # =====================================================================
         # MAIN TAB 3: PROCESSING
@@ -1824,6 +1862,11 @@ class BambiDockWidget(QDockWidget):
             self.sam3_api_key_edit.setEchoMode(QLineEdit.Normal)
         else:
             self.sam3_api_key_edit.setEchoMode(QLineEdit.Password)
+
+    def _toggle_frame_marker_interval(self, state):
+        """Toggle the frame marker interval spinbox based on checkbox state."""
+        self.frame_marker_interval_spin.setEnabled(state)
+        self.frame_marker_include_zero_check.setEnabled(state)
 
     def detect_frame_count(self):
         """Detect the number of available frames from poses.json."""
@@ -3426,7 +3469,7 @@ class BambiDockWidget(QDockWidget):
             QMessageBox.critical(self, "Error", f"Failed to add GeoTIFFs: {str(e)}")
 
     def add_flight_route_to_qgis(self):
-        """Add flight route layers (polyline and points) to QGIS."""
+        """Add flight route layers (polyline, points, and frame markers) to QGIS."""
         config = self.get_config()
         route_folder = os.path.join(config["target_folder"], "flight_route")
 
@@ -3491,6 +3534,17 @@ class BambiDockWidget(QDockWidget):
                 else:
                     self.log(f"Warning: Could not load camera positions")
 
+            # Add frame markers if enabled
+            if self.frame_markers_enabled_check.isChecked():
+                markers_layer = self._create_frame_markers_layer(
+                    camera_points_file, config
+                )
+                if markers_layer and markers_layer.isValid():
+                    QgsProject.instance().addMapLayer(markers_layer, False)
+                    group.addLayer(markers_layer)
+                    loaded_count += 1
+                    self.log("Added frame markers layer")
+
             if loaded_count == 0:
                 QMessageBox.warning(self, "No Layers", "No flight route layers found.")
                 self.update_status("add_flight_route", "🔴 No files")
@@ -3508,3 +3562,113 @@ class BambiDockWidget(QDockWidget):
             self.log(f"Error adding flight route: {str(e)}")
             self.update_status("add_flight_route", "🔴 Error")
             QMessageBox.critical(self, "Error", f"Failed to add flight route: {str(e)}")
+
+    def _create_frame_markers_layer(self, camera_points_file: str, config: dict) -> Optional[QgsVectorLayer]:
+        """Create a vector layer with frame markers at every N-th position.
+
+        :param camera_points_file: Path to the camera positions GeoJSON file
+        :param config: Configuration dictionary
+        :return: QgsVectorLayer with frame markers, or None if creation fails
+        """
+        if not os.path.exists(camera_points_file):
+            self.log("Warning: Camera positions file not found for frame markers")
+            return None
+
+        try:
+            # Read camera positions
+            with open(camera_points_file, 'r', encoding='utf-8') as f:
+                camera_data = json.load(f)
+
+            features = camera_data.get("features", [])
+            if not features:
+                self.log("Warning: No camera positions found for frame markers")
+                return None
+
+            # Get marker settings
+            marker_interval = self.frame_marker_interval_spin.value()
+            include_zero = self.frame_marker_include_zero_check.isChecked()
+
+            # Get CRS from config
+            target_epsg = config.get("target_epsg", 32633)
+
+            # Create memory layer for markers
+            layer_uri = f"Point?crs=EPSG:{target_epsg}&field=frame_idx:integer&field=label:string"
+            markers_layer = QgsVectorLayer(layer_uri, "Frame Markers", "memory")
+
+            if not markers_layer.isValid():
+                self.log("Warning: Could not create frame markers layer")
+                return None
+
+            # Add features for every N-th frame
+            marker_features = []
+            for feature in features:
+                frame_idx = feature.get("properties", {}).get("frame_idx", 0)
+
+                # Check if this frame should have a marker
+                should_add_marker = False
+                if frame_idx == 0 and include_zero:
+                    should_add_marker = True
+                elif frame_idx > 0 and frame_idx % marker_interval == 0:
+                    should_add_marker = True
+
+                if should_add_marker:
+                    coords = feature.get("geometry", {}).get("coordinates", [0, 0])
+                    point = QgsPointXY(coords[0], coords[1])
+
+                    qgs_feature = QgsFeature(markers_layer.fields())
+                    qgs_feature.setGeometry(QgsGeometry.fromPointXY(point))
+                    qgs_feature.setAttributes([frame_idx, str(frame_idx)])
+                    marker_features.append(qgs_feature)
+
+            if not marker_features:
+                self.log("Warning: No frame markers to add (interval may be larger than total frames)")
+                return None
+
+            # Add features to layer
+            markers_layer.dataProvider().addFeatures(marker_features)
+
+            # Style the marker points
+            symbol = QgsMarkerSymbol.createSimple({
+                'name': 'diamond',
+                'color': '#e31a1c',
+                'outline_color': '#ffffff',
+                'outline_width': '0.8',
+                'size': '4'
+            })
+            markers_layer.renderer().setSymbol(symbol)
+
+            # Configure labeling
+            label_settings = QgsPalLayerSettings()
+            label_settings.fieldName = 'label'
+            label_settings.enabled = True
+
+            # Text format
+            text_format = QgsTextFormat()
+            text_format.setFont(QFont("Arial", 10, QFont.Bold))
+            text_format.setSize(10)
+            text_format.setColor(QColor('#000000'))
+
+            # Add text buffer (halo) for better readability
+            buffer_settings = QgsTextBufferSettings()
+            buffer_settings.setEnabled(True)
+            buffer_settings.setSize(1.5)
+            buffer_settings.setColor(QColor('#ffffff'))
+            text_format.setBuffer(buffer_settings)
+
+            label_settings.setFormat(text_format)
+
+            # Position labels above the marker
+            label_settings.placement = QgsPalLayerSettings.OverPoint
+            label_settings.quadOffset = QgsPalLayerSettings.QuadrantAbove
+
+            # Apply labeling to layer
+            labeling = QgsVectorLayerSimpleLabeling(label_settings)
+            markers_layer.setLabelsEnabled(True)
+            markers_layer.setLabeling(labeling)
+
+            self.log(f"Created {len(marker_features)} frame markers (interval: {marker_interval})")
+            return markers_layer
+
+        except Exception as e:
+            self.log(f"Error creating frame markers: {str(e)}")
+            return None
