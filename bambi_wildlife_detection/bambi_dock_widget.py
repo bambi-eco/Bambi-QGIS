@@ -31,6 +31,7 @@ from qgis.core import (
 from qgis.PyQt.QtCore import QVariant
 
 from .bambi_processing import BambiProcessor, ProcessingWorker
+from .austria_dem_downloader import DEMDownloadWorker
 
 # Plugin scope for project settings storage
 PLUGIN_SCOPE = "BambiWildlifeDetection"
@@ -60,7 +61,7 @@ class CorrectionRangeDialog(QDialog):
     def _setup_ui(self):
         """Setup the dialog UI."""
         layout = QVBoxLayout(self)
-
+        
         # Frame range
         range_group = QGroupBox("Frame Range")
         range_layout = QHBoxLayout(range_group)
@@ -360,7 +361,7 @@ class BambiDockWidget(QDockWidget):
         input_layout.addWidget(rgb_group)
 
         # Common inputs
-        common_group = QGroupBox("Flight Log")
+        common_group = QGroupBox("Flight Data")
         common_layout = QFormLayout(common_group)
 
         self.airdata_path_edit = QLineEdit()
@@ -371,6 +372,15 @@ class BambiDockWidget(QDockWidget):
         airdata_row.addWidget(self.airdata_path_edit)
         airdata_row.addWidget(airdata_browse_btn)
         common_layout.addRow("AirData CSV:", airdata_row)
+
+        self.correction_path_edit = QLineEdit()
+        self.correction_path_edit.setPlaceholderText("Path to correction.json (auto-detected)")
+        correction_browse_btn = QPushButton("Browse...")
+        correction_browse_btn.clicked.connect(self.browse_correction)
+        correction_row = QHBoxLayout()
+        correction_row.addWidget(self.correction_path_edit)
+        correction_row.addWidget(correction_browse_btn)
+        common_layout.addRow("Correction:", correction_row)
 
         input_layout.addWidget(common_group)
 
@@ -396,14 +406,23 @@ class BambiDockWidget(QDockWidget):
         dem_meta_row.addWidget(dem_meta_browse_btn)
         geo_layout.addRow("DEM Metadata:", dem_meta_row)
 
-        self.correction_path_edit = QLineEdit()
-        self.correction_path_edit.setPlaceholderText("Path to correction.json (auto-detected)")
-        correction_browse_btn = QPushButton("Browse...")
-        correction_browse_btn.clicked.connect(self.browse_correction)
-        correction_row = QHBoxLayout()
-        correction_row.addWidget(self.correction_path_edit)
-        correction_row.addWidget(correction_browse_btn)
-        geo_layout.addRow("Correction:", correction_row)
+        # Austria DEM Download (requires AirData CSV to be set)
+        dem_download_row = QHBoxLayout()
+        self.dem_padding_spin = QSpinBox()
+        self.dem_padding_spin.setRange(0, 500)
+        self.dem_padding_spin.setValue(30)
+        self.dem_padding_spin.setSuffix(" m")
+        self.dem_padding_spin.setToolTip("Padding around flight area in meters")
+        dem_download_row.addWidget(QLabel("Padding:"))
+        dem_download_row.addWidget(self.dem_padding_spin)
+        self.dem_download_btn = QPushButton("Download DEM (Austria)")
+        self.dem_download_btn.setToolTip(
+            "Download DEM from Austrian BEV service based on AirData CSV GPS coordinates.\n"
+            "Requires AirData CSV to be selected. Uses Austria-wide 1m ALS-DTM dataset."
+        )
+        self.dem_download_btn.clicked.connect(self.download_austria_dem)
+        dem_download_row.addWidget(self.dem_download_btn)
+        geo_layout.addRow("Auto-Download:", dem_download_row)
 
         input_layout.addWidget(geo_group)
 
@@ -1880,6 +1899,115 @@ class BambiDockWidget(QDockWidget):
                         self.dem_metadata_path_edit.setText(alt_path)
                         self.log(f"Auto-detected DEM metadata: {alt_path}")
                         break
+
+    def download_austria_dem(self):
+        """Download DEM from Austrian BEV service based on AirData CSV GPS coordinates."""
+        # Check if AirData CSV is selected
+        airdata_path = self.airdata_path_edit.text()
+        if not airdata_path or not os.path.exists(airdata_path):
+            QMessageBox.warning(
+                self, "Missing Input",
+                "Please select an AirData CSV file first.\n"
+                "The GPS coordinates from this file will be used to determine the DEM area."
+            )
+            return
+
+        # Determine output folder (parent of AirData CSV)
+        output_folder = os.path.dirname(airdata_path)
+        if not output_folder:
+            QMessageBox.warning(
+                self, "Invalid Path",
+                "Could not determine output folder from AirData CSV path."
+            )
+            return
+
+        # Get padding value
+        padding = self.dem_padding_spin.value()
+
+        # Get output CRS from the target CRS combo
+        target_crs_text = self.target_crs_combo.currentText()
+        output_crs = target_crs_text.split(" - ")[0] if " - " in target_crs_text else "EPSG:32633"
+
+        # Confirm download
+        reply = QMessageBox.question(
+            self, "Download DEM",
+            f"Download DEM from Austrian BEV service?\n\n"
+            f"AirData CSV: {os.path.basename(airdata_path)}\n"
+            f"Padding: {padding} m\n"
+            f"Output CRS: {output_crs}\n"
+            f"Output folder: {output_folder}\n\n"
+            f"This will download the Austria-wide 1m ALS-DTM dataset.\n"
+            f"Large areas may take several minutes.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        )
+
+        if reply != QMessageBox.Yes:
+            return
+
+        # Disable button during download
+        self.dem_download_btn.setEnabled(False)
+        self.dem_download_btn.setText("Downloading...")
+
+        # Create and start worker thread
+        self.dem_download_thread = QThread()
+        self.dem_download_worker = DEMDownloadWorker(
+            csv_path=airdata_path,
+            output_folder=output_folder,
+            padding=float(padding),
+            output_crs=output_crs,
+            simplify_factor=2
+        )
+
+        self.dem_download_worker.moveToThread(self.dem_download_thread)
+        self.dem_download_thread.started.connect(self.dem_download_worker.run)
+        self.dem_download_worker.finished.connect(self._on_dem_download_finished)
+        self.dem_download_worker.progress.connect(self._on_dem_download_progress)
+        self.dem_download_worker.log.connect(self.log)
+        self.dem_download_worker.finished.connect(self.dem_download_thread.quit)
+        self.dem_download_worker.finished.connect(self.dem_download_worker.deleteLater)
+        self.dem_download_thread.finished.connect(self.dem_download_thread.deleteLater)
+
+        self.dem_download_thread.start()
+        self.log("Starting Austria DEM download...")
+
+    def _on_dem_download_progress(self, percent: int):
+        """Handle DEM download progress updates."""
+        self.dem_download_btn.setText(f"Downloading... {percent}%")
+
+    def _on_dem_download_finished(self, success: bool, message: str):
+        """Handle DEM download completion."""
+        self.dem_download_btn.setEnabled(True)
+        self.dem_download_btn.setText("Download DEM (Austria)")
+
+        if success:
+            # Set the DEM path to the downloaded file
+            mesh_path = message  # message contains the path on success
+            self.dem_path_edit.setText(mesh_path)
+
+            # Auto-detect metadata
+            json_path = mesh_path.replace(".glb", ".json").replace(".gltf", ".json")
+            if os.path.exists(json_path):
+                self.dem_metadata_path_edit.setText(json_path)
+                self.log(f"Auto-detected DEM metadata: {json_path}")
+
+            QMessageBox.information(
+                self, "DEM Download Complete",
+                f"DEM downloaded successfully!\n\n"
+                f"Mesh: {mesh_path}\n"
+                f"Metadata: {json_path}"
+            )
+        else:
+            QMessageBox.warning(
+                self, "DEM Download Failed",
+                f"Failed to download DEM:\n{message}"
+            )
+
+    def cancel_dem_download(self):
+        """Cancel ongoing DEM download."""
+        if hasattr(self, 'dem_download_worker') and self.dem_download_worker:
+            self.dem_download_worker.cancel()
+            self.log("Cancelling DEM download...")
 
     def browse_correction(self):
         """Browse for correction.json file and load its values."""
@@ -4585,6 +4713,8 @@ class BambiDockWidget(QDockWidget):
                            self.dem_path_edit.text())
         project.writeEntry(PLUGIN_SCOPE, "Input/DemMetadataPath", 
                            self.dem_metadata_path_edit.text())
+        project.writeEntryDouble(PLUGIN_SCOPE, "Input/DemPadding", 
+                                 self.dem_padding_spin.value())
         project.writeEntry(PLUGIN_SCOPE, "Input/CorrectionPath", 
                            self.correction_path_edit.text())
         project.writeEntry(PLUGIN_SCOPE, "Input/TargetFolder", 
@@ -4761,6 +4891,7 @@ class BambiDockWidget(QDockWidget):
         self.airdata_path_edit.setText(read_str("Input/AirdataPath"))
         self.dem_path_edit.setText(read_str("Input/DemPath"))
         self.dem_metadata_path_edit.setText(read_str("Input/DemMetadataPath"))
+        self.dem_padding_spin.setValue(read_int("Input/DemPadding", 30))
         self.correction_path_edit.setText(read_str("Input/CorrectionPath"))
         self.target_folder_edit.setText(read_str("Input/TargetFolder"))
         
