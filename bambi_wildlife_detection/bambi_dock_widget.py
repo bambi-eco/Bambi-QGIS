@@ -445,6 +445,78 @@ class BambiDockWidget(QDockWidget):
         config_sub_tabs = QTabWidget()
         config_layout.addWidget(config_sub_tabs)
 
+        # ----- Sub-Tab 7: Flight Route Visualization -----
+        flight_route_tab = QWidget()
+        flight_route_tab_layout = QVBoxLayout(flight_route_tab)
+        config_sub_tabs.addTab(flight_route_tab, "Flight Route")
+
+        flight_route_viz_group = QGroupBox("Flight Route Visualization")
+        flight_route_viz_layout = QFormLayout(flight_route_viz_group)
+
+        # Frame markers enable checkbox
+        self.frame_markers_enabled_check = QCheckBox()
+        self.frame_markers_enabled_check.setChecked(True)
+        self.frame_markers_enabled_check.setToolTip(
+            "Enable displaying text markers at every N-th camera position"
+        )
+        self.frame_markers_enabled_check.stateChanged.connect(self._toggle_frame_marker_interval)
+        flight_route_viz_layout.addRow("Show Frame Markers:", self.frame_markers_enabled_check)
+
+        # Frame marker interval
+        self.frame_marker_interval_spin = QSpinBox()
+        self.frame_marker_interval_spin.setRange(1, 10000)
+        self.frame_marker_interval_spin.setValue(100)
+        self.frame_marker_interval_spin.setToolTip(
+            "Display a text marker every N frames (e.g., 100 shows markers at frame 100, 200, 300, ...)"
+        )
+        flight_route_viz_layout.addRow("Marker Interval (N):", self.frame_marker_interval_spin)
+
+        # Include frame 0 checkbox
+        self.frame_marker_include_zero_check = QCheckBox()
+        self.frame_marker_include_zero_check.setChecked(False)
+        self.frame_marker_include_zero_check.setToolTip(
+            "Include a marker at frame 0 (the starting position)"
+        )
+        flight_route_viz_layout.addRow("Include Frame 0:", self.frame_marker_include_zero_check)
+
+        flight_route_tab_layout.addWidget(flight_route_viz_group)
+
+        # Distance-based markers group
+        distance_markers_group = QGroupBox("Distance Markers")
+        distance_markers_layout = QFormLayout(distance_markers_group)
+
+        # Distance markers enable checkbox
+        self.distance_markers_enabled_check = QCheckBox()
+        self.distance_markers_enabled_check.setChecked(False)
+        self.distance_markers_enabled_check.setToolTip(
+            "Enable displaying markers at regular distance intervals along the flight path"
+        )
+        self.distance_markers_enabled_check.stateChanged.connect(self._toggle_distance_marker_controls)
+        distance_markers_layout.addRow("Show Distance Markers:", self.distance_markers_enabled_check)
+
+        # Distance interval spinbox
+        self.distance_marker_interval_spin = QSpinBox()
+        self.distance_marker_interval_spin.setRange(1, 10000)
+        self.distance_marker_interval_spin.setValue(100)
+        self.distance_marker_interval_spin.setSuffix(" m")
+        self.distance_marker_interval_spin.setEnabled(False)
+        self.distance_marker_interval_spin.setToolTip(
+            "Display a marker every N meters (e.g., 100 shows markers at 100m, 200m, 300m, ...)"
+        )
+        distance_markers_layout.addRow("Distance Interval:", self.distance_marker_interval_spin)
+
+        # Include start (0m) checkbox
+        self.distance_marker_include_start_check = QCheckBox()
+        self.distance_marker_include_start_check.setChecked(False)
+        self.distance_marker_include_start_check.setEnabled(False)
+        self.distance_marker_include_start_check.setToolTip(
+            "Include a marker at the starting position (0m)"
+        )
+        distance_markers_layout.addRow("Include Start (0m):", self.distance_marker_include_start_check)
+
+        flight_route_tab_layout.addWidget(distance_markers_group)
+        flight_route_tab_layout.addStretch()
+
         # ----- Sub-Tab 1: Detection -----
         detect_tab = QWidget()
         detect_tab_layout = QVBoxLayout(detect_tab)
@@ -1063,78 +1135,6 @@ class BambiDockWidget(QDockWidget):
 
         sam3_tab_layout.addWidget(sam3_params_group)
         sam3_tab_layout.addStretch()
-
-        # ----- Sub-Tab 7: Flight Route Visualization -----
-        flight_route_tab = QWidget()
-        flight_route_tab_layout = QVBoxLayout(flight_route_tab)
-        config_sub_tabs.addTab(flight_route_tab, "Flight Route")
-
-        flight_route_viz_group = QGroupBox("Flight Route Visualization")
-        flight_route_viz_layout = QFormLayout(flight_route_viz_group)
-
-        # Frame markers enable checkbox
-        self.frame_markers_enabled_check = QCheckBox()
-        self.frame_markers_enabled_check.setChecked(True)
-        self.frame_markers_enabled_check.setToolTip(
-            "Enable displaying text markers at every N-th camera position"
-        )
-        self.frame_markers_enabled_check.stateChanged.connect(self._toggle_frame_marker_interval)
-        flight_route_viz_layout.addRow("Show Frame Markers:", self.frame_markers_enabled_check)
-
-        # Frame marker interval
-        self.frame_marker_interval_spin = QSpinBox()
-        self.frame_marker_interval_spin.setRange(1, 10000)
-        self.frame_marker_interval_spin.setValue(100)
-        self.frame_marker_interval_spin.setToolTip(
-            "Display a text marker every N frames (e.g., 100 shows markers at frame 100, 200, 300, ...)"
-        )
-        flight_route_viz_layout.addRow("Marker Interval (N):", self.frame_marker_interval_spin)
-
-        # Include frame 0 checkbox
-        self.frame_marker_include_zero_check = QCheckBox()
-        self.frame_marker_include_zero_check.setChecked(False)
-        self.frame_marker_include_zero_check.setToolTip(
-            "Include a marker at frame 0 (the starting position)"
-        )
-        flight_route_viz_layout.addRow("Include Frame 0:", self.frame_marker_include_zero_check)
-
-        flight_route_tab_layout.addWidget(flight_route_viz_group)
-
-        # Distance-based markers group
-        distance_markers_group = QGroupBox("Distance Markers")
-        distance_markers_layout = QFormLayout(distance_markers_group)
-
-        # Distance markers enable checkbox
-        self.distance_markers_enabled_check = QCheckBox()
-        self.distance_markers_enabled_check.setChecked(False)
-        self.distance_markers_enabled_check.setToolTip(
-            "Enable displaying markers at regular distance intervals along the flight path"
-        )
-        self.distance_markers_enabled_check.stateChanged.connect(self._toggle_distance_marker_controls)
-        distance_markers_layout.addRow("Show Distance Markers:", self.distance_markers_enabled_check)
-
-        # Distance interval spinbox
-        self.distance_marker_interval_spin = QSpinBox()
-        self.distance_marker_interval_spin.setRange(1, 10000)
-        self.distance_marker_interval_spin.setValue(100)
-        self.distance_marker_interval_spin.setSuffix(" m")
-        self.distance_marker_interval_spin.setEnabled(False)
-        self.distance_marker_interval_spin.setToolTip(
-            "Display a marker every N meters (e.g., 100 shows markers at 100m, 200m, 300m, ...)"
-        )
-        distance_markers_layout.addRow("Distance Interval:", self.distance_marker_interval_spin)
-
-        # Include start (0m) checkbox
-        self.distance_marker_include_start_check = QCheckBox()
-        self.distance_marker_include_start_check.setChecked(False)
-        self.distance_marker_include_start_check.setEnabled(False)
-        self.distance_marker_include_start_check.setToolTip(
-            "Include a marker at the starting position (0m)"
-        )
-        distance_markers_layout.addRow("Include Start (0m):", self.distance_marker_include_start_check)
-
-        flight_route_tab_layout.addWidget(distance_markers_group)
-        flight_route_tab_layout.addStretch()
 
         # =====================================================================
         # MAIN TAB 3: PROCESSING
