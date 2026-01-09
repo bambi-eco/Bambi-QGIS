@@ -132,8 +132,11 @@ class BambiWildlifeDetection:
         # Remove the toolbar
         del self.toolbar
         
-        # Remove dock widget
+        # Disconnect project signals and remove dock widget
         if self.dock_widget:
+            # Disconnect project signals to prevent issues
+            self.dock_widget.disconnect_project_signals()
+            
             self.iface.removeDockWidget(self.dock_widget)
             self.dock_widget.deleteLater()
             self.dock_widget = None

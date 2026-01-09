@@ -26,11 +26,14 @@ from qgis.core import (
     QgsProject, QgsVectorLayer, QgsCoordinateReferenceSystem,
     QgsFeature, QgsGeometry, QgsPointXY, QgsField, QgsRasterLayer,
     QgsLineSymbol, QgsMarkerSymbol, QgsPalLayerSettings, QgsTextFormat,
-    QgsVectorLayerSimpleLabeling, QgsTextBufferSettings
+    QgsVectorLayerSimpleLabeling, QgsTextBufferSettings, QgsLayerTreeGroup
 )
 from qgis.PyQt.QtCore import QVariant
 
 from .bambi_processing import BambiProcessor, ProcessingWorker
+
+# Plugin scope for project settings storage
+PLUGIN_SCOPE = "BambiWildlifeDetection"
 
 
 class CorrectionRangeDialog(QDialog):
@@ -232,9 +235,22 @@ class BambiDockWidget(QDockWidget):
 
         # Track if initial check has been done
         self._initial_check_done = False
+        
+        # Flag to prevent recursive saves during config loading
+        self._loading_config = False
 
         # Setup UI
         self.setup_ui()
+        
+        # Connect to project signals for config persistence
+        self._connect_project_signals()
+        
+        # Load config if project already has saved config
+        self._loading_config = True
+        try:
+            self.load_config_from_project()
+        finally:
+            self._loading_config = False
 
     def showEvent(self, event):
         """Handle widget show event to check for existing layers."""
@@ -1083,6 +1099,41 @@ class BambiDockWidget(QDockWidget):
         flight_route_viz_layout.addRow("Include Frame 0:", self.frame_marker_include_zero_check)
 
         flight_route_tab_layout.addWidget(flight_route_viz_group)
+
+        # Distance-based markers group
+        distance_markers_group = QGroupBox("Distance Markers")
+        distance_markers_layout = QFormLayout(distance_markers_group)
+
+        # Distance markers enable checkbox
+        self.distance_markers_enabled_check = QCheckBox()
+        self.distance_markers_enabled_check.setChecked(False)
+        self.distance_markers_enabled_check.setToolTip(
+            "Enable displaying markers at regular distance intervals along the flight path"
+        )
+        self.distance_markers_enabled_check.stateChanged.connect(self._toggle_distance_marker_controls)
+        distance_markers_layout.addRow("Show Distance Markers:", self.distance_markers_enabled_check)
+
+        # Distance interval spinbox
+        self.distance_marker_interval_spin = QSpinBox()
+        self.distance_marker_interval_spin.setRange(1, 10000)
+        self.distance_marker_interval_spin.setValue(100)
+        self.distance_marker_interval_spin.setSuffix(" m")
+        self.distance_marker_interval_spin.setEnabled(False)
+        self.distance_marker_interval_spin.setToolTip(
+            "Display a marker every N meters (e.g., 100 shows markers at 100m, 200m, 300m, ...)"
+        )
+        distance_markers_layout.addRow("Distance Interval:", self.distance_marker_interval_spin)
+
+        # Include start (0m) checkbox
+        self.distance_marker_include_start_check = QCheckBox()
+        self.distance_marker_include_start_check.setChecked(False)
+        self.distance_marker_include_start_check.setEnabled(False)
+        self.distance_marker_include_start_check.setToolTip(
+            "Include a marker at the starting position (0m)"
+        )
+        distance_markers_layout.addRow("Include Start (0m):", self.distance_marker_include_start_check)
+
+        flight_route_tab_layout.addWidget(distance_markers_group)
         flight_route_tab_layout.addStretch()
 
         # =====================================================================
@@ -2343,6 +2394,11 @@ class BambiDockWidget(QDockWidget):
         self.frame_marker_interval_spin.setEnabled(state)
         self.frame_marker_include_zero_check.setEnabled(state)
 
+    def _toggle_distance_marker_controls(self, state):
+        """Toggle distance marker controls based on checkbox state."""
+        self.distance_marker_interval_spin.setEnabled(state)
+        self.distance_marker_include_start_check.setEnabled(state)
+
     def detect_frame_count(self):
         """Detect the number of available frames from poses.json."""
         config = self.get_config()
@@ -2717,9 +2773,8 @@ class BambiDockWidget(QDockWidget):
                     self.update_status("add_sam3", "⚪ Cancelled")
                     return
 
-            # Create main group
-            root = QgsProject.instance().layerTreeRoot()
-            main_group = root.addGroup("SAM3 Segmentation")
+            # Create main group at top of layer tree
+            main_group = self._create_layer_group("SAM3 Segmentation")
 
             total_polygons = 0
             total_frames_added = 0
@@ -2791,6 +2846,13 @@ class BambiDockWidget(QDockWidget):
 
                         # Style the layer
                         color = prompt_colors.get(prompt, (100, 100, 100))
+                        self._style_sam3_layer(layer, color)
+
+                        # Persist the layer to GeoPackage (use unique name with frame index)
+                        layer_filename = f"SAM3_Frame{frame_idx:04d}_{prompt}"
+                        layer = self._persist_memory_layer(layer, layer_filename, "sam3_layers")
+                        
+                        # Re-apply style after persistence (style is lost when saving)
                         self._style_sam3_layer(layer, color)
 
                         # Add to project and frame group
@@ -3033,9 +3095,8 @@ class BambiDockWidget(QDockWidget):
                     self.update_status("add_layers", "⚪ Cancelled")
                     return
 
-            # Create main group for all tracks
-            root = QgsProject.instance().layerTreeRoot()
-            main_group = root.addGroup("BAMBI Wildlife Tracks")
+            # Create main group for all tracks at top of layer tree
+            main_group = self._create_layer_group("BAMBI Wildlife Tracks")
 
             # Generate colors for tracks (cycle through a palette)
             colors = [
@@ -3144,6 +3205,18 @@ class BambiDockWidget(QDockWidget):
 
                 # Style bbox layer
                 self._style_bbox_layer(bbox_layer, color_str)
+
+                # Persist layers to GeoPackage
+                bbox_layer = self._persist_memory_layer(
+                    bbox_layer, f"Track{track_id}_FinalPosition", "tracks_layers"
+                )
+                path_layer = self._persist_memory_layer(
+                    path_layer, f"Track{track_id}_Path", "tracks_layers"
+                )
+                
+                # Re-apply styles after persistence
+                self._style_bbox_layer(bbox_layer, color_str)
+                self._style_path_layer(path_layer, color_str)
 
                 # Add layers to project and group
                 # Add bbox first (renders below), then path (renders above)
@@ -3361,9 +3434,8 @@ class BambiDockWidget(QDockWidget):
 
     def _add_fov_separate_layers(self, fov_polygons: Dict[int, list], target_crs):
         """Add FoV polygons as separate layers for each frame."""
-        # Create a group for the layers
-        root = QgsProject.instance().layerTreeRoot()
-        group = root.addGroup("BAMBI FoV Polygons")
+        # Create a group for the layers at top of layer tree
+        group = self._create_layer_group("BAMBI FoV Polygons")
 
         for frame_idx, points in fov_polygons.items():
             if len(points) < 3:
@@ -3394,6 +3466,9 @@ class BambiDockWidget(QDockWidget):
 
             provider.addFeatures([feat])
             layer.updateExtents()
+
+            # Persist layer to GeoPackage
+            layer = self._persist_memory_layer(layer, layer_name, "fov_layers")
 
             # Add layer to project and group
             QgsProject.instance().addMapLayer(layer, False)
@@ -3434,6 +3509,9 @@ class BambiDockWidget(QDockWidget):
 
         provider.addFeatures(features)
         layer.updateExtents()
+
+        # Persist layer to GeoPackage
+        layer = self._persist_memory_layer(layer, "FoV_Combined", "fov_layers")
 
         # Add layer to project
         QgsProject.instance().addMapLayer(layer)
@@ -3536,6 +3614,15 @@ class BambiDockWidget(QDockWidget):
             # Style the layer with semi-transparent fill
             symbol = layer.renderer().symbol()
             symbol.setColor(QColor(0, 150, 255, 50))  # Light blue with transparency
+            symbol.symbolLayer(0).setStrokeColor(QColor(0, 100, 200))
+            symbol.symbolLayer(0).setStrokeWidth(0.5)
+
+            # Persist layer to GeoPackage
+            layer = self._persist_memory_layer(layer, "FoV_Coverage_Merged", "fov_layers")
+            
+            # Re-apply style after persistence
+            symbol = layer.renderer().symbol()
+            symbol.setColor(QColor(0, 150, 255, 50))
             symbol.symbolLayer(0).setStrokeColor(QColor(0, 100, 200))
             symbol.symbolLayer(0).setStrokeWidth(0.5)
 
@@ -3672,9 +3759,8 @@ class BambiDockWidget(QDockWidget):
 
     def _add_detections_separate_layers(self, frame_detections: Dict[int, list], target_crs):
         """Add detections as separate layers for each frame."""
-        # Create a group for the layers
-        root = QgsProject.instance().layerTreeRoot()
-        group = root.addGroup("BAMBI Frame Detections")
+        # Create a group for the layers at top of layer tree
+        group = self._create_layer_group("BAMBI Frame Detections")
 
         for frame_idx, detections in frame_detections.items():
             if not detections:
@@ -3719,6 +3805,9 @@ class BambiDockWidget(QDockWidget):
 
             provider.addFeatures(features)
             layer.updateExtents()
+
+            # Persist layer to GeoPackage
+            layer = self._persist_memory_layer(layer, layer_name, "detection_layers")
 
             # Add layer to project and group
             QgsProject.instance().addMapLayer(layer, False)
@@ -3767,6 +3856,9 @@ class BambiDockWidget(QDockWidget):
 
         provider.addFeatures(features)
         layer.updateExtents()
+
+        # Persist layer to GeoPackage
+        layer = self._persist_memory_layer(layer, "Detections_AllFrames", "detection_layers")
 
         # Add layer to project
         QgsProject.instance().addMapLayer(layer)
@@ -3910,9 +4002,8 @@ class BambiDockWidget(QDockWidget):
                 elif reply == QMessageBox.Yes:
                     geotiff_files = geotiff_files[:max_layers]
 
-            # Create a group for the layers
-            root = QgsProject.instance().layerTreeRoot()
-            group = root.addGroup("BAMBI Frame GeoTIFFs")
+            # Create a group for the layers at top of layer tree
+            group = self._create_layer_group("BAMBI Frame GeoTIFFs")
 
             loaded_count = 0
 
@@ -3960,9 +4051,8 @@ class BambiDockWidget(QDockWidget):
             self.log("Adding flight route to QGIS...")
             self.update_status("add_flight_route", "🟡 Loading...")
 
-            # Create a group for the layers
-            root = QgsProject.instance().layerTreeRoot()
-            group = root.addGroup("BAMBI Flight Route")
+            # Create a group for the layers at top of layer tree
+            group = self._create_layer_group("BAMBI Flight Route")
 
             loaded_count = 0
 
@@ -4015,10 +4105,29 @@ class BambiDockWidget(QDockWidget):
                     camera_points_file, config
                 )
                 if markers_layer and markers_layer.isValid():
+                    # Persist the layer
+                    markers_layer = self._persist_memory_layer(
+                        markers_layer, "Frame_Markers", "flight_route_layers"
+                    )
                     QgsProject.instance().addMapLayer(markers_layer, False)
                     group.addLayer(markers_layer)
                     loaded_count += 1
                     self.log("Added frame markers layer")
+
+            # Add distance markers if enabled
+            if self.distance_markers_enabled_check.isChecked():
+                distance_layer = self._create_distance_markers_layer(
+                    camera_points_file, config
+                )
+                if distance_layer and distance_layer.isValid():
+                    # Persist the layer
+                    distance_layer = self._persist_memory_layer(
+                        distance_layer, "Distance_Markers", "flight_route_layers"
+                    )
+                    QgsProject.instance().addMapLayer(distance_layer, False)
+                    group.addLayer(distance_layer)
+                    loaded_count += 1
+                    self.log("Added distance markers layer")
 
             if loaded_count == 0:
                 QMessageBox.warning(self, "No Layers", "No flight route layers found.")
@@ -4147,3 +4256,592 @@ class BambiDockWidget(QDockWidget):
         except Exception as e:
             self.log(f"Error creating frame markers: {str(e)}")
             return None
+
+    def _create_distance_markers_layer(self, camera_points_file: str, config: dict) -> Optional[QgsVectorLayer]:
+        """Create a vector layer with markers at regular distance intervals along the flight path.
+
+        Markers show both the cumulative distance and the associated frame number,
+        e.g., "100m (243)" meaning 100 meters traveled, reached at frame 243.
+
+        :param camera_points_file: Path to the camera positions GeoJSON file
+        :param config: Configuration dictionary
+        :return: QgsVectorLayer with distance markers, or None if creation fails
+        """
+        import math
+
+        if not os.path.exists(camera_points_file):
+            self.log("Warning: Camera positions file not found for distance markers")
+            return None
+
+        try:
+            # Read camera positions
+            with open(camera_points_file, 'r', encoding='utf-8') as f:
+                camera_data = json.load(f)
+
+            features = camera_data.get("features", [])
+            if len(features) < 2:
+                self.log("Warning: Need at least 2 camera positions for distance markers")
+                return None
+
+            # Get marker settings
+            distance_interval = self.distance_marker_interval_spin.value()
+            include_start = self.distance_marker_include_start_check.isChecked()
+
+            # Get CRS from config
+            target_epsg = config.get("target_epsg", 32633)
+
+            # Calculate cumulative distances and find marker positions
+            # Each entry: (cumulative_distance, frame_idx, x, y)
+            positions = []
+            cumulative_distance = 0.0
+
+            for i, feature in enumerate(features):
+                coords = feature.get("geometry", {}).get("coordinates", [0, 0])
+                frame_idx = feature.get("properties", {}).get("frame_idx", i)
+                x, y = coords[0], coords[1]
+
+                if i == 0:
+                    positions.append((0.0, frame_idx, x, y))
+                else:
+                    prev_coords = features[i - 1].get("geometry", {}).get("coordinates", [0, 0])
+                    dx = x - prev_coords[0]
+                    dy = y - prev_coords[1]
+                    segment_distance = math.sqrt(dx * dx + dy * dy)
+                    cumulative_distance += segment_distance
+                    positions.append((cumulative_distance, frame_idx, x, y))
+
+            total_distance = positions[-1][0]
+            self.log(f"Total flight distance: {total_distance:.1f}m")
+
+            # Create memory layer for distance markers
+            layer_uri = f"Point?crs=EPSG:{target_epsg}&field=distance:double&field=frame_idx:integer&field=label:string"
+            markers_layer = QgsVectorLayer(layer_uri, "Distance Markers", "memory")
+
+            if not markers_layer.isValid():
+                self.log("Warning: Could not create distance markers layer")
+                return None
+
+            # Find positions for each distance interval
+            marker_features = []
+
+            # Optionally include start marker
+            if include_start:
+                start_pos = positions[0]
+                point = QgsPointXY(start_pos[2], start_pos[3])
+                qgs_feature = QgsFeature(markers_layer.fields())
+                qgs_feature.setGeometry(QgsGeometry.fromPointXY(point))
+                label = f"0m ({start_pos[1]})"
+                qgs_feature.setAttributes([0.0, start_pos[1], label])
+                marker_features.append(qgs_feature)
+
+            # Find positions at each distance interval
+            target_distance = distance_interval
+
+            while target_distance <= total_distance:
+                # Find the segment containing this distance
+                for i in range(1, len(positions)):
+                    prev_dist, prev_frame, prev_x, prev_y = positions[i - 1]
+                    curr_dist, curr_frame, curr_x, curr_y = positions[i]
+
+                    if prev_dist <= target_distance <= curr_dist:
+                        # Interpolate position within this segment
+                        segment_length = curr_dist - prev_dist
+                        if segment_length > 0:
+                            # How far along the segment is our target distance
+                            ratio = (target_distance - prev_dist) / segment_length
+                            interp_x = prev_x + ratio * (curr_x - prev_x)
+                            interp_y = prev_y + ratio * (curr_y - prev_y)
+                        else:
+                            interp_x, interp_y = curr_x, curr_y
+
+                        # Use the frame index of the end of this segment
+                        # (the first frame that exceeds the target distance)
+                        point = QgsPointXY(interp_x, interp_y)
+                        qgs_feature = QgsFeature(markers_layer.fields())
+                        qgs_feature.setGeometry(QgsGeometry.fromPointXY(point))
+                        label = f"{int(target_distance)}m ({curr_frame})"
+                        qgs_feature.setAttributes([target_distance, curr_frame, label])
+                        marker_features.append(qgs_feature)
+                        break
+
+                target_distance += distance_interval
+
+            if not marker_features:
+                self.log(f"Warning: No distance markers created (interval {distance_interval}m > total {total_distance:.1f}m)")
+                return None
+
+            # Add features to layer
+            markers_layer.dataProvider().addFeatures(marker_features)
+
+            # Style the marker points (different color from frame markers)
+            symbol = QgsMarkerSymbol.createSimple({
+                'name': 'triangle',
+                'color': '#2ca02c',  # Green color
+                'outline_color': '#ffffff',
+                'outline_width': '0.8',
+                'size': '4.5'
+            })
+            markers_layer.renderer().setSymbol(symbol)
+
+            # Configure labeling
+            label_settings = QgsPalLayerSettings()
+            label_settings.fieldName = 'label'
+            label_settings.enabled = True
+
+            # Text format
+            text_format = QgsTextFormat()
+            text_format.setFont(QFont("Arial", 9, QFont.Bold))
+            text_format.setSize(9)
+            text_format.setColor(QColor('#1a5e1a'))  # Dark green
+
+            # Add text buffer (halo) for better readability
+            buffer_settings = QgsTextBufferSettings()
+            buffer_settings.setEnabled(True)
+            buffer_settings.setSize(1.5)
+            buffer_settings.setColor(QColor('#ffffff'))
+            text_format.setBuffer(buffer_settings)
+
+            label_settings.setFormat(text_format)
+
+            # Position labels above the marker
+            label_settings.placement = QgsPalLayerSettings.OverPoint
+            label_settings.quadOffset = QgsPalLayerSettings.QuadrantAbove
+
+            # Apply labeling to layer
+            labeling = QgsVectorLayerSimpleLabeling(label_settings)
+            markers_layer.setLabelsEnabled(True)
+            markers_layer.setLabeling(labeling)
+
+            self.log(f"Created {len(marker_features)} distance markers (interval: {distance_interval}m)")
+            return markers_layer
+
+        except Exception as e:
+            self.log(f"Error creating distance markers: {str(e)}")
+            return None
+
+    # =========================================================================
+    # PROJECT CONFIGURATION PERSISTENCE
+    # =========================================================================
+
+    def _connect_project_signals(self):
+        """Connect to QGIS project signals for automatic config persistence."""
+        project = QgsProject.instance()
+        
+        # Save config before project is written (saved)
+        project.writeProject.connect(self._on_project_write)
+        
+        # Load config when a project is read (opened)
+        project.readProject.connect(self._on_project_read)
+        
+        # Handle project cleared (new project)
+        project.cleared.connect(self._on_project_cleared)
+
+    def disconnect_project_signals(self):
+        """Disconnect from QGIS project signals. Call this when unloading the plugin."""
+        try:
+            project = QgsProject.instance()
+            project.writeProject.disconnect(self._on_project_write)
+            project.readProject.disconnect(self._on_project_read)
+            project.cleared.disconnect(self._on_project_cleared)
+        except Exception:
+            pass  # Ignore errors if signals weren't connected
+
+    def _on_project_write(self, doc):
+        """Called when project is about to be saved."""
+        if not self._loading_config:
+            self.save_config_to_project()
+
+    def _on_project_read(self, doc):
+        """Called when a project is opened."""
+        self._loading_config = True
+        try:
+            self.load_config_from_project()
+        finally:
+            self._loading_config = False
+
+    def _on_project_cleared(self):
+        """Called when project is cleared (new project)."""
+        # Optionally reset fields to defaults when creating new project
+        pass
+
+    def save_config_to_project(self):
+        """Save all configuration to the QGIS project."""
+        project = QgsProject.instance()
+        
+        # ===== Input Paths =====
+        project.writeEntry(PLUGIN_SCOPE, "Input/ThermalVideoPaths", 
+                           self.thermal_video_paths_edit.text())
+        project.writeEntry(PLUGIN_SCOPE, "Input/ThermalSrtPaths", 
+                           self.thermal_srt_paths_edit.text())
+        project.writeEntry(PLUGIN_SCOPE, "Input/ThermalCalibrationPath", 
+                           self.thermal_calibration_path_edit.text())
+        project.writeEntry(PLUGIN_SCOPE, "Input/RgbVideoPaths", 
+                           self.rgb_video_paths_edit.text())
+        project.writeEntry(PLUGIN_SCOPE, "Input/RgbSrtPaths", 
+                           self.rgb_srt_paths_edit.text())
+        project.writeEntry(PLUGIN_SCOPE, "Input/RgbCalibrationPath", 
+                           self.rgb_calibration_path_edit.text())
+        project.writeEntry(PLUGIN_SCOPE, "Input/AirdataPath", 
+                           self.airdata_path_edit.text())
+        project.writeEntry(PLUGIN_SCOPE, "Input/DemPath", 
+                           self.dem_path_edit.text())
+        project.writeEntry(PLUGIN_SCOPE, "Input/DemMetadataPath", 
+                           self.dem_metadata_path_edit.text())
+        project.writeEntry(PLUGIN_SCOPE, "Input/CorrectionPath", 
+                           self.correction_path_edit.text())
+        project.writeEntry(PLUGIN_SCOPE, "Input/TargetFolder", 
+                           self.target_folder_edit.text())
+        project.writeEntryDouble(PLUGIN_SCOPE, "Input/TargetCrs", 
+                                 self.target_crs_combo.currentIndex())
+        
+        # ===== Detection Settings =====
+        project.writeEntry(PLUGIN_SCOPE, "Detection/ModelPath", 
+                           self.model_path_edit.text())
+        project.writeEntryDouble(PLUGIN_SCOPE, "Detection/Confidence", 
+                                 self.confidence_spin.value())
+        project.writeEntryBool(PLUGIN_SCOPE, "Detection/AllFrames", 
+                               self.detect_all_frames_check.isChecked())
+        project.writeEntryDouble(PLUGIN_SCOPE, "Detection/StartFrame", 
+                                 self.detect_start_frame_spin.value())
+        project.writeEntryDouble(PLUGIN_SCOPE, "Detection/EndFrame", 
+                                 self.detect_end_frame_spin.value())
+        project.writeEntryDouble(PLUGIN_SCOPE, "Detection/SampleRate", 
+                                 self.detect_sample_rate_spin.value())
+        
+        # ===== Correction Settings =====
+        project.writeEntryDouble(PLUGIN_SCOPE, "Correction/RotationUnit", 
+                                 self.rotation_unit_combo.currentIndex())
+        project.writeEntryDouble(PLUGIN_SCOPE, "Correction/TransX", 
+                                 self.trans_x_spin.value())
+        project.writeEntryDouble(PLUGIN_SCOPE, "Correction/TransY", 
+                                 self.trans_y_spin.value())
+        project.writeEntryDouble(PLUGIN_SCOPE, "Correction/TransZ", 
+                                 self.trans_z_spin.value())
+        project.writeEntryDouble(PLUGIN_SCOPE, "Correction/RotX", 
+                                 self.rot_x_spin.value())
+        project.writeEntryDouble(PLUGIN_SCOPE, "Correction/RotY", 
+                                 self.rot_y_spin.value())
+        project.writeEntryDouble(PLUGIN_SCOPE, "Correction/RotZ", 
+                                 self.rot_z_spin.value())
+        
+        # Save additional corrections as JSON
+        corrections_data = []
+        for i in range(self.additional_corrections_list.count()):
+            item = self.additional_corrections_list.item(i)
+            data = item.data(Qt.UserRole)
+            if data:
+                corrections_data.append(data)
+        project.writeEntry(PLUGIN_SCOPE, "Correction/AdditionalCorrections", 
+                           json.dumps(corrections_data))
+        
+        # ===== Tracking Settings =====
+        project.writeEntryDouble(PLUGIN_SCOPE, "Tracking/TrackerType", 
+                                 self.tracker_backend_combo.currentIndex())
+        project.writeEntryDouble(PLUGIN_SCOPE, "Tracking/ReidModel", 
+                                 self.reid_model_combo.currentIndex())
+        project.writeEntry(PLUGIN_SCOPE, "Tracking/CustomReidPath", 
+                           self.custom_reid_path_edit.text())
+        project.writeEntry(PLUGIN_SCOPE, "Tracking/TrackerParams", 
+                           self.tracker_params_edit.toPlainText())
+        project.writeEntryDouble(PLUGIN_SCOPE, "Tracking/IouThreshold", 
+                                 self.iou_threshold_spin.value())
+        project.writeEntryDouble(PLUGIN_SCOPE, "Tracking/MaxAge", 
+                                 self.max_age_spin.value())
+        project.writeEntryDouble(PLUGIN_SCOPE, "Tracking/MaxCenterDist", 
+                                 self.max_center_dist_spin.value())
+        project.writeEntryDouble(PLUGIN_SCOPE, "Tracking/TrackerMode", 
+                                 self.tracker_mode_combo.currentIndex())
+        project.writeEntryBool(PLUGIN_SCOPE, "Tracking/ClassAware", 
+                               self.class_aware_check.isChecked())
+        project.writeEntryBool(PLUGIN_SCOPE, "Tracking/Interpolate", 
+                               self.interpolate_check.isChecked())
+        
+        # ===== Field of View Settings =====
+        project.writeEntryBool(PLUGIN_SCOPE, "FoV/UseMask", 
+                               self.use_fov_mask_check.isChecked())
+        project.writeEntry(PLUGIN_SCOPE, "FoV/MaskPath", 
+                           self.fov_mask_path_edit.text())
+        project.writeEntryDouble(PLUGIN_SCOPE, "FoV/MaskSimplify", 
+                                 self.mask_simplify_spin.value())
+        project.writeEntryBool(PLUGIN_SCOPE, "FoV/AllFrames", 
+                               self.fov_all_frames_check.isChecked())
+        project.writeEntryDouble(PLUGIN_SCOPE, "FoV/StartFrame", 
+                                 self.fov_start_frame_spin.value())
+        project.writeEntryDouble(PLUGIN_SCOPE, "FoV/EndFrame", 
+                                 self.fov_end_frame_spin.value())
+        project.writeEntryDouble(PLUGIN_SCOPE, "FoV/SampleRate", 
+                                 self.fov_sample_rate_spin.value())
+        
+        # ===== Orthomosaic Settings =====
+        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/Resolution", 
+                                 self.ortho_resolution_spin.value())
+        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/BlendMode", 
+                                 self.blend_mode_combo.currentIndex())
+        project.writeEntryBool(PLUGIN_SCOPE, "Ortho/AllFrames", 
+                               self.ortho_all_frames_check.isChecked())
+        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/StartFrame", 
+                                 self.ortho_start_frame_spin.value())
+        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/EndFrame", 
+                                 self.ortho_end_frame_spin.value())
+        project.writeEntryBool(PLUGIN_SCOPE, "Ortho/Crop", 
+                               self.ortho_crop_check.isChecked())
+        project.writeEntryBool(PLUGIN_SCOPE, "Ortho/Overviews", 
+                               self.ortho_overviews_check.isChecked())
+        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/TileSize", 
+                                 self.ortho_tile_size_spin.value())
+        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/FrameStep", 
+                                 self.ortho_frame_step_spin.value())
+        
+        # ===== SAM3 Settings =====
+        # Note: API key is intentionally NOT saved for security
+        project.writeEntry(PLUGIN_SCOPE, "SAM3/Prompts", 
+                           self.sam3_prompts_edit.toPlainText())
+        project.writeEntryDouble(PLUGIN_SCOPE, "SAM3/Confidence", 
+                                 self.sam3_confidence_spin.value())
+        project.writeEntryBool(PLUGIN_SCOPE, "SAM3/AllFrames", 
+                               self.sam3_all_frames_check.isChecked())
+        project.writeEntryDouble(PLUGIN_SCOPE, "SAM3/StartFrame", 
+                                 self.sam3_start_frame_spin.value())
+        project.writeEntryDouble(PLUGIN_SCOPE, "SAM3/EndFrame", 
+                                 self.sam3_end_frame_spin.value())
+        project.writeEntryDouble(PLUGIN_SCOPE, "SAM3/FrameStep", 
+                                 self.sam3_step_spin.value())
+        
+        # ===== Flight Route Settings =====
+        project.writeEntryBool(PLUGIN_SCOPE, "FlightRoute/FrameMarkersEnabled", 
+                               self.frame_markers_enabled_check.isChecked())
+        project.writeEntryDouble(PLUGIN_SCOPE, "FlightRoute/FrameMarkerInterval", 
+                                 self.frame_marker_interval_spin.value())
+        project.writeEntryBool(PLUGIN_SCOPE, "FlightRoute/IncludeFrameZero", 
+                               self.frame_marker_include_zero_check.isChecked())
+        project.writeEntryBool(PLUGIN_SCOPE, "FlightRoute/DistanceMarkersEnabled", 
+                               self.distance_markers_enabled_check.isChecked())
+        project.writeEntryDouble(PLUGIN_SCOPE, "FlightRoute/DistanceMarkerInterval", 
+                                 self.distance_marker_interval_spin.value())
+        project.writeEntryBool(PLUGIN_SCOPE, "FlightRoute/IncludeDistanceStart", 
+                               self.distance_marker_include_start_check.isChecked())
+        project.writeEntryDouble(PLUGIN_SCOPE, "FlightRoute/CameraComboIndex", 
+                                 self.flight_route_camera_combo.currentIndex())
+        
+        # Mark project as modified so user is prompted to save
+        project.setDirty(True)
+        
+        self.log("Configuration saved to project")
+
+    def load_config_from_project(self):
+        """Load all configuration from the QGIS project."""
+        project = QgsProject.instance()
+        
+        # Helper functions
+        def read_str(key: str, default: str = "") -> str:
+            value, ok = project.readEntry(PLUGIN_SCOPE, key, default)
+            return value if ok else default
+        
+        def read_double(key: str, default: float = 0.0) -> float:
+            value, ok = project.readDoubleEntry(PLUGIN_SCOPE, key, default)
+            return value if ok else default
+        
+        def read_bool(key: str, default: bool = False) -> bool:
+            value, ok = project.readBoolEntry(PLUGIN_SCOPE, key, default)
+            return value if ok else default
+        
+        def read_int(key: str, default: int = 0) -> int:
+            return int(read_double(key, float(default)))
+        
+        # Check if there's any saved config
+        test_value, has_config = project.readEntry(PLUGIN_SCOPE, "Input/TargetFolder", "")
+        if not has_config:
+            return  # No saved config in this project
+        
+        # ===== Input Paths =====
+        self.thermal_video_paths_edit.setText(read_str("Input/ThermalVideoPaths"))
+        self.thermal_srt_paths_edit.setText(read_str("Input/ThermalSrtPaths"))
+        self.thermal_calibration_path_edit.setText(read_str("Input/ThermalCalibrationPath"))
+        self.rgb_video_paths_edit.setText(read_str("Input/RgbVideoPaths"))
+        self.rgb_srt_paths_edit.setText(read_str("Input/RgbSrtPaths"))
+        self.rgb_calibration_path_edit.setText(read_str("Input/RgbCalibrationPath"))
+        self.airdata_path_edit.setText(read_str("Input/AirdataPath"))
+        self.dem_path_edit.setText(read_str("Input/DemPath"))
+        self.dem_metadata_path_edit.setText(read_str("Input/DemMetadataPath"))
+        self.correction_path_edit.setText(read_str("Input/CorrectionPath"))
+        self.target_folder_edit.setText(read_str("Input/TargetFolder"))
+        
+        target_crs_idx = read_int("Input/TargetCrs", 1)
+        if 0 <= target_crs_idx < self.target_crs_combo.count():
+            self.target_crs_combo.setCurrentIndex(target_crs_idx)
+        
+        # ===== Detection Settings =====
+        self.model_path_edit.setText(read_str("Detection/ModelPath"))
+        self.confidence_spin.setValue(read_double("Detection/Confidence", 0.5))
+        self.detect_all_frames_check.setChecked(read_bool("Detection/AllFrames", True))
+        self.detect_start_frame_spin.setValue(read_int("Detection/StartFrame", 0))
+        self.detect_end_frame_spin.setValue(read_int("Detection/EndFrame", 999999))
+        self.detect_sample_rate_spin.setValue(read_int("Detection/SampleRate", 1))
+        
+        # ===== Correction Settings =====
+        rot_unit_idx = read_int("Correction/RotationUnit", 0)
+        if 0 <= rot_unit_idx < self.rotation_unit_combo.count():
+            self.rotation_unit_combo.setCurrentIndex(rot_unit_idx)
+        
+        self.trans_x_spin.setValue(read_double("Correction/TransX", 0.0))
+        self.trans_y_spin.setValue(read_double("Correction/TransY", 0.0))
+        self.trans_z_spin.setValue(read_double("Correction/TransZ", 0.0))
+        self.rot_x_spin.setValue(read_double("Correction/RotX", 0.0))
+        self.rot_y_spin.setValue(read_double("Correction/RotY", 0.0))
+        self.rot_z_spin.setValue(read_double("Correction/RotZ", 0.0))
+        
+        # Load additional corrections
+        corrections_json = read_str("Correction/AdditionalCorrections", "[]")
+        try:
+            corrections_data = json.loads(corrections_json)
+            self.additional_corrections_list.clear()
+            for corr in corrections_data:
+                self._add_correction_to_list(corr)
+        except json.JSONDecodeError:
+            pass
+        
+        # ===== Tracking Settings =====
+        tracker_idx = read_int("Tracking/TrackerType", 0)
+        if 0 <= tracker_idx < self.tracker_backend_combo.count():
+            self.tracker_backend_combo.setCurrentIndex(tracker_idx)
+        
+        reid_model_idx = read_int("Tracking/ReidModel", 0)
+        if 0 <= reid_model_idx < self.reid_model_combo.count():
+            self.reid_model_combo.setCurrentIndex(reid_model_idx)
+        
+        self.custom_reid_path_edit.setText(read_str("Tracking/CustomReidPath"))
+        self.tracker_params_edit.setPlainText(read_str("Tracking/TrackerParams"))
+        self.iou_threshold_spin.setValue(read_double("Tracking/IouThreshold", 0.3))
+        self.max_age_spin.setValue(read_int("Tracking/MaxAge", -1))
+        self.max_center_dist_spin.setValue(read_double("Tracking/MaxCenterDist", 0.2))
+        
+        tracker_mode_idx = read_int("Tracking/TrackerMode", 1)
+        if 0 <= tracker_mode_idx < self.tracker_mode_combo.count():
+            self.tracker_mode_combo.setCurrentIndex(tracker_mode_idx)
+        
+        self.class_aware_check.setChecked(read_bool("Tracking/ClassAware", True))
+        self.interpolate_check.setChecked(read_bool("Tracking/Interpolate", True))
+        
+        # ===== Field of View Settings =====
+        self.use_fov_mask_check.setChecked(read_bool("FoV/UseMask", False))
+        self.fov_mask_path_edit.setText(read_str("FoV/MaskPath"))
+        self.mask_simplify_spin.setValue(read_double("FoV/MaskSimplify", 2.0))
+        self.fov_all_frames_check.setChecked(read_bool("FoV/AllFrames", True))
+        self.fov_start_frame_spin.setValue(read_int("FoV/StartFrame", 0))
+        self.fov_end_frame_spin.setValue(read_int("FoV/EndFrame", 999999))
+        self.fov_sample_rate_spin.setValue(read_int("FoV/SampleRate", 1))
+        
+        # ===== Orthomosaic Settings =====
+        self.ortho_resolution_spin.setValue(read_double("Ortho/Resolution", 0.05))
+        
+        blend_mode_idx = read_int("Ortho/BlendMode", 0)
+        if 0 <= blend_mode_idx < self.blend_mode_combo.count():
+            self.blend_mode_combo.setCurrentIndex(blend_mode_idx)
+        
+        self.ortho_all_frames_check.setChecked(read_bool("Ortho/AllFrames", True))
+        self.ortho_start_frame_spin.setValue(read_int("Ortho/StartFrame", 0))
+        self.ortho_end_frame_spin.setValue(read_int("Ortho/EndFrame", 999999))
+        self.ortho_crop_check.setChecked(read_bool("Ortho/Crop", True))
+        self.ortho_overviews_check.setChecked(read_bool("Ortho/Overviews", True))
+        self.ortho_tile_size_spin.setValue(read_int("Ortho/TileSize", 8192))
+        self.ortho_frame_step_spin.setValue(read_int("Ortho/FrameStep", 1))
+        
+        # ===== SAM3 Settings =====
+        self.sam3_prompts_edit.setPlainText(read_str("SAM3/Prompts"))
+        self.sam3_confidence_spin.setValue(read_double("SAM3/Confidence", 0.5))
+        self.sam3_all_frames_check.setChecked(read_bool("SAM3/AllFrames", True))
+        self.sam3_start_frame_spin.setValue(read_int("SAM3/StartFrame", 0))
+        self.sam3_end_frame_spin.setValue(read_int("SAM3/EndFrame", 999999))
+        self.sam3_step_spin.setValue(read_int("SAM3/FrameStep", 1))
+        
+        # ===== Flight Route Settings =====
+        self.frame_markers_enabled_check.setChecked(read_bool("FlightRoute/FrameMarkersEnabled", True))
+        self.frame_marker_interval_spin.setValue(read_int("FlightRoute/FrameMarkerInterval", 100))
+        self.frame_marker_include_zero_check.setChecked(read_bool("FlightRoute/IncludeFrameZero", False))
+        self.distance_markers_enabled_check.setChecked(read_bool("FlightRoute/DistanceMarkersEnabled", False))
+        self.distance_marker_interval_spin.setValue(read_int("FlightRoute/DistanceMarkerInterval", 100))
+        self.distance_marker_include_start_check.setChecked(read_bool("FlightRoute/IncludeDistanceStart", False))
+        
+        camera_combo_idx = read_int("FlightRoute/CameraComboIndex", 0)
+        if 0 <= camera_combo_idx < self.flight_route_camera_combo.count():
+            self.flight_route_camera_combo.setCurrentIndex(camera_combo_idx)
+        
+        self.log("Configuration loaded from project")
+
+    def _create_layer_group(self, group_name: str, at_top: bool = True) -> QgsLayerTreeGroup:
+        """Create a layer group, optionally at the top of the layer tree.
+        
+        :param group_name: Name for the new group
+        :param at_top: If True, insert at top of layer tree; if False, append at bottom
+        :return: The created QgsLayerTreeGroup
+        """
+        root = QgsProject.instance().layerTreeRoot()
+        group = QgsLayerTreeGroup(group_name)
+        
+        if at_top:
+            root.insertChildNode(0, group)
+        else:
+            root.addChildNode(group)
+        
+        return group
+
+    def _persist_memory_layer(self, mem_layer: QgsVectorLayer, layer_name: str, 
+                               subfolder: str = "qgis_layers") -> QgsVectorLayer:
+        """Save a memory layer to GeoPackage file and return the file-based layer.
+        
+        If no target folder is set, returns the original memory layer unchanged.
+        
+        :param mem_layer: The memory layer to persist
+        :param layer_name: Display name for the layer (also used for filename)
+        :param subfolder: Subfolder within target folder for storing layers
+        :return: File-based QgsVectorLayer if saved successfully, otherwise original memory layer
+        """
+        from qgis.core import QgsVectorFileWriter, QgsCoordinateTransformContext
+        
+        # Check if target folder is set
+        target_folder = self.target_folder_edit.text().strip()
+        if not target_folder or not os.path.isdir(target_folder):
+            # No target folder, return memory layer as-is
+            return mem_layer
+        
+        try:
+            # Create output folder
+            gpkg_folder = os.path.join(target_folder, subfolder)
+            os.makedirs(gpkg_folder, exist_ok=True)
+            
+            # Sanitize layer name for filename
+            safe_name = "".join(c if c.isalnum() or c in "_-" else "_" for c in layer_name)
+            gpkg_path = os.path.join(gpkg_folder, f"{safe_name}.gpkg")
+            
+            # If file already exists, remove it to overwrite
+            if os.path.exists(gpkg_path):
+                os.remove(gpkg_path)
+            
+            # Write to GeoPackage
+            options = QgsVectorFileWriter.SaveVectorOptions()
+            options.driverName = "GPKG"
+            options.fileEncoding = "UTF-8"
+            
+            error = QgsVectorFileWriter.writeAsVectorFormatV3(
+                mem_layer,
+                gpkg_path,
+                QgsCoordinateTransformContext(),
+                options
+            )
+            
+            if error[0] != QgsVectorFileWriter.NoError:
+                self.log(f"Warning: Could not save layer '{layer_name}' to GeoPackage: {error[1]}")
+                return mem_layer
+            
+            # Load the persisted layer
+            persisted_layer = QgsVectorLayer(gpkg_path, layer_name, "ogr")
+            
+            if not persisted_layer.isValid():
+                self.log(f"Warning: Persisted layer '{layer_name}' is not valid, using memory layer")
+                return mem_layer
+            
+            return persisted_layer
+            
+        except Exception as e:
+            self.log(f"Warning: Failed to persist layer '{layer_name}': {str(e)}")
+            return mem_layer
