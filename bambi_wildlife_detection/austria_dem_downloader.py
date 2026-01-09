@@ -643,8 +643,9 @@ class GLTFMeshGenerator:
                 height = src.height
                 bounds = src.bounds
 
+                # Origin is top-right corner of the DEM
                 origin_x = bounds.left
-                origin_y = bounds.bottom
+                origin_y = bounds.top
 
                 valid_elevations = elevation[~np.isnan(elevation)]
                 if len(valid_elevations) == 0:
@@ -758,35 +759,41 @@ class GLTFMeshGenerator:
 
             self._progress(95)
 
-            # Write metadata
+            # Write metadata in expected format
             if metadata_path:
+                # Use the source_crs parameter as the primary CRS (this is the output CRS we reprojected to)
+                # Fall back to file CRS or default only if source_crs wasn't provided
+                crs_string = source_crs if source_crs else (crs if crs else "EPSG:32633")
+                
+                # Convert Affine transform to list format [a, b, c, d, e, f, 0, 0, 1]
+                transform_list = [
+                    transform.a,  # scale x
+                    transform.b,  # shear
+                    transform.c,  # translation x
+                    transform.d,  # shear
+                    transform.e,  # scale y (usually negative)
+                    transform.f,  # translation y
+                    0.0,
+                    0.0,
+                    1.0
+                ]
+                
+                # origin is in the projected coordinate system (e.g., EPSG:32633)
+                # origin_x and origin_y come from bounds which are in the file's CRS
                 metadata = {
-                    "origin": {
+                    "width": width,
+                    "height": height,
+                    "crs": crs_string,
+                    "transform": transform_list,
+                    "origin": [origin_x, origin_y, origin_z],
+                    "origin_wgs84": {
                         "latitude": origin_lat,
                         "longitude": origin_lon,
-                        "altitude": origin_z,
-                        "x": origin_x,
-                        "y": origin_y
-                    },
-                    "crs": crs,
-                    "bounds": {
-                        "left": bounds.left,
-                        "bottom": bounds.bottom,
-                        "right": bounds.right,
-                        "top": bounds.top
-                    },
-                    "pixel_size": {
-                        "x": pixel_size_x,
-                        "y": pixel_size_y
-                    },
-                    "dimensions": {
-                        "width": width,
-                        "height": height
-                    },
-                    "simplify_factor": self.simplify_factor
+                        "altitude": origin_z
+                    }
                 }
                 with open(metadata_path, 'w') as f:
-                    json.dump(metadata, f, indent=2)
+                    json.dump(metadata, f, indent=4)
                 self._log(f"Created metadata: {metadata_path}")
 
             # Write GLTF
