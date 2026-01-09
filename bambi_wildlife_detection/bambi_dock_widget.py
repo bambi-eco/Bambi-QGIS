@@ -4109,6 +4109,8 @@ class BambiDockWidget(QDockWidget):
                     markers_layer = self._persist_memory_layer(
                         markers_layer, "Frame_Markers", "flight_route_layers"
                     )
+                    # Re-apply styling after persistence (GeoPackage doesn't store QGIS styling)
+                    self._style_frame_markers_layer(markers_layer)
                     QgsProject.instance().addMapLayer(markers_layer, False)
                     group.addLayer(markers_layer)
                     loaded_count += 1
@@ -4124,6 +4126,8 @@ class BambiDockWidget(QDockWidget):
                     distance_layer = self._persist_memory_layer(
                         distance_layer, "Distance_Markers", "flight_route_layers"
                     )
+                    # Re-apply styling after persistence (GeoPackage doesn't store QGIS styling)
+                    self._style_distance_markers_layer(distance_layer)
                     QgsProject.instance().addMapLayer(distance_layer, False)
                     group.addLayer(distance_layer)
                     loaded_count += 1
@@ -4418,6 +4422,100 @@ class BambiDockWidget(QDockWidget):
         except Exception as e:
             self.log(f"Error creating distance markers: {str(e)}")
             return None
+
+    def _style_frame_markers_layer(self, layer: QgsVectorLayer):
+        """Apply styling and labeling to frame markers layer.
+        
+        :param layer: The frame markers layer to style
+        """
+        try:
+            # Style the marker points
+            symbol = QgsMarkerSymbol.createSimple({
+                'name': 'diamond',
+                'color': '#e31a1c',
+                'outline_color': '#ffffff',
+                'outline_width': '0.8',
+                'size': '4'
+            })
+            layer.renderer().setSymbol(symbol)
+
+            # Configure labeling
+            label_settings = QgsPalLayerSettings()
+            label_settings.fieldName = 'label'
+            label_settings.enabled = True
+
+            # Text format
+            text_format = QgsTextFormat()
+            text_format.setFont(QFont("Arial", 10, QFont.Bold))
+            text_format.setSize(10)
+            text_format.setColor(QColor('#000000'))
+
+            # Add text buffer (halo) for better readability
+            buffer_settings = QgsTextBufferSettings()
+            buffer_settings.setEnabled(True)
+            buffer_settings.setSize(1.5)
+            buffer_settings.setColor(QColor('#ffffff'))
+            text_format.setBuffer(buffer_settings)
+
+            label_settings.setFormat(text_format)
+
+            # Position labels above the marker
+            label_settings.placement = QgsPalLayerSettings.OverPoint
+            label_settings.quadOffset = QgsPalLayerSettings.QuadrantAbove
+
+            # Apply labeling to layer
+            labeling = QgsVectorLayerSimpleLabeling(label_settings)
+            layer.setLabelsEnabled(True)
+            layer.setLabeling(labeling)
+        except Exception as e:
+            self.log(f"Warning: Could not style frame markers layer: {str(e)}")
+
+    def _style_distance_markers_layer(self, layer: QgsVectorLayer):
+        """Apply styling and labeling to distance markers layer.
+        
+        :param layer: The distance markers layer to style
+        """
+        try:
+            # Style the marker points (different color from frame markers)
+            symbol = QgsMarkerSymbol.createSimple({
+                'name': 'triangle',
+                'color': '#2ca02c',  # Green color
+                'outline_color': '#ffffff',
+                'outline_width': '0.8',
+                'size': '4.5'
+            })
+            layer.renderer().setSymbol(symbol)
+
+            # Configure labeling
+            label_settings = QgsPalLayerSettings()
+            label_settings.fieldName = 'label'
+            label_settings.enabled = True
+
+            # Text format
+            text_format = QgsTextFormat()
+            text_format.setFont(QFont("Arial", 9, QFont.Bold))
+            text_format.setSize(9)
+            text_format.setColor(QColor('#1a5e1a'))  # Dark green
+
+            # Add text buffer (halo) for better readability
+            buffer_settings = QgsTextBufferSettings()
+            buffer_settings.setEnabled(True)
+            buffer_settings.setSize(1.5)
+            buffer_settings.setColor(QColor('#ffffff'))
+            text_format.setBuffer(buffer_settings)
+
+            label_settings.setFormat(text_format)
+
+            # Position labels above the marker
+            label_settings.placement = QgsPalLayerSettings.OverPoint
+            label_settings.quadOffset = QgsPalLayerSettings.QuadrantAbove
+
+            # Apply labeling to layer
+            labeling = QgsVectorLayerSimpleLabeling(label_settings)
+            layer.setLabelsEnabled(True)
+            layer.setLabeling(labeling)
+        except Exception as e:
+            self.log(f"Warning: Could not style distance markers layer: {str(e)}")
 
     # =========================================================================
     # PROJECT CONFIGURATION PERSISTENCE
