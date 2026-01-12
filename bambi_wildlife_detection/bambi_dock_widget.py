@@ -9,6 +9,7 @@ This module contains the main dock widget UI for the plugin.
 import os
 import json
 import math
+import csv
 from typing import Optional, Dict, Any, List
 import sys
 
@@ -440,15 +441,27 @@ class BambiDockWidget(QDockWidget):
         target_row.addWidget(target_browse_btn)
         output_layout.addRow("Target Folder:", target_row)
 
-        self.target_crs_combo = QComboBox()
-        self.target_crs_combo.addItems([
-            "EPSG:32632 - UTM zone 32N",
-            "EPSG:32633 - UTM zone 33N",
-            "EPSG:32634 - UTM zone 34N",
-            "EPSG:4326 - WGS 84"
-        ])
-        self.target_crs_combo.setCurrentIndex(1)  # Default to 32633
-        output_layout.addRow("Target CRS:", self.target_crs_combo)
+        self.target_crs_edit = QLineEdit()
+        self.target_crs_edit.setPlaceholderText("EPSG:32633 (UTM CRS required)")
+        self.target_crs_edit.setText("EPSG:32633")
+        self.target_crs_edit.setToolTip(
+            "Enter a UTM CRS (e.g., EPSG:32632, EPSG:32633).\n"
+            "UTM zones 01-60 for Northern (EPSG:32601-32660) or Southern (EPSG:32701-32760) hemisphere.\n"
+            "Click 'Auto' to detect from DEM metadata or AirData GPS coordinates."
+        )
+        self.target_crs_edit.editingFinished.connect(self._validate_crs_input)
+        
+        self.target_crs_auto_btn = QPushButton("Auto")
+        self.target_crs_auto_btn.setToolTip(
+            "Auto-detect CRS from DEM metadata (dem.json) or AirData CSV GPS coordinates"
+        )
+        self.target_crs_auto_btn.setFixedWidth(50)
+        self.target_crs_auto_btn.clicked.connect(self._auto_detect_crs)
+        
+        crs_row = QHBoxLayout()
+        crs_row.addWidget(self.target_crs_edit)
+        crs_row.addWidget(self.target_crs_auto_btn)
+        output_layout.addRow("Target CRS:", crs_row)
 
         input_layout.addWidget(output_group)
         input_layout.addStretch()
@@ -1555,9 +1568,9 @@ class BambiDockWidget(QDockWidget):
 
     def get_config(self) -> Dict[str, Any]:
         """Get the current configuration from UI elements."""
-        # Parse CRS
-        crs_text = self.target_crs_combo.currentText()
-        epsg = int(crs_text.split(":")[1].split(" ")[0])
+        # Parse CRS from text input
+        crs_text = self.target_crs_edit.text().strip().upper()
+        epsg = self._parse_epsg_from_text(crs_text)
 
         # Get rotation values - convert to radians if UI is in degrees mode
         rot_x = self.rot_x_spin.value()
@@ -1845,6 +1858,9 @@ class BambiDockWidget(QDockWidget):
             else:
                 # Check for existing outputs if folder already exists
                 self._check_existing_outputs(qgis_folder)
+        
+        # Try to auto-detect CRS from available sources
+        self._try_auto_detect_crs_silent()
 
     def browse_thermal_srts(self):
         """Browse for thermal SRT files."""
@@ -1879,6 +1895,8 @@ class BambiDockWidget(QDockWidget):
             self, "Select AirData CSV", "", "CSV Files (*.csv)")
         if file:
             self.airdata_path_edit.setText(file)
+            # Try to auto-detect CRS from GPS coordinates (only if no DEM metadata)
+            self._try_auto_detect_crs_silent()
 
     def browse_dem(self):
         file, _ = QFileDialog.getOpenFileName(
@@ -1887,9 +1905,11 @@ class BambiDockWidget(QDockWidget):
             self.dem_path_edit.setText(file)
             # Auto-initialize DEM metadata path by changing suffix to .json
             json_path = file.replace(".gltf", ".json").replace(".glb", ".json")
+            metadata_found = False
             if os.path.exists(json_path):
                 self.dem_metadata_path_edit.setText(json_path)
                 self.log(f"Auto-detected DEM metadata: {json_path}")
+                metadata_found = True
             else:
                 # Try common naming patterns
                 for suffix in ["_mesh.json", "_dem.json", "_metadata.json"]:
@@ -1898,7 +1918,12 @@ class BambiDockWidget(QDockWidget):
                     if os.path.exists(alt_path):
                         self.dem_metadata_path_edit.setText(alt_path)
                         self.log(f"Auto-detected DEM metadata: {alt_path}")
+                        metadata_found = True
                         break
+            
+            # Try to auto-detect CRS from the metadata
+            if metadata_found:
+                self._try_auto_detect_crs_silent()
 
     def download_austria_dem(self):
         """Download DEM from Austrian BEV service based on AirData CSV GPS coordinates."""
@@ -1924,9 +1949,19 @@ class BambiDockWidget(QDockWidget):
         # Get padding value
         padding = self.dem_padding_spin.value()
 
-        # Get output CRS from the target CRS combo
-        target_crs_text = self.target_crs_combo.currentText()
-        output_crs = target_crs_text.split(" - ")[0] if " - " in target_crs_text else "EPSG:32633"
+        # Get output CRS from the target CRS text input
+        output_crs = self.target_crs_edit.text().strip().upper()
+        if not output_crs.startswith("EPSG:"):
+            output_crs = f"EPSG:{output_crs}"
+        # Validate it's a UTM CRS
+        if not self._is_valid_utm_crs(output_crs):
+            QMessageBox.warning(
+                self, "Invalid CRS",
+                f"The CRS '{output_crs}' is not a valid UTM CRS.\n"
+                "Please enter a UTM CRS (EPSG:32601-32660 for N hemisphere, "
+                "EPSG:32701-32760 for S hemisphere)."
+            )
+            return
 
         # Confirm download
         reply = QMessageBox.question(
@@ -1990,6 +2025,8 @@ class BambiDockWidget(QDockWidget):
             if os.path.exists(json_path):
                 self.dem_metadata_path_edit.setText(json_path)
                 self.log(f"Auto-detected DEM metadata: {json_path}")
+                # Also try to auto-detect CRS from the new metadata
+                self._try_auto_detect_crs_silent()
 
             QMessageBox.information(
                 self, "DEM Download Complete",
@@ -2002,6 +2039,265 @@ class BambiDockWidget(QDockWidget):
                 self, "DEM Download Failed",
                 f"Failed to download DEM:\n{message}"
             )
+
+    # =========================================================================
+    # CRS Validation and Auto-Detection Methods
+    # =========================================================================
+    
+    def _is_valid_utm_crs(self, crs_text: str) -> bool:
+        """
+        Check if the given CRS string is a valid UTM CRS.
+        
+        Valid UTM EPSG codes:
+        - Northern Hemisphere: EPSG:32601 to EPSG:32660 (zones 1-60)
+        - Southern Hemisphere: EPSG:32701 to EPSG:32760 (zones 1-60)
+        
+        :param crs_text: CRS string like "EPSG:32633" or "32633"
+        :return: True if valid UTM CRS
+        """
+        try:
+            epsg = self._parse_epsg_from_text(crs_text)
+            if epsg is None:
+                return False
+            
+            # Check if in UTM range
+            is_northern = 32601 <= epsg <= 32660
+            is_southern = 32701 <= epsg <= 32760
+            
+            return is_northern or is_southern
+        except:
+            return False
+    
+    def _parse_epsg_from_text(self, crs_text: str) -> Optional[int]:
+        """
+        Parse EPSG code from text input.
+        
+        Handles formats like:
+        - "EPSG:32633"
+        - "epsg:32633"
+        - "32633"
+        
+        :param crs_text: CRS string
+        :return: EPSG code as integer, or None if invalid
+        """
+        try:
+            crs_text = crs_text.strip().upper()
+            
+            if crs_text.startswith("EPSG:"):
+                code_str = crs_text[5:].strip()
+            else:
+                code_str = crs_text
+            
+            return int(code_str)
+        except (ValueError, AttributeError):
+            return None
+    
+    def _validate_crs_input(self):
+        """Validate the CRS text input and show warning if invalid."""
+        crs_text = self.target_crs_edit.text().strip()
+        
+        if not crs_text:
+            return  # Empty is ok, will use default
+        
+        if not self._is_valid_utm_crs(crs_text):
+            epsg = self._parse_epsg_from_text(crs_text)
+            if epsg is None:
+                msg = f"'{crs_text}' is not a valid EPSG code format."
+            else:
+                msg = f"EPSG:{epsg} is not a UTM CRS."
+            
+            QMessageBox.warning(
+                self, "Invalid CRS",
+                f"{msg}\n\n"
+                "The algorithms in this plugin require a UTM CRS.\n"
+                "Valid ranges:\n"
+                "  • Northern Hemisphere: EPSG:32601 - EPSG:32660\n"
+                "  • Southern Hemisphere: EPSG:32701 - EPSG:32760\n\n"
+                "Click 'Auto' to detect the correct UTM zone automatically."
+            )
+        else:
+            # Normalize format
+            epsg = self._parse_epsg_from_text(crs_text)
+            self.target_crs_edit.setText(f"EPSG:{epsg}")
+    
+    def _auto_detect_crs(self):
+        """
+        Auto-detect the target CRS from available sources.
+        
+        Priority:
+        1. DEM metadata JSON file (if available and contains 'crs' field)
+        2. First GPS position from AirData CSV (calculate UTM zone)
+        """
+        detected_crs = None
+        source = None
+        
+        # Try 1: DEM metadata JSON
+        dem_metadata_path = self.dem_metadata_path_edit.text()
+        if dem_metadata_path and os.path.exists(dem_metadata_path):
+            try:
+                with open(dem_metadata_path, 'r', encoding='utf-8') as f:
+                    metadata = json.load(f)
+                
+                if 'crs' in metadata:
+                    crs_value = metadata['crs']
+                    if self._is_valid_utm_crs(crs_value):
+                        detected_crs = crs_value.upper()
+                        source = f"DEM metadata ({os.path.basename(dem_metadata_path)})"
+                    else:
+                        self.log(f"DEM metadata has CRS '{crs_value}' but it's not a UTM CRS")
+            except Exception as e:
+                self.log(f"Could not read DEM metadata: {e}")
+        
+        # Try 2: AirData CSV GPS coordinates
+        if detected_crs is None:
+            airdata_path = self.airdata_path_edit.text()
+            if airdata_path and os.path.exists(airdata_path):
+                detected_crs = self._detect_utm_from_airdata(airdata_path)
+                if detected_crs:
+                    source = f"AirData CSV ({os.path.basename(airdata_path)})"
+        
+        # Apply result
+        if detected_crs:
+            self.target_crs_edit.setText(detected_crs)
+            self.log(f"Auto-detected CRS: {detected_crs} from {source}")
+            QMessageBox.information(
+                self, "CRS Auto-Detected",
+                f"Detected CRS: {detected_crs}\n"
+                f"Source: {source}"
+            )
+        else:
+            # No sources available
+            sources_checked = []
+            if dem_metadata_path:
+                sources_checked.append("DEM metadata")
+            if self.airdata_path_edit.text():
+                sources_checked.append("AirData CSV")
+            
+            if not sources_checked:
+                QMessageBox.warning(
+                    self, "Cannot Auto-Detect",
+                    "No data sources available for CRS auto-detection.\n\n"
+                    "Please provide either:\n"
+                    "  • A DEM metadata JSON file (with 'crs' field)\n"
+                    "  • An AirData CSV file with GPS coordinates"
+                )
+            else:
+                QMessageBox.warning(
+                    self, "Auto-Detection Failed",
+                    f"Could not detect CRS from: {', '.join(sources_checked)}\n\n"
+                    "Please enter the target CRS manually."
+                )
+    
+    def _try_auto_detect_crs_silent(self):
+        """
+        Silently try to auto-detect CRS from available sources.
+        
+        This is called automatically when files are selected, and only
+        updates the CRS field without showing message boxes. It logs
+        the result to the output panel.
+        """
+        detected_crs = None
+        source = None
+        
+        # Try 1: DEM metadata JSON
+        dem_metadata_path = self.dem_metadata_path_edit.text()
+        if dem_metadata_path and os.path.exists(dem_metadata_path):
+            try:
+                with open(dem_metadata_path, 'r', encoding='utf-8') as f:
+                    metadata = json.load(f)
+                
+                if 'crs' in metadata:
+                    crs_value = metadata['crs']
+                    if self._is_valid_utm_crs(crs_value):
+                        detected_crs = crs_value.upper()
+                        source = f"DEM metadata"
+            except Exception:
+                pass
+        
+        # Try 2: AirData CSV GPS coordinates
+        if detected_crs is None:
+            airdata_path = self.airdata_path_edit.text()
+            if airdata_path and os.path.exists(airdata_path):
+                detected_crs = self._detect_utm_from_airdata(airdata_path)
+                if detected_crs:
+                    source = f"AirData GPS"
+        
+        # Apply result silently (just log, no message boxes)
+        if detected_crs:
+            self.target_crs_edit.setText(detected_crs)
+            self.log(f"Auto-detected CRS: {detected_crs} (from {source})")
+    
+    def _detect_utm_from_airdata(self, csv_path: str) -> Optional[str]:
+        """
+        Detect appropriate UTM zone from GPS coordinates in AirData CSV.
+        
+        Uses the first valid GPS position to determine the UTM zone.
+        
+        :param csv_path: Path to AirData CSV file
+        :return: CRS string like "EPSG:32633" or None
+        """
+        try:
+            with open(csv_path, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                
+                # Find latitude/longitude columns
+                lat_col = None
+                lon_col = None
+                
+                fieldnames = reader.fieldnames
+                if fieldnames is None:
+                    return None
+                
+                for col in fieldnames:
+                    col_lower = col.lower().strip()
+                    if lat_col is None and any(x in col_lower for x in ['latitude', 'lat']):
+                        lat_col = col
+                    if lon_col is None and any(x in col_lower for x in ['longitude', 'lon', 'lng']):
+                        lon_col = col
+                
+                if lat_col is None or lon_col is None:
+                    self.log(f"Could not find lat/lon columns in {os.path.basename(csv_path)}")
+                    return None
+                
+                # Get first valid GPS position
+                for row in reader:
+                    try:
+                        lat = float(row[lat_col])
+                        lon = float(row[lon_col])
+                        
+                        # Skip invalid values
+                        if lat == 0 and lon == 0:
+                            continue
+                        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+                            continue
+                        
+                        # Calculate UTM zone from longitude
+                        # UTM zones are 6 degrees wide, zone 1 starts at -180°
+                        utm_zone = int((lon + 180) / 6) + 1
+                        
+                        # Clamp to valid range 1-60
+                        utm_zone = max(1, min(60, utm_zone))
+                        
+                        # Determine hemisphere
+                        if lat >= 0:
+                            epsg = 32600 + utm_zone  # Northern hemisphere
+                        else:
+                            epsg = 32700 + utm_zone  # Southern hemisphere
+                        
+                        self.log(f"Detected UTM zone {utm_zone}{'N' if lat >= 0 else 'S'} "
+                                f"from GPS: ({lat:.4f}, {lon:.4f})")
+                        
+                        return f"EPSG:{epsg}"
+                    
+                    except (ValueError, KeyError):
+                        continue
+                
+                self.log(f"No valid GPS coordinates found in {os.path.basename(csv_path)}")
+                return None
+                
+        except Exception as e:
+            self.log(f"Error reading AirData CSV for CRS detection: {e}")
+            return None
 
     def cancel_dem_download(self):
         """Cancel ongoing DEM download."""
@@ -4719,8 +5015,8 @@ class BambiDockWidget(QDockWidget):
                            self.correction_path_edit.text())
         project.writeEntry(PLUGIN_SCOPE, "Input/TargetFolder", 
                            self.target_folder_edit.text())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Input/TargetCrs", 
-                                 self.target_crs_combo.currentIndex())
+        project.writeEntry(PLUGIN_SCOPE, "Input/TargetCrs", 
+                           self.target_crs_edit.text())
         
         # ===== Detection Settings =====
         project.writeEntry(PLUGIN_SCOPE, "Detection/ModelPath", 
@@ -4895,9 +5191,11 @@ class BambiDockWidget(QDockWidget):
         self.correction_path_edit.setText(read_str("Input/CorrectionPath"))
         self.target_folder_edit.setText(read_str("Input/TargetFolder"))
         
-        target_crs_idx = read_int("Input/TargetCrs", 1)
-        if 0 <= target_crs_idx < self.target_crs_combo.count():
-            self.target_crs_combo.setCurrentIndex(target_crs_idx)
+        target_crs = read_str("Input/TargetCrs")
+        if target_crs:
+            self.target_crs_edit.setText(target_crs)
+        else:
+            self.target_crs_edit.setText("EPSG:32633")  # Default
         
         # ===== Detection Settings =====
         self.model_path_edit.setText(read_str("Detection/ModelPath"))
