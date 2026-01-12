@@ -448,16 +448,7 @@ class BambiDockWidget(QDockWidget):
             "1 = full resolution, 2 = half resolution, etc."
         )
         geotiff_input_layout.addRow("Simplify Factor:", self.geotiff_simplify_spin)
-        
-        # Reproject option
-        self.geotiff_reproject_check = QCheckBox("Reproject to Target CRS")
-        self.geotiff_reproject_check.setToolTip(
-            "If checked, the GeoTIFF will be reprojected to the Target CRS defined below.\n"
-            "If unchecked, the original CRS of the GeoTIFF will be used."
-        )
-        self.geotiff_reproject_check.setChecked(False)
-        geotiff_input_layout.addRow("", self.geotiff_reproject_check)
-        
+
         # Convert button
         convert_row = QHBoxLayout()
         self.geotiff_convert_btn = QPushButton("Convert GeoTIFF to Mesh")
@@ -2165,19 +2156,18 @@ class BambiDockWidget(QDockWidget):
         
         # Determine output CRS
         output_crs = None
-        if self.geotiff_reproject_check.isChecked():
-            output_crs = self.target_crs_edit.text().strip().upper()
-            if not output_crs.startswith("EPSG:"):
-                output_crs = f"EPSG:{output_crs}"
-            # Validate it's a UTM CRS
-            if not self._is_valid_utm_crs(output_crs):
-                QMessageBox.warning(
-                    self, "Invalid CRS",
-                    f"The CRS '{output_crs}' is not a valid UTM CRS.\n"
-                    "Please enter a UTM CRS (EPSG:32601-32660 for N hemisphere, "
-                    "EPSG:32701-32760 for S hemisphere)."
-                )
-                return
+        output_crs = self.target_crs_edit.text().strip().upper()
+        if not output_crs.startswith("EPSG:"):
+            output_crs = f"EPSG:{output_crs}"
+        # Validate it's a UTM CRS
+        if not self._is_valid_utm_crs(output_crs):
+            QMessageBox.warning(
+                self, "Invalid CRS",
+                f"The CRS '{output_crs}' is not a valid UTM CRS.\n"
+                "Please enter a UTM CRS (EPSG:32601-32660 for N hemisphere, "
+                "EPSG:32701-32760 for S hemisphere)."
+            )
+            return
         
         # Confirm conversion
         crs_info = f"\nOutput CRS: {output_crs}" if output_crs else "\n(Using original CRS)"
@@ -5228,9 +5218,7 @@ class BambiDockWidget(QDockWidget):
                            self.geotiff_input_path_edit.text())
         project.writeEntryDouble(PLUGIN_SCOPE, "Input/GeotiffSimplifyFactor",
                                  self.geotiff_simplify_spin.value())
-        project.writeEntryBool(PLUGIN_SCOPE, "Input/GeotiffReproject",
-                               self.geotiff_reproject_check.isChecked())
-        project.writeEntry(PLUGIN_SCOPE, "Input/CorrectionPath", 
+        project.writeEntry(PLUGIN_SCOPE, "Input/CorrectionPath",
                            self.correction_path_edit.text())
         project.writeEntry(PLUGIN_SCOPE, "Input/TargetFolder", 
                            self.target_folder_edit.text())
@@ -5409,7 +5397,6 @@ class BambiDockWidget(QDockWidget):
         self.dem_padding_spin.setValue(read_int("Input/DemPadding", 30))
         self.geotiff_input_path_edit.setText(read_str("Input/GeotiffInputPath"))
         self.geotiff_simplify_spin.setValue(read_int("Input/GeotiffSimplifyFactor", 2))
-        self.geotiff_reproject_check.setChecked(read_bool("Input/GeotiffReproject", False))
         self.correction_path_edit.setText(read_str("Input/CorrectionPath"))
         self.target_folder_edit.setText(read_str("Input/TargetFolder"))
         

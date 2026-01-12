@@ -97,7 +97,7 @@ Or visit: [https://github.com/bambi-eco/Geo-Referenced-Tracking](https://github.
 
 ## Installation
 
-### Method 1: Install from ZIP (Re[dem_mesh_r2.json](../alfs_detection/testdata/haag/dem_mesh_r2.json)commended)
+### Method 1: Install from ZIP (Recommended)
 
 1. Download the repository and zip the "bambi_wildlife_detection" subfolder
 2. Open QGIS
@@ -137,16 +137,16 @@ Or visit: [https://github.com/bambi-eco/Geo-Referenced-Tracking](https://github.
 
 You need the following inputs for a complete processing workflow:
 
-| File Type     | Extension         | Description                                                                                                                                                            |
-|---------------|-------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Video Files   | `.MP4`            | Drone thermal video recordings                                                                                                                                         |
-| SRT Files     | `.SRT`            | Subtitle files with frame timestamps                                                                                                                                   |
-| Calibration   | `.json`           | Camera intrinsic parameters                                                                                                                                            |
-| AirData CSV   | `.csv`            | Flight log exported from AirData                                                                                                                                       |
-| Correction    | `.json`           | JSON file describing positional corrections (can also be done within plugin)                                                                                           |
-| DEM           | `.gltf` or `.glb` | Digital Elevation Model + metadata JSON (either define manually, convert a GeoTIFF DEM or automatically download a suitable DEM (currently only supported for Austria) |
-| Target CRS    | `EPSG Code`       | EPSG Code for the target UTM based CRS (e.g. EPSG:32633 for Austria)                                                                                                   |
-| Target Folder | `Folder`          | Folder path, where created output should be saved                                                                                                                      |
+| File Type     | Extension         | Description                                                                                                                                                             |
+|---------------|-------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Video Files   | `.MP4`            | Drone thermal and/or RGB video recordings                                                                                                                               |
+| SRT Files     | `.SRT`            | Subtitle files with frame timestamps                                                                                                                                    |
+| Calibration   | `.json`           | Camera intrinsic parameters                                                                                                                                             |
+| AirData CSV   | `.csv`            | Flight log exported from AirData                                                                                                                                        |
+| Correction    | `.json`           | JSON file describing positional corrections (can also be done within plugin)                                                                                            |
+| DEM           | `.gltf` or `.glb` | Digital Elevation Model + metadata JSON (either define manually, convert a GeoTIFF DEM or automatically download a suitable DEM (currently only supported for Austria)) |
+| Target CRS    | `EPSG Code`       | EPSG Code for the target UTM based CRS (e.g. EPSG:32633 for Austria)                                                                                                    |
+| Target Folder | `Folder`          | Folder path, where created output should be saved                                                                                                                       |
 
 ![Input Tab](images/input_tab.png)
 
@@ -277,7 +277,25 @@ Geo-Reference segmented objects.
 ```json
 {
     "translation": {"x": 0.0, "y": 0.0, "z": 0.0},
-    "rotation": {"x": 0.0, "y": 0.0, "z": 0.0}
+    "rotation": {"x": 0.0, "y": 0.0, "z": 0.0},
+    "additional": [
+          {
+              "start": 10,
+              "end": 100,
+              "translation": {
+                  "x": 0.0,
+                  "y": 0.0,
+                  "z": 0.0
+              },
+              "rotation": {
+                  "x": 0.0,
+                  "y": 0.0,
+                  "z": 0.0
+              }
+          },
+          ...
+      ]
+  
 }
 ```
 
