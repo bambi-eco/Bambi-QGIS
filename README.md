@@ -135,15 +135,18 @@ Or visit: [https://github.com/bambi-eco/Geo-Referenced-Tracking](https://github.
 
 ### Input Data Requirements
 
-You need the following files for a complete processing workflow:
+You need the following inputs for a complete processing workflow:
 
-| File Type   | Extension         | Description                             |
-|-------------|-------------------|-----------------------------------------|
-| Video Files | `.MP4`            | Drone thermal video recordings          |
-| SRT Files   | `.SRT`            | Subtitle files with frame timestamps    |
-| AirData CSV | `.csv`            | Flight log exported from AirData        |
-| DEM         | `.gltf` or `.glb` | Digital Elevation Model + metadata JSON |
-| Calibration | `.json`           | Camera intrinsic parameters             |
+| File Type     | Extension         | Description                                                                                                                                                            |
+|---------------|-------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Video Files   | `.MP4`            | Drone thermal video recordings                                                                                                                                         |
+| SRT Files     | `.SRT`            | Subtitle files with frame timestamps                                                                                                                                   |
+| Calibration   | `.json`           | Camera intrinsic parameters                                                                                                                                            |
+| AirData CSV   | `.csv`            | Flight log exported from AirData                                                                                                                                       |
+| Correction    | `.json`           | JSON file describing positional corrections (can also be done within plugin)                                                                                           |
+| DEM           | `.gltf` or `.glb` | Digital Elevation Model + metadata JSON (either define manually, convert a GeoTIFF DEM or automatically download a suitable DEM (currently only supported for Austria) |
+| Target CRS    | `EPSG Code`       | EPSG Code for the target UTM based CRS (e.g. EPSG:32633 for Austria)                                                                                                   |
+| Target Folder | `Folder`          | Folder path, where created output should be saved                                                                                                                      |
 
 ![Input Tab](images/input_tab.png)
 

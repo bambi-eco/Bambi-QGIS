@@ -2,7 +2,7 @@
 name=Bambi - QGIS Integration
 qgisMinimumVersion=3.22
 description=Detect and track wildlife in drone videos with geo-referencing
-version=1.2.1
+version=1.3.0
 author=Christoph Praschl, Anna Maschek, Davvid C.Schedl
 email=christoph.praschl@fh-hagenberg.at
 

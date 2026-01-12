@@ -32,7 +32,7 @@ from qgis.core import (
 from qgis.PyQt.QtCore import QVariant
 
 from .bambi_processing import BambiProcessor, ProcessingWorker
-from .austria_dem_downloader import DEMDownloadWorker
+from .austria_dem_downloader import DEMDownloadWorker, GeoTIFFConversionWorker
 
 # Plugin scope for project settings storage
 PLUGIN_SCOPE = "BambiWildlifeDetection"
@@ -385,10 +385,25 @@ class BambiDockWidget(QDockWidget):
 
         input_layout.addWidget(common_group)
 
-        # Geo-referencing data
+        # Geo-referencing data with tabs for different input methods
         geo_group = QGroupBox("Geo-referencing Data")
-        geo_layout = QFormLayout(geo_group)
+        geo_main_layout = QVBoxLayout(geo_group)
 
+        # Tabs for different input methods
+        self.geo_input_tabs = QTabWidget()
+        geo_main_layout.addWidget(self.geo_input_tabs)
+
+        # ----- Tab 1: Mesh Input (manual GLTF/JSON selection) -----
+        mesh_input_tab = QWidget()
+        mesh_input_layout = QFormLayout(mesh_input_tab)
+        
+        mesh_info_label = QLabel(
+            "Select existing GLTF/GLB mesh and JSON metadata files directly."
+        )
+        mesh_info_label.setWordWrap(True)
+        mesh_input_layout.addRow(mesh_info_label)
+        
+        # DEM GLTF file selection
         self.dem_path_edit = QLineEdit()
         self.dem_path_edit.setPlaceholderText("Path to DEM GLTF file")
         dem_browse_btn = QPushButton("Browse...")
@@ -396,8 +411,9 @@ class BambiDockWidget(QDockWidget):
         dem_row = QHBoxLayout()
         dem_row.addWidget(self.dem_path_edit)
         dem_row.addWidget(dem_browse_btn)
-        geo_layout.addRow("DEM (GLTF):", dem_row)
+        mesh_input_layout.addRow("DEM (GLTF):", dem_row)
 
+        # DEM metadata JSON file selection
         self.dem_metadata_path_edit = QLineEdit()
         self.dem_metadata_path_edit.setPlaceholderText("Path to DEM metadata JSON (auto-detected from DEM)")
         dem_meta_browse_btn = QPushButton("Browse...")
@@ -405,25 +421,91 @@ class BambiDockWidget(QDockWidget):
         dem_meta_row = QHBoxLayout()
         dem_meta_row.addWidget(self.dem_metadata_path_edit)
         dem_meta_row.addWidget(dem_meta_browse_btn)
-        geo_layout.addRow("DEM Metadata:", dem_meta_row)
+        mesh_input_layout.addRow("DEM Metadata:", dem_meta_row)
+        
+        self.geo_input_tabs.addTab(mesh_input_tab, "Mesh Input")
 
-        # Austria DEM Download (requires AirData CSV to be set)
-        dem_download_row = QHBoxLayout()
+        # ----- Tab 2: GeoTIFF Input (convert arbitrary GeoTIFF) -----
+        geotiff_input_tab = QWidget()
+        geotiff_input_layout = QFormLayout(geotiff_input_tab)
+        
+        # GeoTIFF file selection
+        self.geotiff_input_path_edit = QLineEdit()
+        self.geotiff_input_path_edit.setPlaceholderText("Select a GeoTIFF DEM file to convert")
+        geotiff_browse_btn = QPushButton("Browse...")
+        geotiff_browse_btn.clicked.connect(self.browse_geotiff_input)
+        geotiff_browse_row = QHBoxLayout()
+        geotiff_browse_row.addWidget(self.geotiff_input_path_edit)
+        geotiff_browse_row.addWidget(geotiff_browse_btn)
+        geotiff_input_layout.addRow("GeoTIFF File:", geotiff_browse_row)
+        
+        # Simplification factor
+        self.geotiff_simplify_spin = QSpinBox()
+        self.geotiff_simplify_spin.setRange(1, 20)
+        self.geotiff_simplify_spin.setValue(2)
+        self.geotiff_simplify_spin.setToolTip(
+            "Mesh simplification factor. Higher values = smaller file size but less detail.\n"
+            "1 = full resolution, 2 = half resolution, etc."
+        )
+        geotiff_input_layout.addRow("Simplify Factor:", self.geotiff_simplify_spin)
+        
+        # Reproject option
+        self.geotiff_reproject_check = QCheckBox("Reproject to Target CRS")
+        self.geotiff_reproject_check.setToolTip(
+            "If checked, the GeoTIFF will be reprojected to the Target CRS defined below.\n"
+            "If unchecked, the original CRS of the GeoTIFF will be used."
+        )
+        self.geotiff_reproject_check.setChecked(False)
+        geotiff_input_layout.addRow("", self.geotiff_reproject_check)
+        
+        # Convert button
+        convert_row = QHBoxLayout()
+        self.geotiff_convert_btn = QPushButton("Convert GeoTIFF to Mesh")
+        self.geotiff_convert_btn.setToolTip(
+            "Convert the selected GeoTIFF to GLTF mesh format.\n"
+            "Output files will be saved in the Target Folder."
+        )
+        self.geotiff_convert_btn.clicked.connect(self.convert_geotiff_to_mesh)
+        convert_row.addWidget(self.geotiff_convert_btn)
+        convert_row.addStretch()
+        geotiff_input_layout.addRow("", convert_row)
+        
+        self.geo_input_tabs.addTab(geotiff_input_tab, "GeoTIFF Input")
+
+        # ----- Tab 3: Auto-Download (Austria BEV service) -----
+        auto_download_tab = QWidget()
+        auto_download_layout = QFormLayout(auto_download_tab)
+        
+        # Padding setting
         self.dem_padding_spin = QSpinBox()
         self.dem_padding_spin.setRange(0, 500)
         self.dem_padding_spin.setValue(30)
         self.dem_padding_spin.setSuffix(" m")
         self.dem_padding_spin.setToolTip("Padding around flight area in meters")
-        dem_download_row.addWidget(QLabel("Padding:"))
-        dem_download_row.addWidget(self.dem_padding_spin)
+        auto_download_layout.addRow("Padding:", self.dem_padding_spin)
+        
+        # Download button
+        download_row = QHBoxLayout()
         self.dem_download_btn = QPushButton("Download DEM (Austria)")
         self.dem_download_btn.setToolTip(
             "Download DEM from Austrian BEV service based on AirData CSV GPS coordinates.\n"
             "Requires AirData CSV to be selected. Uses Austria-wide 1m ALS-DTM dataset."
         )
         self.dem_download_btn.clicked.connect(self.download_austria_dem)
-        dem_download_row.addWidget(self.dem_download_btn)
-        geo_layout.addRow("Auto-Download:", dem_download_row)
+        download_row.addWidget(self.dem_download_btn)
+        download_row.addStretch()
+        auto_download_layout.addRow("", download_row)
+        
+        # Info label
+        download_info_label = QLabel(
+            "Downloads DEM tiles from the Austrian BEV service based on GPS coordinates\n"
+            "in the AirData CSV file. The area is determined automatically with the\n"
+            "specified padding around the flight path."
+        )
+        download_info_label.setWordWrap(True)
+        auto_download_layout.addRow("", download_info_label)
+        
+        self.geo_input_tabs.addTab(auto_download_tab, "Auto-Download")
 
         input_layout.addWidget(geo_group)
 
@@ -2038,6 +2120,137 @@ class BambiDockWidget(QDockWidget):
             QMessageBox.warning(
                 self, "DEM Download Failed",
                 f"Failed to download DEM:\n{message}"
+            )
+
+    # =========================================================================
+    # GeoTIFF to Mesh Conversion Methods
+    # =========================================================================
+    
+    def browse_geotiff_input(self):
+        """Browse for a GeoTIFF file to convert."""
+        file, _ = QFileDialog.getOpenFileName(
+            self, "Select GeoTIFF DEM File", "", 
+            "GeoTIFF Files (*.tif *.tiff *.TIF *.TIFF);;All Files (*.*)"
+        )
+        if file:
+            self.geotiff_input_path_edit.setText(file)
+            self.log(f"Selected GeoTIFF: {file}")
+    
+    def convert_geotiff_to_mesh(self):
+        """Convert the selected GeoTIFF to GLTF mesh format."""
+        # Check if GeoTIFF is selected
+        geotiff_path = self.geotiff_input_path_edit.text()
+        if not geotiff_path or not os.path.exists(geotiff_path):
+            QMessageBox.warning(
+                self, "Missing Input",
+                "Please select a GeoTIFF file to convert."
+            )
+            return
+        
+        # Determine output folder
+        output_folder = self.target_folder_edit.text().strip()
+        if not output_folder:
+            # Use same folder as GeoTIFF if no target folder specified
+            output_folder = os.path.dirname(geotiff_path)
+        
+        if not output_folder:
+            QMessageBox.warning(
+                self, "Invalid Path",
+                "Could not determine output folder. Please set a Target Folder."
+            )
+            return
+        
+        # Get simplification factor
+        simplify_factor = self.geotiff_simplify_spin.value()
+        
+        # Determine output CRS
+        output_crs = None
+        if self.geotiff_reproject_check.isChecked():
+            output_crs = self.target_crs_edit.text().strip().upper()
+            if not output_crs.startswith("EPSG:"):
+                output_crs = f"EPSG:{output_crs}"
+            # Validate it's a UTM CRS
+            if not self._is_valid_utm_crs(output_crs):
+                QMessageBox.warning(
+                    self, "Invalid CRS",
+                    f"The CRS '{output_crs}' is not a valid UTM CRS.\n"
+                    "Please enter a UTM CRS (EPSG:32601-32660 for N hemisphere, "
+                    "EPSG:32701-32760 for S hemisphere)."
+                )
+                return
+        
+        # Confirm conversion
+        crs_info = f"\nOutput CRS: {output_crs}" if output_crs else "\n(Using original CRS)"
+        reply = QMessageBox.question(
+            self, "Convert GeoTIFF",
+            f"Convert GeoTIFF to mesh?\n\n"
+            f"Input: {os.path.basename(geotiff_path)}\n"
+            f"Output folder: {output_folder}\n"
+            f"Simplification: {simplify_factor}x{crs_info}",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        )
+        
+        if reply != QMessageBox.Yes:
+            return
+        
+        # Disable button during conversion
+        self.geotiff_convert_btn.setEnabled(False)
+        self.geotiff_convert_btn.setText("Converting...")
+        
+        # Create and start worker thread
+        self.geotiff_convert_thread = QThread()
+        self.geotiff_convert_worker = GeoTIFFConversionWorker(
+            geotiff_path=geotiff_path,
+            output_folder=output_folder,
+            output_crs=output_crs,
+            simplify_factor=simplify_factor
+        )
+        
+        self.geotiff_convert_worker.moveToThread(self.geotiff_convert_thread)
+        self.geotiff_convert_thread.started.connect(self.geotiff_convert_worker.run)
+        self.geotiff_convert_worker.finished.connect(self._on_geotiff_convert_finished)
+        self.geotiff_convert_worker.progress.connect(self._on_geotiff_convert_progress)
+        self.geotiff_convert_worker.log.connect(self.log)
+        self.geotiff_convert_worker.finished.connect(self.geotiff_convert_thread.quit)
+        self.geotiff_convert_worker.finished.connect(self.geotiff_convert_worker.deleteLater)
+        self.geotiff_convert_thread.finished.connect(self.geotiff_convert_thread.deleteLater)
+        
+        self.geotiff_convert_thread.start()
+        self.log("Starting GeoTIFF to mesh conversion...")
+    
+    def _on_geotiff_convert_progress(self, percent: int):
+        """Handle GeoTIFF conversion progress updates."""
+        self.geotiff_convert_btn.setText(f"Converting... {percent}%")
+    
+    def _on_geotiff_convert_finished(self, success: bool, message: str):
+        """Handle GeoTIFF conversion completion."""
+        self.geotiff_convert_btn.setEnabled(True)
+        self.geotiff_convert_btn.setText("Convert GeoTIFF to Mesh")
+        
+        if success:
+            # Set the DEM path to the converted file
+            mesh_path = message  # message contains the path on success
+            self.dem_path_edit.setText(mesh_path)
+            
+            # Auto-detect metadata
+            json_path = mesh_path.replace(".glb", ".json").replace(".gltf", ".json")
+            if os.path.exists(json_path):
+                self.dem_metadata_path_edit.setText(json_path)
+                self.log(f"Auto-detected DEM metadata: {json_path}")
+                # Also try to auto-detect CRS from the new metadata
+                self._try_auto_detect_crs_silent()
+            
+            QMessageBox.information(
+                self, "Conversion Complete",
+                f"GeoTIFF converted successfully!\n\n"
+                f"Mesh: {mesh_path}\n"
+                f"Metadata: {json_path}"
+            )
+        else:
+            QMessageBox.warning(
+                self, "Conversion Failed",
+                f"Failed to convert GeoTIFF:\n{message}"
             )
 
     # =========================================================================
@@ -5011,6 +5224,12 @@ class BambiDockWidget(QDockWidget):
                            self.dem_metadata_path_edit.text())
         project.writeEntryDouble(PLUGIN_SCOPE, "Input/DemPadding", 
                                  self.dem_padding_spin.value())
+        project.writeEntry(PLUGIN_SCOPE, "Input/GeotiffInputPath",
+                           self.geotiff_input_path_edit.text())
+        project.writeEntryDouble(PLUGIN_SCOPE, "Input/GeotiffSimplifyFactor",
+                                 self.geotiff_simplify_spin.value())
+        project.writeEntryBool(PLUGIN_SCOPE, "Input/GeotiffReproject",
+                               self.geotiff_reproject_check.isChecked())
         project.writeEntry(PLUGIN_SCOPE, "Input/CorrectionPath", 
                            self.correction_path_edit.text())
         project.writeEntry(PLUGIN_SCOPE, "Input/TargetFolder", 
@@ -5188,6 +5407,9 @@ class BambiDockWidget(QDockWidget):
         self.dem_path_edit.setText(read_str("Input/DemPath"))
         self.dem_metadata_path_edit.setText(read_str("Input/DemMetadataPath"))
         self.dem_padding_spin.setValue(read_int("Input/DemPadding", 30))
+        self.geotiff_input_path_edit.setText(read_str("Input/GeotiffInputPath"))
+        self.geotiff_simplify_spin.setValue(read_int("Input/GeotiffSimplifyFactor", 2))
+        self.geotiff_reproject_check.setChecked(read_bool("Input/GeotiffReproject", False))
         self.correction_path_edit.setText(read_str("Input/CorrectionPath"))
         self.target_folder_edit.setText(read_str("Input/TargetFolder"))
         

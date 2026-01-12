@@ -1036,3 +1036,163 @@ class DEMDownloadWorker(QObject):
             logger.error(error_msg)
             traceback.print_exc()
             self.finished.emit(False, error_msg)
+
+
+class GeoTIFFConversionWorker(QObject):
+    """Worker for converting an arbitrary GeoTIFF to GLTF mesh in a background thread."""
+    
+    finished = pyqtSignal(bool, str)  # success, message/path
+    progress = pyqtSignal(int)  # percentage
+    log = pyqtSignal(str)  # log message
+    
+    def __init__(self, geotiff_path: str, output_folder: str,
+                 output_crs: Optional[str] = None, simplify_factor: int = 2):
+        """
+        Initialize the GeoTIFF conversion worker.
+        
+        :param geotiff_path: Path to the input GeoTIFF file
+        :param output_folder: Folder where output files will be saved
+        :param output_crs: Optional target CRS (e.g., "EPSG:32633"). If None, keeps original CRS.
+        :param simplify_factor: Mesh simplification factor (1 = full resolution)
+        """
+        super().__init__()
+        self.geotiff_path = geotiff_path
+        self.output_folder = output_folder
+        self.output_crs = output_crs
+        self.simplify_factor = simplify_factor
+        self._cancelled = False
+        self._processor = None
+
+    def cancel(self):
+        """Cancel the conversion."""
+        self._cancelled = True
+        if self._processor:
+            self._processor.cancel()
+
+    def run(self):
+        """Execute the GeoTIFF conversion process."""
+        try:
+            import shutil
+            
+            self.log.emit("Starting GeoTIFF to mesh conversion...")
+            self.progress.emit(5)
+            
+            input_path = Path(self.geotiff_path)
+            if not input_path.exists():
+                self.finished.emit(False, f"Input file not found: {self.geotiff_path}")
+                return
+            
+            # Determine output base name from input file
+            output_base = Path(self.output_folder) / input_path.stem
+            output_base.parent.mkdir(parents=True, exist_ok=True)
+            
+            self.log.emit(f"Input GeoTIFF: {input_path.name}")
+            self.progress.emit(10)
+            
+            # Check if reprojection is needed
+            needs_reprojection = False
+            source_crs_string = None
+            
+            try:
+                import rasterio
+                with rasterio.open(input_path) as src:
+                    if src.crs:
+                        source_crs_string = str(src.crs)
+                        self.log.emit(f"Source CRS: {source_crs_string}")
+                        
+                        if self.output_crs and self.output_crs != source_crs_string:
+                            # Check if EPSG codes match
+                            try:
+                                src_epsg = src.crs.to_epsg()
+                                dst_epsg = int(self.output_crs.replace("EPSG:", "").strip())
+                                needs_reprojection = src_epsg != dst_epsg
+                            except:
+                                needs_reprojection = True
+                    else:
+                        self.log.emit("Warning: Input GeoTIFF has no CRS defined")
+            except ImportError:
+                self.finished.emit(False, "rasterio library is required for GeoTIFF processing")
+                return
+            except Exception as e:
+                self.log.emit(f"Warning: Could not read source CRS: {e}")
+            
+            self.progress.emit(20)
+            
+            # Process in temporary directory if reprojection needed
+            if needs_reprojection and self.output_crs:
+                self.log.emit(f"Reprojecting to {self.output_crs}...")
+                
+                self._processor = DEMProcessor(
+                    output_crs=self.output_crs,
+                    log_callback=lambda msg: self.log.emit(msg),
+                    progress_callback=lambda p: self.progress.emit(20 + int(p * 0.3))  # 20-50%
+                )
+                
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    temp_path = Path(temp_dir)
+                    reprojected_file = temp_path / "reprojected.tif"
+                    
+                    result = self._processor.reproject_geotiff(input_path, reprojected_file)
+                    
+                    if self._cancelled:
+                        self.finished.emit(False, "Conversion cancelled")
+                        return
+                    
+                    if not result:
+                        self.finished.emit(False, "Failed to reproject GeoTIFF")
+                        return
+                    
+                    # Copy reprojected file to output
+                    final_geotiff = output_base.with_suffix('.tif')
+                    shutil.copy2(reprojected_file, final_geotiff)
+                    self.log.emit(f"Created reprojected GeoTIFF: {final_geotiff}")
+                    
+                    geotiff_for_mesh = final_geotiff
+                    mesh_crs = self.output_crs
+            else:
+                # No reprojection needed, use input directly
+                geotiff_for_mesh = input_path
+                mesh_crs = self.output_crs or source_crs_string
+                self.log.emit("No reprojection needed, using original GeoTIFF")
+            
+            self.progress.emit(50)
+            
+            if self._cancelled:
+                self.finished.emit(False, "Conversion cancelled")
+                return
+            
+            # Generate mesh
+            self.log.emit("Generating GLTF mesh...")
+            mesh_generator = GLTFMeshGenerator(
+                simplify_factor=self.simplify_factor,
+                log_callback=lambda msg: self.log.emit(msg),
+                progress_callback=lambda p: self.progress.emit(50 + int(p * 0.5))  # 50-100%
+            )
+            
+            mesh_file = output_base.with_suffix('.glb')
+            metadata_file = output_base.with_suffix('.json')
+            
+            success = mesh_generator.generate_mesh(
+                geotiff_for_mesh, mesh_file, metadata_file,
+                source_crs=mesh_crs
+            )
+            
+            if not success:
+                self.finished.emit(False, "Failed to generate mesh")
+                return
+            
+            self.progress.emit(100)
+            self.log.emit("=" * 50)
+            self.log.emit("GeoTIFF conversion complete!")
+            self.log.emit(f"  Mesh:     {mesh_file}")
+            self.log.emit(f"  Metadata: {metadata_file}")
+            self.log.emit("=" * 50)
+            
+            self.finished.emit(True, str(mesh_file))
+            
+        except Exception as e:
+            import traceback
+            error_msg = f"Error during GeoTIFF conversion: {str(e)}"
+            logger.error(error_msg)
+            traceback.print_exc()
+            self.finished.emit(False, error_msg)
