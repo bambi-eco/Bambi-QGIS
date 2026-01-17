@@ -62,7 +62,7 @@ class CorrectionRangeDialog(QDialog):
     def _setup_ui(self):
         """Setup the dialog UI."""
         layout = QVBoxLayout(self)
-        
+
         # Frame range
         range_group = QGroupBox("Frame Range")
         range_layout = QHBoxLayout(range_group)
@@ -237,16 +237,16 @@ class BambiDockWidget(QDockWidget):
 
         # Track if initial check has been done
         self._initial_check_done = False
-        
+
         # Flag to prevent recursive saves during config loading
         self._loading_config = False
 
         # Setup UI
         self.setup_ui()
-        
+
         # Connect to project signals for config persistence
         self._connect_project_signals()
-        
+
         # Load config if project already has saved config
         self._loading_config = True
         try:
@@ -396,13 +396,13 @@ class BambiDockWidget(QDockWidget):
         # ----- Tab 1: Mesh Input (manual GLTF/JSON selection) -----
         mesh_input_tab = QWidget()
         mesh_input_layout = QFormLayout(mesh_input_tab)
-        
+
         mesh_info_label = QLabel(
             "Select existing GLTF/GLB mesh and JSON metadata files directly."
         )
         mesh_info_label.setWordWrap(True)
         mesh_input_layout.addRow(mesh_info_label)
-        
+
         # DEM GLTF file selection
         self.dem_path_edit = QLineEdit()
         self.dem_path_edit.setPlaceholderText("Path to DEM GLTF file")
@@ -422,13 +422,13 @@ class BambiDockWidget(QDockWidget):
         dem_meta_row.addWidget(self.dem_metadata_path_edit)
         dem_meta_row.addWidget(dem_meta_browse_btn)
         mesh_input_layout.addRow("DEM Metadata:", dem_meta_row)
-        
+
         self.geo_input_tabs.addTab(mesh_input_tab, "Mesh Input")
 
         # ----- Tab 2: GeoTIFF Input (convert arbitrary GeoTIFF) -----
         geotiff_input_tab = QWidget()
         geotiff_input_layout = QFormLayout(geotiff_input_tab)
-        
+
         # GeoTIFF file selection
         self.geotiff_input_path_edit = QLineEdit()
         self.geotiff_input_path_edit.setPlaceholderText("Select a GeoTIFF DEM file to convert")
@@ -438,7 +438,7 @@ class BambiDockWidget(QDockWidget):
         geotiff_browse_row.addWidget(self.geotiff_input_path_edit)
         geotiff_browse_row.addWidget(geotiff_browse_btn)
         geotiff_input_layout.addRow("GeoTIFF File:", geotiff_browse_row)
-        
+
         # Simplification factor
         self.geotiff_simplify_spin = QSpinBox()
         self.geotiff_simplify_spin.setRange(1, 20)
@@ -460,13 +460,13 @@ class BambiDockWidget(QDockWidget):
         convert_row.addWidget(self.geotiff_convert_btn)
         convert_row.addStretch()
         geotiff_input_layout.addRow("", convert_row)
-        
+
         self.geo_input_tabs.addTab(geotiff_input_tab, "GeoTIFF Input")
 
         # ----- Tab 3: Auto-Download (Austria BEV service) -----
         auto_download_tab = QWidget()
         auto_download_layout = QFormLayout(auto_download_tab)
-        
+
         # Padding setting
         self.dem_padding_spin = QSpinBox()
         self.dem_padding_spin.setRange(0, 500)
@@ -474,21 +474,21 @@ class BambiDockWidget(QDockWidget):
         self.dem_padding_spin.setSuffix(" m")
         self.dem_padding_spin.setToolTip("Padding around flight area in meters")
         auto_download_layout.addRow("Padding:", self.dem_padding_spin)
-        
+
         # Download button
         download_row = QHBoxLayout()
         self.dem_download_btn = QPushButton("Download DEM (Austria)")
         self.dem_download_btn.setToolTip(
-            "Download DEM from Austrian BEV service based on AirData CSV GPS coordinates.\n"
-            "Requires AirData CSV to be selected. Uses Austria-wide 1m ALS-DTM dataset.\n"
-            "Note, that this may take some time, since individual tiles are 10GB+ and it may be necessary to download multiple map tiles.\n"
+            "Download DEM from Austrian BEV service based on AirData CSV GPS coordinates. "
+            "Requires AirData CSV to be selected. Uses Austria-wide 1m ALS-DTM dataset. "
+            "Note, that this may take some time, since individual tiles are 10GB+ and it may be necessary to download multiple map tiles. "
             "Downloaded to \"<user profile>/.cache/austria_dem\""
         )
         self.dem_download_btn.clicked.connect(self.download_austria_dem)
         download_row.addWidget(self.dem_download_btn)
         download_row.addStretch()
         auto_download_layout.addRow("", download_row)
-        
+
         # Info label
         download_info_label = QLabel(
             "Downloads DEM tiles from the Austrian BEV service based on GPS coordinates\n"
@@ -499,7 +499,7 @@ class BambiDockWidget(QDockWidget):
         )
         download_info_label.setWordWrap(True)
         auto_download_layout.addRow("", download_info_label)
-        
+
         self.geo_input_tabs.addTab(auto_download_tab, "Auto-Download")
 
         input_layout.addWidget(geo_group)
@@ -527,14 +527,14 @@ class BambiDockWidget(QDockWidget):
             "Click 'Auto' to detect from DEM metadata or AirData GPS coordinates."
         )
         self.target_crs_edit.editingFinished.connect(self._validate_crs_input)
-        
+
         self.target_crs_auto_btn = QPushButton("Auto")
         self.target_crs_auto_btn.setToolTip(
             "Auto-detect CRS from DEM metadata (dem.json) or AirData CSV GPS coordinates"
         )
         self.target_crs_auto_btn.setFixedWidth(50)
         self.target_crs_auto_btn.clicked.connect(self._auto_detect_crs)
-        
+
         crs_row = QHBoxLayout()
         crs_row.addWidget(self.target_crs_edit)
         crs_row.addWidget(self.target_crs_auto_btn)
@@ -825,7 +825,8 @@ class BambiDockWidget(QDockWidget):
 
         # Save correction button
         save_correction_btn = QPushButton("Save Correction to JSON...")
-        save_correction_btn.setToolTip("Save the current translation and rotation values to a JSON file (rotations saved in radians)")
+        save_correction_btn.setToolTip(
+            "Save the current translation and rotation values to a JSON file (rotations saved in radians)")
         save_correction_btn.clicked.connect(self.save_correction_values)
         correction_tab_layout.addWidget(save_correction_btn)
 
@@ -1480,14 +1481,14 @@ class BambiDockWidget(QDockWidget):
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         progress_layout.addWidget(self.progress_bar, stretch=1)
-        
+
         self.abort_btn = QPushButton("Abort")
         self.abort_btn.setToolTip("Cancel the current running process")
         self.abort_btn.setEnabled(False)
         self.abort_btn.setFixedWidth(70)
         self.abort_btn.clicked.connect(self._abort_current_process)
         progress_layout.addWidget(self.abort_btn)
-        
+
         processing_layout.addLayout(progress_layout)
 
         # Refresh Status button
@@ -1945,7 +1946,7 @@ class BambiDockWidget(QDockWidget):
             else:
                 # Check for existing outputs if folder already exists
                 self._check_existing_outputs(qgis_folder)
-        
+
         # Try to auto-detect CRS from available sources
         self._try_auto_detect_crs_silent()
 
@@ -2007,7 +2008,7 @@ class BambiDockWidget(QDockWidget):
                         self.log(f"Auto-detected DEM metadata: {alt_path}")
                         metadata_found = True
                         break
-            
+
             # Try to auto-detect CRS from the metadata
             if metadata_found:
                 self._try_auto_detect_crs_silent()
@@ -2130,17 +2131,17 @@ class BambiDockWidget(QDockWidget):
     # =========================================================================
     # GeoTIFF to Mesh Conversion Methods
     # =========================================================================
-    
+
     def browse_geotiff_input(self):
         """Browse for a GeoTIFF file to convert."""
         file, _ = QFileDialog.getOpenFileName(
-            self, "Select GeoTIFF DEM File", "", 
+            self, "Select GeoTIFF DEM File", "",
             "GeoTIFF Files (*.tif *.tiff *.TIF *.TIFF);;All Files (*.*)"
         )
         if file:
             self.geotiff_input_path_edit.setText(file)
             self.log(f"Selected GeoTIFF: {file}")
-    
+
     def convert_geotiff_to_mesh(self):
         """Convert the selected GeoTIFF to GLTF mesh format."""
         # Check if GeoTIFF is selected
@@ -2151,23 +2152,23 @@ class BambiDockWidget(QDockWidget):
                 "Please select a GeoTIFF file to convert."
             )
             return
-        
+
         # Determine output folder
         output_folder = self.target_folder_edit.text().strip()
         if not output_folder:
             # Use same folder as GeoTIFF if no target folder specified
             output_folder = os.path.dirname(geotiff_path)
-        
+
         if not output_folder:
             QMessageBox.warning(
                 self, "Invalid Path",
                 "Could not determine output folder. Please set a Target Folder."
             )
             return
-        
+
         # Get simplification factor
         simplify_factor = self.geotiff_simplify_spin.value()
-        
+
         # Determine output CRS
         output_crs = None
         output_crs = self.target_crs_edit.text().strip().upper()
@@ -2182,7 +2183,7 @@ class BambiDockWidget(QDockWidget):
                 "EPSG:32701-32760 for S hemisphere)."
             )
             return
-        
+
         # Confirm conversion
         crs_info = f"\nOutput CRS: {output_crs}" if output_crs else "\n(Using original CRS)"
         reply = QMessageBox.question(
@@ -2194,14 +2195,14 @@ class BambiDockWidget(QDockWidget):
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.Yes
         )
-        
+
         if reply != QMessageBox.Yes:
             return
-        
+
         # Disable button during conversion
         self.geotiff_convert_btn.setEnabled(False)
         self.geotiff_convert_btn.setText("Converting...")
-        
+
         # Create and start worker thread
         self.geotiff_convert_thread = QThread()
         self.geotiff_convert_worker = GeoTIFFConversionWorker(
@@ -2210,7 +2211,7 @@ class BambiDockWidget(QDockWidget):
             output_crs=output_crs,
             simplify_factor=simplify_factor
         )
-        
+
         self.geotiff_convert_worker.moveToThread(self.geotiff_convert_thread)
         self.geotiff_convert_thread.started.connect(self.geotiff_convert_worker.run)
         self.geotiff_convert_worker.finished.connect(self._on_geotiff_convert_finished)
@@ -2219,24 +2220,24 @@ class BambiDockWidget(QDockWidget):
         self.geotiff_convert_worker.finished.connect(self.geotiff_convert_thread.quit)
         self.geotiff_convert_worker.finished.connect(self.geotiff_convert_worker.deleteLater)
         self.geotiff_convert_thread.finished.connect(self.geotiff_convert_thread.deleteLater)
-        
+
         self.geotiff_convert_thread.start()
         self.log("Starting GeoTIFF to mesh conversion...")
-    
+
     def _on_geotiff_convert_progress(self, percent: int):
         """Handle GeoTIFF conversion progress updates."""
         self.geotiff_convert_btn.setText(f"Converting... {percent}%")
-    
+
     def _on_geotiff_convert_finished(self, success: bool, message: str):
         """Handle GeoTIFF conversion completion."""
         self.geotiff_convert_btn.setEnabled(True)
         self.geotiff_convert_btn.setText("Convert GeoTIFF to Mesh")
-        
+
         if success:
             # Set the DEM path to the converted file
             mesh_path = message  # message contains the path on success
             self.dem_path_edit.setText(mesh_path)
-            
+
             # Auto-detect metadata
             json_path = mesh_path.replace(".glb", ".json").replace(".gltf", ".json")
             if os.path.exists(json_path):
@@ -2244,7 +2245,7 @@ class BambiDockWidget(QDockWidget):
                 self.log(f"Auto-detected DEM metadata: {json_path}")
                 # Also try to auto-detect CRS from the new metadata
                 self._try_auto_detect_crs_silent()
-            
+
             QMessageBox.information(
                 self, "Conversion Complete",
                 f"GeoTIFF converted successfully!\n\n"
@@ -2260,15 +2261,15 @@ class BambiDockWidget(QDockWidget):
     # =========================================================================
     # CRS Validation and Auto-Detection Methods
     # =========================================================================
-    
+
     def _is_valid_utm_crs(self, crs_text: str) -> bool:
         """
         Check if the given CRS string is a valid UTM CRS.
-        
+
         Valid UTM EPSG codes:
         - Northern Hemisphere: EPSG:32601 to EPSG:32660 (zones 1-60)
         - Southern Hemisphere: EPSG:32701 to EPSG:32760 (zones 1-60)
-        
+
         :param crs_text: CRS string like "EPSG:32633" or "32633"
         :return: True if valid UTM CRS
         """
@@ -2276,53 +2277,53 @@ class BambiDockWidget(QDockWidget):
             epsg = self._parse_epsg_from_text(crs_text)
             if epsg is None:
                 return False
-            
+
             # Check if in UTM range
             is_northern = 32601 <= epsg <= 32660
             is_southern = 32701 <= epsg <= 32760
-            
+
             return is_northern or is_southern
         except:
             return False
-    
+
     def _parse_epsg_from_text(self, crs_text: str) -> Optional[int]:
         """
         Parse EPSG code from text input.
-        
+
         Handles formats like:
         - "EPSG:32633"
         - "epsg:32633"
         - "32633"
-        
+
         :param crs_text: CRS string
         :return: EPSG code as integer, or None if invalid
         """
         try:
             crs_text = crs_text.strip().upper()
-            
+
             if crs_text.startswith("EPSG:"):
                 code_str = crs_text[5:].strip()
             else:
                 code_str = crs_text
-            
+
             return int(code_str)
         except (ValueError, AttributeError):
             return None
-    
+
     def _validate_crs_input(self):
         """Validate the CRS text input and show warning if invalid."""
         crs_text = self.target_crs_edit.text().strip()
-        
+
         if not crs_text:
             return  # Empty is ok, will use default
-        
+
         if not self._is_valid_utm_crs(crs_text):
             epsg = self._parse_epsg_from_text(crs_text)
             if epsg is None:
                 msg = f"'{crs_text}' is not a valid EPSG code format."
             else:
                 msg = f"EPSG:{epsg} is not a UTM CRS."
-            
+
             QMessageBox.warning(
                 self, "Invalid CRS",
                 f"{msg}\n\n"
@@ -2336,25 +2337,25 @@ class BambiDockWidget(QDockWidget):
             # Normalize format
             epsg = self._parse_epsg_from_text(crs_text)
             self.target_crs_edit.setText(f"EPSG:{epsg}")
-    
+
     def _auto_detect_crs(self):
         """
         Auto-detect the target CRS from available sources.
-        
+
         Priority:
         1. DEM metadata JSON file (if available and contains 'crs' field)
         2. First GPS position from AirData CSV (calculate UTM zone)
         """
         detected_crs = None
         source = None
-        
+
         # Try 1: DEM metadata JSON
         dem_metadata_path = self.dem_metadata_path_edit.text()
         if dem_metadata_path and os.path.exists(dem_metadata_path):
             try:
                 with open(dem_metadata_path, 'r', encoding='utf-8') as f:
                     metadata = json.load(f)
-                
+
                 if 'crs' in metadata:
                     crs_value = metadata['crs']
                     if self._is_valid_utm_crs(crs_value):
@@ -2364,7 +2365,7 @@ class BambiDockWidget(QDockWidget):
                         self.log(f"DEM metadata has CRS '{crs_value}' but it's not a UTM CRS")
             except Exception as e:
                 self.log(f"Could not read DEM metadata: {e}")
-        
+
         # Try 2: AirData CSV GPS coordinates
         if detected_crs is None:
             airdata_path = self.airdata_path_edit.text()
@@ -2372,7 +2373,7 @@ class BambiDockWidget(QDockWidget):
                 detected_crs = self._detect_utm_from_airdata(airdata_path)
                 if detected_crs:
                     source = f"AirData CSV ({os.path.basename(airdata_path)})"
-        
+
         # Apply result
         if detected_crs:
             self.target_crs_edit.setText(detected_crs)
@@ -2389,7 +2390,7 @@ class BambiDockWidget(QDockWidget):
                 sources_checked.append("DEM metadata")
             if self.airdata_path_edit.text():
                 sources_checked.append("AirData CSV")
-            
+
             if not sources_checked:
                 QMessageBox.warning(
                     self, "Cannot Auto-Detect",
@@ -2404,25 +2405,25 @@ class BambiDockWidget(QDockWidget):
                     f"Could not detect CRS from: {', '.join(sources_checked)}\n\n"
                     "Please enter the target CRS manually."
                 )
-    
+
     def _try_auto_detect_crs_silent(self):
         """
         Silently try to auto-detect CRS from available sources.
-        
+
         This is called automatically when files are selected, and only
         updates the CRS field without showing message boxes. It logs
         the result to the output panel.
         """
         detected_crs = None
         source = None
-        
+
         # Try 1: DEM metadata JSON
         dem_metadata_path = self.dem_metadata_path_edit.text()
         if dem_metadata_path and os.path.exists(dem_metadata_path):
             try:
                 with open(dem_metadata_path, 'r', encoding='utf-8') as f:
                     metadata = json.load(f)
-                
+
                 if 'crs' in metadata:
                     crs_value = metadata['crs']
                     if self._is_valid_utm_crs(crs_value):
@@ -2430,7 +2431,7 @@ class BambiDockWidget(QDockWidget):
                         source = f"DEM metadata"
             except Exception:
                 pass
-        
+
         # Try 2: AirData CSV GPS coordinates
         if detected_crs is None:
             airdata_path = self.airdata_path_edit.text()
@@ -2438,80 +2439,80 @@ class BambiDockWidget(QDockWidget):
                 detected_crs = self._detect_utm_from_airdata(airdata_path)
                 if detected_crs:
                     source = f"AirData GPS"
-        
+
         # Apply result silently (just log, no message boxes)
         if detected_crs:
             self.target_crs_edit.setText(detected_crs)
             self.log(f"Auto-detected CRS: {detected_crs} (from {source})")
-    
+
     def _detect_utm_from_airdata(self, csv_path: str) -> Optional[str]:
         """
         Detect appropriate UTM zone from GPS coordinates in AirData CSV.
-        
+
         Uses the first valid GPS position to determine the UTM zone.
-        
+
         :param csv_path: Path to AirData CSV file
         :return: CRS string like "EPSG:32633" or None
         """
         try:
             with open(csv_path, 'r', encoding='utf-8') as f:
                 reader = csv.DictReader(f)
-                
+
                 # Find latitude/longitude columns
                 lat_col = None
                 lon_col = None
-                
+
                 fieldnames = reader.fieldnames
                 if fieldnames is None:
                     return None
-                
+
                 for col in fieldnames:
                     col_lower = col.lower().strip()
                     if lat_col is None and any(x in col_lower for x in ['latitude', 'lat']):
                         lat_col = col
                     if lon_col is None and any(x in col_lower for x in ['longitude', 'lon', 'lng']):
                         lon_col = col
-                
+
                 if lat_col is None or lon_col is None:
                     self.log(f"Could not find lat/lon columns in {os.path.basename(csv_path)}")
                     return None
-                
+
                 # Get first valid GPS position
                 for row in reader:
                     try:
                         lat = float(row[lat_col])
                         lon = float(row[lon_col])
-                        
+
                         # Skip invalid values
                         if lat == 0 and lon == 0:
                             continue
                         if not (-90 <= lat <= 90 and -180 <= lon <= 180):
                             continue
-                        
+
                         # Calculate UTM zone from longitude
                         # UTM zones are 6 degrees wide, zone 1 starts at -180°
                         utm_zone = int((lon + 180) / 6) + 1
-                        
+
                         # Clamp to valid range 1-60
                         utm_zone = max(1, min(60, utm_zone))
-                        
+
                         # Determine hemisphere
                         if lat >= 0:
                             epsg = 32600 + utm_zone  # Northern hemisphere
                         else:
                             epsg = 32700 + utm_zone  # Southern hemisphere
-                        
+
                         self.log(f"Detected UTM zone {utm_zone}{'N' if lat >= 0 else 'S'} "
-                                f"from GPS: ({lat:.4f}, {lon:.4f})")
-                        
+                                 f"from GPS: ({lat:.4f}, {lon:.4f})")
+
                         return f"EPSG:{epsg}"
-                    
+
                     except (ValueError, KeyError):
                         continue
-                
+
                 self.log(f"No valid GPS coordinates found in {os.path.basename(csv_path)}")
                 return None
-                
+
         except Exception as e:
             self.log(f"Error reading AirData CSV for CRS detection: {e}")
             return None
@@ -3492,7 +3493,7 @@ class BambiDockWidget(QDockWidget):
                         # Persist the layer to GeoPackage (use unique name with frame index)
                         layer_filename = f"SAM3_Frame{frame_idx:04d}_{prompt}"
                         layer = self._persist_memory_layer(layer, layer_filename, "sam3_layers")
-                        
+
                         # Re-apply style after persistence (style is lost when saving)
                         self._style_sam3_layer(layer, color)
 
@@ -3859,14 +3860,16 @@ class BambiDockWidget(QDockWidget):
                 # Style bbox layer
                 self._style_bbox_layer(bbox_layer, color_str)
 
-                # Persist layers to GeoPackage
+                # Persist layers to GeoPackage (using unique file names, keeping display names)
                 bbox_layer = self._persist_memory_layer(
-                    bbox_layer, f"Track{track_id}_FinalPosition", "tracks_layers"
+                    bbox_layer, f"Track{track_id}_FinalPosition", "tracks_layers",
+                    display_name="Final Position"
                 )
                 path_layer = self._persist_memory_layer(
-                    path_layer, f"Track{track_id}_Path", "tracks_layers"
+                    path_layer, f"Track{track_id}_Path", "tracks_layers",
+                    display_name="Path"
                 )
-                
+
                 # Re-apply styles after persistence
                 self._style_bbox_layer(bbox_layer, color_str)
                 self._style_path_layer(path_layer, color_str)
@@ -4272,7 +4275,7 @@ class BambiDockWidget(QDockWidget):
 
             # Persist layer to GeoPackage
             layer = self._persist_memory_layer(layer, "FoV_Coverage_Merged", "fov_layers")
-            
+
             # Re-apply style after persistence
             symbol = layer.renderer().symbol()
             symbol.setColor(QColor(0, 150, 255, 50))
@@ -5024,7 +5027,8 @@ class BambiDockWidget(QDockWidget):
                 target_distance += distance_interval
 
             if not marker_features:
-                self.log(f"Warning: No distance markers created (interval {distance_interval}m > total {total_distance:.1f}m)")
+                self.log(
+                    f"Warning: No distance markers created (interval {distance_interval}m > total {total_distance:.1f}m)")
                 return None
 
             # Add features to layer
@@ -5078,7 +5082,7 @@ class BambiDockWidget(QDockWidget):
 
     def _style_frame_markers_layer(self, layer: QgsVectorLayer):
         """Apply styling and labeling to frame markers layer.
-        
+
         :param layer: The frame markers layer to style
         """
         try:
@@ -5125,7 +5129,7 @@ class BambiDockWidget(QDockWidget):
 
     def _style_distance_markers_layer(self, layer: QgsVectorLayer):
         """Apply styling and labeling to distance markers layer.
-        
+
         :param layer: The distance markers layer to style
         """
         try:
@@ -5177,13 +5181,13 @@ class BambiDockWidget(QDockWidget):
     def _connect_project_signals(self):
         """Connect to QGIS project signals for automatic config persistence."""
         project = QgsProject.instance()
-        
+
         # Save config before project is written (saved)
         project.writeProject.connect(self._on_project_write)
-        
+
         # Load config when a project is read (opened)
         project.readProject.connect(self._on_project_read)
-        
+
         # Handle project cleared (new project)
         project.cleared.connect(self._on_project_cleared)
 
@@ -5218,27 +5222,27 @@ class BambiDockWidget(QDockWidget):
     def save_config_to_project(self):
         """Save all configuration to the QGIS project."""
         project = QgsProject.instance()
-        
+
         # ===== Input Paths =====
-        project.writeEntry(PLUGIN_SCOPE, "Input/ThermalVideoPaths", 
+        project.writeEntry(PLUGIN_SCOPE, "Input/ThermalVideoPaths",
                            self.thermal_video_paths_edit.text())
-        project.writeEntry(PLUGIN_SCOPE, "Input/ThermalSrtPaths", 
+        project.writeEntry(PLUGIN_SCOPE, "Input/ThermalSrtPaths",
                            self.thermal_srt_paths_edit.text())
-        project.writeEntry(PLUGIN_SCOPE, "Input/ThermalCalibrationPath", 
+        project.writeEntry(PLUGIN_SCOPE, "Input/ThermalCalibrationPath",
                            self.thermal_calibration_path_edit.text())
-        project.writeEntry(PLUGIN_SCOPE, "Input/RgbVideoPaths", 
+        project.writeEntry(PLUGIN_SCOPE, "Input/RgbVideoPaths",
                            self.rgb_video_paths_edit.text())
-        project.writeEntry(PLUGIN_SCOPE, "Input/RgbSrtPaths", 
+        project.writeEntry(PLUGIN_SCOPE, "Input/RgbSrtPaths",
                            self.rgb_srt_paths_edit.text())
-        project.writeEntry(PLUGIN_SCOPE, "Input/RgbCalibrationPath", 
+        project.writeEntry(PLUGIN_SCOPE, "Input/RgbCalibrationPath",
                            self.rgb_calibration_path_edit.text())
-        project.writeEntry(PLUGIN_SCOPE, "Input/AirdataPath", 
+        project.writeEntry(PLUGIN_SCOPE, "Input/AirdataPath",
                            self.airdata_path_edit.text())
-        project.writeEntry(PLUGIN_SCOPE, "Input/DemPath", 
+        project.writeEntry(PLUGIN_SCOPE, "Input/DemPath",
                            self.dem_path_edit.text())
-        project.writeEntry(PLUGIN_SCOPE, "Input/DemMetadataPath", 
+        project.writeEntry(PLUGIN_SCOPE, "Input/DemMetadataPath",
                            self.dem_metadata_path_edit.text())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Input/DemPadding", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "Input/DemPadding",
                                  self.dem_padding_spin.value())
         project.writeEntry(PLUGIN_SCOPE, "Input/GeotiffInputPath",
                            self.geotiff_input_path_edit.text())
@@ -5246,41 +5250,41 @@ class BambiDockWidget(QDockWidget):
                                  self.geotiff_simplify_spin.value())
         project.writeEntry(PLUGIN_SCOPE, "Input/CorrectionPath",
                            self.correction_path_edit.text())
-        project.writeEntry(PLUGIN_SCOPE, "Input/TargetFolder", 
+        project.writeEntry(PLUGIN_SCOPE, "Input/TargetFolder",
                            self.target_folder_edit.text())
-        project.writeEntry(PLUGIN_SCOPE, "Input/TargetCrs", 
+        project.writeEntry(PLUGIN_SCOPE, "Input/TargetCrs",
                            self.target_crs_edit.text())
-        
+
         # ===== Detection Settings =====
-        project.writeEntry(PLUGIN_SCOPE, "Detection/ModelPath", 
+        project.writeEntry(PLUGIN_SCOPE, "Detection/ModelPath",
                            self.model_path_edit.text())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Detection/Confidence", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "Detection/Confidence",
                                  self.confidence_spin.value())
-        project.writeEntryBool(PLUGIN_SCOPE, "Detection/AllFrames", 
+        project.writeEntryBool(PLUGIN_SCOPE, "Detection/AllFrames",
                                self.detect_all_frames_check.isChecked())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Detection/StartFrame", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "Detection/StartFrame",
                                  self.detect_start_frame_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Detection/EndFrame", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "Detection/EndFrame",
                                  self.detect_end_frame_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Detection/SampleRate", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "Detection/SampleRate",
                                  self.detect_sample_rate_spin.value())
-        
+
         # ===== Correction Settings =====
-        project.writeEntryDouble(PLUGIN_SCOPE, "Correction/RotationUnit", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "Correction/RotationUnit",
                                  self.rotation_unit_combo.currentIndex())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Correction/TransX", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "Correction/TransX",
                                  self.trans_x_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Correction/TransY", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "Correction/TransY",
                                  self.trans_y_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Correction/TransZ", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "Correction/TransZ",
                                  self.trans_z_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Correction/RotX", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "Correction/RotX",
                                  self.rot_x_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Correction/RotY", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "Correction/RotY",
                                  self.rot_y_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Correction/RotZ", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "Correction/RotZ",
                                  self.rot_z_spin.value())
-        
+
         # Save additional corrections as JSON
         corrections_data = []
         for i in range(self.additional_corrections_list.count()):
@@ -5288,128 +5292,128 @@ class BambiDockWidget(QDockWidget):
             data = item.data(Qt.UserRole)
             if data:
                 corrections_data.append(data)
-        project.writeEntry(PLUGIN_SCOPE, "Correction/AdditionalCorrections", 
+        project.writeEntry(PLUGIN_SCOPE, "Correction/AdditionalCorrections",
                            json.dumps(corrections_data))
-        
+
         # ===== Tracking Settings =====
-        project.writeEntryDouble(PLUGIN_SCOPE, "Tracking/TrackerType", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "Tracking/TrackerType",
                                  self.tracker_backend_combo.currentIndex())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Tracking/ReidModel", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "Tracking/ReidModel",
                                  self.reid_model_combo.currentIndex())
-        project.writeEntry(PLUGIN_SCOPE, "Tracking/CustomReidPath", 
+        project.writeEntry(PLUGIN_SCOPE, "Tracking/CustomReidPath",
                            self.custom_reid_path_edit.text())
-        project.writeEntry(PLUGIN_SCOPE, "Tracking/TrackerParams", 
+        project.writeEntry(PLUGIN_SCOPE, "Tracking/TrackerParams",
                            self.tracker_params_edit.toPlainText())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Tracking/IouThreshold", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "Tracking/IouThreshold",
                                  self.iou_threshold_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Tracking/MaxAge", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "Tracking/MaxAge",
                                  self.max_age_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Tracking/MaxCenterDist", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "Tracking/MaxCenterDist",
                                  self.max_center_dist_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Tracking/TrackerMode", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "Tracking/TrackerMode",
                                  self.tracker_mode_combo.currentIndex())
-        project.writeEntryBool(PLUGIN_SCOPE, "Tracking/ClassAware", 
+        project.writeEntryBool(PLUGIN_SCOPE, "Tracking/ClassAware",
                                self.class_aware_check.isChecked())
-        project.writeEntryBool(PLUGIN_SCOPE, "Tracking/Interpolate", 
+        project.writeEntryBool(PLUGIN_SCOPE, "Tracking/Interpolate",
                                self.interpolate_check.isChecked())
-        
+
         # ===== Field of View Settings =====
-        project.writeEntryBool(PLUGIN_SCOPE, "FoV/UseMask", 
+        project.writeEntryBool(PLUGIN_SCOPE, "FoV/UseMask",
                                self.use_fov_mask_check.isChecked())
-        project.writeEntry(PLUGIN_SCOPE, "FoV/MaskPath", 
+        project.writeEntry(PLUGIN_SCOPE, "FoV/MaskPath",
                            self.fov_mask_path_edit.text())
-        project.writeEntryDouble(PLUGIN_SCOPE, "FoV/MaskSimplify", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "FoV/MaskSimplify",
                                  self.mask_simplify_spin.value())
-        project.writeEntryBool(PLUGIN_SCOPE, "FoV/AllFrames", 
+        project.writeEntryBool(PLUGIN_SCOPE, "FoV/AllFrames",
                                self.fov_all_frames_check.isChecked())
-        project.writeEntryDouble(PLUGIN_SCOPE, "FoV/StartFrame", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "FoV/StartFrame",
                                  self.fov_start_frame_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "FoV/EndFrame", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "FoV/EndFrame",
                                  self.fov_end_frame_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "FoV/SampleRate", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "FoV/SampleRate",
                                  self.fov_sample_rate_spin.value())
-        
+
         # ===== Orthomosaic Settings =====
-        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/Resolution", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/Resolution",
                                  self.ortho_resolution_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/BlendMode", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/BlendMode",
                                  self.blend_mode_combo.currentIndex())
-        project.writeEntryBool(PLUGIN_SCOPE, "Ortho/AllFrames", 
+        project.writeEntryBool(PLUGIN_SCOPE, "Ortho/AllFrames",
                                self.ortho_all_frames_check.isChecked())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/StartFrame", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/StartFrame",
                                  self.ortho_start_frame_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/EndFrame", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/EndFrame",
                                  self.ortho_end_frame_spin.value())
-        project.writeEntryBool(PLUGIN_SCOPE, "Ortho/Crop", 
+        project.writeEntryBool(PLUGIN_SCOPE, "Ortho/Crop",
                                self.ortho_crop_check.isChecked())
-        project.writeEntryBool(PLUGIN_SCOPE, "Ortho/Overviews", 
+        project.writeEntryBool(PLUGIN_SCOPE, "Ortho/Overviews",
                                self.ortho_overviews_check.isChecked())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/TileSize", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/TileSize",
                                  self.ortho_tile_size_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/FrameStep", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/FrameStep",
                                  self.ortho_frame_step_spin.value())
-        
+
         # ===== SAM3 Settings =====
         # Note: API key is intentionally NOT saved for security
-        project.writeEntry(PLUGIN_SCOPE, "SAM3/Prompts", 
+        project.writeEntry(PLUGIN_SCOPE, "SAM3/Prompts",
                            self.sam3_prompts_edit.toPlainText())
-        project.writeEntryDouble(PLUGIN_SCOPE, "SAM3/Confidence", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "SAM3/Confidence",
                                  self.sam3_confidence_spin.value())
-        project.writeEntryBool(PLUGIN_SCOPE, "SAM3/AllFrames", 
+        project.writeEntryBool(PLUGIN_SCOPE, "SAM3/AllFrames",
                                self.sam3_all_frames_check.isChecked())
-        project.writeEntryDouble(PLUGIN_SCOPE, "SAM3/StartFrame", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "SAM3/StartFrame",
                                  self.sam3_start_frame_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "SAM3/EndFrame", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "SAM3/EndFrame",
                                  self.sam3_end_frame_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "SAM3/FrameStep", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "SAM3/FrameStep",
                                  self.sam3_step_spin.value())
-        
+
         # ===== Flight Route Settings =====
-        project.writeEntryBool(PLUGIN_SCOPE, "FlightRoute/FrameMarkersEnabled", 
+        project.writeEntryBool(PLUGIN_SCOPE, "FlightRoute/FrameMarkersEnabled",
                                self.frame_markers_enabled_check.isChecked())
-        project.writeEntryDouble(PLUGIN_SCOPE, "FlightRoute/FrameMarkerInterval", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "FlightRoute/FrameMarkerInterval",
                                  self.frame_marker_interval_spin.value())
-        project.writeEntryBool(PLUGIN_SCOPE, "FlightRoute/IncludeFrameZero", 
+        project.writeEntryBool(PLUGIN_SCOPE, "FlightRoute/IncludeFrameZero",
                                self.frame_marker_include_zero_check.isChecked())
-        project.writeEntryBool(PLUGIN_SCOPE, "FlightRoute/DistanceMarkersEnabled", 
+        project.writeEntryBool(PLUGIN_SCOPE, "FlightRoute/DistanceMarkersEnabled",
                                self.distance_markers_enabled_check.isChecked())
-        project.writeEntryDouble(PLUGIN_SCOPE, "FlightRoute/DistanceMarkerInterval", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "FlightRoute/DistanceMarkerInterval",
                                  self.distance_marker_interval_spin.value())
-        project.writeEntryBool(PLUGIN_SCOPE, "FlightRoute/IncludeDistanceStart", 
+        project.writeEntryBool(PLUGIN_SCOPE, "FlightRoute/IncludeDistanceStart",
                                self.distance_marker_include_start_check.isChecked())
-        project.writeEntryDouble(PLUGIN_SCOPE, "FlightRoute/CameraComboIndex", 
+        project.writeEntryDouble(PLUGIN_SCOPE, "FlightRoute/CameraComboIndex",
                                  self.flight_route_camera_combo.currentIndex())
-        
+
         # Mark project as modified so user is prompted to save
         project.setDirty(True)
-        
+
         self.log("Configuration saved to project")
 
     def load_config_from_project(self):
         """Load all configuration from the QGIS project."""
         project = QgsProject.instance()
-        
+
         # Helper functions
         def read_str(key: str, default: str = "") -> str:
             value, ok = project.readEntry(PLUGIN_SCOPE, key, default)
             return value if ok else default
-        
+
         def read_double(key: str, default: float = 0.0) -> float:
             value, ok = project.readDoubleEntry(PLUGIN_SCOPE, key, default)
             return value if ok else default
-        
+
         def read_bool(key: str, default: bool = False) -> bool:
             value, ok = project.readBoolEntry(PLUGIN_SCOPE, key, default)
             return value if ok else default
-        
+
         def read_int(key: str, default: int = 0) -> int:
             return int(read_double(key, float(default)))
-        
+
         # Check if there's any saved config
         test_value, has_config = project.readEntry(PLUGIN_SCOPE, "Input/TargetFolder", "")
         if not has_config:
             return  # No saved config in this project
-        
+
         # ===== Input Paths =====
         self.thermal_video_paths_edit.setText(read_str("Input/ThermalVideoPaths"))
         self.thermal_srt_paths_edit.setText(read_str("Input/ThermalSrtPaths"))
@@ -5425,13 +5429,13 @@ class BambiDockWidget(QDockWidget):
         self.geotiff_simplify_spin.setValue(read_int("Input/GeotiffSimplifyFactor", 2))
         self.correction_path_edit.setText(read_str("Input/CorrectionPath"))
         self.target_folder_edit.setText(read_str("Input/TargetFolder"))
-        
+
         target_crs = read_str("Input/TargetCrs")
         if target_crs:
             self.target_crs_edit.setText(target_crs)
         else:
             self.target_crs_edit.setText("EPSG:32633")  # Default
-        
+
         # ===== Detection Settings =====
         self.model_path_edit.setText(read_str("Detection/ModelPath"))
         self.confidence_spin.setValue(read_double("Detection/Confidence", 0.5))
@@ -5439,19 +5443,19 @@ class BambiDockWidget(QDockWidget):
         self.detect_start_frame_spin.setValue(read_int("Detection/StartFrame", 0))
         self.detect_end_frame_spin.setValue(read_int("Detection/EndFrame", 999999))
         self.detect_sample_rate_spin.setValue(read_int("Detection/SampleRate", 1))
-        
+
         # ===== Correction Settings =====
         rot_unit_idx = read_int("Correction/RotationUnit", 0)
         if 0 <= rot_unit_idx < self.rotation_unit_combo.count():
             self.rotation_unit_combo.setCurrentIndex(rot_unit_idx)
-        
+
         self.trans_x_spin.setValue(read_double("Correction/TransX", 0.0))
         self.trans_y_spin.setValue(read_double("Correction/TransY", 0.0))
         self.trans_z_spin.setValue(read_double("Correction/TransZ", 0.0))
         self.rot_x_spin.setValue(read_double("Correction/RotX", 0.0))
         self.rot_y_spin.setValue(read_double("Correction/RotY", 0.0))
         self.rot_z_spin.setValue(read_double("Correction/RotZ", 0.0))
-        
+
         # Load additional corrections
         corrections_json = read_str("Correction/AdditionalCorrections", "[]")
         try:
@@ -5461,29 +5465,29 @@ class BambiDockWidget(QDockWidget):
                 self._add_correction_to_list(corr)
         except json.JSONDecodeError:
             pass
-        
+
         # ===== Tracking Settings =====
         tracker_idx = read_int("Tracking/TrackerType", 0)
         if 0 <= tracker_idx < self.tracker_backend_combo.count():
             self.tracker_backend_combo.setCurrentIndex(tracker_idx)
-        
+
         reid_model_idx = read_int("Tracking/ReidModel", 0)
         if 0 <= reid_model_idx < self.reid_model_combo.count():
             self.reid_model_combo.setCurrentIndex(reid_model_idx)
-        
+
         self.custom_reid_path_edit.setText(read_str("Tracking/CustomReidPath"))
         self.tracker_params_edit.setPlainText(read_str("Tracking/TrackerParams"))
         self.iou_threshold_spin.setValue(read_double("Tracking/IouThreshold", 0.3))
         self.max_age_spin.setValue(read_int("Tracking/MaxAge", -1))
         self.max_center_dist_spin.setValue(read_double("Tracking/MaxCenterDist", 0.2))
-        
+
         tracker_mode_idx = read_int("Tracking/TrackerMode", 1)
         if 0 <= tracker_mode_idx < self.tracker_mode_combo.count():
             self.tracker_mode_combo.setCurrentIndex(tracker_mode_idx)
-        
+
         self.class_aware_check.setChecked(read_bool("Tracking/ClassAware", True))
         self.interpolate_check.setChecked(read_bool("Tracking/Interpolate", True))
-        
+
         # ===== Field of View Settings =====
         self.use_fov_mask_check.setChecked(read_bool("FoV/UseMask", False))
         self.fov_mask_path_edit.setText(read_str("FoV/MaskPath"))
@@ -5492,14 +5496,14 @@ class BambiDockWidget(QDockWidget):
         self.fov_start_frame_spin.setValue(read_int("FoV/StartFrame", 0))
         self.fov_end_frame_spin.setValue(read_int("FoV/EndFrame", 999999))
         self.fov_sample_rate_spin.setValue(read_int("FoV/SampleRate", 1))
-        
+
         # ===== Orthomosaic Settings =====
         self.ortho_resolution_spin.setValue(read_double("Ortho/Resolution", 0.05))
-        
+
         blend_mode_idx = read_int("Ortho/BlendMode", 0)
         if 0 <= blend_mode_idx < self.blend_mode_combo.count():
             self.blend_mode_combo.setCurrentIndex(blend_mode_idx)
-        
+
         self.ortho_all_frames_check.setChecked(read_bool("Ortho/AllFrames", True))
         self.ortho_start_frame_spin.setValue(read_int("Ortho/StartFrame", 0))
         self.ortho_end_frame_spin.setValue(read_int("Ortho/EndFrame", 999999))
@@ -5507,7 +5511,7 @@ class BambiDockWidget(QDockWidget):
         self.ortho_overviews_check.setChecked(read_bool("Ortho/Overviews", True))
         self.ortho_tile_size_spin.setValue(read_int("Ortho/TileSize", 8192))
         self.ortho_frame_step_spin.setValue(read_int("Ortho/FrameStep", 1))
-        
+
         # ===== SAM3 Settings =====
         self.sam3_prompts_edit.setPlainText(read_str("SAM3/Prompts"))
         self.sam3_confidence_spin.setValue(read_double("SAM3/Confidence", 0.5))
@@ -5515,7 +5519,7 @@ class BambiDockWidget(QDockWidget):
         self.sam3_start_frame_spin.setValue(read_int("SAM3/StartFrame", 0))
         self.sam3_end_frame_spin.setValue(read_int("SAM3/EndFrame", 999999))
         self.sam3_step_spin.setValue(read_int("SAM3/FrameStep", 1))
-        
+
         # ===== Flight Route Settings =====
         self.frame_markers_enabled_check.setChecked(read_bool("FlightRoute/FrameMarkersEnabled", True))
         self.frame_marker_interval_spin.setValue(read_int("FlightRoute/FrameMarkerInterval", 100))
@@ -5523,87 +5527,94 @@ class BambiDockWidget(QDockWidget):
         self.distance_markers_enabled_check.setChecked(read_bool("FlightRoute/DistanceMarkersEnabled", False))
         self.distance_marker_interval_spin.setValue(read_int("FlightRoute/DistanceMarkerInterval", 100))
         self.distance_marker_include_start_check.setChecked(read_bool("FlightRoute/IncludeDistanceStart", False))
-        
+
         camera_combo_idx = read_int("FlightRoute/CameraComboIndex", 0)
         if 0 <= camera_combo_idx < self.flight_route_camera_combo.count():
             self.flight_route_camera_combo.setCurrentIndex(camera_combo_idx)
-        
+
         self.log("Configuration loaded from project")
 
     def _create_layer_group(self, group_name: str, at_top: bool = True) -> QgsLayerTreeGroup:
         """Create a layer group, optionally at the top of the layer tree.
-        
+
         :param group_name: Name for the new group
         :param at_top: If True, insert at top of layer tree; if False, append at bottom
         :return: The created QgsLayerTreeGroup
         """
         root = QgsProject.instance().layerTreeRoot()
         group = QgsLayerTreeGroup(group_name)
-        
+
         if at_top:
             root.insertChildNode(0, group)
         else:
             root.addChildNode(group)
-        
+
         return group
 
-    def _persist_memory_layer(self, mem_layer: QgsVectorLayer, layer_name: str, 
-                               subfolder: str = "qgis_layers") -> QgsVectorLayer:
+    def _persist_memory_layer(self, mem_layer: QgsVectorLayer, file_name: str,
+                              subfolder: str = "qgis_layers",
+                              display_name: Optional[str] = None) -> QgsVectorLayer:
         """Save a memory layer to GeoPackage file and return the file-based layer.
-        
+
         If no target folder is set, returns the original memory layer unchanged.
-        
+
         :param mem_layer: The memory layer to persist
-        :param layer_name: Display name for the layer (also used for filename)
+        :param file_name: Unique name for the GeoPackage file (without extension)
         :param subfolder: Subfolder within target folder for storing layers
+        :param display_name: Display name for the layer in QGIS (defaults to mem_layer's name)
         :return: File-based QgsVectorLayer if saved successfully, otherwise original memory layer
         """
         from qgis.core import QgsVectorFileWriter, QgsCoordinateTransformContext
-        
+
+        # Use memory layer's name as display name if not specified
+        if display_name is None:
+            display_name = mem_layer.name()
+
         # Check if target folder is set
         target_folder = self.target_folder_edit.text().strip()
         if not target_folder or not os.path.isdir(target_folder):
             # No target folder, return memory layer as-is
+            self.log(f"Warning: No target folder set, layer '{display_name}' will be temporary")
             return mem_layer
-        
+
         try:
             # Create output folder
             gpkg_folder = os.path.join(target_folder, subfolder)
             os.makedirs(gpkg_folder, exist_ok=True)
-            
-            # Sanitize layer name for filename
-            safe_name = "".join(c if c.isalnum() or c in "_-" else "_" for c in layer_name)
+
+            # Sanitize file name for filesystem
+            safe_name = "".join(c if c.isalnum() or c in "_-" else "_" for c in file_name)
             gpkg_path = os.path.join(gpkg_folder, f"{safe_name}.gpkg")
-            
+
             # If file already exists, remove it to overwrite
             if os.path.exists(gpkg_path):
                 os.remove(gpkg_path)
-            
+
             # Write to GeoPackage
             options = QgsVectorFileWriter.SaveVectorOptions()
             options.driverName = "GPKG"
             options.fileEncoding = "UTF-8"
-            
+
             error = QgsVectorFileWriter.writeAsVectorFormatV3(
                 mem_layer,
                 gpkg_path,
                 QgsCoordinateTransformContext(),
                 options
             )
-            
+
             if error[0] != QgsVectorFileWriter.NoError:
-                self.log(f"Warning: Could not save layer '{layer_name}' to GeoPackage: {error[1]}")
+                self.log(f"Warning: Could not save layer '{display_name}' to GeoPackage: {error[1]}")
                 return mem_layer
-            
-            # Load the persisted layer
-            persisted_layer = QgsVectorLayer(gpkg_path, layer_name, "ogr")
-            
+
+            # Load the persisted layer with the display name
+            persisted_layer = QgsVectorLayer(gpkg_path, display_name, "ogr")
+
             if not persisted_layer.isValid():
-                self.log(f"Warning: Persisted layer '{layer_name}' is not valid, using memory layer")
+                self.log(f"Warning: Persisted layer '{display_name}' is not valid, using memory layer")
                 return mem_layer
-            
+
             return persisted_layer
-            
+
         except Exception as e:
-            self.log(f"Warning: Failed to persist layer '{layer_name}': {str(e)}")
+            self.log(f"Warning: Failed to persist layer '{display_name}': {str(e)}")
             return mem_layer
