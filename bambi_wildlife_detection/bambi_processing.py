@@ -15,6 +15,80 @@ from collections import defaultdict
 
 from qgis.PyQt.QtCore import QObject, pyqtSignal
 
+from contextlib import contextmanager
+from typing import Callable, List, Optional
+
+# Progress callback receives a single int: percentage 0-100
+ProgressCallback = Callable[[int], None]
+
+
+@contextmanager
+def patch_frame_extraction_progress(
+        progress_fn: Optional[ProgressCallback],
+        total_frames: int,
+        log_fn: Optional[Callable[[str], None]] = None,
+        log_interval_percent: int = 10,
+):
+    """
+    Context manager that patches frame extraction to report progress.
+
+    Usage:
+        total = count_srt_frames(srt_paths)
+        with patch_frame_extraction_progress(progress_fn, total, log_fn):
+            extractor.extract(...)
+
+    :param progress_fn: Function receiving percentage (0-100 int)
+    :param total_frames: Total number of frames to extract
+    :param log_fn: Optional logging function
+    :param log_interval_percent: Log every N percent (default 10)
+    """
+    import bambi.webgl.timed_pose_extractor as tpe_module
+
+    # Get reference to the callback class
+    CallbackClass = tpe_module.TimedFrameExtractorCallback
+
+    # Store original __call__
+    original_call = CallbackClass.__call__
+
+    # Progress tracking state
+    state = {'processed': 0, 'last_logged_percent': -1}
+
+    def patched_call(self, idx, img):
+        # Call original
+        result = original_call(self, idx, img)
+
+        # Track progress on success
+        if result and total_frames > 0:
+            state['processed'] += 1
+            current = state['processed']
+            percent = int((current / total_frames) * 100)
+
+            # Report percentage via callback
+            if progress_fn is not None:
+                progress_fn(percent)
+
+            # Log periodically
+            if log_fn is not None and percent >= state['last_logged_percent'] + log_interval_percent:
+                state['last_logged_percent'] = percent
+                log_fn(f"Extracting frames: {current} / {total_frames} ({percent}%)")
+
+        return result
+
+    try:
+        # Patch
+        CallbackClass.__call__ = patched_call
+        yield
+    finally:
+        # Restore
+        CallbackClass.__call__ = original_call
+
+
+def count_srt_frames(srt_paths: List[str]) -> int:
+    """Count total frames in SRT files."""
+    from bambi.srt.srt_parser import SrtParser
+    parser = SrtParser()
+    return sum(len(parser.parse(p)) for p in srt_paths)
+
 
 class ProcessingWorker(QObject):
     """Worker class for background processing."""
@@ -265,13 +339,18 @@ class BambiProcessor:
             camera_name=Camera.from_string("T")
         )
 
-        if log_fn:
-            log_fn(f"Processing {len(thermal_video_paths)} thermal video(s)...")
+        # Count frames for progress
+        total_frames = count_srt_frames(thermal_srt_paths)
 
-        extractor.extract(
-            frames_folder_t, airdata_path, thermal_video_paths, thermal_srt_paths,
-            origin=ad_origin, include_gps=True
-        )
+        if log_fn:
+            log_fn(f"Processing {total_frames} frames...")
+
+        # Wrap extraction with progress reporting
+        with patch_frame_extraction_progress(progress_fn, total_frames, log_fn):
+            extractor.extract(
+                frames_folder_t, airdata_path, thermal_video_paths, thermal_srt_paths,
+                origin=ad_origin, include_gps=True
+            )
 
         # Move poses.json and masks to target folder with thermal suffix
         if os.path.exists(os.path.join(frames_folder_t, "poses.json")):
@@ -331,13 +410,18 @@ class BambiProcessor:
             camera_name=Camera.from_string("W")
         )
 
-        if log_fn:
-            log_fn(f"Processing {len(rgb_video_paths)} RGB video(s)...")
+        # Count frames for progress
+        total_frames = count_srt_frames(rgb_srt_paths)
 
-        extractor.extract(
-            frames_folder_w, airdata_path, rgb_video_paths, rgb_srt_paths,
-            origin=ad_origin, include_gps=True
-        )
+        if log_fn:
+            log_fn(f"Processing {total_frames} frames...")
+
+        # Wrap extraction with progress reporting
+        with patch_frame_extraction_progress(progress_fn, total_frames, log_fn):
+            extractor.extract(
+                frames_folder_w, airdata_path, rgb_video_paths, rgb_srt_paths,
+                origin=ad_origin, include_gps=True
+            )
 
         # Move poses.json and masks to target folder with RGB suffix
         if os.path.exists(os.path.join(frames_folder_w, "poses.json")):
