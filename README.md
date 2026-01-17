@@ -358,7 +358,7 @@ Using pip you can install them directly, using the projects' paths.
 
 ```shell
 pip install <path>/alfs_py
-pip install <path>/alfs_detection
+pip install <path>/bambi_detection
 ```
 
 ---

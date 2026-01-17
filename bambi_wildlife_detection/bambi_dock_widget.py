@@ -493,7 +493,9 @@ class BambiDockWidget(QDockWidget):
         download_info_label = QLabel(
             "Downloads DEM tiles from the Austrian BEV service based on GPS coordinates\n"
             "in the AirData CSV file. The area is determined automatically with the\n"
-            "specified padding around the flight path."
+            "specified padding around the flight path.\n"
+            "Note, that this may take some time, since individual tiles are 10GB+ and it may be necessary to download multiple map tiles.\n"
+            "Downloaded to \"<user profile>/.cache/austria_dem\""
         )
         download_info_label.setWordWrap(True)
         auto_download_layout.addRow("", download_info_label)
