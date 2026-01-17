@@ -99,7 +99,9 @@ Or visit: [https://github.com/bambi-eco/Geo-Referenced-Tracking](https://github.
 
 ### Method 1: Install from ZIP (Recommended)
 
-1. Download the repository and zip the "bambi_wildlife_detection" subfolder
+1. Download the plugin by either
+    - Getting the zipped plugin from a [released version](https://github.com/bambi-eco/Bambi-QGIS/releases) (recommended)
+    - Or download this code repository and zip the "bambi_wildlife_detection" subfolder to get the current work in progress version
 2. Open QGIS
 3. Go to **Plugins** → **Manage and Install Plugins...**
 4. Select the **Install from ZIP** tab

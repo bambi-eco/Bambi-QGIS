@@ -2522,13 +2522,17 @@ class BambiProcessor:
             far=10000.0
         )
 
-        # 7. Render (Tiled or Single)
-        # Check if tiling is needed based on max_tile_size
-        needs_tiling = (width_pixels > max_tile_size or height_pixels > max_tile_size)
+        # 7. Render (always use tiled approach for consistency)
+        # Note: Single-pass rendering was producing empty outputs, so we always use
+        # the tiled approach. For small images, this simply creates one tile.
+        needs_tiling = True  # Always use tiling - single-pass has issues
 
         if needs_tiling:
             if log_fn:
-                log_fn(f"Resolution exceeds {max_tile_size}px. Using tiled rendering...")
+                if width_pixels > max_tile_size or height_pixels > max_tile_size:
+                    log_fn(f"Resolution exceeds {max_tile_size}px. Using tiled rendering...")
+                else:
+                    log_fn(f"Using tiled rendering (single tile)...")
 
             # Initialize large output array
             result = np.zeros((height_pixels, width_pixels, 4), dtype=np.uint8)
@@ -2662,7 +2666,7 @@ class BambiProcessor:
 
         for i, img_info in enumerate(images):
             location = list(img_info.get("location", [0, 0, 0]))
-            
+
             # Apply frame-specific correction for bounds calculation
             frame_idx = img_info.get("_original_frame_idx", i)
             correction = self.get_correction_for_frame(frame_idx, config)
@@ -2670,7 +2674,7 @@ class BambiProcessor:
             location[0] += cor_translation.get('x', 0)
             location[1] += cor_translation.get('y', 0)
             location[2] += cor_translation.get('z', 0)
-            
+
             # Accept any location (even 0,0 might be valid for local coords)
             positions.append((location[0], location[1], location[2]))
             valid_images.append(img_info)
