@@ -1474,11 +1474,21 @@ class BambiDockWidget(QDockWidget):
 
         processing_layout.addWidget(steps_group)
 
-        # Progress bar
+        # Progress bar with abort button
+        progress_layout = QHBoxLayout()
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
-        processing_layout.addWidget(self.progress_bar)
+        progress_layout.addWidget(self.progress_bar, stretch=1)
+        
+        self.abort_btn = QPushButton("Abort")
+        self.abort_btn.setToolTip("Cancel the current running process")
+        self.abort_btn.setEnabled(False)
+        self.abort_btn.setFixedWidth(70)
+        self.abort_btn.clicked.connect(self._abort_current_process)
+        progress_layout.addWidget(self.abort_btn)
+        
+        processing_layout.addLayout(progress_layout)
 
         # Refresh Status button
         self.refresh_status_btn = QPushButton("🔄 Refresh Status")
@@ -3576,6 +3586,7 @@ class BambiDockWidget(QDockWidget):
 
         # Update UI
         self.set_buttons_enabled(False)
+        self.abort_btn.setEnabled(True)  # Enable abort button during processing
         self.update_status(step, "🟡 Running...")
         self.progress_bar.setValue(0)
 
@@ -3585,6 +3596,7 @@ class BambiDockWidget(QDockWidget):
     def on_worker_finished(self, step: str, success: bool):
         """Handle worker completion."""
         self.set_buttons_enabled(True)
+        self.abort_btn.setEnabled(False)  # Disable abort button when done
         self.worker = None
 
         if success:
@@ -3592,11 +3604,13 @@ class BambiDockWidget(QDockWidget):
             self.log(f"{step} completed successfully!")
             self.progress_bar.setValue(100)
         else:
-            self.update_status(step, "🔴 Failed")
+            # Check if it was cancelled (worker would have logged it)
+            self.update_status(step, "🔴 Cancelled/Failed")
 
     def on_worker_error(self, step: str, error_msg: str):
         """Handle worker error."""
         self.set_buttons_enabled(True)
+        self.abort_btn.setEnabled(False)  # Disable abort button on error
         self.worker = None
         self.update_status(step, "🔴 Error")
         self.log(f"ERROR: {error_msg}")
@@ -3605,6 +3619,14 @@ class BambiDockWidget(QDockWidget):
     def on_worker_progress(self, value: int):
         """Update progress bar."""
         self.progress_bar.setValue(value)
+
+    def _abort_current_process(self):
+        """Abort the currently running process."""
+        if self.worker is not None:
+            self.log("Aborting current process...")
+            self.abort_btn.setEnabled(False)  # Prevent multiple clicks
+            self.worker.cancel()
+            # The worker will emit finished signal when it detects cancellation
 
     def update_status(self, step: str, status: str):
         """Update the status label for a step."""

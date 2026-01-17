@@ -28,19 +28,21 @@ def patch_frame_extraction_progress(
         total_frames: int,
         log_fn: Optional[Callable[[str], None]] = None,
         log_interval_percent: int = 10,
+        cancel_check: Optional[Callable[[], bool]] = None,
 ):
     """
     Context manager that patches frame extraction to report progress.
 
     Usage:
         total = count_srt_frames(srt_paths)
-        with patch_frame_extraction_progress(progress_fn, total, log_fn):
+        with patch_frame_extraction_progress(progress_fn, total, log_fn, cancel_check=is_cancelled):
             extractor.extract(...)
 
     :param progress_fn: Function receiving percentage (0-100 int)
     :param total_frames: Total number of frames to extract
     :param log_fn: Optional logging function
     :param log_interval_percent: Log every N percent (default 10)
+    :param cancel_check: Optional function that returns True if cancelled
     """
     import bambi.webgl.timed_pose_extractor as tpe_module
 
@@ -54,6 +56,10 @@ def patch_frame_extraction_progress(
     state = {'processed': 0, 'last_logged_percent': -1}
 
     def patched_call(self, idx, img):
+        # Check for cancellation
+        if cancel_check is not None and cancel_check():
+            raise CancelledException("Frame extraction cancelled")
+        
         # Call original
         result = original_call(self, idx, img)
 
@@ -103,42 +109,64 @@ class ProcessingWorker(QObject):
         self.processor = processor
         self.step = step
         self.config = config
+        self._cancelled = False
+
+    def cancel(self):
+        """Request cancellation of the current processing step."""
+        self._cancelled = True
+
+    def is_cancelled(self) -> bool:
+        """Check if cancellation has been requested."""
+        return self._cancelled
 
     def run(self):
         """Execute the processing step."""
         try:
             if self.step == "extract_thermal_frames":
-                self.processor.extract_thermal_frames(self.config, self.progress.emit, self.log.emit)
+                self.processor.extract_thermal_frames(self.config, self.progress.emit, self.log.emit, self.is_cancelled)
             elif self.step == "extract_rgb_frames":
-                self.processor.extract_rgb_frames(self.config, self.progress.emit, self.log.emit)
+                self.processor.extract_rgb_frames(self.config, self.progress.emit, self.log.emit, self.is_cancelled)
             elif self.step == "flight_route":
-                self.processor.run_flight_route(self.config, self.progress.emit, self.log.emit)
+                self.processor.run_flight_route(self.config, self.progress.emit, self.log.emit, self.is_cancelled)
             elif self.step == "detection":
-                self.processor.run_detection(self.config, self.progress.emit, self.log.emit)
+                self.processor.run_detection(self.config, self.progress.emit, self.log.emit, self.is_cancelled)
             elif self.step == "georeference":
-                self.processor.run_georeference(self.config, self.progress.emit, self.log.emit)
+                self.processor.run_georeference(self.config, self.progress.emit, self.log.emit, self.is_cancelled)
             elif self.step == "calculate_fov":
-                self.processor.run_calculate_fov(self.config, self.progress.emit, self.log.emit)
+                self.processor.run_calculate_fov(self.config, self.progress.emit, self.log.emit, self.is_cancelled)
             elif self.step == "tracking":
-                self.processor.run_tracking(self.config, self.progress.emit, self.log.emit)
+                self.processor.run_tracking(self.config, self.progress.emit, self.log.emit, self.is_cancelled)
             elif self.step == "orthomosaic":
-                self.processor.run_orthomosaic(self.config, self.progress.emit, self.log.emit)
+                self.processor.run_orthomosaic(self.config, self.progress.emit, self.log.emit, self.is_cancelled)
             elif self.step == "export_geotiffs":
-                self.processor.run_export_geotiffs(self.config, self.progress.emit, self.log.emit)
+                self.processor.run_export_geotiffs(self.config, self.progress.emit, self.log.emit, self.is_cancelled)
             elif self.step == "sam3_segmentation":
-                self.processor.run_sam3_segmentation(self.config, self.progress.emit, self.log.emit)
+                self.processor.run_sam3_segmentation(self.config, self.progress.emit, self.log.emit, self.is_cancelled)
             elif self.step == "sam3_georeference":
-                self.processor.run_sam3_georeference(self.config, self.progress.emit, self.log.emit)
+                self.processor.run_sam3_georeference(self.config, self.progress.emit, self.log.emit, self.is_cancelled)
             else:
                 raise ValueError(f"Unknown step: {self.step}")
 
-            self.finished.emit(self.step, True)
+            # Check if cancelled before signaling success
+            if self._cancelled:
+                self.log.emit(f"{self.step} was cancelled")
+                self.finished.emit(self.step, False)
+            else:
+                self.finished.emit(self.step, True)
 
+        except CancelledException:
+            self.log.emit(f"{self.step} was cancelled")
+            self.finished.emit(self.step, False)
         except Exception as e:
             import traceback
             tb = traceback.format_exc()
             self.error.emit(self.step, f"{str(e)}\n\n{tb}")
             self.finished.emit(self.step, False)
+
+
+class CancelledException(Exception):
+    """Exception raised when a processing step is cancelled."""
+    pass
 
 
 class BambiProcessor:
@@ -302,12 +330,13 @@ class BambiProcessor:
 
         return target_folder, rel_transformer, ad_origin
 
-    def extract_thermal_frames(self, config: Dict[str, Any], progress_fn=None, log_fn=None):
+    def extract_thermal_frames(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Extract frames from thermal drone videos.
 
         :param config: Configuration dictionary
         :param progress_fn: Progress callback function
         :param log_fn: Logging callback function
+        :param cancel_check: Optional function that returns True if cancelled
         """
         # Import bambi modules
         from bambi.video.calibrated_video_frame_accessor import CalibratedVideoFrameAccessor
@@ -318,6 +347,10 @@ class BambiProcessor:
             log_fn("=" * 50)
             log_fn("Extracting THERMAL frames...")
             log_fn("=" * 50)
+
+        # Check for cancellation before starting
+        if cancel_check and cancel_check():
+            raise CancelledException("Cancelled before starting")
 
         target_folder, rel_transformer, ad_origin = self._get_extraction_prerequisites(config)
         airdata_path = config["airdata_path"]
@@ -346,7 +379,7 @@ class BambiProcessor:
             log_fn(f"Processing {total_frames} frames...")
 
         # Wrap extraction with progress reporting
-        with patch_frame_extraction_progress(progress_fn, total_frames, log_fn):
+        with patch_frame_extraction_progress(progress_fn, total_frames, log_fn, cancel_check=cancel_check):
             extractor.extract(
                 frames_folder_t, airdata_path, thermal_video_paths, thermal_srt_paths,
                 origin=ad_origin, include_gps=True
@@ -373,12 +406,13 @@ class BambiProcessor:
                 os.remove(target_mask_t)
             os.rename(os.path.join(frames_folder_t, "mask_T.png"), target_mask_t)
 
-    def extract_rgb_frames(self, config: Dict[str, Any], progress_fn=None, log_fn=None):
+    def extract_rgb_frames(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Extract frames from RGB drone videos.
 
         :param config: Configuration dictionary
         :param progress_fn: Progress callback function
         :param log_fn: Logging callback function
+        :param cancel_check: Optional function that returns True if cancelled
         """
         # Import bambi modules
         from bambi.video.calibrated_video_frame_accessor import CalibratedVideoFrameAccessor
@@ -389,6 +423,10 @@ class BambiProcessor:
             log_fn("=" * 50)
             log_fn("Extracting RGB frames...")
             log_fn("=" * 50)
+
+        # Check for cancellation before starting
+        if cancel_check and cancel_check():
+            raise CancelledException("Cancelled before starting")
 
         target_folder, rel_transformer, ad_origin = self._get_extraction_prerequisites(config)
         airdata_path = config["airdata_path"]
@@ -417,7 +455,7 @@ class BambiProcessor:
             log_fn(f"Processing {total_frames} frames...")
 
         # Wrap extraction with progress reporting
-        with patch_frame_extraction_progress(progress_fn, total_frames, log_fn):
+        with patch_frame_extraction_progress(progress_fn, total_frames, log_fn, cancel_check=cancel_check):
             extractor.extract(
                 frames_folder_w, airdata_path, rgb_video_paths, rgb_srt_paths,
                 origin=ad_origin, include_gps=True
@@ -444,7 +482,7 @@ class BambiProcessor:
                 os.remove(target_mask_w)
             os.rename(os.path.join(frames_folder_w, "mask_W.png"), target_mask_w)
 
-    def run_flight_route(self, config: Dict[str, Any], progress_fn=None, log_fn=None):
+    def run_flight_route(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Generate a flight route polyline layer from camera positions.
 
         Creates a GeoJSON file with a LineString representing the drone's
@@ -618,7 +656,7 @@ class BambiProcessor:
         if progress_fn:
             progress_fn(100)
 
-    def run_detection(self, config: Dict[str, Any], progress_fn=None, log_fn=None):
+    def run_detection(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Run animal detection on extracted frames.
 
         :param config: Configuration dictionary
@@ -723,6 +761,12 @@ class BambiProcessor:
         with open(output_file, 'w', encoding='utf-8') as f:
             f.write("# frame x1 y1 x2 y2 confidence class_id\n")
             for idx in frame_indices:
+                # Check for cancellation
+                if cancel_check and cancel_check():
+                    if log_fn:
+                        log_fn("Detection cancelled by user")
+                    raise CancelledException("Detection cancelled")
+                
                 image_info = images[idx]
                 imagefile = image_info.get("imagefile")
                 if not imagefile:
@@ -762,7 +806,7 @@ class BambiProcessor:
         if progress_fn:
             progress_fn(100)
 
-    def run_georeference(self, config: Dict[str, Any], progress_fn=None, log_fn=None):
+    def run_georeference(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Geo-reference detections using DEM.
 
         :param config: Configuration dictionary
@@ -887,6 +931,12 @@ class BambiProcessor:
             total_dets = len(detections)
 
             for idx, det in enumerate(detections):
+                # Check for cancellation
+                if cancel_check and cancel_check():
+                    if log_fn:
+                        log_fn("Geo-referencing cancelled by user")
+                    raise CancelledException("Geo-referencing cancelled")
+                
                 frame_idx = det["frame"]
 
                 if frame_idx >= len(poses["images"]):
@@ -967,7 +1017,7 @@ class BambiProcessor:
         if progress_fn:
             progress_fn(100)
 
-    def run_calculate_fov(self, config: Dict[str, Any], progress_fn=None, log_fn=None):
+    def run_calculate_fov(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Calculate and save Field of View (FoV) polygons for each frame.
 
         This geo-references the image corners for each frame to create a polygon
@@ -1122,6 +1172,12 @@ class BambiProcessor:
                 f.write("# Format: frame_idx num_points x1 y1 z1 x2 y2 z2 ...\n")
 
                 for i, frame_idx in enumerate(frame_indices):
+                    # Check for cancellation
+                    if cancel_check and cancel_check():
+                        if log_fn:
+                            log_fn("FoV calculation cancelled by user")
+                        raise CancelledException("FoV calculation cancelled")
+                    
                     # Get frame-specific correction factors
                     correction = self.get_correction_for_frame(frame_idx, config)
                     translation = correction["translation"]
@@ -1270,7 +1326,7 @@ class BambiProcessor:
 
         return georeferenced_points
 
-    def run_tracking(self, config: Dict[str, Any], progress_fn=None, log_fn=None):
+    def run_tracking(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Run tracking on geo-referenced detections.
 
         Supports multiple tracking backends:
@@ -2132,7 +2188,7 @@ class BambiProcessor:
         new_results.sort(key=lambda r: (r[0], r[1]))
         return new_results
 
-    def run_orthomosaic(self, config: Dict[str, Any], progress_fn=None, log_fn=None):
+    def run_orthomosaic(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Generate an orthomosaic from extracted frames and DEM.
 
         :param config: Configuration dictionary
@@ -2327,7 +2383,7 @@ class BambiProcessor:
                 output_file, ground_resolution, blend_mode,
                 coord_offset_x, coord_offset_y, target_epsg,
                 crop_to_content, create_overviews, max_tile_size,
-                frames_folder, progress_fn, log_fn
+                frames_folder, progress_fn, log_fn, cancel_check
             )
         else:
             # Use simplified orthomosaic generation (projection without rendering)
@@ -2336,7 +2392,7 @@ class BambiProcessor:
                 output_file, ground_resolution, blend_mode,
                 coord_offset_x, coord_offset_y, target_epsg,
                 crop_to_content, create_overviews,
-                frames_folder, progress_fn, log_fn
+                frames_folder, progress_fn, log_fn, cancel_check
             )
 
         if log_fn:
@@ -2459,7 +2515,7 @@ class BambiProcessor:
             output_file, ground_resolution, blend_mode,
             coord_offset_x, coord_offset_y, target_epsg,
             crop_to_content, create_overviews, max_tile_size,
-            frames_folder, progress_fn, log_fn
+            frames_folder, progress_fn, log_fn, cancel_check=None
     ):
         """Run orthomosaic generation using alfspy rendering pipeline with tiling support."""
         import math
@@ -2506,6 +2562,12 @@ class BambiProcessor:
         default_fovy = 50.0
 
         for i, img_info in enumerate(images):
+            # Check for cancellation
+            if cancel_check and cancel_check():
+                if log_fn:
+                    log_fn("Orthomosaic generation cancelled by user")
+                raise CancelledException("Orthomosaic generation cancelled")
+            
             image_file = img_info.get("imagefile")
             image_path = os.path.join(frames_folder, image_file)
 
@@ -2728,7 +2790,7 @@ class BambiProcessor:
             output_file, ground_resolution, blend_mode,
             coord_offset_x, coord_offset_y, target_epsg,
             crop_to_content, create_overviews,
-            frames_folder, progress_fn, log_fn
+            frames_folder, progress_fn, log_fn, cancel_check=None
     ):
         """Simplified orthomosaic generation without alfspy.
 
@@ -2818,6 +2880,12 @@ class BambiProcessor:
         images_placed = 0
 
         for i, img_info in enumerate(valid_images):
+            # Check for cancellation
+            if cancel_check and cancel_check():
+                if log_fn:
+                    log_fn("Orthomosaic generation cancelled by user")
+                raise CancelledException("Orthomosaic generation cancelled")
+            
             image_file = img_info.get("imagefile")
             image_path = os.path.join(frames_folder, image_file)
 
@@ -3218,7 +3286,7 @@ class BambiProcessor:
             if log_fn:
                 log_fn(f"Warning: Could not save PRJ file: {e}")
 
-    def run_export_geotiffs(self, config: Dict[str, Any], progress_fn=None, log_fn=None):
+    def run_export_geotiffs(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Export each frame as an individual GeoTIFF using optimized projection.
 
         This method uses an efficient single-pass approach that loads the DEM mesh
@@ -3434,6 +3502,12 @@ class BambiProcessor:
             log_fn(f"Starting frame export...")
 
         for i, frame_idx in enumerate(frame_indices):
+            # Check for cancellation
+            if cancel_check and cancel_check():
+                if log_fn:
+                    log_fn("GeoTIFF export cancelled by user")
+                raise CancelledException("GeoTIFF export cancelled")
+            
             try:
                 # Get image info
                 img_info = all_images[frame_idx]
@@ -3777,7 +3851,7 @@ class BambiProcessor:
     # SAM3 SEGMENTATION
     # =========================================================================
 
-    def run_sam3_segmentation(self, config: Dict[str, Any], progress_fn=None, log_fn=None):
+    def run_sam3_segmentation(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Run SAM3 segmentation on extracted frames using Roboflow Serverless API.
 
         Expects:
@@ -3902,6 +3976,12 @@ class BambiProcessor:
         headers = {"Content-Type": "application/json"}
 
         for idx, frame_idx in enumerate(frames_to_process):
+            # Check for cancellation
+            if cancel_check and cancel_check():
+                if log_fn:
+                    log_fn("SAM3 segmentation cancelled by user")
+                raise CancelledException("SAM3 segmentation cancelled")
+            
             if frame_idx >= len(images):
                 continue
 
@@ -4004,7 +4084,7 @@ class BambiProcessor:
         if progress_fn:
             progress_fn(100)
 
-    def run_sam3_georeference(self, config: Dict[str, Any], progress_fn=None, log_fn=None):
+    def run_sam3_georeference(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Geo-reference SAM3 segmentation masks.
 
         Converts pixel polygon coordinates to world coordinates using the same
@@ -4105,6 +4185,12 @@ class BambiProcessor:
             failed_count = 0
 
             for idx, frame_result in enumerate(pixel_results):
+                # Check for cancellation
+                if cancel_check and cancel_check():
+                    if log_fn:
+                        log_fn("SAM3 geo-referencing cancelled by user")
+                    raise CancelledException("SAM3 geo-referencing cancelled")
+                
                 frame_idx = frame_result['frame_idx']
 
                 if frame_idx >= len(poses["images"]):
