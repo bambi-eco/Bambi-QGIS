@@ -55,9 +55,11 @@ EPSG_TO_PROJ4 = {
     "EPSG:32634": "+proj=utm +zone=34 +datum=WGS84 +units=m +no_defs",
 }
 
+
 def get_proj4_for_crs(crs_str: str) -> str:
     """Get PROJ4 string for a CRS, with fallback to the original string."""
     return EPSG_TO_PROJ4.get(crs_str, crs_str)
+
 
 # BEV ATOM service
 BEV_ATOM_SERVICE = "https://data.bev.gv.at/geonetwork/srv/atom/describe/service"
@@ -114,7 +116,7 @@ class BoundingBox:
     def from_airdata_csv(cls, csv_path: str, padding_meters: float = 0) -> Optional['BoundingBox']:
         """
         Create bounding box from AirData CSV file by finding min/max GPS positions.
-        
+
         :param csv_path: Path to the AirData CSV file
         :param padding_meters: Padding in meters to add around the bounding box
         :return: BoundingBox or None if no GPS data found
@@ -122,30 +124,30 @@ class BoundingBox:
         try:
             lats = []
             lons = []
-            
+
             with open(csv_path, 'r', encoding='utf-8') as f:
                 reader = csv.DictReader(f)
-                
+
                 # Try to find latitude/longitude columns (AirData uses various naming)
                 lat_col = None
                 lon_col = None
-                
+
                 # Check column names
                 fieldnames = reader.fieldnames
                 if fieldnames is None:
                     return None
-                    
+
                 for col in fieldnames:
                     col_lower = col.lower().strip()
                     if lat_col is None and any(x in col_lower for x in ['latitude', 'lat']):
                         lat_col = col
                     if lon_col is None and any(x in col_lower for x in ['longitude', 'lon', 'lng']):
                         lon_col = col
-                
+
                 if lat_col is None or lon_col is None:
                     logger.error(f"Could not find latitude/longitude columns in CSV. Columns: {fieldnames}")
                     return None
-                
+
                 for row in reader:
                     try:
                         lat = float(row[lat_col])
@@ -156,20 +158,20 @@ class BoundingBox:
                             lons.append(lon)
                     except (ValueError, KeyError):
                         continue
-            
+
             if not lats or not lons:
                 logger.error("No valid GPS coordinates found in CSV")
                 return None
-            
+
             min_lat = min(lats)
             max_lat = max(lats)
             min_lon = min(lons)
             max_lon = max(lons)
-            
+
             logger.info(f"Found GPS bounds: lat [{min_lat:.6f}, {max_lat:.6f}], lon [{min_lon:.6f}, {max_lon:.6f}]")
-            
+
             return cls.from_points(min_lat, min_lon, max_lat, max_lon, padding_meters)
-            
+
         except Exception as e:
             logger.error(f"Error reading AirData CSV: {e}")
             return None
@@ -180,11 +182,11 @@ class BoundingBox:
             from pyproj import Transformer, CRS as PyprojCRS
         except ImportError:
             raise ImportError("pyproj is required. Install with: pip install pyproj")
-        
+
         # Use PROJ4 strings to avoid PROJ database version conflicts
         src_proj4 = get_proj4_for_crs(WGS84_CRS)
         dst_proj4 = get_proj4_for_crs(target_crs)
-        
+
         transformer = Transformer.from_crs(
             PyprojCRS.from_proj4(src_proj4),
             PyprojCRS.from_proj4(dst_proj4),
@@ -286,7 +288,7 @@ class BEVTileCalculator:
 class BEVDownloader:
     """Handles downloading and caching of BEV DEM tiles."""
 
-    def __init__(self, cache_dir: Path = DEFAULT_CACHE_DIR, 
+    def __init__(self, cache_dir: Path = DEFAULT_CACHE_DIR,
                  log_callback: Optional[Callable[[str], None]] = None,
                  progress_callback: Optional[Callable[[int], None]] = None):
         self.cache_dir = Path(cache_dir)
@@ -295,7 +297,7 @@ class BEVDownloader:
         self.log_callback = log_callback
         self.progress_callback = progress_callback
         self._cancelled = False
-        
+
         try:
             import requests
             self.session = requests.Session()
@@ -324,15 +326,24 @@ class BEVDownloader:
         """Get the cache path for a tile."""
         return self.cache_dir / f"{tile_name}.tif"
 
-    def download_tile(self, tile_name: str, force: bool = False) -> Optional[Path]:
-        """Download a single tile."""
+    def download_tile(self, tile_name: str, force: bool = False,
+                      tile_progress_callback: Optional[Callable[[int], None]] = None) -> Optional[Path]:
+        """Download a single tile.
+
+        :param tile_name: Name of the tile to download
+        :param force: If True, re-download even if cached
+        :param tile_progress_callback: Optional callback for reporting progress (0-100) during this tile's download
+        :return: Path to the downloaded tile, or None if failed
+        """
         if self._cancelled:
             return None
-            
+
         cache_path = self._get_cache_path(tile_name)
 
         if cache_path.exists() and not force:
             self._log(f"Using cached: {tile_name}")
+            if tile_progress_callback:
+                tile_progress_callback(100)
             return cache_path
 
         urls = self.tile_calculator.get_download_urls(tile_name)
@@ -340,7 +351,7 @@ class BEVDownloader:
         for url in urls:
             if self._cancelled:
                 return None
-                
+
             self._log(f"Downloading: {tile_name}")
             logger.debug(f"  URL: {url}")
 
@@ -354,8 +365,12 @@ class BEVDownloader:
                 response.raise_for_status()
 
                 total_size = int(response.headers.get('content-length', 0))
+                if total_size > 0:
+                    size_mb = total_size / 1024 / 1024
+                    self._log(f"  Size: {size_mb:.1f} MB")
 
                 downloaded = 0
+                last_reported_percent = -1
                 with open(cache_path, 'wb') as f:
                     for chunk in response.iter_content(chunk_size=1024 * 1024):
                         if self._cancelled:
@@ -367,10 +382,17 @@ class BEVDownloader:
                         downloaded += len(chunk)
                         if total_size > 0:
                             percent = int((downloaded / total_size) * 100)
-                            logger.debug(f"  Progress: {percent}%")
+                            # Only report progress when it changes to avoid excessive updates
+                            if percent != last_reported_percent:
+                                logger.debug(f"  Progress: {percent}%")
+                                if tile_progress_callback:
+                                    tile_progress_callback(percent)
+                                last_reported_percent = percent
 
                 size_mb = cache_path.stat().st_size / 1024 / 1024
                 self._log(f"Downloaded: {tile_name} ({size_mb:.1f} MB)")
+                if tile_progress_callback:
+                    tile_progress_callback(100)
                 return cache_path
 
             except Exception as e:
@@ -389,12 +411,26 @@ class BEVDownloader:
 
         downloaded_tiles = []
         total = len(tile_names)
-        
+
         for i, tile_name in enumerate(tile_names):
             if self._cancelled:
                 break
-            self._progress(int((i / total) * 50))  # 0-50% for downloads
-            tile_path = self.download_tile(tile_name, force=force)
+
+            # Create a callback that maps tile-level progress (0-100) to overall progress
+            # The download phase uses 0-50% of overall progress
+            # Each tile gets an equal slice: tile i uses [i/total * 50, (i+1)/total * 50]
+            def make_tile_progress_callback(tile_index: int, num_tiles: int) -> Callable[[int], None]:
+                def callback(tile_percent: int):
+                    # Map tile progress to overall progress
+                    base_progress = (tile_index / num_tiles) * 50
+                    tile_contribution = (tile_percent / 100) * (50 / num_tiles)
+                    overall_percent = int(base_progress + tile_contribution)
+                    self._progress(overall_percent)
+
+                return callback
+
+            tile_progress_cb = make_tile_progress_callback(i, total)
+            tile_path = self.download_tile(tile_name, force=force, tile_progress_callback=tile_progress_cb)
             if tile_path:
                 downloaded_tiles.append(tile_path)
 
@@ -456,7 +492,7 @@ class DEMProcessor:
             for f in input_files:
                 src = rasterio.open(f)
                 src_files.append(src)
-            
+
             # Use PROJ4 string to avoid PROJ database version conflicts in QGIS
             # The BEV tiles are in EPSG:3035 but files don't encode it correctly
             src_crs = CRS.from_proj4(BEV_CRS_PROJ4)
@@ -543,7 +579,7 @@ class DEMProcessor:
             # Convert target CRS to PROJ4 to avoid PROJ database issues
             target_proj4 = get_proj4_for_crs(target_crs)
             dst_crs = CRS.from_proj4(target_proj4)
-            
+
             with rasterio.open(input_file) as src:
                 # Check if already in target CRS (compare PROJ4 representations)
                 src_proj4 = src.crs.to_proj4() if src.crs else None
@@ -611,7 +647,7 @@ class GLTFMeshGenerator:
                       metadata_path: Optional[Path] = None,
                       source_crs: Optional[str] = None) -> bool:
         """Generate a GLTF mesh from a GeoTIFF DEM.
-        
+
         :param geotiff_path: Path to the input GeoTIFF
         :param output_path: Path for the output GLB file
         :param metadata_path: Optional path for metadata JSON
@@ -658,18 +694,18 @@ class GLTFMeshGenerator:
                 # Use PROJ4 strings to avoid PROJ database version conflicts
                 # Try multiple methods to get a valid source PROJ4 string
                 src_proj4 = None
-                
+
                 # Method 1: Try to get PROJ4 from rasterio CRS
                 if src.crs is not None:
                     try:
                         src_proj4 = src.crs.to_proj4()
                     except:
                         pass
-                
+
                 # Method 2: If that failed or returned None, try our mapping with file's CRS string
                 if not src_proj4 and crs:
                     src_proj4 = get_proj4_for_crs(crs)
-                
+
                 # Method 3: Try to extract EPSG code and map it
                 if not src_proj4 and src.crs is not None:
                     try:
@@ -678,19 +714,19 @@ class GLTFMeshGenerator:
                             src_proj4 = get_proj4_for_crs(f"EPSG:{epsg}")
                     except:
                         pass
-                
+
                 # Method 4: Use the passed source_crs parameter if available
                 if not src_proj4 and source_crs:
                     self._log(f"Using provided source CRS: {source_crs}")
                     src_proj4 = get_proj4_for_crs(source_crs)
-                
+
                 # Method 5: Default to UTM 33N if all else fails (common for Austria)
                 if not src_proj4:
                     self._log("Warning: Could not determine source CRS, assuming EPSG:32633")
                     src_proj4 = get_proj4_for_crs("EPSG:32633")
-                
+
                 dst_proj4 = get_proj4_for_crs(WGS84_CRS)
-                
+
                 transformer = Transformer.from_crs(
                     PyprojCRS.from_proj4(src_proj4),
                     PyprojCRS.from_proj4(dst_proj4),
@@ -737,7 +773,8 @@ class GLTFMeshGenerator:
             for i, row in enumerate(rows[:-1]):
                 for j, col in enumerate(cols[:-1]):
                     r0, c0 = row, col
-                    r1, c1 = rows[i + 1] if i + 1 < len(rows) else row + step, cols[j + 1] if j + 1 < len(cols) else col + step
+                    r1, c1 = rows[i + 1] if i + 1 < len(rows) else row + step, cols[j + 1] if j + 1 < len(
+                        cols) else col + step
 
                     if r1 >= height:
                         r1 = height - 1
@@ -765,7 +802,7 @@ class GLTFMeshGenerator:
                 # Use the source_crs parameter as the primary CRS (this is the output CRS we reprojected to)
                 # Fall back to file CRS or default only if source_crs wasn't provided
                 crs_string = source_crs if source_crs else (crs if crs else "EPSG:32633")
-                
+
                 # Convert Affine transform to list format [a, b, c, d, e, f, 0, 0, 1]
                 transform_list = [
                     transform.a,  # scale x
@@ -778,7 +815,7 @@ class GLTFMeshGenerator:
                     0.0,
                     1.0
                 ]
-                
+
                 # origin is in the projected coordinate system (e.g., EPSG:32633)
                 # origin_x and origin_y come from bounds which are in the file's CRS
                 metadata = {
@@ -891,11 +928,11 @@ class GLTFMeshGenerator:
 
 class DEMDownloadWorker(QObject):
     """Worker for downloading DEM in a background thread."""
-    
+
     finished = pyqtSignal(bool, str)  # success, message/path
     progress = pyqtSignal(int)  # percentage
     log = pyqtSignal(str)  # log message
-    
+
     def __init__(self, csv_path: str, output_folder: str, padding: float = 30.0,
                  output_crs: str = DEFAULT_OUTPUT_CRS, simplify_factor: int = 2):
         super().__init__()
@@ -921,105 +958,105 @@ class DEMDownloadWorker(QObject):
         try:
             self.log.emit("Starting DEM download for Austria...")
             self.progress.emit(5)
-            
+
             # Parse CSV to get bounding box
             self.log.emit(f"Reading GPS coordinates from: {os.path.basename(self.csv_path)}")
             bbox = BoundingBox.from_airdata_csv(self.csv_path, self.padding)
-            
+
             if bbox is None:
                 self.finished.emit(False, "Failed to extract GPS coordinates from CSV")
                 return
-            
+
             self.log.emit(f"Bounding box (with {self.padding}m padding):")
             self.log.emit(f"  SW: {bbox.min_lat:.6f}, {bbox.min_lon:.6f}")
             self.log.emit(f"  NE: {bbox.max_lat:.6f}, {bbox.max_lon:.6f}")
             self.progress.emit(10)
-            
+
             # Initialize components
             self._downloader = BEVDownloader(
                 log_callback=lambda msg: self.log.emit(msg),
                 progress_callback=lambda p: self.progress.emit(10 + int(p * 0.4))  # 10-50%
             )
-            
+
             self._processor = DEMProcessor(
                 output_crs=self.output_crs,
                 log_callback=lambda msg: self.log.emit(msg),
                 progress_callback=lambda p: self.progress.emit(50 + int(p * 0.3))  # 50-80%
             )
-            
+
             mesh_generator = GLTFMeshGenerator(
                 simplify_factor=self.simplify_factor,
                 log_callback=lambda msg: self.log.emit(msg),
                 progress_callback=lambda p: self.progress.emit(80 + int(p * 0.2))  # 80-100%
             )
-            
+
             # Download tiles
             self.log.emit("Downloading required DEM tiles...")
             tile_paths = self._downloader.download_tiles_for_bbox(bbox)
-            
+
             if self._cancelled:
                 self.finished.emit(False, "Download cancelled")
                 return
-            
+
             if not tile_paths:
                 self.finished.emit(False, "No tiles downloaded - area may be outside Austria")
                 return
-            
+
             # Setup output path
             output_base = Path(self.output_folder) / "dem"
             output_base.parent.mkdir(parents=True, exist_ok=True)
-            
+
             # Process in temporary directory
             with tempfile.TemporaryDirectory() as temp_dir:
                 temp_path = Path(temp_dir)
-                
+
                 # Merge and clip
                 self.log.emit("Merging and clipping tiles...")
                 clipped_file = temp_path / "clipped.tif"
                 result = self._processor.merge_and_clip(tile_paths, clipped_file, bbox)
-                
+
                 if self._cancelled:
                     self.finished.emit(False, "Processing cancelled")
                     return
-                
+
                 if not result:
                     self.finished.emit(False, "Failed to merge and clip tiles")
                     return
-                
+
                 # Reproject
                 self.log.emit("Reprojecting to output CRS...")
                 reprojected_file = temp_path / "reprojected.tif"
                 result = self._processor.reproject_geotiff(clipped_file, reprojected_file)
-                
+
                 if self._cancelled:
                     self.finished.emit(False, "Processing cancelled")
                     return
-                
+
                 if not result:
                     self.finished.emit(False, "Failed to reproject GeoTIFF")
                     return
-                
+
                 # Copy final GeoTIFF
                 final_geotiff = output_base.with_suffix('.tif')
                 import shutil
                 shutil.copy2(reprojected_file, final_geotiff)
                 self.log.emit(f"Created output GeoTIFF: {final_geotiff}")
-                
+
                 # Generate mesh
                 self.log.emit("Generating GLTF mesh...")
                 mesh_file = output_base.with_suffix('.glb')
                 metadata_file = output_base.with_suffix('.json')
-                
+
                 # Pass the output_crs so mesh generator knows the CRS if it can't read it from file
                 success = mesh_generator.generate_mesh(
-                    final_geotiff, mesh_file, metadata_file, 
+                    final_geotiff, mesh_file, metadata_file,
                     source_crs=self.output_crs
                 )
-                
+
                 if not success:
                     self.finished.emit(False, "Failed to generate mesh")
                     return
-            
+
             self.progress.emit(100)
             self.log.emit("=" * 50)
             self.log.emit("DEM download and processing complete!")
@@ -1027,9 +1064,9 @@ class DEMDownloadWorker(QObject):
             self.log.emit(f"  Mesh:     {mesh_file}")
             self.log.emit(f"  Metadata: {metadata_file}")
             self.log.emit("=" * 50)
-            
+
             self.finished.emit(True, str(mesh_file))
-            
+
         except Exception as e:
             import traceback
             error_msg = f"Error during DEM download: {str(e)}"
@@ -1040,16 +1077,16 @@ class DEMDownloadWorker(QObject):
 
 class GeoTIFFConversionWorker(QObject):
     """Worker for converting an arbitrary GeoTIFF to GLTF mesh in a background thread."""
-    
+
     finished = pyqtSignal(bool, str)  # success, message/path
     progress = pyqtSignal(int)  # percentage
     log = pyqtSignal(str)  # log message
-    
+
     def __init__(self, geotiff_path: str, output_folder: str,
                  output_crs: Optional[str] = None, simplify_factor: int = 2):
         """
         Initialize the GeoTIFF conversion worker.
-        
+
         :param geotiff_path: Path to the input GeoTIFF file
         :param output_folder: Folder where output files will be saved
         :param output_crs: Optional target CRS (e.g., "EPSG:32633"). If None, keeps original CRS.
@@ -1073,33 +1110,33 @@ class GeoTIFFConversionWorker(QObject):
         """Execute the GeoTIFF conversion process."""
         try:
             import shutil
-            
+
             self.log.emit("Starting GeoTIFF to mesh conversion...")
             self.progress.emit(5)
-            
+
             input_path = Path(self.geotiff_path)
             if not input_path.exists():
                 self.finished.emit(False, f"Input file not found: {self.geotiff_path}")
                 return
-            
+
             # Determine output base name from input file
             output_base = Path(self.output_folder) / input_path.stem
             output_base.parent.mkdir(parents=True, exist_ok=True)
-            
+
             self.log.emit(f"Input GeoTIFF: {input_path.name}")
             self.progress.emit(10)
-            
+
             # Check if reprojection is needed
             needs_reprojection = False
             source_crs_string = None
-            
+
             try:
                 import rasterio
                 with rasterio.open(input_path) as src:
                     if src.crs:
                         source_crs_string = str(src.crs)
                         self.log.emit(f"Source CRS: {source_crs_string}")
-                        
+
                         if self.output_crs and self.output_crs != source_crs_string:
                             # Check if EPSG codes match
                             try:
@@ -1115,38 +1152,38 @@ class GeoTIFFConversionWorker(QObject):
                 return
             except Exception as e:
                 self.log.emit(f"Warning: Could not read source CRS: {e}")
-            
+
             self.progress.emit(20)
-            
+
             # Process in temporary directory if reprojection needed
             if needs_reprojection and self.output_crs:
                 self.log.emit(f"Reprojecting to {self.output_crs}...")
-                
+
                 self._processor = DEMProcessor(
                     output_crs=self.output_crs,
                     log_callback=lambda msg: self.log.emit(msg),
                     progress_callback=lambda p: self.progress.emit(20 + int(p * 0.3))  # 20-50%
                 )
-                
+
                 with tempfile.TemporaryDirectory() as temp_dir:
                     temp_path = Path(temp_dir)
                     reprojected_file = temp_path / "reprojected.tif"
-                    
+
                     result = self._processor.reproject_geotiff(input_path, reprojected_file)
-                    
+
                     if self._cancelled:
                         self.finished.emit(False, "Conversion cancelled")
                         return
-                    
+
                     if not result:
                         self.finished.emit(False, "Failed to reproject GeoTIFF")
                         return
-                    
+
                     # Copy reprojected file to output
                     final_geotiff = output_base.with_suffix('.tif')
                     shutil.copy2(reprojected_file, final_geotiff)
                     self.log.emit(f"Created reprojected GeoTIFF: {final_geotiff}")
-                    
+
                     geotiff_for_mesh = final_geotiff
                     mesh_crs = self.output_crs
             else:
@@ -1154,13 +1191,13 @@ class GeoTIFFConversionWorker(QObject):
                 geotiff_for_mesh = input_path
                 mesh_crs = self.output_crs or source_crs_string
                 self.log.emit("No reprojection needed, using original GeoTIFF")
-            
+
             self.progress.emit(50)
-            
+
             if self._cancelled:
                 self.finished.emit(False, "Conversion cancelled")
                 return
-            
+
             # Generate mesh
             self.log.emit("Generating GLTF mesh...")
             mesh_generator = GLTFMeshGenerator(
@@ -1168,28 +1205,28 @@ class GeoTIFFConversionWorker(QObject):
                 log_callback=lambda msg: self.log.emit(msg),
                 progress_callback=lambda p: self.progress.emit(50 + int(p * 0.5))  # 50-100%
             )
-            
+
             mesh_file = output_base.with_suffix('.glb')
             metadata_file = output_base.with_suffix('.json')
-            
+
             success = mesh_generator.generate_mesh(
                 geotiff_for_mesh, mesh_file, metadata_file,
                 source_crs=mesh_crs
             )
-            
+
             if not success:
                 self.finished.emit(False, "Failed to generate mesh")
                 return
-            
+
             self.progress.emit(100)
             self.log.emit("=" * 50)
             self.log.emit("GeoTIFF conversion complete!")
             self.log.emit(f"  Mesh:     {mesh_file}")
             self.log.emit(f"  Metadata: {metadata_file}")
             self.log.emit("=" * 50)
-            
+
             self.finished.emit(True, str(mesh_file))
-            
+
         except Exception as e:
             import traceback
             error_msg = f"Error during GeoTIFF conversion: {str(e)}"

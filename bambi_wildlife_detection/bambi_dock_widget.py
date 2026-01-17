@@ -480,7 +480,9 @@ class BambiDockWidget(QDockWidget):
         self.dem_download_btn = QPushButton("Download DEM (Austria)")
         self.dem_download_btn.setToolTip(
             "Download DEM from Austrian BEV service based on AirData CSV GPS coordinates.\n"
-            "Requires AirData CSV to be selected. Uses Austria-wide 1m ALS-DTM dataset."
+            "Requires AirData CSV to be selected. Uses Austria-wide 1m ALS-DTM dataset.\n"
+            "Note, that this may take some time, since individual tiles are 10GB+ and it may be necessary to download multiple map tiles.\n"
+            "Downloaded to \"<user profile>/.cache/austria_dem\""
         )
         self.dem_download_btn.clicked.connect(self.download_austria_dem)
         download_row.addWidget(self.dem_download_btn)
