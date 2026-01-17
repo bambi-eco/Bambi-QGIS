@@ -4599,8 +4599,8 @@ class BambiDockWidget(QDockWidget):
             self.update_status("add_ortho", "🟢 Added")
 
             # Zoom to layer extent
-            self.iface.mapCanvas().setExtent(layer.extent())
-            self.iface.mapCanvas().refresh()
+            # self.iface.mapCanvas().setExtent(layer.extent())
+            # self.iface.mapCanvas().refresh()
 
         except Exception as e:
             self.log(f"Error adding orthomosaic: {str(e)}")
