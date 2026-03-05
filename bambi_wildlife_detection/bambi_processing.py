@@ -331,18 +331,13 @@ class BambiProcessor:
         return target_folder, rel_transformer, ad_origin
 
     def extract_thermal_frames(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
-        """Extract frames from thermal drone videos.
+        """Extract frames from thermal drone videos or photos.
 
         :param config: Configuration dictionary
         :param progress_fn: Progress callback function
         :param log_fn: Logging callback function
         :param cancel_check: Optional function that returns True if cancelled
         """
-        # Import bambi modules
-        from bambi.video.calibrated_video_frame_accessor import CalibratedVideoFrameAccessor
-        from bambi.webgl.timed_pose_extractor import TimedPoseExtractor
-        from bambi.domain.camera import Camera
-
         if log_fn:
             log_fn("=" * 50)
             log_fn("Extracting THERMAL frames...")
@@ -355,46 +350,78 @@ class BambiProcessor:
         target_folder, rel_transformer, ad_origin = self._get_extraction_prerequisites(config)
         airdata_path = config["airdata_path"]
 
-        thermal_video_paths = config["thermal_video_paths"]
-        thermal_srt_paths = config["thermal_srt_paths"]
-
         frames_folder_t = os.path.join(target_folder, "frames_t")
         os.makedirs(frames_folder_t, exist_ok=True)
+        target_poses_t = os.path.join(target_folder, "poses_t.json")
 
-        if config.get("thermal_calibration_data") is not None:
-            calibration_res = config["thermal_calibration_data"]
-        else:
-            with open(config["thermal_calibration_path"]) as f:
-                calibration_res = json.load(f)
+        if config.get("input_mode") == "photo":
+            from bambi.webgl.photo_pose_extractor import PhotoPoseExtractor
 
-        accessor = CalibratedVideoFrameAccessor(calibration_res)
-        extractor = TimedPoseExtractor(
-            accessor,
-            rel_transformer=rel_transformer,
-            camera_name=Camera.from_string("T")
-        )
+            calibration_res = config.get("thermal_photo_calibration_data")
+            if calibration_res is None:
+                with open(config["thermal_photo_calibration_path"]) as f:
+                    calibration_res = json.load(f)
 
-        # Count frames for progress
-        total_frames = count_srt_frames(thermal_srt_paths)
+            extractor = PhotoPoseExtractor(
+                rel_transformer=rel_transformer,
+                calibration_res=calibration_res,
+            )
+            if log_fn:
+                log_fn(f"Photo mode: processing images in {config['thermal_photo_dir']}")
 
-        if log_fn:
-            log_fn(f"Processing {total_frames} frames...")
-
-        # Wrap extraction with progress reporting
-        with patch_frame_extraction_progress(progress_fn, total_frames, log_fn, cancel_check=cancel_check):
             extractor.extract(
-                frames_folder_t, airdata_path, thermal_video_paths, thermal_srt_paths,
-                origin=ad_origin, include_gps=True
+                photo_dir=config["thermal_photo_dir"],
+                airdata_csv=airdata_path,
+                output_path=target_poses_t,
+                output_image_dir=frames_folder_t,
+                photo_timezone_offset_hours=config.get("photo_timezone_offset", 1.0),
+                origin=ad_origin,
+            )
+        else:
+            from bambi.video.calibrated_video_frame_accessor import CalibratedVideoFrameAccessor
+            from bambi.webgl.timed_pose_extractor import TimedPoseExtractor
+            from bambi.domain.camera import Camera
+
+            thermal_video_paths = config["thermal_video_paths"]
+            thermal_srt_paths = config["thermal_srt_paths"]
+
+            calibration_res = config.get("thermal_calibration_data")
+            if calibration_res is None:
+                with open(config["thermal_calibration_path"]) as f:
+                    calibration_res = json.load(f)
+
+            accessor = CalibratedVideoFrameAccessor(calibration_res)
+            extractor = TimedPoseExtractor(
+                accessor,
+                rel_transformer=rel_transformer,
+                camera_name=Camera.from_string("T")
             )
 
-        # Move poses.json and masks to target folder with thermal suffix
-        if os.path.exists(os.path.join(frames_folder_t, "poses.json")):
-            target_poses_t = os.path.join(target_folder, "poses_t.json")
-            if os.path.exists(target_poses_t):
-                os.remove(target_poses_t)
-            os.rename(os.path.join(frames_folder_t, "poses.json"), target_poses_t)
+            total_frames = count_srt_frames(thermal_srt_paths)
+            if log_fn:
+                log_fn(f"Processing {total_frames} frames...")
 
-            # Count frames
+            with patch_frame_extraction_progress(progress_fn, total_frames, log_fn, cancel_check=cancel_check):
+                extractor.extract(
+                    frames_folder_t, airdata_path, thermal_video_paths, thermal_srt_paths,
+                    origin=ad_origin, include_gps=True
+                )
+
+            # Move poses.json written into frames_folder to target folder with suffix
+            poses_in_frames = os.path.join(frames_folder_t, "poses.json")
+            if os.path.exists(poses_in_frames):
+                if os.path.exists(target_poses_t):
+                    os.remove(target_poses_t)
+                os.rename(poses_in_frames, target_poses_t)
+
+            if os.path.exists(os.path.join(frames_folder_t, "mask_T.png")):
+                target_mask_t = os.path.join(target_folder, "mask_T.png")
+                if os.path.exists(target_mask_t):
+                    os.remove(target_mask_t)
+                os.rename(os.path.join(frames_folder_t, "mask_T.png"), target_mask_t)
+
+        # Log frame count from poses file
+        if os.path.exists(target_poses_t):
             with open(target_poses_t, 'r') as f:
                 poses_t = json.load(f)
             thermal_frames = len(poses_t.get("images", []))
@@ -402,25 +429,14 @@ class BambiProcessor:
                 log_fn(f"Thermal extraction complete: {thermal_frames} frames")
                 log_fn(f"Frames saved to: frames_t/")
 
-        if os.path.exists(os.path.join(frames_folder_t, "mask_T.png")):
-            target_mask_t = os.path.join(target_folder, "mask_T.png")
-            if os.path.exists(target_mask_t):
-                os.remove(target_mask_t)
-            os.rename(os.path.join(frames_folder_t, "mask_T.png"), target_mask_t)
-
     def extract_rgb_frames(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
-        """Extract frames from RGB drone videos.
+        """Extract frames from RGB drone videos or photos.
 
         :param config: Configuration dictionary
         :param progress_fn: Progress callback function
         :param log_fn: Logging callback function
         :param cancel_check: Optional function that returns True if cancelled
         """
-        # Import bambi modules
-        from bambi.video.calibrated_video_frame_accessor import CalibratedVideoFrameAccessor
-        from bambi.webgl.timed_pose_extractor import TimedPoseExtractor
-        from bambi.domain.camera import Camera
-
         if log_fn:
             log_fn("=" * 50)
             log_fn("Extracting RGB frames...")
@@ -433,58 +449,84 @@ class BambiProcessor:
         target_folder, rel_transformer, ad_origin = self._get_extraction_prerequisites(config)
         airdata_path = config["airdata_path"]
 
-        rgb_video_paths = config["rgb_video_paths"]
-        rgb_srt_paths = config["rgb_srt_paths"]
-
         frames_folder_w = os.path.join(target_folder, "frames_w")
         os.makedirs(frames_folder_w, exist_ok=True)
+        target_poses_w = os.path.join(target_folder, "poses_w.json")
 
-        if config.get("rgb_calibration_data") is not None:
-            calibration_res = config["rgb_calibration_data"]
-        else:
-            with open(config["rgb_calibration_path"]) as f:
-                calibration_res = json.load(f)
+        if config.get("input_mode") == "photo":
+            from bambi.webgl.photo_pose_extractor import PhotoPoseExtractor
 
-        accessor = CalibratedVideoFrameAccessor(calibration_res)
-        extractor = TimedPoseExtractor(
-            accessor,
-            rel_transformer=rel_transformer,
-            camera_name=Camera.from_string("W")
-        )
+            calibration_res = config.get("rgb_photo_calibration_data")
+            if calibration_res is None:
+                with open(config["rgb_photo_calibration_path"]) as f:
+                    calibration_res = json.load(f)
 
-        # Count frames for progress
-        total_frames = count_srt_frames(rgb_srt_paths)
+            extractor = PhotoPoseExtractor(
+                rel_transformer=rel_transformer,
+                calibration_res=calibration_res,
+            )
+            if log_fn:
+                log_fn(f"Photo mode: processing images in {config['rgb_photo_dir']}")
 
-        if log_fn:
-            log_fn(f"Processing {total_frames} frames...")
-
-        # Wrap extraction with progress reporting
-        with patch_frame_extraction_progress(progress_fn, total_frames, log_fn, cancel_check=cancel_check):
             extractor.extract(
-                frames_folder_w, airdata_path, rgb_video_paths, rgb_srt_paths,
-                origin=ad_origin, include_gps=True
+                photo_dir=config["rgb_photo_dir"],
+                airdata_csv=airdata_path,
+                output_path=target_poses_w,
+                output_image_dir=frames_folder_w,
+                photo_timezone_offset_hours=config.get("photo_timezone_offset", 1.0),
+                origin=ad_origin,
+            )
+        else:
+            from bambi.video.calibrated_video_frame_accessor import CalibratedVideoFrameAccessor
+            from bambi.webgl.timed_pose_extractor import TimedPoseExtractor
+            from bambi.domain.camera import Camera
+
+            rgb_video_paths = config["rgb_video_paths"]
+            rgb_srt_paths = config["rgb_srt_paths"]
+
+            calibration_res = config.get("rgb_calibration_data")
+            if calibration_res is None:
+                with open(config["rgb_calibration_path"]) as f:
+                    calibration_res = json.load(f)
+
+            accessor = CalibratedVideoFrameAccessor(calibration_res)
+            extractor = TimedPoseExtractor(
+                accessor,
+                rel_transformer=rel_transformer,
+                camera_name=Camera.from_string("W")
             )
 
-        # Move poses.json and masks to target folder with RGB suffix
-        if os.path.exists(os.path.join(frames_folder_w, "poses.json")):
-            target_poses_w = os.path.join(target_folder, "poses_w.json")
-            if os.path.exists(target_poses_w):
-                os.remove(target_poses_w)
-            os.rename(os.path.join(frames_folder_w, "poses.json"), target_poses_w)
+            total_frames = count_srt_frames(rgb_srt_paths)
+            if log_fn:
+                log_fn(f"Processing {total_frames} frames...")
 
-            # Count frames
+            with patch_frame_extraction_progress(progress_fn, total_frames, log_fn, cancel_check=cancel_check):
+                extractor.extract(
+                    frames_folder_w, airdata_path, rgb_video_paths, rgb_srt_paths,
+                    origin=ad_origin, include_gps=True
+                )
+
+            # Move poses.json written into frames_folder to target folder with suffix
+            poses_in_frames = os.path.join(frames_folder_w, "poses.json")
+            if os.path.exists(poses_in_frames):
+                if os.path.exists(target_poses_w):
+                    os.remove(target_poses_w)
+                os.rename(poses_in_frames, target_poses_w)
+
+            if os.path.exists(os.path.join(frames_folder_w, "mask_W.png")):
+                target_mask_w = os.path.join(target_folder, "mask_W.png")
+                if os.path.exists(target_mask_w):
+                    os.remove(target_mask_w)
+                os.rename(os.path.join(frames_folder_w, "mask_W.png"), target_mask_w)
+
+        # Log frame count from poses file
+        if os.path.exists(target_poses_w):
             with open(target_poses_w, 'r') as f:
                 poses_w = json.load(f)
             rgb_frames = len(poses_w.get("images", []))
             if log_fn:
                 log_fn(f"RGB extraction complete: {rgb_frames} frames")
                 log_fn(f"Frames saved to: frames_w/")
-
-        if os.path.exists(os.path.join(frames_folder_w, "mask_W.png")):
-            target_mask_w = os.path.join(target_folder, "mask_W.png")
-            if os.path.exists(target_mask_w):
-                os.remove(target_mask_w)
-            os.rename(os.path.join(frames_folder_w, "mask_W.png"), target_mask_w)
 
     def run_flight_route(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Generate a flight route polyline layer from camera positions.
@@ -956,7 +998,9 @@ class BambiProcessor:
                 image_metadata = poses["images"][frame_idx]
 
                 # Get camera for this frame
-                fovy = image_metadata.get("fovy", [50])[0]
+                fovy = image_metadata.get("fovy", [50])
+                if isinstance(fovy, list):
+                    fovy = fovy[0]
                 position = Vector3(image_metadata["location"])
                 rot = image_metadata["rotation"]
                 rotation_eulers = (Vector3(

@@ -314,28 +314,24 @@ class BambiDockWidget(QDockWidget):
         # =====================================================================
         # MAIN TAB 1: INPUT
         # =====================================================================
-        info_tab = QWidget()
-        info_layout = QVBoxLayout(info_tab)
-        main_tabs.addTab(info_tab, "Info")
-        flight_info_group = QGroupBox("Video Recommendations")
-        flight_info_group_layout = QVBoxLayout(flight_info_group)
-
         # Thermal Video inputs
-        flight_info_label = QLabel(
-            "To ensure high-quality and consistent video recordings, configure your drone mission with stable flight parameters and a fixed camera setup. Plan the flight at a constant altitude between 30 m and 60 m above ground, depending on the terrain and desired coverage, and maintain a steady speed of 3–7 m/s throughout the mission. "
-            "Although the exact heading is not critical, the drone’s orientation should remain constant for the entire flight, and yaw rotations should be avoided. A practical approach is to configure each waypoint so that the drone faces north, ensuring a stable and repeatable camera perspective. "
-            "Set the gimbal pitch to −90° so the camera is pointing straight down (nadir). This provides a consistent top-down view and simplifies later processing of the video data. "
-            "Finally, start video recording at the first waypoint and stop recording at the last waypoint to capture the full survey area in one continuous sequence while avoiding unnecessary footage. "
-        )
-        flight_info_label.setWordWrap(True)
-        flight_info_label.setAlignment(Qt.AlignTop)
-        flight_info_label.setStyleSheet("color: black; font-size: 10px;")
-        flight_info_group_layout.addWidget(flight_info_label)
-        info_layout.addWidget(flight_info_group)
-
         input_tab = QWidget()
         input_layout = QVBoxLayout(input_tab)
         main_tabs.addTab(input_tab, "Input")
+
+        # --- Input mode toggle ---
+        self.video_mode_check = QCheckBox("Video Mode")
+        self.video_mode_check.setChecked(True)
+        self.video_mode_check.setToolTip(
+            "Checked: use video files + SRT files as input.\n"
+            "Unchecked: use a folder of still photos as input.")
+        input_layout.addWidget(self.video_mode_check)
+
+        # ── Video inputs container ─────────────────────────────────────────
+        self.video_inputs_widget = QWidget()
+        video_inputs_layout = QVBoxLayout(self.video_inputs_widget)
+        video_inputs_layout.setContentsMargins(0, 0, 0, 0)
+        video_inputs_layout.setSpacing(4)
 
         thermal_group = QGroupBox("Thermal Video Inputs")
         thermal_layout = QFormLayout(thermal_group)
@@ -384,7 +380,7 @@ class BambiDockWidget(QDockWidget):
             self._on_thermal_calib_preset_changed)
         thermal_layout.addRow("Calibration:", thermal_calib_container)
 
-        input_layout.addWidget(thermal_group)
+        video_inputs_layout.addWidget(thermal_group)
 
         # RGB Video inputs
         rgb_group = QGroupBox("RGB Video Inputs")
@@ -434,7 +430,133 @@ class BambiDockWidget(QDockWidget):
             self._on_rgb_calib_preset_changed)
         rgb_layout.addRow("Calibration:", rgb_calib_container)
 
-        input_layout.addWidget(rgb_group)
+        video_inputs_layout.addWidget(rgb_group)
+        input_layout.addWidget(self.video_inputs_widget)
+
+        # ── Photo inputs container ─────────────────────────────────────────
+        self.photo_inputs_widget = QWidget()
+        self.photo_inputs_widget.setVisible(False)
+        photo_inputs_layout = QVBoxLayout(self.photo_inputs_widget)
+        photo_inputs_layout.setContentsMargins(0, 0, 0, 0)
+        photo_inputs_layout.setSpacing(4)
+
+        # Thermal photo group
+        thermal_photo_group = QGroupBox("Thermal Photo Inputs")
+        thermal_photo_layout = QFormLayout(thermal_photo_group)
+
+        self.thermal_photo_dir_edit = QLineEdit()
+        self.thermal_photo_dir_edit.setPlaceholderText("Folder containing thermal photos")
+        thermal_photo_browse_btn = QPushButton("Browse...")
+        thermal_photo_browse_btn.clicked.connect(self.browse_thermal_photo_dir)
+        thermal_photo_dir_row = QHBoxLayout()
+        thermal_photo_dir_row.addWidget(self.thermal_photo_dir_edit)
+        thermal_photo_dir_row.addWidget(thermal_photo_browse_btn)
+        thermal_photo_layout.addRow("Photo Folder:", thermal_photo_dir_row)
+
+        thermal_photo_calib_container = QWidget()
+        thermal_photo_calib_vbox = QVBoxLayout(thermal_photo_calib_container)
+        thermal_photo_calib_vbox.setContentsMargins(0, 0, 0, 0)
+        thermal_photo_calib_vbox.setSpacing(2)
+        self.thermal_photo_calib_preset_combo = QComboBox()
+        self.thermal_photo_calib_preset_combo.addItem("Custom file...")
+        for name in THERMAL_CALIBRATIONS:
+            self.thermal_photo_calib_preset_combo.addItem(name)
+        thermal_photo_calib_vbox.addWidget(self.thermal_photo_calib_preset_combo)
+        self.thermal_photo_calib_file_row = QWidget()
+        thermal_photo_calib_file_layout = QHBoxLayout(self.thermal_photo_calib_file_row)
+        thermal_photo_calib_file_layout.setContentsMargins(0, 0, 0, 0)
+        self.thermal_photo_calibration_path_edit = QLineEdit()
+        self.thermal_photo_calibration_path_edit.setPlaceholderText("Path to T_calib.json")
+        thermal_photo_calib_browse_btn = QPushButton("Browse...")
+        thermal_photo_calib_browse_btn.clicked.connect(self.browse_thermal_photo_calibration)
+        thermal_photo_calib_file_layout.addWidget(self.thermal_photo_calibration_path_edit)
+        thermal_photo_calib_file_layout.addWidget(thermal_photo_calib_browse_btn)
+        thermal_photo_calib_vbox.addWidget(self.thermal_photo_calib_file_row)
+        self.thermal_photo_calib_preset_combo.currentIndexChanged.connect(
+            self._on_thermal_photo_calib_preset_changed)
+        thermal_photo_layout.addRow("Calibration:", thermal_photo_calib_container)
+        photo_inputs_layout.addWidget(thermal_photo_group)
+
+        # RGB photo group
+        rgb_photo_group = QGroupBox("RGB Photo Inputs")
+        rgb_photo_layout = QFormLayout(rgb_photo_group)
+
+        self.rgb_photo_dir_edit = QLineEdit()
+        self.rgb_photo_dir_edit.setPlaceholderText("Folder containing RGB photos")
+        rgb_photo_browse_btn = QPushButton("Browse...")
+        rgb_photo_browse_btn.clicked.connect(self.browse_rgb_photo_dir)
+        rgb_photo_dir_row = QHBoxLayout()
+        rgb_photo_dir_row.addWidget(self.rgb_photo_dir_edit)
+        rgb_photo_dir_row.addWidget(rgb_photo_browse_btn)
+        rgb_photo_layout.addRow("Photo Folder:", rgb_photo_dir_row)
+
+        rgb_photo_calib_container = QWidget()
+        rgb_photo_calib_vbox = QVBoxLayout(rgb_photo_calib_container)
+        rgb_photo_calib_vbox.setContentsMargins(0, 0, 0, 0)
+        rgb_photo_calib_vbox.setSpacing(2)
+        self.rgb_photo_calib_preset_combo = QComboBox()
+        self.rgb_photo_calib_preset_combo.addItem("Custom file...")
+        for name in RGB_CALIBRATIONS:
+            self.rgb_photo_calib_preset_combo.addItem(name)
+        rgb_photo_calib_vbox.addWidget(self.rgb_photo_calib_preset_combo)
+        self.rgb_photo_calib_file_row = QWidget()
+        rgb_photo_calib_file_layout = QHBoxLayout(self.rgb_photo_calib_file_row)
+        rgb_photo_calib_file_layout.setContentsMargins(0, 0, 0, 0)
+        self.rgb_photo_calibration_path_edit = QLineEdit()
+        self.rgb_photo_calibration_path_edit.setPlaceholderText("Path to W_calib.json")
+        rgb_photo_calib_browse_btn = QPushButton("Browse...")
+        rgb_photo_calib_browse_btn.clicked.connect(self.browse_rgb_photo_calibration)
+        rgb_photo_calib_file_layout.addWidget(self.rgb_photo_calibration_path_edit)
+        rgb_photo_calib_file_layout.addWidget(rgb_photo_calib_browse_btn)
+        rgb_photo_calib_vbox.addWidget(self.rgb_photo_calib_file_row)
+        self.rgb_photo_calib_preset_combo.currentIndexChanged.connect(
+            self._on_rgb_photo_calib_preset_changed)
+        rgb_photo_layout.addRow("Calibration:", rgb_photo_calib_container)
+        photo_inputs_layout.addWidget(rgb_photo_group)
+
+        # Photo settings
+        photo_settings_group = QGroupBox("Photo Settings")
+        photo_settings_layout = QFormLayout(photo_settings_group)
+
+        self.photo_timezone_combo = QComboBox()
+        self.photo_timezone_combo.setEditable(True)
+        self.photo_timezone_combo.setToolTip(
+            "Timezone of the camera clock. The current UTC offset is shown on the right.")
+        try:
+            from zoneinfo import available_timezones
+            tz_names = sorted(available_timezones())
+        except ImportError:
+            tz_names = [
+                "UTC", "Europe/London", "Europe/Paris", "Europe/Berlin",
+                "Europe/Vienna", "Europe/Rome", "Europe/Madrid",
+                "Europe/Warsaw", "Europe/Helsinki", "Europe/Athens",
+                "America/New_York", "America/Chicago", "America/Denver",
+                "America/Los_Angeles", "America/Anchorage", "Pacific/Honolulu",
+                "America/Sao_Paulo", "America/Buenos_Aires",
+                "Asia/Dubai", "Asia/Kolkata", "Asia/Bangkok",
+                "Asia/Shanghai", "Asia/Tokyo", "Australia/Sydney",
+            ]
+        self.photo_timezone_combo.addItems(tz_names)
+        default_tz = "Europe/Vienna"
+        default_idx = self.photo_timezone_combo.findText(default_tz)
+        if default_idx >= 0:
+            self.photo_timezone_combo.setCurrentIndex(default_idx)
+
+        self.photo_timezone_offset_label = QLabel()
+        self.photo_timezone_offset_label.setStyleSheet("color: grey; font-size: 10px;")
+        self._update_timezone_offset_label()
+
+        tz_row = QHBoxLayout()
+        tz_row.addWidget(self.photo_timezone_combo)
+        tz_row.addWidget(self.photo_timezone_offset_label)
+        photo_settings_layout.addRow("Timezone:", tz_row)
+
+        self.photo_timezone_combo.currentTextChanged.connect(self._update_timezone_offset_label)
+        photo_inputs_layout.addWidget(photo_settings_group)
+
+        input_layout.addWidget(self.photo_inputs_widget)
+
+        self.video_mode_check.stateChanged.connect(self._on_input_mode_changed)
 
         # Common inputs
         common_group = QGroupBox("Flight Data")
@@ -1604,6 +1726,25 @@ class BambiDockWidget(QDockWidget):
         processing_layout.addWidget(log_group)
         processing_layout.addStretch()
 
+        # Info tab
+
+        info_tab = QWidget()
+        info_layout = QVBoxLayout(info_tab)
+        main_tabs.addTab(info_tab, "Info")
+        flight_info_group = QGroupBox("Video Recommendations")
+        flight_info_group_layout = QVBoxLayout(flight_info_group)
+        flight_info_label = QLabel(
+            "To ensure high-quality and consistent video recordings, configure your drone mission with stable flight parameters and a fixed camera setup. Plan the flight at a constant altitude between 30 m and 60 m above ground, depending on the terrain and desired coverage, and maintain a steady speed of 3–7 m/s throughout the mission. "
+            "Although the exact heading is not critical, the drone’s orientation should remain constant for the entire flight, and yaw rotations should be avoided. A practical approach is to configure each waypoint so that the drone faces north, ensuring a stable and repeatable camera perspective. "
+            "Set the gimbal pitch to −90° so the camera is pointing straight down (nadir). This provides a consistent top-down view and simplifies later processing of the video data. "
+            "Finally, start video recording at the first waypoint and stop recording at the last waypoint to capture the full survey area in one continuous sequence while avoiding unnecessary footage. "
+        )
+        flight_info_label.setWordWrap(True)
+        flight_info_label.setAlignment(Qt.AlignTop)
+        flight_info_label.setStyleSheet("color: black; font-size: 10px;")
+        flight_info_group_layout.addWidget(flight_info_label)
+        info_layout.addWidget(flight_info_group)
+
     def _populate_tracker_backends(self):
         """Populate the tracker backend dropdown with available trackers."""
         from .tracker_manager import get_tracker_manager
@@ -1758,8 +1899,12 @@ class BambiDockWidget(QDockWidget):
             rot_y = math.radians(rot_y)
             rot_z = math.radians(rot_z)
 
+        video_mode = self.video_mode_check.isChecked()
         return {
-            # Thermal inputs
+            # Input mode
+            "input_mode": "video" if video_mode else "photo",
+
+            # Video inputs
             "thermal_video_paths": [p.strip() for p in self.thermal_video_paths_edit.text().split(",") if p.strip()],
             "thermal_srt_paths": [p.strip() for p in self.thermal_srt_paths_edit.text().split(",") if p.strip()],
             "thermal_calibration_path": (
@@ -1770,8 +1915,6 @@ class BambiDockWidget(QDockWidget):
                 THERMAL_CALIBRATIONS.get(self.thermal_calib_preset_combo.currentText())
                 if self.thermal_calib_preset_combo.currentIndex() > 0 else None
             ),
-
-            # RGB inputs
             "rgb_video_paths": [p.strip() for p in self.rgb_video_paths_edit.text().split(",") if p.strip()],
             "rgb_srt_paths": [p.strip() for p in self.rgb_srt_paths_edit.text().split(",") if p.strip()],
             "rgb_calibration_path": (
@@ -1781,6 +1924,30 @@ class BambiDockWidget(QDockWidget):
             "rgb_calibration_data": (
                 RGB_CALIBRATIONS.get(self.rgb_calib_preset_combo.currentText())
                 if self.rgb_calib_preset_combo.currentIndex() > 0 else None
+            ),
+
+            # Photo inputs
+            "thermal_photo_dir": self.thermal_photo_dir_edit.text(),
+            "thermal_photo_calibration_path": (
+                self.thermal_photo_calibration_path_edit.text()
+                if self.thermal_photo_calib_preset_combo.currentIndex() == 0 else ""
+            ),
+            "thermal_photo_calibration_data": (
+                THERMAL_CALIBRATIONS.get(self.thermal_photo_calib_preset_combo.currentText())
+                if self.thermal_photo_calib_preset_combo.currentIndex() > 0 else None
+            ),
+            "rgb_photo_dir": self.rgb_photo_dir_edit.text(),
+            "rgb_photo_calibration_path": (
+                self.rgb_photo_calibration_path_edit.text()
+                if self.rgb_photo_calib_preset_combo.currentIndex() == 0 else ""
+            ),
+            "rgb_photo_calibration_data": (
+                RGB_CALIBRATIONS.get(self.rgb_photo_calib_preset_combo.currentText())
+                if self.rgb_photo_calib_preset_combo.currentIndex() > 0 else None
+            ),
+            "photo_timezone_offset": (
+                self._compute_timezone_offset(self.photo_timezone_combo.currentText().strip())
+                or 0.0
             ),
 
             # Common inputs
@@ -2071,6 +2238,42 @@ class BambiDockWidget(QDockWidget):
         if files:
             self.rgb_srt_paths_edit.setText(", ".join(files))
 
+    @staticmethod
+    def _compute_timezone_offset(tz_name: str) -> Optional[float]:
+        """Return the current UTC offset in hours for a given IANA timezone name."""
+        try:
+            import datetime
+            from zoneinfo import ZoneInfo
+            now = datetime.datetime.now(ZoneInfo(tz_name))
+            return now.utcoffset().total_seconds() / 3600
+        except Exception:
+            try:
+                import datetime
+                from dateutil import tz as dateutil_tz
+                zone = dateutil_tz.gettz(tz_name)
+                if zone is None:
+                    return None
+                now = datetime.datetime.now(zone)
+                return now.utcoffset().total_seconds() / 3600
+            except Exception:
+                return None
+
+    def _update_timezone_offset_label(self):
+        """Update the UTC offset label next to the timezone combo."""
+        tz_name = self.photo_timezone_combo.currentText().strip()
+        offset = self._compute_timezone_offset(tz_name)
+        if offset is None:
+            self.photo_timezone_offset_label.setText("(unknown timezone)")
+        else:
+            sign = "+" if offset >= 0 else ""
+            self.photo_timezone_offset_label.setText(f"UTC{sign}{offset:g}h")
+
+    def _on_input_mode_changed(self, state: int):
+        """Toggle between video and photo input panels."""
+        video_mode = bool(state)
+        self.video_inputs_widget.setVisible(video_mode)
+        self.photo_inputs_widget.setVisible(not video_mode)
+
     def _on_thermal_calib_preset_changed(self, index: int):
         """Show/hide custom file row depending on combo selection."""
         self.thermal_calib_file_row.setVisible(index == 0)
@@ -2078,6 +2281,14 @@ class BambiDockWidget(QDockWidget):
     def _on_rgb_calib_preset_changed(self, index: int):
         """Show/hide custom file row depending on combo selection."""
         self.rgb_calib_file_row.setVisible(index == 0)
+
+    def _on_thermal_photo_calib_preset_changed(self, index: int):
+        """Show/hide custom file row for thermal photo calibration."""
+        self.thermal_photo_calib_file_row.setVisible(index == 0)
+
+    def _on_rgb_photo_calib_preset_changed(self, index: int):
+        """Show/hide custom file row for RGB photo calibration."""
+        self.rgb_photo_calib_file_row.setVisible(index == 0)
 
     def browse_thermal_calibration(self):
         """Browse for thermal calibration JSON file."""
@@ -2092,6 +2303,32 @@ class BambiDockWidget(QDockWidget):
             self, "Select RGB Calibration JSON", "", "JSON Files (*.json)")
         if file:
             self.rgb_calibration_path_edit.setText(file)
+
+    def browse_thermal_photo_dir(self):
+        """Browse for thermal photo directory."""
+        folder = QFileDialog.getExistingDirectory(self, "Select Thermal Photo Folder")
+        if folder:
+            self.thermal_photo_dir_edit.setText(folder)
+
+    def browse_rgb_photo_dir(self):
+        """Browse for RGB photo directory."""
+        folder = QFileDialog.getExistingDirectory(self, "Select RGB Photo Folder")
+        if folder:
+            self.rgb_photo_dir_edit.setText(folder)
+
+    def browse_thermal_photo_calibration(self):
+        """Browse for thermal photo calibration JSON file."""
+        file, _ = QFileDialog.getOpenFileName(
+            self, "Select Thermal Photo Calibration JSON", "", "JSON Files (*.json)")
+        if file:
+            self.thermal_photo_calibration_path_edit.setText(file)
+
+    def browse_rgb_photo_calibration(self):
+        """Browse for RGB photo calibration JSON file."""
+        file, _ = QFileDialog.getOpenFileName(
+            self, "Select RGB Photo Calibration JSON", "", "JSON Files (*.json)")
+        if file:
+            self.rgb_photo_calibration_path_edit.setText(file)
 
     def browse_airdata(self):
         file, _ = QFileDialog.getOpenFileName(
@@ -2978,6 +3215,14 @@ class BambiDockWidget(QDockWidget):
         if not target_folder or not os.path.isdir(target_folder):
             return
 
+        # Reset all folder-based statuses before re-checking so that deleted
+        # outputs are correctly reflected as "Not started" after a refresh.
+        for step in ("extract_thermal_frames", "extract_rgb_frames", "detection",
+                     "georeference", "tracking", "calculate_fov", "flight_route",
+                     "orthomosaic", "export_geotiffs", "sam3_segmentation",
+                     "sam3_georeference"):
+            self.update_status(step, "⚪ Not started")
+
         completed_count = 0
 
         # Check for thermal frame extraction
@@ -3007,6 +3252,8 @@ class BambiDockWidget(QDockWidget):
             ("fov", "calculate_fov", None),
             ("orthomosaic", "orthomosaic", None),
             ("geotiffs", "export_geotiffs", None),
+            ("segmentation", "sam3_segmentation", "segmentation_pixel.json"),
+            ("segmentation", "sam3_georeference", "segmentation_georef.json"),
         ]
 
         for subfolder, status_key, check_file in folder_status_mapping:
@@ -3041,6 +3288,12 @@ class BambiDockWidget(QDockWidget):
         in the current QGIS project and marks the corresponding 'Add to QGIS' steps
         as completed.
         """
+        # Reset all QGIS-layer statuses before re-checking.
+        for step in ("add_flight_route", "add_frame_detections", "add_layers",
+                     "add_fov", "add_merged_fov", "add_ortho", "add_geotiffs",
+                     "add_sam3"):
+            self.update_status(step, "⚪")
+
         root = QgsProject.instance().layerTreeRoot()
 
         # Get all existing layer group names
@@ -3219,23 +3472,39 @@ class BambiDockWidget(QDockWidget):
         """Run frame extraction for thermal modality."""
         config = self.get_config()
 
-        # Check if thermal inputs are provided
-        thermal_calib_ok = (
-            config.get("thermal_calibration_data") is not None
-            or config.get("thermal_calibration_path")
-        )
-        if not (config.get("thermal_video_paths") and
-                config.get("thermal_srt_paths") and
-                thermal_calib_ok):
-            QMessageBox.warning(
-                self,
-                "Missing Thermal Inputs",
-                "Please provide thermal video inputs:\n\n"
-                "• Thermal video files\n"
-                "• Thermal SRT files\n"
-                "• Thermal calibration (preset or custom file)"
+        if config["input_mode"] == "photo":
+            # Photo mode validation
+            thermal_calib_ok = (
+                config.get("thermal_photo_calibration_data") is not None
+                or config.get("thermal_photo_calibration_path")
             )
-            return
+            if not config.get("thermal_photo_dir") or not thermal_calib_ok:
+                QMessageBox.warning(
+                    self,
+                    "Missing Thermal Photo Inputs",
+                    "Please provide thermal photo inputs:\n\n"
+                    "• Thermal photo folder\n"
+                    "• Thermal calibration (preset or custom file)"
+                )
+                return
+        else:
+            # Video mode validation
+            thermal_calib_ok = (
+                config.get("thermal_calibration_data") is not None
+                or config.get("thermal_calibration_path")
+            )
+            if not (config.get("thermal_video_paths") and
+                    config.get("thermal_srt_paths") and
+                    thermal_calib_ok):
+                QMessageBox.warning(
+                    self,
+                    "Missing Thermal Inputs",
+                    "Please provide thermal video inputs:\n\n"
+                    "• Thermal video files\n"
+                    "• Thermal SRT files\n"
+                    "• Thermal calibration (preset or custom file)"
+                )
+                return
 
         # Validate common inputs
         if not self.validate_inputs(["airdata_path", "target_folder"]):
@@ -3247,23 +3516,39 @@ class BambiDockWidget(QDockWidget):
         """Run frame extraction for RGB modality."""
         config = self.get_config()
 
-        # Check if RGB inputs are provided
-        rgb_calib_ok = (
-            config.get("rgb_calibration_data") is not None
-            or config.get("rgb_calibration_path")
-        )
-        if not (config.get("rgb_video_paths") and
-                config.get("rgb_srt_paths") and
-                rgb_calib_ok):
-            QMessageBox.warning(
-                self,
-                "Missing RGB Inputs",
-                "Please provide RGB video inputs:\n\n"
-                "• RGB video files\n"
-                "• RGB SRT files\n"
-                "• RGB calibration (preset or custom file)"
+        if config["input_mode"] == "photo":
+            # Photo mode validation
+            rgb_calib_ok = (
+                config.get("rgb_photo_calibration_data") is not None
+                or config.get("rgb_photo_calibration_path")
             )
-            return
+            if not config.get("rgb_photo_dir") or not rgb_calib_ok:
+                QMessageBox.warning(
+                    self,
+                    "Missing RGB Photo Inputs",
+                    "Please provide RGB photo inputs:\n\n"
+                    "• RGB photo folder\n"
+                    "• RGB calibration (preset or custom file)"
+                )
+                return
+        else:
+            # Video mode validation
+            rgb_calib_ok = (
+                config.get("rgb_calibration_data") is not None
+                or config.get("rgb_calibration_path")
+            )
+            if not (config.get("rgb_video_paths") and
+                    config.get("rgb_srt_paths") and
+                    rgb_calib_ok):
+                QMessageBox.warning(
+                    self,
+                    "Missing RGB Inputs",
+                    "Please provide RGB video inputs:\n\n"
+                    "• RGB video files\n"
+                    "• RGB SRT files\n"
+                    "• RGB calibration (preset or custom file)"
+                )
+                return
 
         # Validate common inputs
         if not self.validate_inputs(["airdata_path", "target_folder"]):
@@ -5346,7 +5631,11 @@ class BambiDockWidget(QDockWidget):
         """Save all configuration to the QGIS project."""
         project = QgsProject.instance()
 
-        # ===== Input Paths =====
+        # ===== Input Mode =====
+        project.writeEntry(PLUGIN_SCOPE, "Input/VideoMode",
+                           "1" if self.video_mode_check.isChecked() else "0")
+
+        # ===== Video Input Paths =====
         project.writeEntry(PLUGIN_SCOPE, "Input/ThermalVideoPaths",
                            self.thermal_video_paths_edit.text())
         project.writeEntry(PLUGIN_SCOPE, "Input/ThermalSrtPaths",
@@ -5363,6 +5652,22 @@ class BambiDockWidget(QDockWidget):
                            self.rgb_calibration_path_edit.text())
         project.writeEntry(PLUGIN_SCOPE, "Input/RgbCalibrationPreset",
                            self.rgb_calib_preset_combo.currentText())
+
+        # ===== Photo Input Paths =====
+        project.writeEntry(PLUGIN_SCOPE, "Input/ThermalPhotoDir",
+                           self.thermal_photo_dir_edit.text())
+        project.writeEntry(PLUGIN_SCOPE, "Input/ThermalPhotoCalibrationPath",
+                           self.thermal_photo_calibration_path_edit.text())
+        project.writeEntry(PLUGIN_SCOPE, "Input/ThermalPhotoCalibrationPreset",
+                           self.thermal_photo_calib_preset_combo.currentText())
+        project.writeEntry(PLUGIN_SCOPE, "Input/RgbPhotoDir",
+                           self.rgb_photo_dir_edit.text())
+        project.writeEntry(PLUGIN_SCOPE, "Input/RgbPhotoCalibrationPath",
+                           self.rgb_photo_calibration_path_edit.text())
+        project.writeEntry(PLUGIN_SCOPE, "Input/RgbPhotoCalibrationPreset",
+                           self.rgb_photo_calib_preset_combo.currentText())
+        project.writeEntry(PLUGIN_SCOPE, "Input/PhotoTimezone",
+                           self.photo_timezone_combo.currentText())
         project.writeEntry(PLUGIN_SCOPE, "Input/AirdataPath",
                            self.airdata_path_edit.text())
         project.writeEntry(PLUGIN_SCOPE, "Input/DemPath",
@@ -5541,7 +5846,12 @@ class BambiDockWidget(QDockWidget):
         if not has_config:
             return  # No saved config in this project
 
-        # ===== Input Paths =====
+        # ===== Input Mode =====
+        video_mode_val = read_str("Input/VideoMode")
+        if video_mode_val != "":
+            self.video_mode_check.setChecked(video_mode_val != "0")
+
+        # ===== Video Input Paths =====
         self.thermal_video_paths_edit.setText(read_str("Input/ThermalVideoPaths"))
         self.thermal_srt_paths_edit.setText(read_str("Input/ThermalSrtPaths"))
         self.thermal_calibration_path_edit.setText(read_str("Input/ThermalCalibrationPath"))
@@ -5556,6 +5866,29 @@ class BambiDockWidget(QDockWidget):
         r_idx = self.rgb_calib_preset_combo.findText(rgb_preset)
         if r_idx >= 0:
             self.rgb_calib_preset_combo.setCurrentIndex(r_idx)
+
+        # ===== Photo Input Paths =====
+        self.thermal_photo_dir_edit.setText(read_str("Input/ThermalPhotoDir"))
+        self.thermal_photo_calibration_path_edit.setText(
+            read_str("Input/ThermalPhotoCalibrationPath"))
+        tp_preset = read_str("Input/ThermalPhotoCalibrationPreset")
+        tp_idx = self.thermal_photo_calib_preset_combo.findText(tp_preset)
+        if tp_idx >= 0:
+            self.thermal_photo_calib_preset_combo.setCurrentIndex(tp_idx)
+        self.rgb_photo_dir_edit.setText(read_str("Input/RgbPhotoDir"))
+        self.rgb_photo_calibration_path_edit.setText(
+            read_str("Input/RgbPhotoCalibrationPath"))
+        rp_preset = read_str("Input/RgbPhotoCalibrationPreset")
+        rp_idx = self.rgb_photo_calib_preset_combo.findText(rp_preset)
+        if rp_idx >= 0:
+            self.rgb_photo_calib_preset_combo.setCurrentIndex(rp_idx)
+        saved_tz = read_str("Input/PhotoTimezone")
+        if saved_tz:
+            tz_idx = self.photo_timezone_combo.findText(saved_tz)
+            if tz_idx >= 0:
+                self.photo_timezone_combo.setCurrentIndex(tz_idx)
+            else:
+                self.photo_timezone_combo.setCurrentText(saved_tz)
         self.airdata_path_edit.setText(read_str("Input/AirdataPath"))
         self.dem_path_edit.setText(read_str("Input/DemPath"))
         self.dem_metadata_path_edit.setText(read_str("Input/DemMetadataPath"))

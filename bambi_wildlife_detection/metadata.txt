@@ -1,16 +1,16 @@
 [general]
 name=Bambi - QGIS Integration
 qgisMinimumVersion=3.22
-description=Detect and track wildlife in drone videos with geo-referencing
-version=1.5.0
+description=Detect and track wildlife in drone videos/photos with geo-referencing
+version=2.0.0
 author=Christoph Praschl, Anna Maschek, David C.Schedl
 email=christoph.praschl@fh-hagenberg.at
 
-about=A comprehensive QGIS plugin for wildlife detection and tracking in drone videos.
+about=A comprehensive QGIS plugin for wildlife detection and tracking in drone videos/photos.
     Features include:
     - Frame extraction from drone videos with configurable sample rate
     - Animal detection using YOLO models
-    - Geo-referencing of detections using DEM and camera metadata
+    - Geo-referencing of detections/video frames/photos using DEM and camera metadata
     - Multi-object tracking with configurable parameters
     - Automatic creation of polygon layers for tracks in QGIS
     - Automatic segmentation of objects using SAM3
