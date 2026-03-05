@@ -355,15 +355,17 @@ class BambiProcessor:
         target_folder, rel_transformer, ad_origin = self._get_extraction_prerequisites(config)
         airdata_path = config["airdata_path"]
 
-        thermal_calibration_path = config["thermal_calibration_path"]
         thermal_video_paths = config["thermal_video_paths"]
         thermal_srt_paths = config["thermal_srt_paths"]
 
         frames_folder_t = os.path.join(target_folder, "frames_t")
         os.makedirs(frames_folder_t, exist_ok=True)
 
-        with open(thermal_calibration_path) as f:
-            calibration_res = json.load(f)
+        if config.get("thermal_calibration_data") is not None:
+            calibration_res = config["thermal_calibration_data"]
+        else:
+            with open(config["thermal_calibration_path"]) as f:
+                calibration_res = json.load(f)
 
         accessor = CalibratedVideoFrameAccessor(calibration_res)
         extractor = TimedPoseExtractor(
@@ -431,15 +433,17 @@ class BambiProcessor:
         target_folder, rel_transformer, ad_origin = self._get_extraction_prerequisites(config)
         airdata_path = config["airdata_path"]
 
-        rgb_calibration_path = config["rgb_calibration_path"]
         rgb_video_paths = config["rgb_video_paths"]
         rgb_srt_paths = config["rgb_srt_paths"]
 
         frames_folder_w = os.path.join(target_folder, "frames_w")
         os.makedirs(frames_folder_w, exist_ok=True)
 
-        with open(rgb_calibration_path) as f:
-            calibration_res = json.load(f)
+        if config.get("rgb_calibration_data") is not None:
+            calibration_res = config["rgb_calibration_data"]
+        else:
+            with open(config["rgb_calibration_path"]) as f:
+                calibration_res = json.load(f)
 
         accessor = CalibratedVideoFrameAccessor(calibration_res)
         extractor = TimedPoseExtractor(

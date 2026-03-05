@@ -37,6 +37,29 @@ from .austria_dem_downloader import DEMDownloadWorker, GeoTIFFConversionWorker
 # Plugin scope for project settings storage
 PLUGIN_SCOPE = "BambiWildlifeDetection"
 
+# ---------------------------------------------------------------------------
+# Built-in calibration presets
+# Add your calibration presets here as:
+#   "Preset Name": { ... calibration JSON dict ... }
+# ---------------------------------------------------------------------------
+THERMAL_CALIBRATIONS: Dict[str, Any] = {
+    "DJI M30T - 1 (Video)": {"ret": 7.245051860689403, "mtx": [[1520.3107832839369, 0.0, 626.3977414191858], [0.0, 1485.995024483995, 503.3510429805098], [0.0, 0.0, 1.0]], "dist": [[-0.3394678906712876, 0.17727664454650988, 0.0009308512048568154, 0.0004890617951054967, 0]]},
+    # "DJI M30T - 2 (Video)": {"ret": 7.245051860689403, "mtx": [[1520.3107832839369, 0.0, 626.3977414191858], [0.0, 1485.995024483995, 503.3510429805098], [0.0, 0.0, 1.0]], "dist": [[-0.3394678906712876, 0.17727664454650988, 0.0009308512048568154, 0.0004890617951054967, 0]]}
+    # "DJI M30T - 3 (Video)": {},
+    # "DJI M3T - 1 (Video)": {},
+    # "DJI M3T - 2 (Video)": {},
+    # "DJI M3T - 3 (Video)": {},
+}
+
+RGB_CALIBRATIONS: Dict[str, Any] = {
+    "DJI M30T - FH1 (Video)": {"ret": None, "mtx": [[2888.178324915765, 0.0, 1929.0179499431672], [0.0, 2819.3160759551897, 1070.7804294784548], [0.0, 0.0, 1.0]], "dist": [[0.13853585738444427, -0.25508562557544706, 0.00020336601637138113, -0.0009057472383396885, 0.0]]},
+    # "DJI M30T - FH2 (Video)": {"ret": None, "mtx": [[2888.178324915765, 0.0, 1929.0179499431672], [0.0, 2819.3160759551897, 1070.7804294784548], [0.0, 0.0, 1.0]], "dist": [[0.13853585738444427, -0.25508562557544706, 0.00020336601637138113, -0.0009057472383396885, 0.0]]},
+    # "DJI M30T - ASP3 (Video)": {},
+    # "DJI M3T - BW1 (Video)": {},
+    # "DJI M3T - SA2 (Video)": {},
+    # "DJI M3T - SA3 (Video)": {},
+}
+
 
 class CorrectionRangeDialog(QDialog):
     """Dialog for adding/editing frame-range specific corrections."""
@@ -291,11 +314,29 @@ class BambiDockWidget(QDockWidget):
         # =====================================================================
         # MAIN TAB 1: INPUT
         # =====================================================================
+        info_tab = QWidget()
+        info_layout = QVBoxLayout(info_tab)
+        main_tabs.addTab(info_tab, "Info")
+        flight_info_group = QGroupBox("Video Recommendations")
+        flight_info_group_layout = QVBoxLayout(flight_info_group)
+
+        # Thermal Video inputs
+        flight_info_label = QLabel(
+            "To ensure high-quality and consistent video recordings, configure your drone mission with stable flight parameters and a fixed camera setup. Plan the flight at a constant altitude between 30 m and 60 m above ground, depending on the terrain and desired coverage, and maintain a steady speed of 3–7 m/s throughout the mission. "
+            "Although the exact heading is not critical, the drone’s orientation should remain constant for the entire flight, and yaw rotations should be avoided. A practical approach is to configure each waypoint so that the drone faces north, ensuring a stable and repeatable camera perspective. "
+            "Set the gimbal pitch to −90° so the camera is pointing straight down (nadir). This provides a consistent top-down view and simplifies later processing of the video data. "
+            "Finally, start video recording at the first waypoint and stop recording at the last waypoint to capture the full survey area in one continuous sequence while avoiding unnecessary footage. "
+        )
+        flight_info_label.setWordWrap(True)
+        flight_info_label.setAlignment(Qt.AlignTop)
+        flight_info_label.setStyleSheet("color: black; font-size: 10px;")
+        flight_info_group_layout.addWidget(flight_info_label)
+        info_layout.addWidget(flight_info_group)
+
         input_tab = QWidget()
         input_layout = QVBoxLayout(input_tab)
         main_tabs.addTab(input_tab, "Input")
 
-        # Thermal Video inputs
         thermal_group = QGroupBox("Thermal Video Inputs")
         thermal_layout = QFormLayout(thermal_group)
 
@@ -317,14 +358,31 @@ class BambiDockWidget(QDockWidget):
         thermal_srt_row.addWidget(thermal_srt_browse_btn)
         thermal_layout.addRow("SRT Files:", thermal_srt_row)
 
+        thermal_calib_container = QWidget()
+        thermal_calib_vbox = QVBoxLayout(thermal_calib_container)
+        thermal_calib_vbox.setContentsMargins(0, 0, 0, 0)
+        thermal_calib_vbox.setSpacing(2)
+
+        self.thermal_calib_preset_combo = QComboBox()
+        self.thermal_calib_preset_combo.addItem("Custom file...")
+        for name in THERMAL_CALIBRATIONS:
+            self.thermal_calib_preset_combo.addItem(name)
+        thermal_calib_vbox.addWidget(self.thermal_calib_preset_combo)
+
+        self.thermal_calib_file_row = QWidget()
+        thermal_calib_file_layout = QHBoxLayout(self.thermal_calib_file_row)
+        thermal_calib_file_layout.setContentsMargins(0, 0, 0, 0)
         self.thermal_calibration_path_edit = QLineEdit()
         self.thermal_calibration_path_edit.setPlaceholderText("Path to T_calib.json")
         thermal_calib_browse_btn = QPushButton("Browse...")
         thermal_calib_browse_btn.clicked.connect(self.browse_thermal_calibration)
-        thermal_calib_row = QHBoxLayout()
-        thermal_calib_row.addWidget(self.thermal_calibration_path_edit)
-        thermal_calib_row.addWidget(thermal_calib_browse_btn)
-        thermal_layout.addRow("Calibration:", thermal_calib_row)
+        thermal_calib_file_layout.addWidget(self.thermal_calibration_path_edit)
+        thermal_calib_file_layout.addWidget(thermal_calib_browse_btn)
+        thermal_calib_vbox.addWidget(self.thermal_calib_file_row)
+
+        self.thermal_calib_preset_combo.currentIndexChanged.connect(
+            self._on_thermal_calib_preset_changed)
+        thermal_layout.addRow("Calibration:", thermal_calib_container)
 
         input_layout.addWidget(thermal_group)
 
@@ -350,14 +408,31 @@ class BambiDockWidget(QDockWidget):
         rgb_srt_row.addWidget(rgb_srt_browse_btn)
         rgb_layout.addRow("SRT Files:", rgb_srt_row)
 
+        rgb_calib_container = QWidget()
+        rgb_calib_vbox = QVBoxLayout(rgb_calib_container)
+        rgb_calib_vbox.setContentsMargins(0, 0, 0, 0)
+        rgb_calib_vbox.setSpacing(2)
+
+        self.rgb_calib_preset_combo = QComboBox()
+        self.rgb_calib_preset_combo.addItem("Custom file...")
+        for name in RGB_CALIBRATIONS:
+            self.rgb_calib_preset_combo.addItem(name)
+        rgb_calib_vbox.addWidget(self.rgb_calib_preset_combo)
+
+        self.rgb_calib_file_row = QWidget()
+        rgb_calib_file_layout = QHBoxLayout(self.rgb_calib_file_row)
+        rgb_calib_file_layout.setContentsMargins(0, 0, 0, 0)
         self.rgb_calibration_path_edit = QLineEdit()
         self.rgb_calibration_path_edit.setPlaceholderText("Path to W_calib.json")
         rgb_calib_browse_btn = QPushButton("Browse...")
         rgb_calib_browse_btn.clicked.connect(self.browse_rgb_calibration)
-        rgb_calib_row = QHBoxLayout()
-        rgb_calib_row.addWidget(self.rgb_calibration_path_edit)
-        rgb_calib_row.addWidget(rgb_calib_browse_btn)
-        rgb_layout.addRow("Calibration:", rgb_calib_row)
+        rgb_calib_file_layout.addWidget(self.rgb_calibration_path_edit)
+        rgb_calib_file_layout.addWidget(rgb_calib_browse_btn)
+        rgb_calib_vbox.addWidget(self.rgb_calib_file_row)
+
+        self.rgb_calib_preset_combo.currentIndexChanged.connect(
+            self._on_rgb_calib_preset_changed)
+        rgb_layout.addRow("Calibration:", rgb_calib_container)
 
         input_layout.addWidget(rgb_group)
 
@@ -373,6 +448,13 @@ class BambiDockWidget(QDockWidget):
         airdata_row.addWidget(self.airdata_path_edit)
         airdata_row.addWidget(airdata_browse_btn)
         common_layout.addRow("AirData CSV:", airdata_row)
+        airdata_label = QLabel(
+            '<a href="https://www.airdata.com">https://www.airdata.com</a>'
+        )
+        airdata_label.setOpenExternalLinks(True)
+        airdata_label.setWordWrap(True)
+        airdata_label.setStyleSheet("color: blue; font-size: 10px;")
+        common_layout.addWidget(airdata_label)
 
         self.correction_path_edit = QLineEdit()
         self.correction_path_edit.setPlaceholderText("Path to correction.json (auto-detected)")
@@ -643,6 +725,13 @@ class BambiDockWidget(QDockWidget):
         model_row.addWidget(self.model_path_edit)
         model_row.addWidget(model_browse_btn)
         detection_layout.addRow("Model Path:", model_row)
+        detection_label = QLabel(
+            "Note, that the default BAMBI model was trained on white-hotspot thermal data showing roe deer, red deer and wild boar with an AGL between 30 to 60 m. So the applicability is limited to that scope. Additionally, the model is based on the Ultralytics framework so the utilization follows their license."
+        )
+        detection_label.setWordWrap(True)
+        detection_label.setStyleSheet("color: gray; font-size: 10px;")
+        detection_layout.addWidget(detection_label)
+
 
         self.confidence_spin = QDoubleSpinBox()
         self.confidence_spin.setRange(0.0, 1.0)
@@ -1673,12 +1762,26 @@ class BambiDockWidget(QDockWidget):
             # Thermal inputs
             "thermal_video_paths": [p.strip() for p in self.thermal_video_paths_edit.text().split(",") if p.strip()],
             "thermal_srt_paths": [p.strip() for p in self.thermal_srt_paths_edit.text().split(",") if p.strip()],
-            "thermal_calibration_path": self.thermal_calibration_path_edit.text(),
+            "thermal_calibration_path": (
+                self.thermal_calibration_path_edit.text()
+                if self.thermal_calib_preset_combo.currentIndex() == 0 else ""
+            ),
+            "thermal_calibration_data": (
+                THERMAL_CALIBRATIONS.get(self.thermal_calib_preset_combo.currentText())
+                if self.thermal_calib_preset_combo.currentIndex() > 0 else None
+            ),
 
             # RGB inputs
             "rgb_video_paths": [p.strip() for p in self.rgb_video_paths_edit.text().split(",") if p.strip()],
             "rgb_srt_paths": [p.strip() for p in self.rgb_srt_paths_edit.text().split(",") if p.strip()],
-            "rgb_calibration_path": self.rgb_calibration_path_edit.text(),
+            "rgb_calibration_path": (
+                self.rgb_calibration_path_edit.text()
+                if self.rgb_calib_preset_combo.currentIndex() == 0 else ""
+            ),
+            "rgb_calibration_data": (
+                RGB_CALIBRATIONS.get(self.rgb_calib_preset_combo.currentText())
+                if self.rgb_calib_preset_combo.currentIndex() > 0 else None
+            ),
 
             # Common inputs
             "airdata_path": self.airdata_path_edit.text(),
@@ -1823,8 +1926,9 @@ class BambiDockWidget(QDockWidget):
                 self.thermal_srt_paths_edit.setText(", ".join(existing_srts))
                 self.log(f"Auto-detected {len(existing_srts)} thermal SRT file(s)")
 
-            # Auto-detect T_calib.json
-            if not self.thermal_calibration_path_edit.text():
+            # Auto-detect T_calib.json (only when using custom file mode)
+            if (self.thermal_calib_preset_combo.currentIndex() == 0
+                    and not self.thermal_calibration_path_edit.text()):
                 t_calib_path = os.path.join(video_folder, "T_calib.json")
                 if os.path.exists(t_calib_path):
                     self.thermal_calibration_path_edit.setText(t_calib_path)
@@ -1856,8 +1960,9 @@ class BambiDockWidget(QDockWidget):
                 self.rgb_srt_paths_edit.setText(", ".join(existing_srts))
                 self.log(f"Auto-detected {len(existing_srts)} RGB SRT file(s)")
 
-            # Auto-detect W_calib.json
-            if not self.rgb_calibration_path_edit.text():
+            # Auto-detect W_calib.json (only when using custom file mode)
+            if (self.rgb_calib_preset_combo.currentIndex() == 0
+                    and not self.rgb_calibration_path_edit.text()):
                 w_calib_path = os.path.join(video_folder, "W_calib.json")
                 if os.path.exists(w_calib_path):
                     self.rgb_calibration_path_edit.setText(w_calib_path)
@@ -1910,15 +2015,17 @@ class BambiDockWidget(QDockWidget):
                             self.log(f"Auto-detected DEM metadata: {dem_base + suffix}")
                             break
 
-        # Auto-detect thermal calibration if not set
-        if not self.thermal_calibration_path_edit.text():
+        # Auto-detect thermal calibration if not set (only in custom file mode)
+        if (self.thermal_calib_preset_combo.currentIndex() == 0
+                and not self.thermal_calibration_path_edit.text()):
             t_calib_path = os.path.join(video_folder, "T_calib.json")
             if os.path.exists(t_calib_path):
                 self.thermal_calibration_path_edit.setText(t_calib_path)
                 self.log(f"Auto-detected thermal calibration: T_calib.json")
 
-        # Auto-detect RGB calibration if not set
-        if not self.rgb_calibration_path_edit.text():
+        # Auto-detect RGB calibration if not set (only in custom file mode)
+        if (self.rgb_calib_preset_combo.currentIndex() == 0
+                and not self.rgb_calibration_path_edit.text()):
             w_calib_path = os.path.join(video_folder, "W_calib.json")
             if os.path.exists(w_calib_path):
                 self.rgb_calibration_path_edit.setText(w_calib_path)
@@ -1963,6 +2070,14 @@ class BambiDockWidget(QDockWidget):
             self, "Select RGB SRT Files", "", "SRT Files (*.srt *.SRT)")
         if files:
             self.rgb_srt_paths_edit.setText(", ".join(files))
+
+    def _on_thermal_calib_preset_changed(self, index: int):
+        """Show/hide custom file row depending on combo selection."""
+        self.thermal_calib_file_row.setVisible(index == 0)
+
+    def _on_rgb_calib_preset_changed(self, index: int):
+        """Show/hide custom file row depending on combo selection."""
+        self.rgb_calib_file_row.setVisible(index == 0)
 
     def browse_thermal_calibration(self):
         """Browse for thermal calibration JSON file."""
@@ -3105,16 +3220,20 @@ class BambiDockWidget(QDockWidget):
         config = self.get_config()
 
         # Check if thermal inputs are provided
+        thermal_calib_ok = (
+            config.get("thermal_calibration_data") is not None
+            or config.get("thermal_calibration_path")
+        )
         if not (config.get("thermal_video_paths") and
                 config.get("thermal_srt_paths") and
-                config.get("thermal_calibration_path")):
+                thermal_calib_ok):
             QMessageBox.warning(
                 self,
                 "Missing Thermal Inputs",
                 "Please provide thermal video inputs:\n\n"
                 "• Thermal video files\n"
                 "• Thermal SRT files\n"
-                "• Thermal calibration file (T_calib.json)"
+                "• Thermal calibration (preset or custom file)"
             )
             return
 
@@ -3129,16 +3248,20 @@ class BambiDockWidget(QDockWidget):
         config = self.get_config()
 
         # Check if RGB inputs are provided
+        rgb_calib_ok = (
+            config.get("rgb_calibration_data") is not None
+            or config.get("rgb_calibration_path")
+        )
         if not (config.get("rgb_video_paths") and
                 config.get("rgb_srt_paths") and
-                config.get("rgb_calibration_path")):
+                rgb_calib_ok):
             QMessageBox.warning(
                 self,
                 "Missing RGB Inputs",
                 "Please provide RGB video inputs:\n\n"
                 "• RGB video files\n"
                 "• RGB SRT files\n"
-                "• RGB calibration file (W_calib.json)"
+                "• RGB calibration (preset or custom file)"
             )
             return
 
@@ -5230,12 +5353,16 @@ class BambiDockWidget(QDockWidget):
                            self.thermal_srt_paths_edit.text())
         project.writeEntry(PLUGIN_SCOPE, "Input/ThermalCalibrationPath",
                            self.thermal_calibration_path_edit.text())
+        project.writeEntry(PLUGIN_SCOPE, "Input/ThermalCalibrationPreset",
+                           self.thermal_calib_preset_combo.currentText())
         project.writeEntry(PLUGIN_SCOPE, "Input/RgbVideoPaths",
                            self.rgb_video_paths_edit.text())
         project.writeEntry(PLUGIN_SCOPE, "Input/RgbSrtPaths",
                            self.rgb_srt_paths_edit.text())
         project.writeEntry(PLUGIN_SCOPE, "Input/RgbCalibrationPath",
                            self.rgb_calibration_path_edit.text())
+        project.writeEntry(PLUGIN_SCOPE, "Input/RgbCalibrationPreset",
+                           self.rgb_calib_preset_combo.currentText())
         project.writeEntry(PLUGIN_SCOPE, "Input/AirdataPath",
                            self.airdata_path_edit.text())
         project.writeEntry(PLUGIN_SCOPE, "Input/DemPath",
@@ -5418,9 +5545,17 @@ class BambiDockWidget(QDockWidget):
         self.thermal_video_paths_edit.setText(read_str("Input/ThermalVideoPaths"))
         self.thermal_srt_paths_edit.setText(read_str("Input/ThermalSrtPaths"))
         self.thermal_calibration_path_edit.setText(read_str("Input/ThermalCalibrationPath"))
+        thermal_preset = read_str("Input/ThermalCalibrationPreset")
+        t_idx = self.thermal_calib_preset_combo.findText(thermal_preset)
+        if t_idx >= 0:
+            self.thermal_calib_preset_combo.setCurrentIndex(t_idx)
         self.rgb_video_paths_edit.setText(read_str("Input/RgbVideoPaths"))
         self.rgb_srt_paths_edit.setText(read_str("Input/RgbSrtPaths"))
         self.rgb_calibration_path_edit.setText(read_str("Input/RgbCalibrationPath"))
+        rgb_preset = read_str("Input/RgbCalibrationPreset")
+        r_idx = self.rgb_calib_preset_combo.findText(rgb_preset)
+        if r_idx >= 0:
+            self.rgb_calib_preset_combo.setCurrentIndex(r_idx)
         self.airdata_path_edit.setText(read_str("Input/AirdataPath"))
         self.dem_path_edit.setText(read_str("Input/DemPath"))
         self.dem_metadata_path_edit.setText(read_str("Input/DemMetadataPath"))
