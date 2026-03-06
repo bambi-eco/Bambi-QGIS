@@ -407,18 +407,25 @@ class BambiProcessor:
                     origin=ad_origin, include_gps=True
                 )
 
-            # Move poses.json written into frames_folder to target folder with suffix
-            poses_in_frames = os.path.join(frames_folder_t, "poses.json")
-            if os.path.exists(poses_in_frames):
-                if os.path.exists(target_poses_t):
-                    os.remove(target_poses_t)
-                os.rename(poses_in_frames, target_poses_t)
+        # Move poses.json written into frames_folder to target folder with suffix
+        poses_in_frames = os.path.join(frames_folder_t, "poses.json")
+        if os.path.exists(poses_in_frames):
+            if os.path.exists(target_poses_t):
+                os.remove(target_poses_t)
+            os.rename(poses_in_frames, target_poses_t)
 
-            if os.path.exists(os.path.join(frames_folder_t, "mask_T.png")):
-                target_mask_t = os.path.join(target_folder, "mask_T.png")
-                if os.path.exists(target_mask_t):
-                    os.remove(target_mask_t)
-                os.rename(os.path.join(frames_folder_t, "mask_T.png"), target_mask_t)
+        if os.path.exists(os.path.join(frames_folder_t, "mask_T.png")):
+            mask_path = os.path.join(frames_folder_t, "mask_T.png")
+        elif os.path.exists(os.path.join(frames_folder_t, "mask.png")):
+            mask_path = os.path.join(frames_folder_t, "mask.png")
+        else:
+            mask_path = None
+
+        if mask_path is not None:
+            target_mask_w = os.path.join(target_folder, "mask_T.png")
+            if os.path.exists(target_mask_w):
+                os.remove(target_mask_w)
+            os.rename(mask_path, target_mask_w)
 
         # Log frame count from poses file
         if os.path.exists(target_poses_t):
@@ -506,18 +513,25 @@ class BambiProcessor:
                     origin=ad_origin, include_gps=True
                 )
 
-            # Move poses.json written into frames_folder to target folder with suffix
-            poses_in_frames = os.path.join(frames_folder_w, "poses.json")
-            if os.path.exists(poses_in_frames):
-                if os.path.exists(target_poses_w):
-                    os.remove(target_poses_w)
-                os.rename(poses_in_frames, target_poses_w)
+        # Move poses.json written into frames_folder to target folder with suffix
+        poses_in_frames = os.path.join(frames_folder_w, "poses.json")
+        if os.path.exists(poses_in_frames):
+            if os.path.exists(target_poses_w):
+                os.remove(target_poses_w)
+            os.rename(poses_in_frames, target_poses_w)
 
-            if os.path.exists(os.path.join(frames_folder_w, "mask_W.png")):
-                target_mask_w = os.path.join(target_folder, "mask_W.png")
-                if os.path.exists(target_mask_w):
-                    os.remove(target_mask_w)
-                os.rename(os.path.join(frames_folder_w, "mask_W.png"), target_mask_w)
+        if os.path.exists(os.path.join(frames_folder_w, "mask_W.png")):
+            mask_path = os.path.join(frames_folder_w, "mask_W.png")
+        elif os.path.exists(os.path.join(frames_folder_w, "mask.png")):
+            mask_path = os.path.join(frames_folder_w, "mask.png")
+        else:
+            mask_path = None
+
+        if mask_path is not None:
+            target_mask_w = os.path.join(target_folder, "mask_W.png")
+            if os.path.exists(target_mask_w):
+                os.remove(target_mask_w)
+            os.rename(mask_path, target_mask_w)
 
         # Log frame count from poses file
         if os.path.exists(target_poses_w):
@@ -560,8 +574,8 @@ class BambiProcessor:
             poses = json.load(f)
 
         images = poses.get("images", [])
-        if len(images) < 2:
-            raise RuntimeError("Need at least 2 frames to create a flight route")
+        if len(images) < 1:
+            raise RuntimeError("Need at least 1 frame to create a flight route")
 
         if log_fn:
             log_fn(f"Creating flight route from {len(images)} positions")
@@ -639,7 +653,12 @@ class BambiProcessor:
         route_folder = os.path.join(target_folder, "flight_route")
         os.makedirs(route_folder, exist_ok=True)
 
-        # Create GeoJSON for the flight path line
+        # Create GeoJSON for the flight path line (or single point if only one frame)
+        if len(coordinates) == 1:
+            route_geometry = {"type": "Point", "coordinates": coordinates[0]}
+        else:
+            route_geometry = {"type": "LineString", "coordinates": coordinates}
+
         flight_line_geojson = {
             "type": "FeatureCollection",
             "name": "flight_route",
@@ -652,10 +671,7 @@ class BambiProcessor:
             "features": [
                 {
                     "type": "Feature",
-                    "geometry": {
-                        "type": "LineString",
-                        "coordinates": coordinates
-                    },
+                    "geometry": route_geometry,
                     "properties": {
                         "name": "Flight Route",
                         "total_frames": len(images),
@@ -1235,7 +1251,9 @@ class BambiProcessor:
 
                     image_metadata = poses["images"][frame_idx]
                     # Get camera for this frame
-                    fovy = image_metadata.get("fovy", [50])[0]
+                    fovy = image_metadata.get("fovy", [50])
+                    if isinstance(fovy, list):
+                        fovy = fovy[0]
                     position = Vector3(image_metadata["location"])
                     rot = image_metadata["rotation"]
                     rotation_eulers = (Vector3(
@@ -2117,7 +2135,9 @@ class BambiProcessor:
                 image_metadata = poses["images"][frame_idx]
 
                 # Get camera for this frame
-                fovy = image_metadata.get("fovy", [50])[0]
+                fovy = image_metadata.get("fovy", [50])
+                if isinstance(fovy, list):
+                    fovy = fovy[0]
                 position = Vector3(image_metadata["location"])
                 rot = image_metadata["rotation"]
                 rotation_eulers = (Vector3(
@@ -4255,7 +4275,9 @@ class BambiProcessor:
                 image_metadata = poses["images"][frame_idx]
 
                 # Get camera for this frame
-                fovy = image_metadata.get("fovy", [50])[0]
+                fovy = image_metadata.get("fovy", [50])
+                if isinstance(fovy, list):
+                    fovy = fovy[0]
                 position = Vector3(image_metadata["location"])
                 rot = image_metadata["rotation"]
                 rotation_eulers = (Vector3(

@@ -49,6 +49,7 @@ DEFAULT_OUTPUT_CRS_PROJ4 = "+proj=utm +zone=33 +datum=WGS84 +units=m +no_defs"
 # Map of common EPSG codes to their PROJ4 strings
 EPSG_TO_PROJ4 = {
     "EPSG:4326": WGS84_PROJ4,
+    "EPSG:3006": "+proj=tmerc +lat_0=0 +lon_0=15 +k=1 +x_0=500000 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs",
     "EPSG:3035": BEV_CRS_PROJ4,
     "EPSG:32632": "+proj=utm +zone=32 +datum=WGS84 +units=m +no_defs",
     "EPSG:32633": "+proj=utm +zone=33 +datum=WGS84 +units=m +no_defs",
@@ -645,13 +646,15 @@ class GLTFMeshGenerator:
 
     def generate_mesh(self, geotiff_path: Path, output_path: Path,
                       metadata_path: Optional[Path] = None,
-                      source_crs: Optional[str] = None) -> bool:
+                      source_crs: Optional[str] = None,
+                      source_crs_override: Optional[str] = None) -> bool:
         """Generate a GLTF mesh from a GeoTIFF DEM.
 
         :param geotiff_path: Path to the input GeoTIFF
         :param output_path: Path for the output GLB file
         :param metadata_path: Optional path for metadata JSON
         :param source_crs: Optional CRS string (e.g., "EPSG:32633") to use if file CRS cannot be read
+        :param source_crs_override: Force this CRS for WGS84 origin transform, ignoring the file's embedded CRS
         """
         try:
             import rasterio
@@ -691,42 +694,70 @@ class GLTFMeshGenerator:
                 min_elevation = float(np.nanmin(valid_elevations))
                 origin_z = min_elevation
 
-                # Use PROJ4 strings to avoid PROJ database version conflicts
-                # Try multiple methods to get a valid source PROJ4 string
-                src_proj4 = None
+                # Use PROJ4 strings to avoid PROJ database version conflicts.
+                # Determine the source EPSG first, then look up its PROJ4 string.
+                src_epsg = None
 
-                # Method 1: Try to get PROJ4 from rasterio CRS
-                if src.crs is not None:
+                # Method 0: Use caller-provided override — highest priority, bypasses file metadata
+                if source_crs_override:
                     try:
-                        src_proj4 = src.crs.to_proj4()
+                        src_epsg = int(source_crs_override.upper().replace("EPSG:", "").strip())
+                        self._log(f"Using source CRS override: EPSG:{src_epsg}")
                     except:
                         pass
 
-                # Method 2: If that failed or returned None, try our mapping with file's CRS string
-                if not src_proj4 and crs:
-                    src_proj4 = get_proj4_for_crs(crs)
-
-                # Method 3: Try to extract EPSG code and map it
-                if not src_proj4 and src.crs is not None:
+                # Method 1: Extract EPSG from rasterio CRS without DB lookup
+                # to_epsg() may fail when QGIS's outdated proj.db shadows pyproj's own.
+                # Fall back to parsing the WKT string for the authority ID.
+                if src_epsg is None and src.crs is not None:
                     try:
-                        epsg = src.crs.to_epsg()
-                        if epsg:
-                            src_proj4 = get_proj4_for_crs(f"EPSG:{epsg}")
+                        src_epsg = src.crs.to_epsg()
+                    except:
+                        pass
+                if src_epsg is None and src.crs is not None:
+                    try:
+                        import re
+                        matches = re.findall(r'ID\["EPSG",(\d+)\]', str(src.crs))
+                        if matches:
+                            src_epsg = int(matches[-1])
                     except:
                         pass
 
-                # Method 4: Use the passed source_crs parameter if available
-                if not src_proj4 and source_crs:
-                    self._log(f"Using provided source CRS: {source_crs}")
-                    src_proj4 = get_proj4_for_crs(source_crs)
+                # Method 2: Parse EPSG from the CRS string if it is in "EPSG:XXXXX" form
+                # (str(src.crs) can return WKT in newer rasterio — only accept EPSG strings)
+                if src_epsg is None and crs and crs.upper().startswith("EPSG:"):
+                    try:
+                        src_epsg = int(crs.upper().replace("EPSG:", "").strip())
+                    except:
+                        pass
 
-                # Method 5: Default to UTM 33N if all else fails (common for Austria)
-                if not src_proj4:
+                # Method 3: Parse EPSG from the caller-provided source_crs parameter
+                if src_epsg is None and source_crs:
+                    try:
+                        src_epsg = int(source_crs.upper().replace("EPSG:", "").strip())
+                    except:
+                        pass
+
+                # Method 4: Default to UTM 33N if all else fails (common for Austria)
+                if src_epsg is None:
                     self._log("Warning: Could not determine source CRS, assuming EPSG:32633")
-                    src_proj4 = get_proj4_for_crs("EPSG:32633")
+                    src_epsg = 32633
 
+                # Build transformer using PROJ4 strings to avoid PROJ database version
+                # conflicts (QGIS bundles an older proj.db that pyproj may find first).
+                src_proj4 = get_proj4_for_crs(f"EPSG:{src_epsg}")
+                if src_proj4 == f"EPSG:{src_epsg}":
+                    # Not in dict — auto-generate for UTM zones
+                    if 32601 <= src_epsg <= 32660:
+                        zone = src_epsg - 32600
+                        src_proj4 = f"+proj=utm +zone={zone} +datum=WGS84 +units=m +no_defs"
+                    elif 32701 <= src_epsg <= 32760:
+                        zone = src_epsg - 32700
+                        src_proj4 = f"+proj=utm +zone={zone} +south +datum=WGS84 +units=m +no_defs"
+                    else:
+                        self._log(f"Warning: No PROJ4 mapping for EPSG:{src_epsg}, falling back to EPSG:32633")
+                        src_proj4 = get_proj4_for_crs("EPSG:32633")
                 dst_proj4 = get_proj4_for_crs(WGS84_CRS)
-
                 transformer = Transformer.from_crs(
                     PyprojCRS.from_proj4(src_proj4),
                     PyprojCRS.from_proj4(dst_proj4),
@@ -1083,7 +1114,8 @@ class GeoTIFFConversionWorker(QObject):
     log = pyqtSignal(str)  # log message
 
     def __init__(self, geotiff_path: str, output_folder: str,
-                 output_crs: Optional[str] = None, simplify_factor: int = 2):
+                 output_crs: Optional[str] = None, simplify_factor: int = 2,
+                 source_crs_override: Optional[str] = None):
         """
         Initialize the GeoTIFF conversion worker.
 
@@ -1091,12 +1123,15 @@ class GeoTIFFConversionWorker(QObject):
         :param output_folder: Folder where output files will be saved
         :param output_crs: Optional target CRS (e.g., "EPSG:32633"). If None, keeps original CRS.
         :param simplify_factor: Mesh simplification factor (1 = full resolution)
+        :param source_crs_override: Override the CRS embedded in the file. Use when the file
+            has incorrect CRS metadata (e.g., SWEREF99TM data labelled as EPSG:32634).
         """
         super().__init__()
         self.geotiff_path = geotiff_path
         self.output_folder = output_folder
         self.output_crs = output_crs
         self.simplify_factor = simplify_factor
+        self.source_crs_override = source_crs_override
         self._cancelled = False
         self._processor = None
 
@@ -1135,16 +1170,7 @@ class GeoTIFFConversionWorker(QObject):
                 with rasterio.open(input_path) as src:
                     if src.crs:
                         source_crs_string = str(src.crs)
-                        self.log.emit(f"Source CRS: {source_crs_string}")
-
-                        if self.output_crs and self.output_crs != source_crs_string:
-                            # Check if EPSG codes match
-                            try:
-                                src_epsg = src.crs.to_epsg()
-                                dst_epsg = int(self.output_crs.replace("EPSG:", "").strip())
-                                needs_reprojection = src_epsg != dst_epsg
-                            except:
-                                needs_reprojection = True
+                        self.log.emit(f"Source CRS (from file): {source_crs_string}")
                     else:
                         self.log.emit("Warning: Input GeoTIFF has no CRS defined")
             except ImportError:
@@ -1153,11 +1179,24 @@ class GeoTIFFConversionWorker(QObject):
             except Exception as e:
                 self.log.emit(f"Warning: Could not read source CRS: {e}")
 
+            # Determine the effective source CRS: override takes priority over file metadata
+            effective_source_crs = self.source_crs_override or source_crs_string
+            if self.source_crs_override:
+                self.log.emit(f"Source CRS override applied: {self.source_crs_override}")
+
+            if self.output_crs and effective_source_crs:
+                try:
+                    src_epsg = int(effective_source_crs.upper().replace("EPSG:", "").strip())
+                    dst_epsg = int(self.output_crs.replace("EPSG:", "").strip())
+                    needs_reprojection = src_epsg != dst_epsg
+                except:
+                    needs_reprojection = effective_source_crs != self.output_crs
+
             self.progress.emit(20)
 
             # Process in temporary directory if reprojection needed
             if needs_reprojection and self.output_crs:
-                self.log.emit(f"Reprojecting to {self.output_crs}...")
+                self.log.emit(f"Reprojecting from {effective_source_crs} to {self.output_crs}...")
 
                 self._processor = DEMProcessor(
                     output_crs=self.output_crs,
@@ -1167,9 +1206,28 @@ class GeoTIFFConversionWorker(QObject):
 
                 with tempfile.TemporaryDirectory() as temp_dir:
                     temp_path = Path(temp_dir)
-                    reprojected_file = temp_path / "reprojected.tif"
+                    # If source CRS is overridden, first re-tag the file so rasterio
+                    # reprojects from the correct source CRS.
+                    if self.source_crs_override:
+                        from rasterio.crs import CRS as RasterioCRS
+                        import rasterio
+                        override_proj4 = get_proj4_for_crs(self.source_crs_override)
+                        if override_proj4 == self.source_crs_override:
+                            self.finished.emit(False, f"Unknown source CRS '{self.source_crs_override}'. "
+                                               "Add it to EPSG_TO_PROJ4 or use a supported EPSG code.")
+                            return
+                        retagged_file = temp_path / "retagged.tif"
+                        with rasterio.open(input_path) as src:
+                            meta = src.meta.copy()
+                            meta['crs'] = RasterioCRS.from_proj4(override_proj4)
+                            with rasterio.open(retagged_file, 'w', **meta) as dst:
+                                dst.write(src.read())
+                        source_for_reproject = retagged_file
+                    else:
+                        source_for_reproject = input_path
 
-                    result = self._processor.reproject_geotiff(input_path, reprojected_file)
+                    reprojected_file = temp_path / "reprojected.tif"
+                    result = self._processor.reproject_geotiff(source_for_reproject, reprojected_file)
 
                     if self._cancelled:
                         self.finished.emit(False, "Conversion cancelled")
@@ -1189,7 +1247,7 @@ class GeoTIFFConversionWorker(QObject):
             else:
                 # No reprojection needed, use input directly
                 geotiff_for_mesh = input_path
-                mesh_crs = self.output_crs or source_crs_string
+                mesh_crs = self.output_crs or effective_source_crs
                 self.log.emit("No reprojection needed, using original GeoTIFF")
 
             self.progress.emit(50)
@@ -1209,9 +1267,13 @@ class GeoTIFFConversionWorker(QObject):
             mesh_file = output_base.with_suffix('.glb')
             metadata_file = output_base.with_suffix('.json')
 
+            # When a source CRS override is active and no reprojection occurred
+            # (source == output CRS), pass the override as the mesh CRS so that
+            # generate_mesh uses it for the origin WGS84 computation.
             success = mesh_generator.generate_mesh(
                 geotiff_for_mesh, mesh_file, metadata_file,
-                source_crs=mesh_crs
+                source_crs=mesh_crs,
+                source_crs_override=self.source_crs_override if not needs_reprojection else None
             )
 
             if not success:

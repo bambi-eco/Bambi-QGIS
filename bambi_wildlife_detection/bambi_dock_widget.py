@@ -653,6 +653,18 @@ class BambiDockWidget(QDockWidget):
         )
         geotiff_input_layout.addRow("Simplify Factor:", self.geotiff_simplify_spin)
 
+        # Source CRS override
+        self.geotiff_source_crs_edit = QLineEdit()
+        self.geotiff_source_crs_edit.setPlaceholderText("Auto-detect (e.g. EPSG:32633)")
+        self.geotiff_source_crs_edit.setToolTip(
+            "Override the input CRS of the GeoTIFF.\n"
+            "Leave empty to use the CRS stored in the file.\n"
+            "Use this when the file's embedded CRS metadata is wrong\n"
+            "(e.g. file contains SWEREF99TM / UTM Zone 33 data but is\n"
+            "labelled EPSG:32634)."
+        )
+        geotiff_input_layout.addRow("Source CRS:", self.geotiff_source_crs_edit)
+
         # Convert button
         convert_row = QHBoxLayout()
         self.geotiff_convert_btn = QPushButton("Convert GeoTIFF to Mesh")
@@ -2536,8 +2548,39 @@ class BambiDockWidget(QDockWidget):
             )
             return
 
+        # Determine source CRS override (optional)
+        source_crs_override = self.geotiff_source_crs_edit.text().strip().upper()
+        if source_crs_override:
+            if not source_crs_override.startswith("EPSG:"):
+                source_crs_override = f"EPSG:{source_crs_override}"
+        else:
+            source_crs_override = None
+
+        # Read file CRS for display in confirmation dialog.
+        # Avoid to_epsg() — it uses the PROJ database which may be QGIS's outdated version.
+        file_crs_label = "Unknown"
+        try:
+            import rasterio, re
+            with rasterio.open(geotiff_path) as src:
+                if src.crs:
+                    # Try WKT regex first (no DB lookup needed)
+                    matches = re.findall(r'ID\["EPSG",(\d+)\]', str(src.crs))
+                    if matches:
+                        file_crs_label = f"EPSG:{matches[-1]}"
+                    else:
+                        try:
+                            epsg = src.crs.to_epsg()
+                            if epsg:
+                                file_crs_label = f"EPSG:{epsg}"
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+        input_crs_label = source_crs_override if source_crs_override else file_crs_label
+
         # Confirm conversion
-        crs_info = f"\nOutput CRS: {output_crs}" if output_crs else "\n(Using original CRS)"
+        crs_info = f"\nInput CRS: {input_crs_label}"
+        crs_info += f"\nOutput CRS: {output_crs}" if output_crs else "\n(Using original CRS)"
         reply = QMessageBox.question(
             self, "Convert GeoTIFF",
             f"Convert GeoTIFF to mesh?\n\n"
@@ -2561,7 +2604,8 @@ class BambiDockWidget(QDockWidget):
             geotiff_path=geotiff_path,
             output_folder=output_folder,
             output_crs=output_crs,
-            simplify_factor=simplify_factor
+            simplify_factor=simplify_factor,
+            source_crs_override=source_crs_override
         )
 
         self.geotiff_convert_worker.moveToThread(self.geotiff_convert_thread)
