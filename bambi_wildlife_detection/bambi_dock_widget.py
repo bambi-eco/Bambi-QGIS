@@ -1555,6 +1555,32 @@ class BambiDockWidget(QDockWidget):
         add_detections_row.addWidget(self.frame_detections_status)
         steps_btn_layout.addLayout(add_detections_row)
 
+        # -> Calculate Perpendicular
+        perp_calc_row = QHBoxLayout()
+        self.perpendicular_btn = QPushButton("   → Calculate Perpendicular")
+        self.perpendicular_btn.clicked.connect(self.run_perpendicular)
+        self.perpendicular_btn.setToolTip(
+            "For each detection, find the nearest point on the flight route and\n"
+            "calculate the perpendicular distance. Requires both flight route and\n"
+            "geo-referenced detections."
+        )
+        self.perpendicular_status = QLabel("⚪")
+        perp_calc_row.addWidget(self.perpendicular_btn)
+        perp_calc_row.addWidget(self.perpendicular_status)
+        steps_btn_layout.addLayout(perp_calc_row)
+
+        # -> Add Perpendicular Lines to QGIS
+        perp_add_row = QHBoxLayout()
+        self.add_perpendicular_btn = QPushButton("   → Add Perpendicular Lines to QGIS")
+        self.add_perpendicular_btn.clicked.connect(self.add_perpendicular_to_qgis)
+        self.add_perpendicular_btn.setToolTip(
+            "Add line layers connecting each detection to its nearest point on the flight route."
+        )
+        self.add_perpendicular_status = QLabel("⚪")
+        perp_add_row.addWidget(self.add_perpendicular_btn)
+        perp_add_row.addWidget(self.add_perpendicular_status)
+        steps_btn_layout.addLayout(perp_add_row)
+
         # ----- Step 5: Track Animals -----
         step5_row = QHBoxLayout()
         self.track_btn = QPushButton("5. Track Animals")
@@ -4092,6 +4118,8 @@ class BambiDockWidget(QDockWidget):
             "add_ortho": self.add_ortho_status,
             "add_geotiffs": self.add_geotiffs_status,
             "add_flight_route": self.add_flight_route_status,
+            "perpendicular": self.perpendicular_status,
+            "add_perpendicular": self.add_perpendicular_status,
             "sam3_segmentation": self.sam3_segment_status,
             "sam3_georeference": self.sam3_georef_status,
             "add_sam3": self.add_sam3_status
@@ -4117,10 +4145,131 @@ class BambiDockWidget(QDockWidget):
         self.add_ortho_btn.setEnabled(enabled)
         self.add_geotiffs_btn.setEnabled(enabled)
         self.add_flight_route_btn.setEnabled(enabled)
+        self.perpendicular_btn.setEnabled(enabled)
+        self.add_perpendicular_btn.setEnabled(enabled)
         self.refresh_status_btn.setEnabled(enabled)
         self.sam3_segment_btn.setEnabled(enabled)
         self.sam3_georef_btn.setEnabled(enabled)
         self.add_sam3_btn.setEnabled(enabled)
+
+    def run_perpendicular(self):
+        """Run perpendicular distance calculation step."""
+        config = self.get_config()
+        target_folder = config["target_folder"]
+
+        route_file = os.path.join(target_folder, "flight_route", "flight_route.geojson")
+        georef_file = os.path.join(target_folder, "georeferenced", "georeferenced.txt")
+
+        missing = []
+        if not os.path.exists(route_file):
+            missing.append("Flight route (run Generate Flight Route first)")
+        if not os.path.exists(georef_file):
+            missing.append("Geo-referenced detections (run Geo-Reference Detections first)")
+
+        if missing:
+            QMessageBox.warning(
+                self, "Missing Prerequisites",
+                "The following are required:\n\n" + "\n".join(f"• {m}" for m in missing)
+            )
+            return
+
+        self.start_worker("perpendicular")
+
+    def add_perpendicular_to_qgis(self):
+        """Add perpendicular lines (detection → nearest flight route point) to QGIS."""
+        config = self.get_config()
+        perp_file = os.path.join(config["target_folder"], "flight_route", "perpendicular.json")
+
+        if not os.path.exists(perp_file):
+            QMessageBox.warning(
+                self, "Missing Data",
+                "Perpendicular distances have not been calculated.\n"
+                "Please run 'Calculate Perpendicular' first."
+            )
+            return
+
+        try:
+            self.log("Adding perpendicular lines to QGIS...")
+            self.update_status("add_perpendicular", "🟡 Loading...")
+
+            with open(perp_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            perpendiculas = data.get("perpendiculas", [])
+            if not perpendiculas:
+                QMessageBox.warning(self, "No Data", "No perpendicular results found.")
+                self.update_status("add_perpendicular", "🔴 No data")
+                return
+
+            target_crs = QgsCoordinateReferenceSystem(f"EPSG:{config['target_epsg']}")
+
+            # Create a line layer: one line per detection (foot point → detection center)
+            layer = QgsVectorLayer(
+                "LineString?crs=" + target_crs.authid(),
+                "Perpendicular Lines",
+                "memory"
+            )
+            provider = layer.dataProvider()
+            provider.addAttributes([
+                QgsField("det_idx", QVariant.Int),
+                QgsField("frame", QVariant.Int),
+                QgsField("confidence", QVariant.Double),
+                QgsField("class_id", QVariant.Int),
+                QgsField("distance_m", QVariant.Double),
+            ])
+            layer.updateFields()
+
+            features = []
+            for entry in perpendiculas:
+                foot = entry["foot_point"]
+                center = entry["detection_center"]
+
+                feat = QgsFeature()
+                feat.setGeometry(QgsGeometry.fromPolylineXY([
+                    QgsPointXY(foot[0], foot[1]),
+                    QgsPointXY(center[0], center[1])
+                ]))
+                feat.setAttributes([
+                    entry["det_idx"],
+                    entry["frame"],
+                    round(entry["confidence"], 4),
+                    entry["class_id"],
+                    round(entry["distance_m"], 4),
+                ])
+                features.append(feat)
+
+            provider.addFeatures(features)
+            layer.updateExtents()
+
+            # Style: thin orange lines
+            symbol = QgsLineSymbol.createSimple({
+                'color': '#ff7800',
+                'width': '0.6',
+                'capstyle': 'round',
+            })
+            layer.renderer().setSymbol(symbol)
+
+            # Persist and add to project
+            layer = self._persist_memory_layer(layer, "Perpendicular_Lines", "flight_route_layers")
+            symbol = QgsLineSymbol.createSimple({
+                'color': '#ff7800',
+                'width': '0.6',
+                'capstyle': 'round',
+            })
+            layer.renderer().setSymbol(symbol)
+
+            group = self._create_layer_group("BAMBI Perpendicular")
+            QgsProject.instance().addMapLayer(layer, False)
+            group.addLayer(layer)
+
+            self.log(f"Added {len(features)} perpendicular lines to QGIS")
+            self.update_status("add_perpendicular", "🟢 Completed")
+            self.iface.mapCanvas().refresh()
+
+        except Exception as e:
+            self.log(f"Error adding perpendicular lines: {str(e)}")
+            self.update_status("add_perpendicular", "🔴 Error")
+            QMessageBox.critical(self, "Error", f"Failed to add perpendicular lines: {str(e)}")
 
     def add_tracks_to_qgis(self):
         """Add tracked animals as individual layer groups to QGIS.

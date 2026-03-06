@@ -144,6 +144,8 @@ class ProcessingWorker(QObject):
                 self.processor.run_sam3_segmentation(self.config, self.progress.emit, self.log.emit, self.is_cancelled)
             elif self.step == "sam3_georeference":
                 self.processor.run_sam3_georeference(self.config, self.progress.emit, self.log.emit, self.is_cancelled)
+            elif self.step == "perpendicular":
+                self.processor.run_perpendicular(self.config, self.progress.emit, self.log.emit, self.is_cancelled)
             else:
                 raise ValueError(f"Unknown step: {self.step}")
 
@@ -743,6 +745,211 @@ class BambiProcessor:
         if log_fn:
             log_fn(f"Camera positions saved to: {camera_points_file}")
             log_fn("Flight route generation complete")
+
+        if progress_fn:
+            progress_fn(100)
+
+    def run_perpendicular(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
+        """Calculate perpendicular distances from detections to the flight route.
+
+        For each georeferenced detection center, finds the nearest point on the
+        AirData flight route (LineString) and records the perpendicular distance.
+        Results are saved to flight_route/perpendicular.json.
+
+        :param config: Configuration dictionary
+        :param progress_fn: Progress callback function
+        :param log_fn: Logging callback function
+        :param cancel_check: Optional function that returns True if cancelled
+        """
+        import math
+
+        target_folder = config["target_folder"]
+        target_epsg = config.get("target_epsg", 32633)
+
+        if log_fn:
+            log_fn("Calculating perpendicular distances to flight route...")
+
+        if progress_fn:
+            progress_fn(5)
+
+        # Load flight route LineString
+        route_line_file = os.path.join(target_folder, "flight_route", "flight_route.geojson")
+        if not os.path.exists(route_line_file):
+            raise FileNotFoundError(
+                "flight_route.geojson not found. Please run 'Generate Flight Route' first."
+            )
+
+        with open(route_line_file, 'r') as f:
+            route_geojson = json.load(f)
+
+        # Extract LineString coordinates
+        route_coords = None
+        for feature in route_geojson.get("features", []):
+            geom = feature.get("geometry", {})
+            if geom.get("type") == "LineString":
+                route_coords = geom["coordinates"]
+                break
+
+        if not route_coords or len(route_coords) < 2:
+            raise RuntimeError(
+                "Flight route does not contain a valid LineString. "
+                "Need at least 2 GPS points in the AirData file."
+            )
+
+        if log_fn:
+            log_fn(f"Flight route loaded: {len(route_coords)} GPS points")
+
+        if progress_fn:
+            progress_fn(20)
+
+        # Load georeferenced detections
+        georef_file = os.path.join(target_folder, "georeferenced", "georeferenced.txt")
+        if not os.path.exists(georef_file):
+            raise FileNotFoundError(
+                "georeferenced.txt not found. Please run 'Geo-Reference Detections' first."
+            )
+
+        detections = []
+        with open(georef_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                parts = line.split()
+                if len(parts) >= 10:
+                    try:
+                        detections.append({
+                            'idx': int(parts[0]),
+                            'frame': int(parts[1]),
+                            'x1': float(parts[2]), 'y1': float(parts[3]), 'z1': float(parts[4]),
+                            'x2': float(parts[5]), 'y2': float(parts[6]), 'z2': float(parts[7]),
+                            'confidence': float(parts[8]),
+                            'class_id': int(parts[9])
+                        })
+                    except (ValueError, IndexError):
+                        continue
+
+        if not detections:
+            raise RuntimeError("No valid georeferenced detections found.")
+
+        if log_fn:
+            log_fn(f"Loaded {len(detections)} georeferenced detections")
+
+        if progress_fn:
+            progress_fn(40)
+
+        # For each detection compute perpendicular foot and distance
+        results = []
+        for i, det in enumerate(detections):
+            if cancel_check and cancel_check():
+                raise CancelledException("Perpendicular calculation cancelled")
+
+            cx = (det['x1'] + det['x2']) / 2.0
+            cy = (det['y1'] + det['y2']) / 2.0
+            cz = (det['z1'] + det['z2']) / 2.0
+
+            # Find nearest point on the LineString (2D, ignoring Z)
+            best_dist = float('inf')
+            best_fx, best_fy = route_coords[0][0], route_coords[0][1]
+
+            for j in range(len(route_coords) - 1):
+                ax, ay = route_coords[j][0], route_coords[j][1]
+                bx, by = route_coords[j + 1][0], route_coords[j + 1][1]
+
+                dx, dy = bx - ax, by - ay
+                seg_len_sq = dx * dx + dy * dy
+
+                if seg_len_sq < 1e-12:
+                    fx, fy = ax, ay
+                else:
+                    t = ((cx - ax) * dx + (cy - ay) * dy) / seg_len_sq
+                    t = max(0.0, min(1.0, t))
+                    fx = ax + t * dx
+                    fy = ay + t * dy
+
+                dist = math.sqrt((cx - fx) ** 2 + (cy - fy) ** 2)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_fx, best_fy = fx, fy
+
+            results.append({
+                'det_idx': det['idx'],
+                'frame': det['frame'],
+                'confidence': det['confidence'],
+                'class_id': det['class_id'],
+                'detection_center': [cx, cy, cz],
+                'foot_point': [best_fx, best_fy],
+                'distance_m': round(best_dist, 4)
+            })
+
+            if progress_fn and i % max(1, len(detections) // 10) == 0:
+                progress_fn(40 + int((i / len(detections)) * 50))
+
+        if progress_fn:
+            progress_fn(95)
+
+        # Build frame index → image filename map from poses file
+        # Try thermal poses first, then RGB
+        frame_to_image: Dict[int, str] = {}
+        for suffix in ("t", "w"):
+            poses_path = os.path.join(target_folder, f"poses_{suffix}.json")
+            if os.path.exists(poses_path):
+                try:
+                    with open(poses_path, 'r') as f:
+                        poses = json.load(f)
+                    for idx, img_info in enumerate(poses.get("images", [])):
+                        imagefile = img_info.get("imagefile", "")
+                        if imagefile:
+                            frame_to_image[idx] = imagefile
+                    if frame_to_image:
+                        if log_fn:
+                            log_fn(f"Mapped {len(frame_to_image)} frames to image filenames "
+                                   f"(poses_{suffix}.json)")
+                        break
+                except Exception as e:
+                    if log_fn:
+                        log_fn(f"Warning: could not read poses_{suffix}.json: {e}")
+
+        route_folder = os.path.join(target_folder, "flight_route")
+        os.makedirs(route_folder, exist_ok=True)
+
+        # Save flat perpendicular.json (used by "Add Perpendicular Lines to QGIS")
+        output = {
+            'crs': f"EPSG:{target_epsg}",
+            'total_detections': len(results),
+            'perpendiculas': results
+        }
+        output_file = os.path.join(route_folder, "perpendicular.json")
+        with open(output_file, 'w', encoding='utf-8') as f:
+            json.dump(output, f, indent=2)
+
+        # Save image-keyed perpendicular_by_image.json
+        # Structure: { "imagefile": { "0": { center, perpendicular, distance }, ... } }
+        by_image: Dict[str, Dict] = {}
+        for r in results:
+            imagefile = frame_to_image.get(r['frame'], f"frame_{r['frame']:06d}")
+            if imagefile not in by_image:
+                by_image[imagefile] = {}
+            # Local detection index within this image (sequential order of appearance)
+            local_idx = str(len(by_image[imagefile]))
+            cz = r['detection_center'][2]
+            by_image[imagefile][local_idx] = {
+                'center': r['detection_center'],
+                'perpendicular': [r['foot_point'][0], r['foot_point'][1], cz],
+                'distance': r['distance_m']
+            }
+
+        by_image_file = os.path.join(route_folder, "perpendicular_by_image.json")
+        with open(by_image_file, 'w', encoding='utf-8') as f:
+            json.dump(by_image, f, indent=2)
+
+        if log_fn:
+            log_fn(f"Perpendicular distances saved to: {output_file}")
+            log_fn(f"Per-image summary saved to: {by_image_file}")
+            distances = [r['distance_m'] for r in results]
+            log_fn(f"Distance stats: min={min(distances):.1f}m, "
+                   f"max={max(distances):.1f}m, "
+                   f"mean={sum(distances)/len(distances):.1f}m")
 
         if progress_fn:
             progress_fn(100)
