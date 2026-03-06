@@ -543,10 +543,11 @@ class BambiProcessor:
                 log_fn(f"Frames saved to: frames_w/")
 
     def run_flight_route(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
-        """Generate a flight route polyline layer from camera positions.
+        """Generate flight route layers from AirData GPS and camera frame positions.
 
-        Creates a GeoJSON file with a LineString representing the drone's
-        flight path based on the camera positions in poses.json.
+        Creates two GeoJSON files:
+        - flight_route.geojson: LineString from AirData GPS log
+        - camera_positions.geojson: Point markers at each extracted frame position
 
         :param config: Configuration dictionary
         :param progress_fn: Progress callback function
@@ -557,15 +558,16 @@ class BambiProcessor:
         camera_name = "Thermal" if camera == "T" else "RGB"
 
         if log_fn:
-            log_fn(f"Generating flight route from {camera_name} poses...")
+            log_fn(f"Generating flight route from AirData + {camera_name} poses...")
 
         target_folder = config["target_folder"]
         target_epsg = config.get("target_epsg", 32633)
+        airdata_path = config.get("airdata_path", "")
 
         if progress_fn:
             progress_fn(10)
 
-        # Load poses file for selected camera
+        # Load poses file for camera position markers
         poses_file = os.path.join(target_folder, f"poses_{camera_suffix}.json")
         if not os.path.exists(poses_file):
             raise FileNotFoundError(f"poses_{camera_suffix}.json not found at {poses_file}")
@@ -578,7 +580,7 @@ class BambiProcessor:
             raise RuntimeError("Need at least 1 frame to create a flight route")
 
         if log_fn:
-            log_fn(f"Creating flight route from {len(images)} positions")
+            log_fn(f"Found {len(images)} frame positions")
 
         if progress_fn:
             progress_fn(20)
@@ -615,23 +617,15 @@ class BambiProcessor:
             log_fn(f"Using coordinate offset: X={coord_offset_x:.2f}, Y={coord_offset_y:.2f}")
 
         if progress_fn:
-            progress_fn(40)
+            progress_fn(30)
 
-        # Build coordinates list for the flight path
-        coordinates = []
+        # Build camera position point features (no connecting line)
         point_features = []
-
         for i, img_info in enumerate(images):
             location = img_info.get("location", [0, 0, 0])
-
-            # Apply coordinate offset to get real-world coordinates
             x = location[0] + coord_offset_x
             y = location[1] + coord_offset_y
             z = location[2]
-
-            coordinates.append([x, y, z])
-
-            # Also create point features for each camera position
             point_features.append({
                 "type": "Feature",
                 "geometry": {
@@ -647,73 +641,108 @@ class BambiProcessor:
             })
 
         if progress_fn:
-            progress_fn(60)
+            progress_fn(50)
+
+        # Build flight route line from AirData GPS log
+        route_coordinates = []
+        if airdata_path and os.path.exists(airdata_path):
+            try:
+                from bambi.airdata.air_data_parser import AirDataParser
+                from pyproj import Transformer, CRS as PyprojCRS
+
+                # Use PROJ4 strings to avoid PROJ database version conflicts
+                # (QGIS bundles an older proj.db that pyproj may pick up first)
+                wgs84_proj4 = "+proj=longlat +datum=WGS84 +no_defs"
+                if 32601 <= target_epsg <= 32660:
+                    zone = target_epsg - 32600
+                    utm_proj4 = f"+proj=utm +zone={zone} +datum=WGS84 +units=m +no_defs"
+                elif 32701 <= target_epsg <= 32760:
+                    zone = target_epsg - 32700
+                    utm_proj4 = f"+proj=utm +zone={zone} +south +datum=WGS84 +units=m +no_defs"
+                else:
+                    from bambi_wildlife_detection.austria_dem_downloader import get_proj4_for_crs, WGS84_PROJ4
+                    wgs84_proj4 = WGS84_PROJ4
+                    utm_proj4 = get_proj4_for_crs(f"EPSG:{target_epsg}")
+
+                transformer = Transformer.from_crs(
+                    PyprojCRS.from_proj4(wgs84_proj4),
+                    PyprojCRS.from_proj4(utm_proj4),
+                    always_xy=True
+                )
+
+                parser = AirDataParser()
+                for frame in parser.parse_yield(airdata_path):
+                    if frame.latitude is None or frame.longitude is None:
+                        continue
+                    alt = frame.altitude_above_seaLevel if frame.altitude_above_seaLevel is not None else (
+                        frame.altitude if frame.altitude is not None else 0.0
+                    )
+                    x, y = transformer.transform(frame.longitude, frame.latitude)
+                    route_coordinates.append([x, y, float(alt)])
+
+                if log_fn:
+                    log_fn(f"Loaded {len(route_coordinates)} GPS positions from AirData")
+            except Exception as e:
+                if log_fn:
+                    log_fn(f"Warning: Could not load AirData route: {e}")
+        else:
+            if log_fn:
+                log_fn("No AirData file specified, skipping flight route line")
+
+        if progress_fn:
+            progress_fn(80)
 
         # Create output folder
         route_folder = os.path.join(target_folder, "flight_route")
         os.makedirs(route_folder, exist_ok=True)
 
-        # Create GeoJSON for the flight path line (or single point if only one frame)
-        if len(coordinates) == 1:
-            route_geometry = {"type": "Point", "coordinates": coordinates[0]}
-        else:
-            route_geometry = {"type": "LineString", "coordinates": coordinates}
-
-        flight_line_geojson = {
-            "type": "FeatureCollection",
-            "name": "flight_route",
-            "crs": {
-                "type": "name",
-                "properties": {
-                    "name": f"urn:ogc:def:crs:EPSG::{target_epsg}"
-                }
-            },
-            "features": [
-                {
-                    "type": "Feature",
-                    "geometry": route_geometry,
-                    "properties": {
-                        "name": "Flight Route",
-                        "total_frames": len(images),
-                        "start_time": images[0].get("timestamp", ""),
-                        "end_time": images[-1].get("timestamp", "")
-                    }
-                }
-            ]
+        crs_block = {
+            "type": "name",
+            "properties": {"name": f"urn:ogc:def:crs:EPSG::{target_epsg}"}
         }
 
-        # Save flight route line
-        route_line_file = os.path.join(route_folder, "flight_route.geojson")
-        with open(route_line_file, 'w', encoding='utf-8') as f:
-            json.dump(flight_line_geojson, f, indent=2)
+        # Save flight route line (from AirData)
+        if route_coordinates:
+            if len(route_coordinates) == 1:
+                route_geometry = {"type": "Point", "coordinates": route_coordinates[0]}
+            else:
+                route_geometry = {"type": "LineString", "coordinates": route_coordinates}
 
-        if log_fn:
-            log_fn(f"Flight route line saved to: {route_line_file}")
+            flight_line_geojson = {
+                "type": "FeatureCollection",
+                "name": "flight_route",
+                "crs": crs_block,
+                "features": [
+                    {
+                        "type": "Feature",
+                        "geometry": route_geometry,
+                        "properties": {
+                            "name": "Flight Route",
+                            "total_gps_points": len(route_coordinates)
+                        }
+                    }
+                ]
+            }
+            route_line_file = os.path.join(route_folder, "flight_route.geojson")
+            with open(route_line_file, 'w', encoding='utf-8') as f:
+                json.dump(flight_line_geojson, f, indent=2)
+            if log_fn:
+                log_fn(f"Flight route line saved to: {route_line_file}")
 
-        if progress_fn:
-            progress_fn(80)
-
-        # Create GeoJSON for camera positions (points)
+        # Save camera frame positions (points only, no connecting line)
         camera_points_geojson = {
             "type": "FeatureCollection",
             "name": "camera_positions",
-            "crs": {
-                "type": "name",
-                "properties": {
-                    "name": f"urn:ogc:def:crs:EPSG::{target_epsg}"
-                }
-            },
+            "crs": crs_block,
             "features": point_features
         }
-
-        # Save camera positions
         camera_points_file = os.path.join(route_folder, "camera_positions.geojson")
         with open(camera_points_file, 'w', encoding='utf-8') as f:
             json.dump(camera_points_geojson, f, indent=2)
 
         if log_fn:
             log_fn(f"Camera positions saved to: {camera_points_file}")
-            log_fn(f"Flight route generation complete")
+            log_fn("Flight route generation complete")
 
         if progress_fn:
             progress_fn(100)
