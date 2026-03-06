@@ -1599,6 +1599,33 @@ class BambiDockWidget(QDockWidget):
         add_tracks_row.addWidget(self.layers_status)
         steps_btn_layout.addLayout(add_tracks_row)
 
+        # -> Calculate Track Perpendicular
+        track_perp_calc_row = QHBoxLayout()
+        self.track_perpendicular_btn = QPushButton("   → Calculate Track Perpendicular")
+        self.track_perpendicular_btn.clicked.connect(self.run_track_perpendicular)
+        self.track_perpendicular_btn.setToolTip(
+            "For each track, find the nearest point on the flight route to the\n"
+            "last bounding box and calculate the perpendicular distance.\n"
+            "Requires both flight route and tracked animals."
+        )
+        self.track_perpendicular_status = QLabel("⚪")
+        track_perp_calc_row.addWidget(self.track_perpendicular_btn)
+        track_perp_calc_row.addWidget(self.track_perpendicular_status)
+        steps_btn_layout.addLayout(track_perp_calc_row)
+
+        # -> Add Track Perpendicular Lines to QGIS
+        track_perp_add_row = QHBoxLayout()
+        self.add_track_perpendicular_btn = QPushButton("   → Add Track Perpendicular Lines to QGIS")
+        self.add_track_perpendicular_btn.clicked.connect(self.add_track_perpendicular_to_qgis)
+        self.add_track_perpendicular_btn.setToolTip(
+            "Add line layers connecting the last detection of each track\n"
+            "to its nearest point on the flight route."
+        )
+        self.add_track_perpendicular_status = QLabel("⚪")
+        track_perp_add_row.addWidget(self.add_track_perpendicular_btn)
+        track_perp_add_row.addWidget(self.add_track_perpendicular_status)
+        steps_btn_layout.addLayout(track_perp_add_row)
+
         # ----- Step 6: Calculate Field of View -----
         step6_row = QHBoxLayout()
         self.calculate_fov_btn = QPushButton("6. Calculate Field of View")
@@ -4120,6 +4147,8 @@ class BambiDockWidget(QDockWidget):
             "add_flight_route": self.add_flight_route_status,
             "perpendicular": self.perpendicular_status,
             "add_perpendicular": self.add_perpendicular_status,
+            "track_perpendicular": self.track_perpendicular_status,
+            "add_track_perpendicular": self.add_track_perpendicular_status,
             "sam3_segmentation": self.sam3_segment_status,
             "sam3_georeference": self.sam3_georef_status,
             "add_sam3": self.add_sam3_status
@@ -4147,6 +4176,8 @@ class BambiDockWidget(QDockWidget):
         self.add_flight_route_btn.setEnabled(enabled)
         self.perpendicular_btn.setEnabled(enabled)
         self.add_perpendicular_btn.setEnabled(enabled)
+        self.track_perpendicular_btn.setEnabled(enabled)
+        self.add_track_perpendicular_btn.setEnabled(enabled)
         self.refresh_status_btn.setEnabled(enabled)
         self.sam3_segment_btn.setEnabled(enabled)
         self.sam3_georef_btn.setEnabled(enabled)
@@ -4271,6 +4302,125 @@ class BambiDockWidget(QDockWidget):
             self.update_status("add_perpendicular", "🔴 Error")
             QMessageBox.critical(self, "Error", f"Failed to add perpendicular lines: {str(e)}")
 
+    def run_track_perpendicular(self):
+        """Run track perpendicular distance calculation step."""
+        config = self.get_config()
+        target_folder = config["target_folder"]
+
+        route_file = os.path.join(target_folder, "flight_route", "flight_route.geojson")
+        tracks_folder = os.path.join(target_folder, "tracks")
+
+        missing = []
+        if not os.path.exists(route_file):
+            missing.append("Flight route (run Generate Flight Route first)")
+        if not os.path.exists(tracks_folder):
+            missing.append("Tracked animals (run Track Animals first)")
+
+        if missing:
+            QMessageBox.warning(
+                self, "Missing Prerequisites",
+                "The following are required:\n\n" + "\n".join(f"• {m}" for m in missing)
+            )
+            return
+
+        self.start_worker("track_perpendicular")
+
+    def add_track_perpendicular_to_qgis(self):
+        """Add track perpendicular lines (last detection → nearest flight route point) to QGIS."""
+        config = self.get_config()
+        perp_file = os.path.join(config["target_folder"], "flight_route", "perpendicular_tracks.json")
+
+        if not os.path.exists(perp_file):
+            QMessageBox.warning(
+                self, "Missing Data",
+                "Track perpendicular distances have not been calculated.\n"
+                "Please run 'Calculate Track Perpendicular' first."
+            )
+            return
+
+        try:
+            self.log("Adding track perpendicular lines to QGIS...")
+            self.update_status("add_track_perpendicular", "🟡 Loading...")
+
+            with open(perp_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            track_entries = data.get("tracks", [])
+            if not track_entries:
+                QMessageBox.warning(self, "No Data", "No track perpendicular results found.")
+                self.update_status("add_track_perpendicular", "🔴 No data")
+                return
+
+            target_crs = QgsCoordinateReferenceSystem(f"EPSG:{config['target_epsg']}")
+
+            layer = QgsVectorLayer(
+                "LineString?crs=" + target_crs.authid(),
+                "Track Perpendicular Lines",
+                "memory"
+            )
+            provider = layer.dataProvider()
+            provider.addAttributes([
+                QgsField("track_id", QVariant.Int),
+                QgsField("last_frame", QVariant.Int),
+                QgsField("last_image", QVariant.String),
+                QgsField("confidence", QVariant.Double),
+                QgsField("class_id", QVariant.Int),
+                QgsField("distance_m", QVariant.Double),
+            ])
+            layer.updateFields()
+
+            features = []
+            for entry in track_entries:
+                foot = entry["foot_point"]
+                center = entry["detection_center"]
+
+                feat = QgsFeature()
+                feat.setGeometry(QgsGeometry.fromPolylineXY([
+                    QgsPointXY(foot[0], foot[1]),
+                    QgsPointXY(center[0], center[1])
+                ]))
+                feat.setAttributes([
+                    entry["track_id"],
+                    entry["last_frame"],
+                    entry.get("last_image", ""),
+                    round(entry["confidence"], 4),
+                    entry["class_id"],
+                    round(entry["distance_m"], 4),
+                ])
+                features.append(feat)
+
+            provider.addFeatures(features)
+            layer.updateExtents()
+
+            # Style: slightly thicker purple lines to distinguish from detection perpendiculars
+            symbol = QgsLineSymbol.createSimple({
+                'color': '#9b30ff',
+                'width': '0.8',
+                'capstyle': 'round',
+            })
+            layer.renderer().setSymbol(symbol)
+
+            layer = self._persist_memory_layer(layer, "Track_Perpendicular_Lines", "flight_route_layers")
+            symbol = QgsLineSymbol.createSimple({
+                'color': '#9b30ff',
+                'width': '0.8',
+                'capstyle': 'round',
+            })
+            layer.renderer().setSymbol(symbol)
+
+            group = self._create_layer_group("BAMBI Track Perpendicular")
+            QgsProject.instance().addMapLayer(layer, False)
+            group.addLayer(layer)
+
+            self.log(f"Added {len(features)} track perpendicular lines to QGIS")
+            self.update_status("add_track_perpendicular", "🟢 Completed")
+            self.iface.mapCanvas().refresh()
+
+        except Exception as e:
+            self.log(f"Error adding track perpendicular lines: {str(e)}")
+            self.update_status("add_track_perpendicular", "🔴 Error")
+            QMessageBox.critical(self, "Error", f"Failed to add track perpendicular lines: {str(e)}")
+
     def add_tracks_to_qgis(self):
         """Add tracked animals as individual layer groups to QGIS.
 
@@ -4319,11 +4469,11 @@ class BambiDockWidget(QDockWidget):
                     continue
                 file_basename = os.path.basename(track_file).replace(".csv", "")
                 for track_id, detections in tracks.items():
-                    if len(detections) >= 2:  # Skip single-detection tracks
+                    if detections:
                         all_tracks[(file_basename, track_id)] = detections
 
             if not all_tracks:
-                QMessageBox.warning(self, "No Tracks", "No valid tracks found (need at least 2 detections).")
+                QMessageBox.warning(self, "No Tracks", "No valid tracks found.")
                 self.update_status("add_layers", "🔴 No valid tracks")
                 return
 
@@ -4375,45 +4525,43 @@ class BambiDockWidget(QDockWidget):
                     track_name = f"Track {file_basename}_{track_id}"
                 track_group = main_group.addGroup(track_name)
 
-                # Create path layer (polyline)
-                path_layer = QgsVectorLayer(
-                    "LineString?crs=" + target_crs.authid(),
-                    "Path",
-                    "memory"
-                )
-                path_provider = path_layer.dataProvider()
-                path_provider.addAttributes([
-                    QgsField("track_id", QVariant.Int),
-                    QgsField("start_frame", QVariant.Int),
-                    QgsField("end_frame", QVariant.Int),
-                    QgsField("num_detections", QVariant.Int),
-                    QgsField("avg_confidence", QVariant.Double)
-                ])
-                path_layer.updateFields()
+                # Create path layer (polyline) — only when there are 2+ detections
+                path_layer = None
+                if len(detections_sorted) >= 2:
+                    path_layer = QgsVectorLayer(
+                        "LineString?crs=" + target_crs.authid(),
+                        "Path",
+                        "memory"
+                    )
+                    path_provider = path_layer.dataProvider()
+                    path_provider.addAttributes([
+                        QgsField("track_id", QVariant.Int),
+                        QgsField("start_frame", QVariant.Int),
+                        QgsField("end_frame", QVariant.Int),
+                        QgsField("num_detections", QVariant.Int),
+                        QgsField("avg_confidence", QVariant.Double)
+                    ])
+                    path_layer.updateFields()
 
-                # Calculate bounding box centers for the path
-                center_points = []
-                for det in detections_sorted:
-                    center_x = (det['x1'] + det['x2']) / 2.0
-                    center_y = (det['y1'] + det['y2']) / 2.0
-                    center_points.append(QgsPointXY(center_x, center_y))
+                    center_points = [
+                        QgsPointXY((det['x1'] + det['x2']) / 2.0, (det['y1'] + det['y2']) / 2.0)
+                        for det in detections_sorted
+                    ]
 
-                # Create path feature
-                path_feat = QgsFeature()
-                path_feat.setGeometry(QgsGeometry.fromPolylineXY(center_points))
-                avg_conf = sum(d['confidence'] for d in detections_sorted) / len(detections_sorted)
-                path_feat.setAttributes([
-                    track_id,
-                    detections_sorted[0]['frame'],
-                    detections_sorted[-1]['frame'],
-                    len(detections_sorted),
-                    round(avg_conf, 4)
-                ])
-                path_provider.addFeatures([path_feat])
-                path_layer.updateExtents()
+                    path_feat = QgsFeature()
+                    path_feat.setGeometry(QgsGeometry.fromPolylineXY(center_points))
+                    avg_conf = sum(d['confidence'] for d in detections_sorted) / len(detections_sorted)
+                    path_feat.setAttributes([
+                        track_id,
+                        detections_sorted[0]['frame'],
+                        detections_sorted[-1]['frame'],
+                        len(detections_sorted),
+                        round(avg_conf, 4)
+                    ])
+                    path_provider.addFeatures([path_feat])
+                    path_layer.updateExtents()
 
-                # Style path layer
-                self._style_path_layer(path_layer, color_str)
+                    self._style_path_layer(path_layer, color_str)
 
                 # Create final position layer (polygon)
                 bbox_layer = QgsVectorLayer(
@@ -4458,22 +4606,18 @@ class BambiDockWidget(QDockWidget):
                     bbox_layer, f"Track{track_id}_FinalPosition", "tracks_layers",
                     display_name="Final Position"
                 )
-                path_layer = self._persist_memory_layer(
-                    path_layer, f"Track{track_id}_Path", "tracks_layers",
-                    display_name="Path"
-                )
-
-                # Re-apply styles after persistence
                 self._style_bbox_layer(bbox_layer, color_str)
-                self._style_path_layer(path_layer, color_str)
-
-                # Add layers to project and group
-                # Add bbox first (renders below), then path (renders above)
                 QgsProject.instance().addMapLayer(bbox_layer, False)
                 track_group.addLayer(bbox_layer)
 
-                QgsProject.instance().addMapLayer(path_layer, False)
-                track_group.addLayer(path_layer)
+                if path_layer is not None:
+                    path_layer = self._persist_memory_layer(
+                        path_layer, f"Track{track_id}_Path", "tracks_layers",
+                        display_name="Path"
+                    )
+                    self._style_path_layer(path_layer, color_str)
+                    QgsProject.instance().addMapLayer(path_layer, False)
+                    track_group.addLayer(path_layer)
 
                 # Collapse the track subgroup by default
                 track_group.setExpanded(False)

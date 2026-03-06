@@ -146,6 +146,8 @@ class ProcessingWorker(QObject):
                 self.processor.run_sam3_georeference(self.config, self.progress.emit, self.log.emit, self.is_cancelled)
             elif self.step == "perpendicular":
                 self.processor.run_perpendicular(self.config, self.progress.emit, self.log.emit, self.is_cancelled)
+            elif self.step == "track_perpendicular":
+                self.processor.run_track_perpendicular(self.config, self.progress.emit, self.log.emit, self.is_cancelled)
             else:
                 raise ValueError(f"Unknown step: {self.step}")
 
@@ -749,6 +751,36 @@ class BambiProcessor:
         if progress_fn:
             progress_fn(100)
 
+    @staticmethod
+    def _nearest_on_linestring(route_coords: list, cx: float, cy: float):
+        """Find the nearest point on a LineString to (cx, cy).
+
+        :param route_coords: List of [x, y, ...] coordinate lists
+        :param cx: Query point X
+        :param cy: Query point Y
+        :return: (foot_x, foot_y, distance)
+        """
+        import math
+        best_dist = float('inf')
+        best_fx, best_fy = route_coords[0][0], route_coords[0][1]
+
+        for j in range(len(route_coords) - 1):
+            ax, ay = route_coords[j][0], route_coords[j][1]
+            bx, by = route_coords[j + 1][0], route_coords[j + 1][1]
+            dx, dy = bx - ax, by - ay
+            seg_len_sq = dx * dx + dy * dy
+            if seg_len_sq < 1e-12:
+                fx, fy = ax, ay
+            else:
+                t = max(0.0, min(1.0, ((cx - ax) * dx + (cy - ay) * dy) / seg_len_sq))
+                fx, fy = ax + t * dx, ay + t * dy
+            dist = math.sqrt((cx - fx) ** 2 + (cy - fy) ** 2)
+            if dist < best_dist:
+                best_dist = dist
+                best_fx, best_fy = fx, fy
+
+        return best_fx, best_fy, best_dist
+
     def run_perpendicular(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Calculate perpendicular distances from detections to the flight route.
 
@@ -761,8 +793,6 @@ class BambiProcessor:
         :param log_fn: Logging callback function
         :param cancel_check: Optional function that returns True if cancelled
         """
-        import math
-
         target_folder = config["target_folder"]
         target_epsg = config.get("target_epsg", 32633)
 
@@ -848,29 +878,7 @@ class BambiProcessor:
             cy = (det['y1'] + det['y2']) / 2.0
             cz = (det['z1'] + det['z2']) / 2.0
 
-            # Find nearest point on the LineString (2D, ignoring Z)
-            best_dist = float('inf')
-            best_fx, best_fy = route_coords[0][0], route_coords[0][1]
-
-            for j in range(len(route_coords) - 1):
-                ax, ay = route_coords[j][0], route_coords[j][1]
-                bx, by = route_coords[j + 1][0], route_coords[j + 1][1]
-
-                dx, dy = bx - ax, by - ay
-                seg_len_sq = dx * dx + dy * dy
-
-                if seg_len_sq < 1e-12:
-                    fx, fy = ax, ay
-                else:
-                    t = ((cx - ax) * dx + (cy - ay) * dy) / seg_len_sq
-                    t = max(0.0, min(1.0, t))
-                    fx = ax + t * dx
-                    fy = ay + t * dy
-
-                dist = math.sqrt((cx - fx) ** 2 + (cy - fy) ** 2)
-                if dist < best_dist:
-                    best_dist = dist
-                    best_fx, best_fy = fx, fy
+            best_fx, best_fy, best_dist = self._nearest_on_linestring(route_coords, cx, cy)
 
             results.append({
                 'det_idx': det['idx'],
@@ -946,6 +954,195 @@ class BambiProcessor:
         if log_fn:
             log_fn(f"Perpendicular distances saved to: {output_file}")
             log_fn(f"Per-image summary saved to: {by_image_file}")
+            distances = [r['distance_m'] for r in results]
+            log_fn(f"Distance stats: min={min(distances):.1f}m, "
+                   f"max={max(distances):.1f}m, "
+                   f"mean={sum(distances)/len(distances):.1f}m")
+
+        if progress_fn:
+            progress_fn(100)
+
+    def run_track_perpendicular(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
+        """Calculate perpendicular distances from the last bounding box of each track to the flight route.
+
+        For each track, finds the last detection (highest frame number), computes its
+        center, and finds the nearest point on the AirData flight route LineString.
+        Results are saved to:
+          flight_route/perpendicular_tracks.json        (flat list, used by QGIS layer)
+          flight_route/perpendicular_tracks_by_track.json (keyed by track_id)
+
+        :param config: Configuration dictionary
+        :param progress_fn: Progress callback function
+        :param log_fn: Logging callback function
+        :param cancel_check: Optional function that returns True if cancelled
+        """
+        target_folder = config["target_folder"]
+        target_epsg = config.get("target_epsg", 32633)
+
+        if log_fn:
+            log_fn("Calculating perpendicular distances for tracks to flight route...")
+
+        if progress_fn:
+            progress_fn(5)
+
+        # Load flight route LineString
+        route_line_file = os.path.join(target_folder, "flight_route", "flight_route.geojson")
+        if not os.path.exists(route_line_file):
+            raise FileNotFoundError(
+                "flight_route.geojson not found. Please run 'Generate Flight Route' first."
+            )
+
+        with open(route_line_file, 'r') as f:
+            route_geojson = json.load(f)
+
+        route_coords = None
+        for feature in route_geojson.get("features", []):
+            geom = feature.get("geometry", {})
+            if geom.get("type") == "LineString":
+                route_coords = geom["coordinates"]
+                break
+
+        if not route_coords or len(route_coords) < 2:
+            raise RuntimeError(
+                "Flight route does not contain a valid LineString. "
+                "Need at least 2 GPS points in the AirData file."
+            )
+
+        if log_fn:
+            log_fn(f"Flight route loaded: {len(route_coords)} GPS points")
+
+        if progress_fn:
+            progress_fn(20)
+
+        # Load all georeferenced track CSV files from tracks/ folder
+        tracks_folder = os.path.join(target_folder, "tracks")
+        if not os.path.exists(tracks_folder):
+            raise FileNotFoundError(
+                "tracks/ folder not found. Please run 'Track Animals' first."
+            )
+
+        # Collect all entries: {track_id: [rows...]}
+        from collections import defaultdict
+        all_tracks: Dict[int, list] = defaultdict(list)
+        csv_files_found = 0
+
+        for fname in os.listdir(tracks_folder):
+            if not fname.endswith(".csv") or fname.endswith("_pixel.csv"):
+                continue
+            csv_path = os.path.join(tracks_folder, fname)
+            csv_files_found += 1
+            try:
+                with open(csv_path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith('#'):
+                            continue
+                        parts = line.split(',')
+                        if len(parts) >= 10:
+                            try:
+                                all_tracks[int(parts[1])].append({
+                                    'frame': int(parts[0]),
+                                    'x1': float(parts[2]), 'y1': float(parts[3]), 'z1': float(parts[4]),
+                                    'x2': float(parts[5]), 'y2': float(parts[6]), 'z2': float(parts[7]),
+                                    'conf': float(parts[8]),
+                                    'cls': int(parts[9])
+                                })
+                            except (ValueError, IndexError):
+                                continue
+            except Exception as e:
+                if log_fn:
+                    log_fn(f"Warning: could not read {fname}: {e}")
+
+        if not all_tracks:
+            raise RuntimeError("No georeferenced track data found. Please run 'Track Animals' first.")
+
+        if log_fn:
+            log_fn(f"Loaded {len(all_tracks)} tracks from {csv_files_found} CSV file(s)")
+
+        if progress_fn:
+            progress_fn(40)
+
+        # Build frame index → image filename map from poses
+        frame_to_image: Dict[int, str] = {}
+        for suffix in ("t", "w"):
+            poses_path = os.path.join(target_folder, f"poses_{suffix}.json")
+            if os.path.exists(poses_path):
+                try:
+                    with open(poses_path, 'r') as f:
+                        poses = json.load(f)
+                    for idx, img_info in enumerate(poses.get("images", [])):
+                        imagefile = img_info.get("imagefile", "")
+                        if imagefile:
+                            frame_to_image[idx] = imagefile
+                    if frame_to_image:
+                        break
+                except Exception:
+                    pass
+
+        # For each track, take the last detection and compute perpendicular
+        results = []
+        by_track: Dict[str, dict] = {}
+
+        for i, (track_id, rows) in enumerate(sorted(all_tracks.items())):
+            if cancel_check and cancel_check():
+                raise CancelledException("Track perpendicular calculation cancelled")
+
+            # Last detection = highest frame number
+            last = max(rows, key=lambda r: r['frame'])
+            cx = (last['x1'] + last['x2']) / 2.0
+            cy = (last['y1'] + last['y2']) / 2.0
+            cz = (last['z1'] + last['z2']) / 2.0
+
+            best_fx, best_fy, best_dist = self._nearest_on_linestring(route_coords, cx, cy)
+
+            last_image = frame_to_image.get(last['frame'], f"frame_{last['frame']:06d}")
+
+            results.append({
+                'track_id': track_id,
+                'last_frame': last['frame'],
+                'last_image': last_image,
+                'confidence': last['conf'],
+                'class_id': last['cls'],
+                'detection_center': [cx, cy, cz],
+                'foot_point': [best_fx, best_fy],
+                'distance_m': round(best_dist, 4)
+            })
+
+            by_track[str(track_id)] = {
+                'last_frame': last['frame'],
+                'last_image': last_image,
+                'center': [cx, cy, cz],
+                'perpendicular': [best_fx, best_fy, cz],
+                'distance': round(best_dist, 4)
+            }
+
+            if progress_fn:
+                progress_fn(40 + int((i / len(all_tracks)) * 55))
+
+        if progress_fn:
+            progress_fn(97)
+
+        route_folder = os.path.join(target_folder, "flight_route")
+        os.makedirs(route_folder, exist_ok=True)
+
+        # Flat list for QGIS layer
+        flat_output = {
+            'crs': f"EPSG:{target_epsg}",
+            'total_tracks': len(results),
+            'tracks': results
+        }
+        flat_file = os.path.join(route_folder, "perpendicular_tracks.json")
+        with open(flat_file, 'w', encoding='utf-8') as f:
+            json.dump(flat_output, f, indent=2)
+
+        # Per-track keyed output
+        by_track_file = os.path.join(route_folder, "perpendicular_tracks_by_track.json")
+        with open(by_track_file, 'w', encoding='utf-8') as f:
+            json.dump(by_track, f, indent=2)
+
+        if log_fn:
+            log_fn(f"Track perpendicular saved to: {flat_file}")
+            log_fn(f"Per-track summary saved to: {by_track_file}")
             distances = [r['distance_m'] for r in results]
             log_fn(f"Distance stats: min={min(distances):.1f}m, "
                    f"max={max(distances):.1f}m, "
