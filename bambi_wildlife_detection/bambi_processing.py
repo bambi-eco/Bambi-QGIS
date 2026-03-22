@@ -373,7 +373,7 @@ class BambiProcessor:
             if log_fn:
                 log_fn(f"Photo mode: processing images in {config['thermal_photo_dir']}")
 
-            extractor.extract(
+            extract_kwargs = dict(
                 photo_dir=config["thermal_photo_dir"],
                 airdata_csv=airdata_path,
                 output_path=target_poses_t,
@@ -381,6 +381,16 @@ class BambiProcessor:
                 photo_timezone_offset_hours=config.get("photo_timezone_offset", 1.0),
                 origin=ad_origin,
             )
+            if config.get("thermal_photo_filter"):
+                _exts = (".JPG", ".jpg", ".jpeg", ".JPEG", ".tiff", ".TIFF", ".png", ".PNG")
+                extract_kwargs["extensions"] = tuple(
+                    f"*_T_*{e}" for e in _exts
+                ) + tuple(
+                    f"*_T{e}" for e in _exts
+                )
+                if log_fn:
+                    log_fn("Thermal filter active: only images with _T_ or _T in filename")
+            extractor.extract(**extract_kwargs)
         else:
             from bambi.video.calibrated_video_frame_accessor import CalibratedVideoFrameAccessor
             from bambi.webgl.timed_pose_extractor import TimedPoseExtractor
@@ -479,7 +489,7 @@ class BambiProcessor:
             if log_fn:
                 log_fn(f"Photo mode: processing images in {config['rgb_photo_dir']}")
 
-            extractor.extract(
+            extract_kwargs = dict(
                 photo_dir=config["rgb_photo_dir"],
                 airdata_csv=airdata_path,
                 output_path=target_poses_w,
@@ -487,6 +497,20 @@ class BambiProcessor:
                 photo_timezone_offset_hours=config.get("photo_timezone_offset", 1.0),
                 origin=ad_origin,
             )
+            if config.get("rgb_photo_filter"):
+                _exts = (".JPG", ".jpg", ".jpeg", ".JPEG", ".tiff", ".TIFF", ".png", ".PNG")
+                extract_kwargs["extensions"] = tuple(
+                    f"*_W_*{e}" for e in _exts
+                ) + tuple(
+                    f"*_W{e}" for e in _exts
+                ) + tuple(
+                    f"*_V_*{e}" for e in _exts
+                ) + tuple(
+                    f"*_V{e}" for e in _exts
+                )
+                if log_fn:
+                    log_fn("RGB filter active: only images with _W_, _W, _V_ or _V in filename")
+            extractor.extract(**extract_kwargs)
         else:
             from bambi.video.calibrated_video_frame_accessor import CalibratedVideoFrameAccessor
             from bambi.webgl.timed_pose_extractor import TimedPoseExtractor
@@ -781,6 +805,161 @@ class BambiProcessor:
 
         return best_fx, best_fy, best_dist
 
+    @staticmethod
+    def _compute_frame_fov_polygon(
+            image_metadata: dict,
+            x_offset: float,
+            y_offset: float,
+            aspect_ratio: float = 4.0 / 3.0
+    ) -> list:
+        """Approximate ground footprint of a camera frame as a 4-corner polygon.
+
+        Uses a flat-earth projection: the camera altitude is taken from the
+        DEM-relative Z coordinate of the poses location, and the FOV rectangle
+        is rotated by the camera's yaw (rotation[2]).
+
+        :param image_metadata: One entry from poses["images"]
+        :param x_offset: DEM origin X in the target CRS
+        :param y_offset: DEM origin Y in the target CRS
+        :param aspect_ratio: Image width / height (default 4/3)
+        :return: List of 4 (x, y) world-coordinate tuples (convex quadrilateral)
+        """
+        import math
+
+        location = image_metadata.get("location", [0, 0, 0])
+        cam_x = location[0] + x_offset
+        cam_y = location[1] + y_offset
+        altitude = max(float(location[2]), 1.0)
+
+        fovy = image_metadata.get("fovy", [50])
+        if isinstance(fovy, list):
+            fovy = fovy[0]
+        fovy = float(fovy)
+
+        yaw_deg = float(image_metadata.get("rotation", [0, 0, 0])[2]) % 360.0
+
+        half_h = altitude * math.tan(math.radians(fovy / 2.0))
+        fov_x = 2.0 * math.atan(aspect_ratio * math.tan(math.radians(fovy / 2.0)))
+        half_w = altitude * math.tan(fov_x / 2.0)
+
+        corners_local = [
+            (-half_w, -half_h),
+            ( half_w, -half_h),
+            ( half_w,  half_h),
+            (-half_w,  half_h),
+        ]
+
+        yaw_rad = math.radians(yaw_deg)
+        cos_y, sin_y = math.cos(yaw_rad), math.sin(yaw_rad)
+        return [
+            (cam_x + cos_y * lx - sin_y * ly,
+             cam_y + sin_y * lx + cos_y * ly)
+            for lx, ly in corners_local
+        ]
+
+    @staticmethod
+    def _point_in_polygon(px: float, py: float, poly: list) -> bool:
+        """Ray-casting point-in-polygon test for a simple polygon."""
+        n = len(poly)
+        inside = False
+        j = n - 1
+        for i in range(n):
+            xi, yi = poly[i]
+            xj, yj = poly[j]
+            if ((yi > py) != (yj > py)) and (
+                    px < (xj - xi) * (py - yi) / (yj - yi) + xi):
+                inside = not inside
+            j = i
+        return inside
+
+    @staticmethod
+    def _segments_intersect(ax, ay, bx, by, cx, cy, dx, dy) -> bool:
+        """Return True if segment AB properly crosses segment CD."""
+        def cross(ox, oy, qx, qy, rx, ry):
+            return (qx - ox) * (ry - oy) - (qy - oy) * (rx - ox)
+
+        d1 = cross(cx, cy, dx, dy, ax, ay)
+        d2 = cross(cx, cy, dx, dy, bx, by)
+        d3 = cross(ax, ay, bx, by, cx, cy)
+        d4 = cross(ax, ay, bx, by, dx, dy)
+        return (((d1 > 0 and d2 < 0) or (d1 < 0 and d2 > 0)) and
+                ((d3 > 0 and d4 < 0) or (d3 < 0 and d4 > 0)))
+
+    @staticmethod
+    def _segment_intersects_polygon(ax, ay, bx, by, poly: list) -> bool:
+        """Return True if segment AB has any part inside or crossing *poly*."""
+        if (BambiProcessor._point_in_polygon(ax, ay, poly) or
+                BambiProcessor._point_in_polygon(bx, by, poly)):
+            return True
+        n = len(poly)
+        for i in range(n):
+            cx, cy = poly[i]
+            dx, dy = poly[(i + 1) % n]
+            if BambiProcessor._segments_intersect(ax, ay, bx, by, cx, cy, dx, dy):
+                return True
+        return False
+
+    @staticmethod
+    def _nearest_on_fov_linestring(route_coords: list, fov_poly: list,
+                                   cx: float, cy: float):
+        """Perpendicular foot on the flight-route sub-path visible in *fov_poly*.
+
+        Only route segments that intersect or lie inside the FOV polygon are
+        considered.  Falls back to the full route when none are found.
+
+        The foot is computed as the true perpendicular projection onto the
+        segment line (unclamped t), so the returned line is always at 90° to
+        the route.  Among visible segments we prefer interior feet (t ∈ [0, 1]);
+        if none exist we use the unclamped foot of the nearest segment.
+
+        :param route_coords: List of [x, y, ...] route coordinates
+        :param fov_poly: FOV footprint as list of (x, y) tuples
+        :param cx, cy: Detection centre in world CRS
+        :return: (foot_x, foot_y, distance)
+        """
+        import math
+
+        visible = [
+            j for j in range(len(route_coords) - 1)
+            if BambiProcessor._segment_intersects_polygon(
+                route_coords[j][0], route_coords[j][1],
+                route_coords[j + 1][0], route_coords[j + 1][1],
+                fov_poly)
+        ]
+
+        if not visible:
+            return BambiProcessor._nearest_on_linestring(route_coords, cx, cy)
+
+        # Best interior foot (t ∈ [0, 1]) and best unclamped foot as fallback.
+        best_interior_dist = float('inf')
+        best_interior_fx = best_interior_fy = None
+        best_any_dist = float('inf')
+        best_any_fx = route_coords[visible[0]][0]
+        best_any_fy = route_coords[visible[0]][1]
+
+        for j in visible:
+            ax, ay = route_coords[j][0], route_coords[j][1]
+            bx, by = route_coords[j + 1][0], route_coords[j + 1][1]
+            dx, dy = bx - ax, by - ay
+            seg_len_sq = dx * dx + dy * dy
+            if seg_len_sq < 1e-12:
+                t, fx, fy = 0.0, ax, ay
+            else:
+                # Unclamped projection → always perpendicular to the segment
+                t = ((cx - ax) * dx + (cy - ay) * dy) / seg_len_sq
+                fx, fy = ax + t * dx, ay + t * dy
+            dist = math.sqrt((cx - fx) ** 2 + (cy - fy) ** 2)
+            if dist < best_any_dist:
+                best_any_dist = dist
+                best_any_fx, best_any_fy = fx, fy
+            if 0.0 <= t <= 1.0 and dist < best_interior_dist:
+                best_interior_dist = dist
+                best_interior_fx, best_interior_fy = fx, fy
+
+        if best_interior_fx is not None:
+            return best_interior_fx, best_interior_fy, best_interior_dist
+        return best_any_fx, best_any_fy, best_any_dist
+
     def run_perpendicular(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Calculate perpendicular distances from detections to the flight route.
 
@@ -830,6 +1009,47 @@ class BambiProcessor:
             log_fn(f"Flight route loaded: {len(route_coords)} GPS points")
 
         if progress_fn:
+            progress_fn(15)
+
+        # Load DEM coordinate offset so poses locations can be converted to world CRS
+        x_offset, y_offset = 0.0, 0.0
+        dem_path = config.get("dem_path", "")
+        if dem_path:
+            dem_meta_path = config.get("ortho_dem_metadata_path") or \
+                dem_path.replace(".gltf", ".json").replace(".glb", ".json")
+            if os.path.exists(dem_meta_path):
+                try:
+                    with open(dem_meta_path, 'r') as f:
+                        dem_meta = json.load(f)
+                    origin = dem_meta.get("origin", [0, 0, 0])
+                    x_offset, y_offset = float(origin[0]), float(origin[1])
+                except Exception:
+                    pass
+
+        # Load poses for frame→image mapping AND camera FOV computation
+        poses_images = []
+        frame_to_image: Dict[int, str] = {}
+        for suffix in ("t", "w"):
+            poses_path = os.path.join(target_folder, f"poses_{suffix}.json")
+            if os.path.exists(poses_path):
+                try:
+                    with open(poses_path, 'r') as f:
+                        poses = json.load(f)
+                    for idx, img_info in enumerate(poses.get("images", [])):
+                        imagefile = img_info.get("imagefile", "")
+                        if imagefile:
+                            frame_to_image[idx] = imagefile
+                    if frame_to_image:
+                        poses_images = poses.get("images", [])
+                        if log_fn:
+                            log_fn(f"Mapped {len(frame_to_image)} frames to image filenames "
+                                   f"(poses_{suffix}.json)")
+                        break
+                except Exception as e:
+                    if log_fn:
+                        log_fn(f"Warning: could not read poses_{suffix}.json: {e}")
+
+        if progress_fn:
             progress_fn(20)
 
         # Load georeferenced detections
@@ -868,6 +1088,10 @@ class BambiProcessor:
         if progress_fn:
             progress_fn(40)
 
+        # FOV polygon cache: computed once per unique frame, reused for all
+        # detections in the same view.
+        fov_cache: Dict[int, list] = {}
+
         # For each detection compute perpendicular foot and distance
         results = []
         for i, det in enumerate(detections):
@@ -878,11 +1102,25 @@ class BambiProcessor:
             cy = (det['y1'] + det['y2']) / 2.0
             cz = (det['z1'] + det['z2']) / 2.0
 
-            best_fx, best_fy, best_dist = self._nearest_on_linestring(route_coords, cx, cy)
+            frame_idx = det['frame']
+            if frame_idx not in fov_cache:
+                if poses_images and frame_idx < len(poses_images):
+                    fov_cache[frame_idx] = self._compute_frame_fov_polygon(
+                        poses_images[frame_idx], x_offset, y_offset)
+                else:
+                    fov_cache[frame_idx] = None
+
+            fov_poly = fov_cache[frame_idx]
+            if fov_poly:
+                best_fx, best_fy, best_dist = self._nearest_on_fov_linestring(
+                    route_coords, fov_poly, cx, cy)
+            else:
+                best_fx, best_fy, best_dist = self._nearest_on_linestring(
+                    route_coords, cx, cy)
 
             results.append({
                 'det_idx': det['idx'],
-                'frame': det['frame'],
+                'frame': frame_idx,
                 'confidence': det['confidence'],
                 'class_id': det['class_id'],
                 'detection_center': [cx, cy, cz],
@@ -893,30 +1131,11 @@ class BambiProcessor:
             if progress_fn and i % max(1, len(detections) // 10) == 0:
                 progress_fn(40 + int((i / len(detections)) * 50))
 
+        if log_fn:
+            log_fn(f"FOV polygons computed for {len(fov_cache)} unique frames")
+
         if progress_fn:
             progress_fn(95)
-
-        # Build frame index → image filename map from poses file
-        # Try thermal poses first, then RGB
-        frame_to_image: Dict[int, str] = {}
-        for suffix in ("t", "w"):
-            poses_path = os.path.join(target_folder, f"poses_{suffix}.json")
-            if os.path.exists(poses_path):
-                try:
-                    with open(poses_path, 'r') as f:
-                        poses = json.load(f)
-                    for idx, img_info in enumerate(poses.get("images", [])):
-                        imagefile = img_info.get("imagefile", "")
-                        if imagefile:
-                            frame_to_image[idx] = imagefile
-                    if frame_to_image:
-                        if log_fn:
-                            log_fn(f"Mapped {len(frame_to_image)} frames to image filenames "
-                                   f"(poses_{suffix}.json)")
-                        break
-                except Exception as e:
-                    if log_fn:
-                        log_fn(f"Warning: could not read poses_{suffix}.json: {e}")
 
         route_folder = os.path.join(target_folder, "flight_route")
         os.makedirs(route_folder, exist_ok=True)
@@ -1012,6 +1231,43 @@ class BambiProcessor:
             log_fn(f"Flight route loaded: {len(route_coords)} GPS points")
 
         if progress_fn:
+            progress_fn(15)
+
+        # Load DEM coordinate offset so poses locations can be converted to world CRS
+        x_offset, y_offset = 0.0, 0.0
+        dem_path = config.get("dem_path", "")
+        if dem_path:
+            dem_meta_path = config.get("ortho_dem_metadata_path") or \
+                dem_path.replace(".gltf", ".json").replace(".glb", ".json")
+            if os.path.exists(dem_meta_path):
+                try:
+                    with open(dem_meta_path, 'r') as f:
+                        dem_meta = json.load(f)
+                    origin = dem_meta.get("origin", [0, 0, 0])
+                    x_offset, y_offset = float(origin[0]), float(origin[1])
+                except Exception:
+                    pass
+
+        # Load poses for frame→image mapping AND camera FOV computation
+        poses_images = []
+        frame_to_image: Dict[int, str] = {}
+        for suffix in ("t", "w"):
+            poses_path = os.path.join(target_folder, f"poses_{suffix}.json")
+            if os.path.exists(poses_path):
+                try:
+                    with open(poses_path, 'r') as f:
+                        poses = json.load(f)
+                    for idx, img_info in enumerate(poses.get("images", [])):
+                        imagefile = img_info.get("imagefile", "")
+                        if imagefile:
+                            frame_to_image[idx] = imagefile
+                    if frame_to_image:
+                        poses_images = poses.get("images", [])
+                        break
+                except Exception:
+                    pass
+
+        if progress_fn:
             progress_fn(20)
 
         # Load all georeferenced track CSV files from tracks/ folder
@@ -1062,22 +1318,9 @@ class BambiProcessor:
         if progress_fn:
             progress_fn(40)
 
-        # Build frame index → image filename map from poses
-        frame_to_image: Dict[int, str] = {}
-        for suffix in ("t", "w"):
-            poses_path = os.path.join(target_folder, f"poses_{suffix}.json")
-            if os.path.exists(poses_path):
-                try:
-                    with open(poses_path, 'r') as f:
-                        poses = json.load(f)
-                    for idx, img_info in enumerate(poses.get("images", [])):
-                        imagefile = img_info.get("imagefile", "")
-                        if imagefile:
-                            frame_to_image[idx] = imagefile
-                    if frame_to_image:
-                        break
-                except Exception:
-                    pass
+        # FOV polygon cache: computed once per unique frame, reused across tracks
+        # that share the same last-detection frame.
+        fov_cache: Dict[int, list] = {}
 
         # For each track, take the last detection and compute perpendicular
         results = []
@@ -1093,13 +1336,27 @@ class BambiProcessor:
             cy = (last['y1'] + last['y2']) / 2.0
             cz = (last['z1'] + last['z2']) / 2.0
 
-            best_fx, best_fy, best_dist = self._nearest_on_linestring(route_coords, cx, cy)
+            frame_idx = last['frame']
+            if frame_idx not in fov_cache:
+                if poses_images and frame_idx < len(poses_images):
+                    fov_cache[frame_idx] = self._compute_frame_fov_polygon(
+                        poses_images[frame_idx], x_offset, y_offset)
+                else:
+                    fov_cache[frame_idx] = None
 
-            last_image = frame_to_image.get(last['frame'], f"frame_{last['frame']:06d}")
+            fov_poly = fov_cache[frame_idx]
+            if fov_poly:
+                best_fx, best_fy, best_dist = self._nearest_on_fov_linestring(
+                    route_coords, fov_poly, cx, cy)
+            else:
+                best_fx, best_fy, best_dist = self._nearest_on_linestring(
+                    route_coords, cx, cy)
+
+            last_image = frame_to_image.get(frame_idx, f"frame_{frame_idx:06d}")
 
             results.append({
                 'track_id': track_id,
-                'last_frame': last['frame'],
+                'last_frame': frame_idx,
                 'last_image': last_image,
                 'confidence': last['conf'],
                 'class_id': last['cls'],
@@ -1109,7 +1366,7 @@ class BambiProcessor:
             })
 
             by_track[str(track_id)] = {
-                'last_frame': last['frame'],
+                'last_frame': frame_idx,
                 'last_image': last_image,
                 'center': [cx, cy, cz],
                 'perpendicular': [best_fx, best_fy, cz],
@@ -1118,6 +1375,9 @@ class BambiProcessor:
 
             if progress_fn:
                 progress_fn(40 + int((i / len(all_tracks)) * 55))
+
+        if log_fn:
+            log_fn(f"FOV polygons computed for {len(fov_cache)} unique frames")
 
         if progress_fn:
             progress_fn(97)

@@ -445,6 +445,11 @@ class BambiDockWidget(QDockWidget):
         thermal_photo_dir_row.addWidget(thermal_photo_browse_btn)
         thermal_photo_layout.addRow("Photo Folder:", thermal_photo_dir_row)
 
+        self.thermal_photo_filter_check = QCheckBox()
+        self.thermal_photo_filter_check.setToolTip(
+            "Only process images with _T_ or _T in the filename")
+        thermal_photo_layout.addRow("Filter (_T_ / _T):", self.thermal_photo_filter_check)
+
         thermal_photo_calib_container = QWidget()
         thermal_photo_calib_vbox = QVBoxLayout(thermal_photo_calib_container)
         thermal_photo_calib_vbox.setContentsMargins(0, 0, 0, 0)
@@ -481,6 +486,11 @@ class BambiDockWidget(QDockWidget):
         rgb_photo_dir_row.addWidget(self.rgb_photo_dir_edit)
         rgb_photo_dir_row.addWidget(rgb_photo_browse_btn)
         rgb_photo_layout.addRow("Photo Folder:", rgb_photo_dir_row)
+
+        self.rgb_photo_filter_check = QCheckBox()
+        self.rgb_photo_filter_check.setToolTip(
+            "Only process images with _W_, _W, _V_ or _V in the filename")
+        rgb_photo_layout.addRow("Filter (_W_ / _W / _V_ / _V):", self.rgb_photo_filter_check)
 
         rgb_photo_calib_container = QWidget()
         rgb_photo_calib_vbox = QVBoxLayout(rgb_photo_calib_container)
@@ -832,6 +842,47 @@ class BambiDockWidget(QDockWidget):
         distance_markers_layout.addRow("Include Start (0m):", self.distance_marker_include_start_check)
 
         flight_route_tab_layout.addWidget(distance_markers_group)
+
+        # Time-based markers group
+        time_markers_group = QGroupBox("Time Markers")
+        time_markers_layout = QFormLayout(time_markers_group)
+
+        self.time_markers_enabled_check = QCheckBox()
+        self.time_markers_enabled_check.setChecked(False)
+        self.time_markers_enabled_check.setToolTip(
+            "Enable displaying markers at regular time intervals along the flight path"
+        )
+        self.time_markers_enabled_check.stateChanged.connect(self._toggle_time_marker_controls)
+        time_markers_layout.addRow("Show Time Markers:", self.time_markers_enabled_check)
+
+        self.time_marker_type_combo = QComboBox()
+        self.time_marker_type_combo.addItems(["Relative", "Absolute"])
+        self.time_marker_type_combo.setEnabled(False)
+        self.time_marker_type_combo.setToolTip(
+            "Relative: elapsed seconds from first frame\n"
+            "Absolute: UTC date/time from AirData log"
+        )
+        time_markers_layout.addRow("Time Type:", self.time_marker_type_combo)
+
+        self.time_marker_interval_spin = QSpinBox()
+        self.time_marker_interval_spin.setRange(1, 3600)
+        self.time_marker_interval_spin.setValue(10)
+        self.time_marker_interval_spin.setSuffix(" sec")
+        self.time_marker_interval_spin.setEnabled(False)
+        self.time_marker_interval_spin.setToolTip(
+            "Place a marker every N seconds (e.g., 10 shows markers at 10s, 20s, 30s, ...)"
+        )
+        time_markers_layout.addRow("Interval:", self.time_marker_interval_spin)
+
+        self.time_marker_include_start_check = QCheckBox()
+        self.time_marker_include_start_check.setChecked(False)
+        self.time_marker_include_start_check.setEnabled(False)
+        self.time_marker_include_start_check.setToolTip(
+            "Include a marker at the starting position (t=0)"
+        )
+        time_markers_layout.addRow("Include Start:", self.time_marker_include_start_check)
+
+        flight_route_tab_layout.addWidget(time_markers_group)
         flight_route_tab_layout.addStretch()
 
         # ----- Sub-Tab 1: Detection -----
@@ -1802,6 +1853,19 @@ class BambiDockWidget(QDockWidget):
         flight_info_group_layout.addWidget(flight_info_label)
         info_layout.addWidget(flight_info_group)
 
+        calibration_group = QGroupBox("Camera Calibration")
+        calibration_group_layout = QVBoxLayout(calibration_group)
+        calibration_label = QLabel(
+            "Cameras show distortions due to the lenses. Because of this distortions image positions can't be mapped accurately. To address this, we need to calibrate the cameras and calculate distortion coefficients. For accurate calibration of the RGB and thermal cameras, a dedicated drone flight should be performed under conditions similar to your mission setup (e.g. when you typically fly with 100 m AGL, the calibration setup should also have about 100 m distance to the object used for calibration). The recorded data should contain clearly distinguishable structures that are visible in both RGB and thermal imagery and appear across once everywhere in the image space (upper left corner, upper right corner, center of the image, lower left, lower right, etc.), to ensure robust calibration over the full field of view. Buildings have proven to be particularly suitable targets, especially roofs with sharp edges or solar panels, as they provide both geometric detail and strong thermal contrast. Facades with windows can also be used, although maintaining a consistent distance is more challenging in side views. It is important that the selected features are clearly recognizable in both modalities to achieve reliable results. A key limitation of DJI cameras is that they do not operate in open gate mode, which leads to differences between video and photo data. As a result, separate calibrations are required for each, as parameters cannot be transferred between these acquisition types. So create images or short video sequences (~1 sec) with the drone hovering stably. For the calibration you can use our tool-chain: <a href='https://github.com/bambi-eco/camera-calib'>https://github.com/bambi-eco/camera-calib</a>."
+        )
+
+        calibration_label.setWordWrap(True)
+        calibration_label.setAlignment(Qt.AlignTop)
+        calibration_label.setStyleSheet("color: black; font-size: 10px;")
+        calibration_group_layout.addWidget(calibration_label)
+        info_layout.addWidget(calibration_group)
+
+
     def _populate_tracker_backends(self):
         """Populate the tracker backend dropdown with available trackers."""
         from .tracker_manager import get_tracker_manager
@@ -1985,6 +2049,7 @@ class BambiDockWidget(QDockWidget):
 
             # Photo inputs
             "thermal_photo_dir": self.thermal_photo_dir_edit.text(),
+            "thermal_photo_filter": self.thermal_photo_filter_check.isChecked(),
             "thermal_photo_calibration_path": (
                 self.thermal_photo_calibration_path_edit.text()
                 if self.thermal_photo_calib_preset_combo.currentIndex() == 0 else ""
@@ -1994,6 +2059,7 @@ class BambiDockWidget(QDockWidget):
                 if self.thermal_photo_calib_preset_combo.currentIndex() > 0 else None
             ),
             "rgb_photo_dir": self.rgb_photo_dir_edit.text(),
+            "rgb_photo_filter": self.rgb_photo_filter_check.isChecked(),
             "rgb_photo_calibration_path": (
                 self.rgb_photo_calibration_path_edit.text()
                 if self.rgb_photo_calib_preset_combo.currentIndex() == 0 else ""
@@ -3497,6 +3563,12 @@ class BambiDockWidget(QDockWidget):
         """Toggle distance marker controls based on checkbox state."""
         self.distance_marker_interval_spin.setEnabled(state)
         self.distance_marker_include_start_check.setEnabled(state)
+
+    def _toggle_time_marker_controls(self, state):
+        """Toggle time marker controls based on checkbox state."""
+        self.time_marker_type_combo.setEnabled(state)
+        self.time_marker_interval_spin.setEnabled(state)
+        self.time_marker_include_start_check.setEnabled(state)
 
     def detect_frame_count(self):
         """Detect the number of available frames from poses.json."""
@@ -5526,6 +5598,21 @@ class BambiDockWidget(QDockWidget):
                     loaded_count += 1
                     self.log("Added distance markers layer")
 
+            # Add time markers if enabled
+            if self.time_markers_enabled_check.isChecked():
+                time_layer = self._create_time_markers_layer(
+                    camera_points_file, config
+                )
+                if time_layer and time_layer.isValid():
+                    time_layer = self._persist_memory_layer(
+                        time_layer, "Time_Markers", "flight_route_layers"
+                    )
+                    self._style_time_markers_layer(time_layer)
+                    QgsProject.instance().addMapLayer(time_layer, False)
+                    group.addLayer(time_layer)
+                    loaded_count += 1
+                    self.log("Added time markers layer")
+
             if loaded_count == 0:
                 QMessageBox.warning(self, "No Layers", "No flight route layers found.")
                 self.update_status("add_flight_route", "🔴 No files")
@@ -5817,6 +5904,246 @@ class BambiDockWidget(QDockWidget):
             self.log(f"Error creating distance markers: {str(e)}")
             return None
 
+    def _create_time_markers_layer(self, camera_points_file: str, config: dict) -> Optional[QgsVectorLayer]:
+        """Create a vector layer with markers at regular time intervals along the flight path.
+
+        Timestamps are read directly from the AirData CSV (first column = relative ms,
+        datetime(utc) column = absolute UTC time).  Positions are interpolated along the
+        AirData GPS track projected to the target CRS.
+
+        Marker labels:
+          Relative mode  →  "30s", "60s", …
+          Absolute mode  →  "10:30:45", "10:31:15", …
+
+        :param camera_points_file: Unused; kept for API consistency with the other marker methods.
+        :param config: Configuration dictionary
+        :return: QgsVectorLayer with time markers, or None if creation fails
+        """
+        import csv
+        from datetime import datetime, timezone
+
+        airdata_path = config.get("airdata_path", "")
+        if not airdata_path or not os.path.exists(airdata_path):
+            self.log("Warning: No AirData file configured – time markers require an AirData log")
+            return None
+
+        time_interval = self.time_marker_interval_spin.value()
+        include_start = self.time_marker_include_start_check.isChecked()
+        use_relative = self.time_marker_type_combo.currentIndex() == 0
+        target_epsg = config.get("target_epsg", 32633)
+
+        try:
+            from pyproj import Transformer, CRS as PyprojCRS
+
+            wgs84_proj4 = "+proj=longlat +datum=WGS84 +no_defs"
+            if 32601 <= target_epsg <= 32660:
+                zone = target_epsg - 32600
+                utm_proj4 = f"+proj=utm +zone={zone} +datum=WGS84 +units=m +no_defs"
+            elif 32701 <= target_epsg <= 32760:
+                zone = target_epsg - 32700
+                utm_proj4 = f"+proj=utm +zone={zone} +south +datum=WGS84 +units=m +no_defs"
+            else:
+                from bambi_wildlife_detection.austria_dem_downloader import get_proj4_for_crs, WGS84_PROJ4
+                wgs84_proj4 = WGS84_PROJ4
+                utm_proj4 = get_proj4_for_crs(f"EPSG:{target_epsg}")
+
+            transformer = Transformer.from_crs(
+                PyprojCRS.from_proj4(wgs84_proj4),
+                PyprojCRS.from_proj4(utm_proj4),
+                always_xy=True
+            )
+
+            # ── Read AirData CSV ──────────────────────────────────────────────
+            def _find_col(headers, *keywords):
+                """Return the first header whose lower-case form contains all keywords."""
+                for h in headers:
+                    hl = h.lower().strip()
+                    if all(k in hl for k in keywords):
+                        return h
+                return None
+
+            def _parse_utc(s):
+                if not s:
+                    return None
+                for fmt in (
+                    "%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ",
+                    "%Y-%m-%dT%H:%M:%S",     "%Y-%m-%d %H:%M:%S",
+                    "%Y-%m-%d %H:%M:%S.%f",
+                ):
+                    try:
+                        return datetime.strptime(s.strip(), fmt).replace(
+                            tzinfo=timezone.utc).timestamp()
+                    except ValueError:
+                        pass
+                return None
+
+            raw_rows = []   # (time_ms, utc_unix, lat, lon)
+
+            with open(airdata_path, 'r', encoding='utf-8-sig') as f:
+                reader = csv.DictReader(f)
+                headers = reader.fieldnames or []
+
+                col_ms  = _find_col(headers, "time", "millisecond")
+                col_utc = _find_col(headers, "datetime", "utc") or _find_col(headers, "datetime")
+                col_lat = _find_col(headers, "latitude") or _find_col(headers, "lat")
+                col_lon = _find_col(headers, "longitude") or _find_col(headers, "lon")
+
+                if col_lat is None or col_lon is None:
+                    self.log("Warning: Could not find lat/lon columns in AirData CSV")
+                    return None
+                if col_ms is None and col_utc is None:
+                    self.log("Warning: Could not find timestamp columns in AirData CSV")
+                    return None
+
+                for row in reader:
+                    try:
+                        lat = float(row[col_lat])
+                        lon = float(row[col_lon])
+                        if lat == 0.0 and lon == 0.0:
+                            continue
+                        ts_ms  = float(row[col_ms])  if col_ms  else None
+                        ts_utc = _parse_utc(row[col_utc]) if col_utc else None
+                        raw_rows.append((ts_ms, ts_utc, lat, lon))
+                    except (ValueError, KeyError):
+                        continue
+
+            if len(raw_rows) < 2:
+                self.log("Warning: Not enough valid GPS rows in AirData for time markers")
+                return None
+
+            # ── Project to target CRS ─────────────────────────────────────────
+            # Build (elapsed_sec, unix_ts_or_None, x, y)
+            first_ms  = raw_rows[0][0]
+            first_utc = raw_rows[0][1]
+
+            positions = []
+            for ts_ms, ts_utc, lat, lon in raw_rows:
+                x, y = transformer.transform(lon, lat)
+                if use_relative:
+                    if ts_ms is None or first_ms is None:
+                        continue
+                    elapsed = (ts_ms - first_ms) / 1000.0
+                    positions.append((elapsed, None, x, y))
+                else:
+                    if ts_utc is None or first_utc is None:
+                        continue
+                    elapsed = ts_utc - first_utc
+                    positions.append((elapsed, ts_utc, x, y))
+
+            if len(positions) < 2:
+                self.log("Warning: Not enough timestamped rows in AirData for time markers")
+                return None
+
+            total_elapsed = positions[-1][0]
+            if total_elapsed <= 0:
+                self.log("Warning: AirData timestamps do not increase – cannot build time markers")
+                return None
+
+            self.log(f"AirData time range: {total_elapsed:.1f}s ({len(positions)} GPS points)")
+
+            # ── Label helper ─────────────────────────────────────────────────
+            def make_label(elapsed_sec, unix_ts):
+                if use_relative:
+                    return f"{elapsed_sec:.0f}s"
+                if unix_ts is not None:
+                    return datetime.fromtimestamp(unix_ts, tz=timezone.utc).strftime("%H:%M:%S")
+                return f"{elapsed_sec:.0f}s"
+
+            # ── Create memory layer ───────────────────────────────────────────
+            layer_uri = (
+                f"Point?crs=EPSG:{target_epsg}"
+                f"&field=elapsed_sec:double&field=label:string"
+            )
+            markers_layer = QgsVectorLayer(layer_uri, "Time Markers", "memory")
+            if not markers_layer.isValid():
+                self.log("Warning: Could not create time markers memory layer")
+                return None
+
+            marker_features = []
+
+            if include_start:
+                p = positions[0]
+                feat = QgsFeature(markers_layer.fields())
+                feat.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(p[2], p[3])))
+                feat.setAttributes([0.0, make_label(0.0, p[1])])
+                marker_features.append(feat)
+
+            target_sec = float(time_interval)
+            while target_sec <= total_elapsed:
+                for i in range(1, len(positions)):
+                    e_prev, ts_prev, xp, yp = positions[i - 1]
+                    e_curr, ts_curr, xc, yc = positions[i]
+                    if e_prev <= target_sec <= e_curr:
+                        seg = e_curr - e_prev
+                        ratio = (target_sec - e_prev) / seg if seg > 0 else 0.0
+                        ix = xp + ratio * (xc - xp)
+                        iy = yp + ratio * (yc - yp)
+                        interp_ts = (
+                            None if (ts_prev is None or ts_curr is None)
+                            else ts_prev + ratio * (ts_curr - ts_prev)
+                        )
+                        feat = QgsFeature(markers_layer.fields())
+                        feat.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(ix, iy)))
+                        feat.setAttributes([target_sec, make_label(target_sec, interp_ts)])
+                        marker_features.append(feat)
+                        break
+                target_sec += time_interval
+
+            if not marker_features:
+                self.log(
+                    f"Warning: No time markers created "
+                    f"(interval {time_interval}s > total {total_elapsed:.1f}s)")
+                return None
+
+            markers_layer.dataProvider().addFeatures(marker_features)
+            self.log(
+                f"Created {len(marker_features)} time markers "
+                f"(interval: {time_interval}s, "
+                f"{'relative' if use_relative else 'absolute'})"
+            )
+            return markers_layer
+
+        except Exception as e:
+            self.log(f"Error creating time markers: {str(e)}")
+            return None
+
+    def _style_time_markers_layer(self, layer: QgsVectorLayer):
+        """Apply styling and labeling to the time markers layer."""
+        try:
+            symbol = QgsMarkerSymbol.createSimple({
+                'name': 'diamond',
+                'color': '#9b59b6',        # Purple
+                'outline_color': '#ffffff',
+                'outline_width': '0.8',
+                'size': '4.5'
+            })
+            layer.renderer().setSymbol(symbol)
+
+            label_settings = QgsPalLayerSettings()
+            label_settings.fieldName = 'label'
+            label_settings.enabled = True
+
+            text_format = QgsTextFormat()
+            text_format.setFont(QFont("Arial", 9, QFont.Bold))
+            text_format.setSize(9)
+            text_format.setColor(QColor('#6c3483'))  # Dark purple
+
+            buffer_settings = QgsTextBufferSettings()
+            buffer_settings.setEnabled(True)
+            buffer_settings.setSize(1.5)
+            buffer_settings.setColor(QColor('#ffffff'))
+            text_format.setBuffer(buffer_settings)
+
+            label_settings.setFormat(text_format)
+            label_settings.placement = QgsPalLayerSettings.OverPoint
+            label_settings.quadOffset = QgsPalLayerSettings.QuadrantAbove
+
+            layer.setLabelsEnabled(True)
+            layer.setLabeling(QgsVectorLayerSimpleLabeling(label_settings))
+            layer.triggerRepaint()
+        except Exception as e:
+            self.log(f"Warning: Could not style time markers layer: {str(e)}")
+
     def _style_frame_markers_layer(self, layer: QgsVectorLayer):
         """Apply styling and labeling to frame markers layer.
 
@@ -5995,6 +6322,10 @@ class BambiDockWidget(QDockWidget):
                            self.rgb_photo_calibration_path_edit.text())
         project.writeEntry(PLUGIN_SCOPE, "Input/RgbPhotoCalibrationPreset",
                            self.rgb_photo_calib_preset_combo.currentText())
+        project.writeEntry(PLUGIN_SCOPE, "Input/ThermalPhotoFilter",
+                           "1" if self.thermal_photo_filter_check.isChecked() else "0")
+        project.writeEntry(PLUGIN_SCOPE, "Input/RgbPhotoFilter",
+                           "1" if self.rgb_photo_filter_check.isChecked() else "0")
         project.writeEntry(PLUGIN_SCOPE, "Input/PhotoTimezone",
                            self.photo_timezone_combo.currentText())
         project.writeEntry(PLUGIN_SCOPE, "Input/AirdataPath",
@@ -6142,6 +6473,14 @@ class BambiDockWidget(QDockWidget):
                                  self.distance_marker_interval_spin.value())
         project.writeEntryBool(PLUGIN_SCOPE, "FlightRoute/IncludeDistanceStart",
                                self.distance_marker_include_start_check.isChecked())
+        project.writeEntryBool(PLUGIN_SCOPE, "FlightRoute/TimeMarkersEnabled",
+                               self.time_markers_enabled_check.isChecked())
+        project.writeEntryDouble(PLUGIN_SCOPE, "FlightRoute/TimeMarkerInterval",
+                                 self.time_marker_interval_spin.value())
+        project.writeEntryDouble(PLUGIN_SCOPE, "FlightRoute/TimeMarkerTypeIndex",
+                                 self.time_marker_type_combo.currentIndex())
+        project.writeEntryBool(PLUGIN_SCOPE, "FlightRoute/IncludeTimeStart",
+                               self.time_marker_include_start_check.isChecked())
         project.writeEntryDouble(PLUGIN_SCOPE, "FlightRoute/CameraComboIndex",
                                  self.flight_route_camera_combo.currentIndex())
 
@@ -6211,6 +6550,10 @@ class BambiDockWidget(QDockWidget):
         rp_idx = self.rgb_photo_calib_preset_combo.findText(rp_preset)
         if rp_idx >= 0:
             self.rgb_photo_calib_preset_combo.setCurrentIndex(rp_idx)
+        self.thermal_photo_filter_check.setChecked(
+            read_str("Input/ThermalPhotoFilter") == "1")
+        self.rgb_photo_filter_check.setChecked(
+            read_str("Input/RgbPhotoFilter") == "1")
         saved_tz = read_str("Input/PhotoTimezone")
         if saved_tz:
             tz_idx = self.photo_timezone_combo.findText(saved_tz)
@@ -6324,6 +6667,12 @@ class BambiDockWidget(QDockWidget):
         self.distance_markers_enabled_check.setChecked(read_bool("FlightRoute/DistanceMarkersEnabled", False))
         self.distance_marker_interval_spin.setValue(read_int("FlightRoute/DistanceMarkerInterval", 100))
         self.distance_marker_include_start_check.setChecked(read_bool("FlightRoute/IncludeDistanceStart", False))
+        self.time_markers_enabled_check.setChecked(read_bool("FlightRoute/TimeMarkersEnabled", False))
+        self.time_marker_interval_spin.setValue(read_int("FlightRoute/TimeMarkerInterval", 10))
+        time_type_idx = read_int("FlightRoute/TimeMarkerTypeIndex", 0)
+        if 0 <= time_type_idx < self.time_marker_type_combo.count():
+            self.time_marker_type_combo.setCurrentIndex(time_type_idx)
+        self.time_marker_include_start_check.setChecked(read_bool("FlightRoute/IncludeTimeStart", False))
 
         camera_combo_idx = read_int("FlightRoute/CameraComboIndex", 0)
         if 0 <= camera_combo_idx < self.flight_route_camera_combo.count():
