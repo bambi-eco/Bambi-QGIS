@@ -359,14 +359,14 @@ class BambiProcessor:
         target_poses_t = os.path.join(target_folder, "poses_t.json")
 
         if config.get("input_mode") == "photo":
-            from bambi.webgl.photo_pose_extractor import PhotoPoseExtractor
+            from bambi.webgl.photo_pose_extractor import UniqueMatchPhotoPoseExtractor
 
             calibration_res = config.get("thermal_photo_calibration_data")
             if calibration_res is None:
                 with open(config["thermal_photo_calibration_path"]) as f:
                     calibration_res = json.load(f)
 
-            extractor = PhotoPoseExtractor(
+            extractor = UniqueMatchPhotoPoseExtractor(
                 rel_transformer=rel_transformer,
                 calibration_res=calibration_res,
             )
@@ -475,14 +475,14 @@ class BambiProcessor:
         target_poses_w = os.path.join(target_folder, "poses_w.json")
 
         if config.get("input_mode") == "photo":
-            from bambi.webgl.photo_pose_extractor import PhotoPoseExtractor
+            from bambi.webgl.photo_pose_extractor import UniqueMatchPhotoPoseExtractor
 
             calibration_res = config.get("rgb_photo_calibration_data")
             if calibration_res is None:
                 with open(config["rgb_photo_calibration_path"]) as f:
                     calibration_res = json.load(f)
 
-            extractor = PhotoPoseExtractor(
+            extractor = UniqueMatchPhotoPoseExtractor(
                 rel_transformer=rel_transformer,
                 calibration_res=calibration_res,
             )
@@ -901,24 +901,61 @@ class BambiProcessor:
 
     @staticmethod
     def _nearest_on_fov_linestring(route_coords: list, fov_poly: list,
-                                   cx: float, cy: float):
-        """Perpendicular foot on the flight-route sub-path visible in *fov_poly*.
+                                   cx: float, cy: float,
+                                   cam_x: float = None, cam_y: float = None):
+        """Perpendicular foot on the flight-route segment associated with this frame.
 
-        Only route segments that intersect or lie inside the FOV polygon are
-        considered.  Falls back to the full route when none are found.
+        When the camera position (cam_x, cam_y) is provided the segment is
+        chosen by finding whichever route segment lies nearest to the camera —
+        i.e. the segment the drone was actually flying on.  This prevents
+        snapping to a parallel transect whose FOV overlap or shorter distance
+        might otherwise win.
 
-        The foot is computed as the true perpendicular projection onto the
-        segment line (unclamped t), so the returned line is always at 90° to
-        the route.  Among visible segments we prefer interior feet (t ∈ [0, 1]);
-        if none exist we use the unclamped foot of the nearest segment.
+        Without camera position, falls back to filtering by FOV polygon
+        intersection (legacy behaviour).
+
+        The foot is the true perpendicular projection (unclamped t) so the
+        returned line is always at 90° to the route.
 
         :param route_coords: List of [x, y, ...] route coordinates
         :param fov_poly: FOV footprint as list of (x, y) tuples
         :param cx, cy: Detection centre in world CRS
+        :param cam_x, cam_y: Camera (drone) position in world CRS for this frame
         :return: (foot_x, foot_y, distance)
         """
         import math
 
+        # Primary path: use camera position to identify the correct transect
+        # segment, avoiding snapping to parallel routes.
+        if cam_x is not None and cam_y is not None:
+            best_cam_dist = float('inf')
+            best_j = 0
+            for j in range(len(route_coords) - 1):
+                ax, ay = route_coords[j][0], route_coords[j][1]
+                bx, by = route_coords[j + 1][0], route_coords[j + 1][1]
+                dx, dy = bx - ax, by - ay
+                seg_len_sq = dx * dx + dy * dy
+                if seg_len_sq < 1e-12:
+                    fx, fy = ax, ay
+                else:
+                    t = max(0.0, min(1.0, ((cam_x - ax) * dx + (cam_y - ay) * dy) / seg_len_sq))
+                    fx, fy = ax + t * dx, ay + t * dy
+                dist = math.sqrt((cam_x - fx) ** 2 + (cam_y - fy) ** 2)
+                if dist < best_cam_dist:
+                    best_cam_dist = dist
+                    best_j = j
+            # Unclamped perpendicular projection of detection onto the transect line
+            ax, ay = route_coords[best_j][0], route_coords[best_j][1]
+            bx, by = route_coords[best_j + 1][0], route_coords[best_j + 1][1]
+            dx, dy = bx - ax, by - ay
+            seg_len_sq = dx * dx + dy * dy
+            if seg_len_sq < 1e-12:
+                return ax, ay, math.sqrt((cx - ax) ** 2 + (cy - ay) ** 2)
+            t = ((cx - ax) * dx + (cy - ay) * dy) / seg_len_sq
+            fx, fy = ax + t * dx, ay + t * dy
+            return fx, fy, math.sqrt((cx - fx) ** 2 + (cy - fy) ** 2)
+
+        # Legacy fallback: filter by FOV polygon intersection
         visible = [
             j for j in range(len(route_coords) - 1)
             if BambiProcessor._segment_intersects_polygon(
@@ -1091,6 +1128,7 @@ class BambiProcessor:
         # FOV polygon cache: computed once per unique frame, reused for all
         # detections in the same view.
         fov_cache: Dict[int, list] = {}
+        cam_pos_cache: Dict[int, tuple] = {}
 
         # For each detection compute perpendicular foot and distance
         results = []
@@ -1105,13 +1143,23 @@ class BambiProcessor:
             frame_idx = det['frame']
             if frame_idx not in fov_cache:
                 if poses_images and frame_idx < len(poses_images):
+                    img_meta = poses_images[frame_idx]
                     fov_cache[frame_idx] = self._compute_frame_fov_polygon(
-                        poses_images[frame_idx], x_offset, y_offset)
+                        img_meta, x_offset, y_offset)
+                    location = img_meta.get("location", [0, 0, 0])
+                    cam_pos_cache[frame_idx] = (
+                        float(location[0]) + x_offset,
+                        float(location[1]) + y_offset
+                    )
                 else:
                     fov_cache[frame_idx] = None
 
             fov_poly = fov_cache[frame_idx]
-            if fov_poly:
+            cam_pos = cam_pos_cache.get(frame_idx)
+            if fov_poly and cam_pos:
+                best_fx, best_fy, best_dist = self._nearest_on_fov_linestring(
+                    route_coords, fov_poly, cx, cy, cam_pos[0], cam_pos[1])
+            elif fov_poly:
                 best_fx, best_fy, best_dist = self._nearest_on_fov_linestring(
                     route_coords, fov_poly, cx, cy)
             else:
@@ -1321,6 +1369,7 @@ class BambiProcessor:
         # FOV polygon cache: computed once per unique frame, reused across tracks
         # that share the same last-detection frame.
         fov_cache: Dict[int, list] = {}
+        cam_pos_cache: Dict[int, tuple] = {}
 
         # For each track, take the last detection and compute perpendicular
         results = []
@@ -1339,13 +1388,23 @@ class BambiProcessor:
             frame_idx = last['frame']
             if frame_idx not in fov_cache:
                 if poses_images and frame_idx < len(poses_images):
+                    img_meta = poses_images[frame_idx]
                     fov_cache[frame_idx] = self._compute_frame_fov_polygon(
-                        poses_images[frame_idx], x_offset, y_offset)
+                        img_meta, x_offset, y_offset)
+                    location = img_meta.get("location", [0, 0, 0])
+                    cam_pos_cache[frame_idx] = (
+                        float(location[0]) + x_offset,
+                        float(location[1]) + y_offset
+                    )
                 else:
                     fov_cache[frame_idx] = None
 
             fov_poly = fov_cache[frame_idx]
-            if fov_poly:
+            cam_pos = cam_pos_cache.get(frame_idx)
+            if fov_poly and cam_pos:
+                best_fx, best_fy, best_dist = self._nearest_on_fov_linestring(
+                    route_coords, fov_poly, cx, cy, cam_pos[0], cam_pos[1])
+            elif fov_poly:
                 best_fx, best_fy, best_dist = self._nearest_on_fov_linestring(
                     route_coords, fov_poly, cx, cy)
             else:

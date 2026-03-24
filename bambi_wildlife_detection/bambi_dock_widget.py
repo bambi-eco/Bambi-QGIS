@@ -1858,19 +1858,30 @@ class BambiDockWidget(QDockWidget):
         info_tab = QWidget()
         info_layout = QVBoxLayout(info_tab)
         main_tabs.addTab(info_tab, "Info")
-        flight_info_group = QGroupBox("Video Recommendations")
-        flight_info_group_layout = QVBoxLayout(flight_info_group)
-        flight_info_label = QLabel(
+        video_mode_info_group = QGroupBox("Video Mode Recommendations")
+        video_mode_info_group_layout = QVBoxLayout(video_mode_info_group)
+        video_mode_info_label = QLabel(
             "To ensure high-quality and consistent video recordings, configure your drone mission with stable flight parameters and a fixed camera setup. Plan the flight at a constant altitude between 30 m and 60 m above ground, depending on the terrain and desired coverage, and maintain a steady speed of 3–7 m/s throughout the mission. "
             "Although the exact heading is not critical, the drone’s orientation should remain constant for the entire flight, and yaw rotations should be avoided. A practical approach is to configure each waypoint so that the drone faces north, ensuring a stable and repeatable camera perspective. "
             "Set the gimbal pitch to −90° so the camera is pointing straight down (nadir). This provides a consistent top-down view and simplifies later processing of the video data. "
             "Finally, start video recording at the first waypoint and stop recording at the last waypoint to capture the full survey area in one continuous sequence while avoiding unnecessary footage. "
         )
-        flight_info_label.setWordWrap(True)
-        flight_info_label.setAlignment(Qt.AlignTop)
-        flight_info_label.setStyleSheet("color: black; font-size: 10px;")
-        flight_info_group_layout.addWidget(flight_info_label)
-        info_layout.addWidget(flight_info_group)
+        video_mode_info_label.setWordWrap(True)
+        video_mode_info_label.setAlignment(Qt.AlignTop)
+        video_mode_info_label.setStyleSheet("color: black; font-size: 10px;")
+        video_mode_info_group_layout.addWidget(video_mode_info_label)
+        info_layout.addWidget(video_mode_info_group)
+
+        photo_mode_info_group = QGroupBox("Photo Mode Info")
+        photo_mode_info_group_layout = QVBoxLayout(photo_mode_info_group)
+        photo_mode_info_label = QLabel(
+            "In photo mode, images are associated with the AirData file in a fixed sequential order due to timestamp ambiguities caused by second-level precision and the lack of sub-second information. Consequently, the complete dataset must always be provided. If individual images are missing, georeferencing will fail."
+        )
+        photo_mode_info_label.setWordWrap(True)
+        photo_mode_info_label.setAlignment(Qt.AlignTop)
+        photo_mode_info_label.setStyleSheet("color: black; font-size: 10px;")
+        photo_mode_info_group_layout.addWidget(photo_mode_info_label)
+        info_layout.addWidget(photo_mode_info_group)
 
         calibration_group = QGroupBox("Camera Calibration")
         calibration_group_layout = QVBoxLayout(calibration_group)
