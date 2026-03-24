@@ -806,6 +806,25 @@ class BambiDockWidget(QDockWidget):
         )
         flight_route_viz_layout.addRow("Include Frame 0:", self.frame_marker_include_zero_check)
 
+        # Image labels enable checkbox
+        self.image_labels_enabled_check = QCheckBox()
+        self.image_labels_enabled_check.setChecked(False)
+        self.image_labels_enabled_check.setToolTip(
+            "Enable displaying image filenames at every N-th camera position"
+        )
+        self.image_labels_enabled_check.stateChanged.connect(self._toggle_image_label_controls)
+        flight_route_viz_layout.addRow("Show Image Labels:", self.image_labels_enabled_check)
+
+        # Image label interval
+        self.image_label_interval_spin = QSpinBox()
+        self.image_label_interval_spin.setRange(1, 100000)
+        self.image_label_interval_spin.setValue(100)
+        self.image_label_interval_spin.setEnabled(False)
+        self.image_label_interval_spin.setToolTip(
+            "Display an image filename label every N frames (e.g., 100 shows labels at frame 100, 200, 300, ...)"
+        )
+        flight_route_viz_layout.addRow("Image Label Interval (N):", self.image_label_interval_spin)
+
         flight_route_tab_layout.addWidget(flight_route_viz_group)
 
         # Distance-based markers group
@@ -3559,6 +3578,10 @@ class BambiDockWidget(QDockWidget):
         self.frame_marker_interval_spin.setEnabled(state)
         self.frame_marker_include_zero_check.setEnabled(state)
 
+    def _toggle_image_label_controls(self, state):
+        """Toggle image label interval spinbox based on checkbox state."""
+        self.image_label_interval_spin.setEnabled(state)
+
     def _toggle_distance_marker_controls(self, state):
         """Toggle distance marker controls based on checkbox state."""
         self.distance_marker_interval_spin.setEnabled(state)
@@ -5613,6 +5636,21 @@ class BambiDockWidget(QDockWidget):
                     loaded_count += 1
                     self.log("Added time markers layer")
 
+            # Add image labels if enabled
+            if self.image_labels_enabled_check.isChecked():
+                image_labels_layer = self._create_image_labels_layer(
+                    camera_points_file, config
+                )
+                if image_labels_layer and image_labels_layer.isValid():
+                    image_labels_layer = self._persist_memory_layer(
+                        image_labels_layer, "Image_Labels", "flight_route_layers"
+                    )
+                    self._style_image_labels_layer(image_labels_layer)
+                    QgsProject.instance().addMapLayer(image_labels_layer, False)
+                    group.addLayer(image_labels_layer)
+                    loaded_count += 1
+                    self.log("Added image labels layer")
+
             if loaded_count == 0:
                 QMessageBox.warning(self, "No Layers", "No flight route layers found.")
                 self.update_status("add_flight_route", "🔴 No files")
@@ -6144,6 +6182,106 @@ class BambiDockWidget(QDockWidget):
         except Exception as e:
             self.log(f"Warning: Could not style time markers layer: {str(e)}")
 
+    def _create_image_labels_layer(self, camera_points_file: str, config: dict) -> Optional[QgsVectorLayer]:
+        """Create a vector layer with image filename labels at every N-th camera position.
+
+        :param camera_points_file: Path to the camera positions GeoJSON file
+        :param config: Configuration dictionary
+        :return: QgsVectorLayer with image labels, or None if creation fails
+        """
+        if not os.path.exists(camera_points_file):
+            self.log("Warning: Camera positions file not found for image labels")
+            return None
+
+        try:
+            with open(camera_points_file, 'r', encoding='utf-8') as f:
+                camera_data = json.load(f)
+
+            features = camera_data.get("features", [])
+            if not features:
+                self.log("Warning: No camera positions found for image labels")
+                return None
+
+            label_interval = self.image_label_interval_spin.value()
+            target_epsg = config.get("target_epsg", 32633)
+
+            layer_uri = (
+                f"Point?crs=EPSG:{target_epsg}"
+                f"&field=frame_idx:integer&field=imagefile:string&field=label:string"
+            )
+            labels_layer = QgsVectorLayer(layer_uri, "Image Labels", "memory")
+
+            if not labels_layer.isValid():
+                self.log("Warning: Could not create image labels layer")
+                return None
+
+            label_features = []
+            for feature in features:
+                props = feature.get("properties", {})
+                frame_idx = props.get("frame_idx", 0)
+
+                if frame_idx % label_interval != 0:
+                    continue
+
+                coords = feature.get("geometry", {}).get("coordinates", [0, 0])
+                imagefile = props.get("imagefile", "")
+                label = os.path.basename(imagefile) if imagefile else str(frame_idx)
+
+                point = QgsPointXY(coords[0], coords[1])
+                qgs_feature = QgsFeature(labels_layer.fields())
+                qgs_feature.setGeometry(QgsGeometry.fromPointXY(point))
+                qgs_feature.setAttributes([frame_idx, imagefile, label])
+                label_features.append(qgs_feature)
+
+            if not label_features:
+                self.log("Warning: No image labels to add (interval may be larger than total frames)")
+                return None
+
+            labels_layer.dataProvider().addFeatures(label_features)
+            self.log(f"Created {len(label_features)} image labels (interval: {label_interval})")
+            return labels_layer
+
+        except Exception as e:
+            self.log(f"Error creating image labels: {str(e)}")
+            return None
+
+    def _style_image_labels_layer(self, layer: QgsVectorLayer):
+        """Apply styling and labeling to the image labels layer."""
+        try:
+            # Invisible marker — label text only
+            symbol = QgsMarkerSymbol.createSimple({
+                'name': 'circle',
+                'color': '0,0,0,0',
+                'outline_style': 'no',
+                'size': '1'
+            })
+            layer.renderer().setSymbol(symbol)
+
+            label_settings = QgsPalLayerSettings()
+            label_settings.fieldName = 'label'
+            label_settings.enabled = True
+
+            text_format = QgsTextFormat()
+            text_format.setFont(QFont("Arial", 8))
+            text_format.setSize(8)
+            text_format.setColor(QColor('#1a1a1a'))
+
+            buffer_settings = QgsTextBufferSettings()
+            buffer_settings.setEnabled(True)
+            buffer_settings.setSize(1.0)
+            buffer_settings.setColor(QColor('#ffffff'))
+            text_format.setBuffer(buffer_settings)
+
+            label_settings.setFormat(text_format)
+            label_settings.placement = QgsPalLayerSettings.OverPoint
+            label_settings.quadOffset = QgsPalLayerSettings.QuadrantBelow
+
+            layer.setLabelsEnabled(True)
+            layer.setLabeling(QgsVectorLayerSimpleLabeling(label_settings))
+            layer.triggerRepaint()
+        except Exception as e:
+            self.log(f"Warning: Could not style image labels layer: {str(e)}")
+
     def _style_frame_markers_layer(self, layer: QgsVectorLayer):
         """Apply styling and labeling to frame markers layer.
 
@@ -6467,6 +6605,10 @@ class BambiDockWidget(QDockWidget):
                                  self.frame_marker_interval_spin.value())
         project.writeEntryBool(PLUGIN_SCOPE, "FlightRoute/IncludeFrameZero",
                                self.frame_marker_include_zero_check.isChecked())
+        project.writeEntryBool(PLUGIN_SCOPE, "FlightRoute/ImageLabelsEnabled",
+                               self.image_labels_enabled_check.isChecked())
+        project.writeEntryDouble(PLUGIN_SCOPE, "FlightRoute/ImageLabelInterval",
+                                 self.image_label_interval_spin.value())
         project.writeEntryBool(PLUGIN_SCOPE, "FlightRoute/DistanceMarkersEnabled",
                                self.distance_markers_enabled_check.isChecked())
         project.writeEntryDouble(PLUGIN_SCOPE, "FlightRoute/DistanceMarkerInterval",
@@ -6664,6 +6806,8 @@ class BambiDockWidget(QDockWidget):
         self.frame_markers_enabled_check.setChecked(read_bool("FlightRoute/FrameMarkersEnabled", True))
         self.frame_marker_interval_spin.setValue(read_int("FlightRoute/FrameMarkerInterval", 100))
         self.frame_marker_include_zero_check.setChecked(read_bool("FlightRoute/IncludeFrameZero", False))
+        self.image_labels_enabled_check.setChecked(read_bool("FlightRoute/ImageLabelsEnabled", False))
+        self.image_label_interval_spin.setValue(read_int("FlightRoute/ImageLabelInterval", 100))
         self.distance_markers_enabled_check.setChecked(read_bool("FlightRoute/DistanceMarkersEnabled", False))
         self.distance_marker_interval_spin.setValue(read_int("FlightRoute/DistanceMarkerInterval", 100))
         self.distance_marker_include_start_check.setChecked(read_bool("FlightRoute/IncludeDistanceStart", False))
