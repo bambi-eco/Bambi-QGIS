@@ -133,6 +133,8 @@ pip install git+https://github.com/bambi-eco/bambi_detection.git
 pip install git+https://github.com/bambi-eco/alfs_py.git
 ```
 
+**Note**: After installing new Python packages using OSGeo4W you will have to restart QGIS. QGIS loads its Python environment only at startup, so it won’t detect new packages dynamically.
+
 ### Optional: Extended Tracking Capabilities
 
 The plugin includes simple geo-based tracking strategies out of the box. For advanced tracking algorithms, install the following packages in the **QGIS OSGeo4W Shell**:
@@ -656,6 +658,14 @@ target_folder/
 
 - Reduce the number of frames processed at each step; back up intermediate results and rerun with different settings
 - For orthomosaics and GeoTIFFs: reduce resolution or decrease the max tile size parameter
+
+### No module named 'bambi'
+
+If you get the processing error `No module named 'bambi'`, you have not installed the `bambi_detection` dependency or you have not restarted QGIS after installation via OSGeo4W.
+
+### No module named 'alfspy'
+
+If you get the processing error `No module named 'alfs_py'`, you have not installed the `alfs_py` dependency or you have not restarted QGIS after installation via OSGeo4W.
 
 ### Problems Installing Dependencies
 
