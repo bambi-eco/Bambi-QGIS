@@ -13,7 +13,6 @@ A comprehensive QGIS plugin for detecting and tracking wildlife in aerial drone 
 ## Table of Contents
 
 - [Features](#features)
-- [Screenshots](#screenshots)
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Usage](#usage)
@@ -22,6 +21,7 @@ A comprehensive QGIS plugin for detecting and tracking wildlife in aerial drone 
 - [Input File Formats](#input-file-formats)
 - [Output Structure](#output-structure)
 - [Troubleshooting](#troubleshooting)
+- [Screenshots](#screenshots)
 - [License](#license)
 - [Credits](#credits)
 
@@ -42,66 +42,6 @@ A comprehensive QGIS plugin for detecting and tracking wildlife in aerial drone 
 - **GeoTIFF Export**: Export individual frames as georeferenced GeoTIFFs for detailed analysis
 - **DEM Import**: Automatically download DEMs (currently limited to Austria), or convert any GeoTIFF DEM to the required GLB format — including source CRS override for files with incorrect embedded CRS metadata
 - **Full QGIS Integration**: All outputs are automatically added as styled layers to the QGIS layer panel
-
----
-
-## Screenshots
-
-### Plugin Interface
-
-![Plugin Overview](images/plugin_overview.png)
-
-![Configuration Tab](images/config_tab.png)
-
-![Processing Tab](images/processing_tab.png)
-
-#### Video Input
-
-![Input Tab](images/input_tab_video.png)
-
-#### Photo Input
-
-![Input Tab](images/input_tab.png)
-
-
-### Flight Route and Camera Positions
-
-#### Video Route
-
-![Flight Route](images/route.png)
-
-#### Photo Route
-
-![Flight Route](images/route_photo.png)
-
-
-### Detections and Geo-referencing
-
-![Detection Results](images/detection_results.png)
-
-#### Perpendicular distances
-
-![Perpendicular Distances](/images/perpendicular_distances.png)
-
-### Track Visualization
-
-![Track Visualization](images/tracks_qgis.png)
-
-### Field of View
-
-![Field of View per Frame](images/fov.png)
-
-![Merged Flight FoV](images/flight_fov.png)
-
-### Orthomosaic and GeoTIFF Export
-
-![Orthomosaic Output](images/orthomosaic.png)
-
-![GeoTIFF Export](images/geotiff.png)
-
-### Segmentation
-
-![Segmentation Output](images/segmentations.png)
 
 ---
 
@@ -153,7 +93,7 @@ Or install from source: [https://github.com/mikel-brostrom/boxmot](https://githu
 
 #### Geo-Referenced Tracking Extension
 
-For tracking algorithms that operate natively in geo-referenced coordinates (recommended for wildlife surveys):
+For tracking algorithms that operate natively in geo-referenced coordinates (recommended for wildlife surveys; builds upon BoxMOT so both dependencies are required):
 
 ```bash
 pip install git+https://github.com/bambi-eco/Geo-Referenced-Tracking.git
@@ -699,6 +639,68 @@ If you use this plugin in your research, please cite:
                Tracking Wildlife in Thermal Drone Videos},
 }
 ```
+
+---
+
+## Screenshots
+
+### Plugin Interface
+
+![Plugin Overview](images/plugin_overview.png)
+
+![Configuration Tab](images/config_tab.png)
+
+![Processing Tab](images/processing_tab.png)
+
+#### Video Input
+
+![Input Tab](images/input_tab_video.png)
+
+#### Photo Input
+
+![Input Tab](images/input_tab.png)
+
+
+### Flight Route and Camera Positions
+
+#### Video Route
+
+![Flight Route](images/route.png)
+
+#### Photo Route
+
+![Flight Route](images/route_photo.png)
+
+
+### Detections and Geo-referencing
+
+![Detection Results](images/detection_results.png)
+
+#### Perpendicular distances
+
+![Perpendicular Distances](/images/perpendicular_distances.png)
+
+### Track Visualization
+
+![Track Visualization](images/tracks_qgis.png)
+
+### Field of View
+
+![Field of View per Frame](images/fov.png)
+
+![Merged Flight FoV](images/flight_fov.png)
+
+### Orthomosaic and GeoTIFF Export
+
+![Orthomosaic Output](images/orthomosaic.png)
+
+![GeoTIFF Export](images/geotiff.png)
+
+### Segmentation
+
+![Segmentation Output](images/segmentations.png)
+
+---
 
 ---
 
