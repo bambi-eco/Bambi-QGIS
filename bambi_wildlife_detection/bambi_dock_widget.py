@@ -1858,6 +1858,18 @@ class BambiDockWidget(QDockWidget):
         info_tab = QWidget()
         info_layout = QVBoxLayout(info_tab)
         main_tabs.addTab(info_tab, "Info")
+
+        general_info_group = QGroupBox("General information")
+        general_info_group_layout = QVBoxLayout(general_info_group)
+        general_info_label = QLabel(
+            "The BAMBI plugin is not intended to process multiple flights within the same QGIS project, since the result files in the output folder will be replaced after additional runs. If you want to combine multiple results, it is recommended to run processing independently and copy & paste the individual layers to a separate project."
+        )
+        general_info_label.setWordWrap(True)
+        general_info_label.setAlignment(Qt.AlignTop)
+        general_info_label.setStyleSheet("color: black; font-size: 10px;")
+        general_info_group_layout.addWidget(general_info_label)
+        info_layout.addWidget(general_info_group)
+
         video_mode_info_group = QGroupBox("Video Mode Recommendations")
         video_mode_info_group_layout = QVBoxLayout(video_mode_info_group)
         video_mode_info_label = QLabel(
