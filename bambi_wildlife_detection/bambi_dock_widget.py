@@ -1870,7 +1870,7 @@ class BambiDockWidget(QDockWidget):
         general_info_group = QGroupBox("General information")
         general_info_group_layout = QVBoxLayout(general_info_group)
         general_info_label = QLabel(
-            "The BAMBI plugin is not intended to process multiple flights within the same QGIS project, since the result files in the output folder will be replaced after additional runs. If you want to combine multiple results, it is recommended to run processing independently, group all layers of interest, export them as 'Layer Definition File' and import it to a separate project."
+            "The BAMBI plugin is not intended to process multiple flights within the same QGIS project (and the same output folder), since the result files in the output folder will be replaced after additional runs. If you want to combine multiple results, it is recommended to run processing independently with (1) different output folders (don't foregt to add all layers to QGIS before changing the output folder, otherwise you will have to change it back again!) or (2) group all layers of interest, export them as 'Layer Definition File' and import it again to QGIS."
         )
         general_info_label.setWordWrap(True)
         general_info_label.setAlignment(Qt.AlignTop)
