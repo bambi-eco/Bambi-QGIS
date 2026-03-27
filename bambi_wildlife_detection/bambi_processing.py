@@ -698,9 +698,12 @@ class BambiProcessor:
                     always_xy=True
                 )
 
+                filter_gps_origin = config.get("filter_gps_origin", True)
                 parser = AirDataParser()
                 for frame in parser.parse_yield(airdata_path):
                     if frame.latitude is None or frame.longitude is None:
+                        continue
+                    if filter_gps_origin and frame.latitude == 0.0 and frame.longitude == 0.0:
                         continue
                     alt = frame.altitude_above_seaLevel if frame.altitude_above_seaLevel is not None else (
                         frame.altitude if frame.altitude is not None else 0.0

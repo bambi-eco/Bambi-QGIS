@@ -780,6 +780,14 @@ class BambiDockWidget(QDockWidget):
         flight_route_viz_group = QGroupBox("Flight Route Visualization")
         flight_route_viz_layout = QFormLayout(flight_route_viz_group)
 
+        # Filter GPS origin (0, 0) checkbox
+        self.filter_gps_origin_check = QCheckBox()
+        self.filter_gps_origin_check.setChecked(True)
+        self.filter_gps_origin_check.setToolTip(
+            "Remove GPS entries at (0°, 0°) which occur when the drone has not yet acquired a GPS fix"
+        )
+        flight_route_viz_layout.addRow("Filter GPS Origin (0°, 0°):", self.filter_gps_origin_check)
+
         # Frame markers enable checkbox
         self.frame_markers_enabled_check = QCheckBox()
         self.frame_markers_enabled_check.setChecked(True)
@@ -2194,6 +2202,9 @@ class BambiDockWidget(QDockWidget):
             "sam3_start_frame": self.sam3_start_frame_spin.value() if hasattr(self, 'sam3_start_frame_spin') else 0,
             "sam3_end_frame": self.sam3_end_frame_spin.value() if hasattr(self, 'sam3_end_frame_spin') else 999999,
             "sam3_step": self.sam3_step_spin.value() if hasattr(self, 'sam3_step_spin') else 1,
+
+            # Flight Route options
+            "filter_gps_origin": self.filter_gps_origin_check.isChecked() if hasattr(self, 'filter_gps_origin_check') else True,
 
             # Camera selections for processing steps
             "flight_route_camera": "T" if self.flight_route_camera_combo.currentIndex() == 0 else "W",
