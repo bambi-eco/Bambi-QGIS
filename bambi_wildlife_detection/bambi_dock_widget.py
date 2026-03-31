@@ -556,6 +556,12 @@ class BambiDockWidget(QDockWidget):
         self.photo_timezone_combo.currentTextChanged.connect(self._update_timezone_offset_label)
         photo_inputs_layout.addWidget(photo_settings_group)
 
+        timezone_label = QLabel(
+            'Timezone of camera, when photos were created not current timezone (consider daylight saving time)!'
+        )
+        timezone_label.setWordWrap(True)
+        photo_settings_layout.addWidget(timezone_label)
+
         input_layout.addWidget(self.photo_inputs_widget)
 
         self.video_mode_check.stateChanged.connect(self._on_input_mode_changed)

@@ -363,8 +363,16 @@ class BambiProcessor:
 
             calibration_res = config.get("thermal_photo_calibration_data")
             if calibration_res is None:
-                with open(config["thermal_photo_calibration_path"]) as f:
+                calib_path = config.get("thermal_photo_calibration_path", "")
+                if not calib_path:
+                    raise ValueError(
+                        "No thermal photo calibration provided. "
+                        "Please select a preset or specify a calibration file path."
+                    )
+                with open(calib_path) as f:
                     calibration_res = json.load(f)
+            if calibration_res is None:
+                raise ValueError("Thermal photo calibration data is None. Check the calibration file or preset.")
 
             extractor = UniqueMatchPhotoPoseExtractor(
                 rel_transformer=rel_transformer,
@@ -479,8 +487,16 @@ class BambiProcessor:
 
             calibration_res = config.get("rgb_photo_calibration_data")
             if calibration_res is None:
-                with open(config["rgb_photo_calibration_path"]) as f:
+                calib_path = config.get("rgb_photo_calibration_path", "")
+                if not calib_path:
+                    raise ValueError(
+                        "No RGB photo calibration provided. "
+                        "Please select a preset or specify a calibration file path."
+                    )
+                with open(calib_path) as f:
                     calibration_res = json.load(f)
+            if calibration_res is None:
+                raise ValueError("RGB photo calibration data is None. Check the calibration file or preset.")
 
             extractor = UniqueMatchPhotoPoseExtractor(
                 rel_transformer=rel_transformer,
@@ -4167,7 +4183,7 @@ class BambiProcessor:
         end_frame = config.get("ortho_end_frame", 999999)
         ground_resolution = config.get("ortho_ground_resolution", 0.1)
         dem_metadata_path = config.get("ortho_dem_metadata_path")
-        apply_smoothing = config.get("geotiff_apply_smoothing", True)
+        apply_smoothing = config.get("geotiff_apply_smoothing", False)
         mesh_subsample = config.get("geotiff_mesh_subsample", 1)
         frame_step = config.get("ortho_frame_step", 1)
 
@@ -4203,15 +4219,16 @@ class BambiProcessor:
         if log_fn:
             log_fn(f"Found {total_all} images in poses.json")
 
-        # Apply pose smoothing if requested
+        # Apply pose smoothing if requested — stored separately to avoid mutating raw poses
+        # (run_georeference uses raw positions; mutating here would cause a mismatch)
+        smoothed_locations = None
         if apply_smoothing and total_all >= 5:
             window_length = min(11, total_all - 1 if (total_all - 1) % 2 == 1 else total_all - 2)
             if window_length >= 3:
                 positions = np.array([img["location"] for img in all_images], dtype=float)
                 smoothed = savgol_filter(positions, window_length=window_length,
                                          polyorder=2, axis=0, mode="interp")
-                for img, loc in zip(all_images, smoothed):
-                    img["location"] = loc.tolist()
+                smoothed_locations = {i: smoothed[i].tolist() for i in range(total_all)}
                 if log_fn:
                     log_fn(f"Applied pose smoothing (window={window_length})")
 
@@ -4359,7 +4376,13 @@ class BambiProcessor:
                     image_mask = np.ones((img_h, img_w), dtype=bool)
 
                 # Get camera parameters
-                position = np.array(img_info['location'], dtype=float)
+                # Use smoothed position if available (raw positions are kept intact in img_info)
+                raw_location = img_info['location']
+                if smoothed_locations is not None:
+                    location = smoothed_locations[frame_idx]
+                else:
+                    location = raw_location
+                position = np.array(location, dtype=float)
                 rotation_deg = np.array(img_info['rotation'], dtype=float)
                 fovy = img_info.get('fovy', 45.0)
                 if isinstance(fovy, list):
@@ -4393,11 +4416,13 @@ class BambiProcessor:
                 world_to_cam = np.linalg.inv(cam_to_world)
 
                 # Calculate FOV
-                aspect_ratio = img_w / img_h
+                # Use aspect_ratio=1.0 to match the alfspy Camera model used in run_georeference
+                # (Camera(aspect_ratio=1.0) → horizontal half-FOV equals vertical half-FOV).
+                # Using img_w/img_h here would produce a wider horizontal projection, causing the
+                # same animal to appear at different geographic positions in consecutive GeoTIFFs.
                 fov_y_rad = np.deg2rad(fovy)
-                fov_x_rad = 2 * np.arctan(aspect_ratio * np.tan(fov_y_rad / 2))
-                half_width = np.tan(fov_x_rad / 2)
                 half_height = np.tan(fov_y_rad / 2)
+                half_width = half_height  # aspect_ratio = 1.0
 
                 # Project mesh vertices to image coordinates (vectorized)
                 n_vertices = len(vertices)
