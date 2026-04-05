@@ -216,10 +216,16 @@ class FeatureViewerDialog(QDialog):
             if len(b) >= 6:
                 info_parts.append(f"Conf: {float(b[4]):.3f}")
                 info_parts.append(f"Class: {int(b[5])}")
+            if len(b) >= 7 and b[6]:
+                info_parts.append("interpolated")
         self.info_label.setText("   |   ".join(info_parts))
 
     def _draw_boxes(self, img, green_boxes, blue_boxes):
-        """Paint bounding boxes onto a copy of *img* and return the result."""
+        """Paint bounding boxes onto a copy of *img* and return the result.
+
+        Box tuple format: (x1, y1, x2, y2[, conf, cls[, is_interpolated]])
+        Interpolated boxes (is_interpolated=1) are drawn with a dashed line.
+        """
         result = img.copy()
         painter = QPainter(result)
         painter.setRenderHint(QPainter.Antialiasing, False)
@@ -227,23 +233,32 @@ class FeatureViewerDialog(QDialog):
         lw_blue  = max(2, img.width() // 400)
         lw_green = max(3, img.width() // 280)
 
-        pen_blue  = QPen(QColor(80, 140, 255), lw_blue)
-        pen_green = QPen(QColor(0, 220, 0),    lw_green)
+        def make_pen(color, lw, dashed):
+            pen = QPen(color, lw, Qt.DashLine if dashed else Qt.SolidLine)
+            return pen
 
         font = QFont("Arial", max(8, img.width() // 80))
         painter.setFont(font)
 
         # Draw blue first so green is always on top
-        for boxes, pen in [(blue_boxes, pen_blue), (green_boxes, pen_green)]:
-            painter.setPen(pen)
+        for boxes, color, lw in [
+            (blue_boxes,  QColor(80, 140, 255), lw_blue),
+            (green_boxes, QColor(0, 220, 0),    lw_green),
+        ]:
             for box in boxes:
                 x1 = int(box[0])
                 y1 = int(box[1])
                 x2 = int(box[2])
                 y2 = int(box[3])
+                is_interp = len(box) >= 7 and bool(box[6])
+
+                painter.setPen(make_pen(color, lw, is_interp))
                 painter.drawRect(x1, y1, x2 - x1, y2 - y1)
+
                 if len(box) >= 6:
                     label = f"cls:{int(box[5])} {float(box[4]):.2f}"
+                    if is_interp:
+                        label += " (interp)"
                     painter.drawText(x1 + 2, max(y1 - 4, 12), label)
 
         painter.end()

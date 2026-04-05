@@ -234,10 +234,15 @@ class BambiClickTool(QgsMapToolIdentify):
     def _build_frames_from_pixel_tracks(
         self, track_dets, all_tracks, track_id, target_folder
     ) -> List[dict]:
-        """Build viewer frame list from pixel-space track data."""
+        """Build viewer frame list from pixel-space track data.
+
+        The ``interpolated`` flag from tracks_pixel.csv is forwarded as the
+        7th element of each green box tuple so the viewer can draw dashed lines.
+        """
         frames = []
         for det in track_dets:
             fi = det["frame"]
+            is_interp = det.get("interpolated", 0)
             other_on_frame = [
                 (d["x1"], d["y1"], d["x2"], d["y2"], d["conf"], d["cls"])
                 for tid, dets in all_tracks.items()
@@ -250,7 +255,7 @@ class BambiClickTool(QgsMapToolIdentify):
                 "image_path":  self._resolve_image_path(target_folder, fi),
                 "boxes_green": [
                     (det["x1"], det["y1"], det["x2"], det["y2"],
-                     det["conf"], det["cls"])
+                     det["conf"], det["cls"], is_interp)
                 ],
                 "boxes_blue": other_on_frame,
             })
@@ -260,12 +265,19 @@ class BambiClickTool(QgsMapToolIdentify):
         self, georef_dets, all_pixel_dets, target_folder
     ) -> List[dict]:
         """Build viewer frame list by matching geo-referenced track detections
-        back to pixel detections via (frame, confidence, class_id)."""
+        back to pixel detections via (frame, confidence, class_id).
+
+        Frames where no pixel match is found (interpolated frames whose bbox
+        was never written to detections.txt) get their bounding box
+        interpolated linearly from neighbouring actual detections and are
+        flagged with is_interpolated=1 so the viewer draws a dashed border.
+        """
         frames = []
         for gd in georef_dets:
-            fi   = gd["frame"]
-            conf = gd["confidence"]
-            cls  = gd["class_id"]
+            fi        = gd["frame"]
+            conf      = gd["confidence"]
+            cls       = gd["class_id"]
+            is_interp = gd.get("interpolated", 0)
 
             same_frame = [d for d in all_pixel_dets if d["frame"] == fi]
 
@@ -280,15 +292,69 @@ class BambiClickTool(QgsMapToolIdentify):
                 "frame_idx":  fi,
                 "image_path": self._resolve_image_path(target_folder, fi),
                 "boxes_green": [
-                    (d["x1"], d["y1"], d["x2"], d["y2"], d["confidence"], d["class_id"])
+                    (d["x1"], d["y1"], d["x2"], d["y2"],
+                     d["confidence"], d["class_id"], is_interp)
                     for d in matched
                 ],
                 "boxes_blue": [
-                    (d["x1"], d["y1"], d["x2"], d["y2"], d["confidence"], d["class_id"])
+                    (d["x1"], d["y1"], d["x2"], d["y2"],
+                     d["confidence"], d["class_id"])
                     for d in others
                 ],
             })
+
+        # For frames where the pixel match failed (interpolated frames that
+        # were never written to detections.txt), interpolate from neighbours.
+        self._fill_interpolated_boxes(frames)
         return frames
+
+    def _fill_interpolated_boxes(self, frames: List[dict]) -> None:
+        """Fill empty ``boxes_green`` entries by linear interpolation.
+
+        Operates in-place.  Interpolated boxes are flagged with
+        ``is_interpolated=1`` so the viewer draws them with a dashed border.
+        """
+        n = len(frames)
+        for i, frame in enumerate(frames):
+            if frame["boxes_green"]:
+                continue  # already has a real or previously-interpolated box
+
+            # Find nearest frames before and after that have actual boxes
+            j_before = next(
+                (j for j in range(i - 1, -1, -1) if frames[j]["boxes_green"]),
+                None,
+            )
+            j_after = next(
+                (j for j in range(i + 1, n) if frames[j]["boxes_green"]),
+                None,
+            )
+
+            if j_before is None and j_after is None:
+                continue  # no reference boxes anywhere — leave empty
+
+            if j_before is not None and j_after is not None:
+                b1 = frames[j_before]["boxes_green"][0]
+                b2 = frames[j_after]["boxes_green"][0]
+                fi1, fi2, fi = (
+                    frames[j_before]["frame_idx"],
+                    frames[j_after]["frame_idx"],
+                    frame["frame_idx"],
+                )
+                alpha = (fi - fi1) / (fi2 - fi1) if fi2 != fi1 else 0.5
+            else:
+                # Only one side available — copy the nearest box unchanged
+                src = frames[j_before if j_before is not None else j_after]
+                b1 = b2 = src["boxes_green"][0]
+                alpha = 0.0
+
+            x1 = b1[0] + alpha * (b2[0] - b1[0])
+            y1 = b1[1] + alpha * (b2[1] - b1[1])
+            x2 = b1[2] + alpha * (b2[2] - b1[2])
+            y2 = b1[3] + alpha * (b2[3] - b1[3])
+            conf = float(b1[4]) if len(b1) > 4 else 0.0
+            cls  = int(b1[5])   if len(b1) > 5 else 0
+
+            frame["boxes_green"] = [(x1, y1, x2, y2, conf, cls, 1)]
 
     # ------------------------------------------------------------------
     # Data loaders
@@ -318,9 +384,10 @@ class BambiClickTool(QgsMapToolIdentify):
                         parts = line.split(",")
                         if len(parts) >= 10 and int(parts[1]) == track_id:
                             result.append({
-                                "frame":      int(parts[0]),
-                                "confidence": float(parts[8]),
-                                "class_id":   int(parts[9]),
+                                "frame":        int(parts[0]),
+                                "confidence":   float(parts[8]),
+                                "class_id":     int(parts[9]),
+                                "interpolated": int(parts[10]) if len(parts) > 10 else 0,
                             })
                 if result:
                     break  # found in this file, no need to search further
