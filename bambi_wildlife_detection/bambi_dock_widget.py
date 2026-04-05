@@ -33,6 +33,8 @@ from qgis.PyQt.QtCore import QVariant
 
 from .bambi_processing import BambiProcessor, ProcessingWorker
 from .austria_dem_downloader import DEMDownloadWorker, GeoTIFFConversionWorker
+from .bambi_click_tool import BambiClickTool
+from .bambi_feature_viewer import FeatureViewerDialog
 
 # Plugin scope for project settings storage
 PLUGIN_SCOPE = "BambiWildlifeDetection"
@@ -256,11 +258,17 @@ class BambiDockWidget(QDockWidget):
         # Flag to prevent recursive saves during config loading
         self._loading_config = False
 
+        # Inspector map tool (lazy-created on first activation)
+        self._click_tool = None
+
         # Setup UI
         self.setup_ui()
 
         # Connect to project signals for config persistence
         self._connect_project_signals()
+
+        # Keep the inspector button in sync when the user switches to another map tool
+        self.iface.mapCanvas().mapToolSet.connect(self._on_map_tool_changed)
 
         # Load config if project already has saved config
         self._loading_config = True
@@ -1682,6 +1690,32 @@ class BambiDockWidget(QDockWidget):
         add_tracks_row.addWidget(self.add_layers_btn)
         add_tracks_row.addWidget(self.layers_status)
         steps_btn_layout.addLayout(add_tracks_row)
+
+        # -> Inspector tool
+        inspector_sep = QFrame()
+        inspector_sep.setFrameShape(QFrame.HLine)
+        inspector_sep.setFrameShadow(QFrame.Sunken)
+        steps_btn_layout.addWidget(inspector_sep)
+
+        inspector_row = QHBoxLayout()
+        self.inspector_btn = QPushButton("Inspector: Click a Detection / Track")
+        self.inspector_btn.setCheckable(True)
+        self.inspector_btn.setToolTip(
+            "Activate the feature inspector.\n"
+            "Click any detection or track bounding box on the map\n"
+            "to view the corresponding frame image with annotated boxes.\n"
+            "Green = clicked feature, Blue = other detections on the same frame."
+        )
+        self.inspector_btn.toggled.connect(self._toggle_inspector)
+        self.inspector_status = QLabel("⚪ Off")
+        inspector_row.addWidget(self.inspector_btn)
+        inspector_row.addWidget(self.inspector_status)
+        steps_btn_layout.addLayout(inspector_row)
+
+        inspector_sep2 = QFrame()
+        inspector_sep2.setFrameShape(QFrame.HLine)
+        inspector_sep2.setFrameShadow(QFrame.Sunken)
+        steps_btn_layout.addWidget(inspector_sep2)
 
         # -> Calculate Track Perpendicular
         track_perp_calc_row = QHBoxLayout()
@@ -3554,6 +3588,30 @@ class BambiDockWidget(QDockWidget):
         if folder and os.path.isdir(folder):
             self._check_existing_outputs(folder)
 
+    def _toggle_inspector(self, checked: bool):
+        """Activate or deactivate the BAMBI feature inspector map tool."""
+        canvas = self.iface.mapCanvas()
+        if checked:
+            if self._click_tool is None:
+                self._click_tool = BambiClickTool(self.iface)
+            canvas.setMapTool(self._click_tool)
+            self.inspector_btn.setText("Inspector: ACTIVE — Click any detection / track")
+            self.inspector_status.setText("🟢 Active")
+        else:
+            if self._click_tool is not None:
+                canvas.unsetMapTool(self._click_tool)
+            self.inspector_btn.setText("Inspector: Click a Detection / Track")
+            self.inspector_status.setText("⚪ Off")
+
+    def _on_map_tool_changed(self, new_tool, old_tool):
+        """Uncheck the inspector button when the user switches to another map tool."""
+        if self._click_tool is not None and new_tool is not self._click_tool:
+            self.inspector_btn.blockSignals(True)
+            self.inspector_btn.setChecked(False)
+            self.inspector_btn.setText("Inspector: Click a Detection / Track")
+            self.inspector_status.setText("⚪ Off")
+            self.inspector_btn.blockSignals(False)
+
     def _refresh_all_statuses(self):
         """Refresh all status indicators by checking outputs and QGIS layers."""
         self.log("Refreshing status indicators...")
@@ -4742,6 +4800,9 @@ class BambiDockWidget(QDockWidget):
                     display_name="Final Position"
                 )
                 self._style_bbox_layer(bbox_layer, color_str)
+                # Tag layer so the inspector tool can identify and handle it
+                bbox_layer.setCustomProperty("bambi_layer_type", "track_final")
+                bbox_layer.setCustomProperty("bambi_target_folder", config["target_folder"])
                 QgsProject.instance().addMapLayer(bbox_layer, False)
                 track_group.addLayer(bbox_layer)
 
@@ -4751,6 +4812,9 @@ class BambiDockWidget(QDockWidget):
                         display_name="Path"
                     )
                     self._style_path_layer(path_layer, color_str)
+                    # Tag layer so the inspector tool can identify and handle it
+                    path_layer.setCustomProperty("bambi_layer_type", "track_path")
+                    path_layer.setCustomProperty("bambi_target_folder", config["target_folder"])
                     QgsProject.instance().addMapLayer(path_layer, False)
                     track_group.addLayer(path_layer)
 
@@ -5337,6 +5401,10 @@ class BambiDockWidget(QDockWidget):
             # Persist layer to GeoPackage
             layer = self._persist_memory_layer(layer, layer_name, "detection_layers")
 
+            # Tag layer so the inspector tool can identify and handle it
+            layer.setCustomProperty("bambi_layer_type", "detection")
+            layer.setCustomProperty("bambi_target_folder", self.target_folder_edit.text().strip())
+
             # Add layer to project and group
             QgsProject.instance().addMapLayer(layer, False)
             group.addLayer(layer)
@@ -5387,6 +5455,10 @@ class BambiDockWidget(QDockWidget):
 
         # Persist layer to GeoPackage
         layer = self._persist_memory_layer(layer, "Detections_AllFrames", "detection_layers")
+
+        # Tag layer so the inspector tool can identify and handle it
+        layer.setCustomProperty("bambi_layer_type", "detection")
+        layer.setCustomProperty("bambi_target_folder", self.target_folder_edit.text().strip())
 
         # Add layer to project
         QgsProject.instance().addMapLayer(layer)
@@ -6916,8 +6988,17 @@ class BambiDockWidget(QDockWidget):
             safe_name = "".join(c if c.isalnum() or c in "_-" else "_" for c in file_name)
             gpkg_path = os.path.join(gpkg_folder, f"{safe_name}.gpkg")
 
-            # If file already exists, remove it to overwrite
+            # If file already exists, release any QGIS layers holding it open
+            # before deleting — on Windows, open file handles cause WinError 32.
             if os.path.exists(gpkg_path):
+                norm_path = os.path.normcase(os.path.abspath(gpkg_path))
+                layers_to_remove = [
+                    lid for lid, lyr in QgsProject.instance().mapLayers().items()
+                    if isinstance(lyr, QgsVectorLayer)
+                    and os.path.normcase(os.path.abspath(lyr.source().split("|")[0])) == norm_path
+                ]
+                if layers_to_remove:
+                    QgsProject.instance().removeMapLayers(layers_to_remove)
                 os.remove(gpkg_path)
 
             # Write to GeoPackage
