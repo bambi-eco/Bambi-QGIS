@@ -41,14 +41,23 @@ from .bambi_feature_viewer import FeatureViewerDialog
 
 TRACK_TYPES = {"track_final", "track_path"}
 DETECTION_TYPE = "detection"
+FOV_TYPE = "fov"
 
 
 class BambiClickTool(QgsMapToolIdentify):
-    """Map tool that opens FeatureViewerDialog on BAMBI layer feature clicks."""
+    """Map tool that opens FeatureViewerDialog on BAMBI layer feature clicks.
 
-    def __init__(self, iface):
+    Parameters
+    ----------
+    mode : str
+        ``"detection_track"`` — identifies detection and track layers (default).
+        ``"fov"``             — identifies FoV polygon layers.
+    """
+
+    def __init__(self, iface, mode: str = "detection_track"):
         super().__init__(iface.mapCanvas())
         self.iface = iface
+        self.mode = mode
         self.setCursor(QCursor(Qt.CrossCursor))
 
     # ------------------------------------------------------------------
@@ -63,8 +72,7 @@ class BambiClickTool(QgsMapToolIdentify):
         if not bambi_layers:
             return
 
-        # Collect ALL results so we can prefer track features over detection
-        # features even when detection layers render on top of track layers.
+        # Collect ALL results so we can apply mode-specific priority.
         results = self.identify(
             event.x(),
             event.y(),
@@ -74,22 +82,29 @@ class BambiClickTool(QgsMapToolIdentify):
         if not results:
             return
 
-        # Prefer any track result over detection results, because:
-        # - Track "Final Position" polygons geographically overlap detection
-        #   polygons (same bbox projected to the same coordinates).
-        # - Detection layers are typically added (and therefore rendered on top)
-        #   after track layers, so TopDownStopAtFirst would always pick the
-        #   detection. We therefore scan all results and pick a track first.
-        track_result = None
-        detection_result = None
-        for r in results:
-            ltype = r.mLayer.customProperty("bambi_layer_type", "")
-            if ltype in TRACK_TYPES and track_result is None:
-                track_result = r
-            elif ltype == DETECTION_TYPE and detection_result is None:
-                detection_result = r
+        if self.mode == "fov":
+            # FoV mode: pick the first (topmost) FoV feature.
+            chosen = next(
+                (r for r in results
+                 if r.mLayer.customProperty("bambi_layer_type", "") == FOV_TYPE),
+                None,
+            )
+        else:
+            # Detection/track mode: prefer track features over detection features
+            # because their polygons overlap geographically and detection layers
+            # are typically rendered on top.
+            track_result = next(
+                (r for r in results
+                 if r.mLayer.customProperty("bambi_layer_type", "") in TRACK_TYPES),
+                None,
+            )
+            detection_result = next(
+                (r for r in results
+                 if r.mLayer.customProperty("bambi_layer_type", "") == DETECTION_TYPE),
+                None,
+            )
+            chosen = track_result if track_result is not None else detection_result
 
-        chosen = track_result if track_result is not None else detection_result
         if chosen is None:
             return
 
@@ -107,6 +122,8 @@ class BambiClickTool(QgsMapToolIdentify):
             self._handle_track_click(feature, target_folder, start_at_last=True)
         elif layer_type == "track_path":
             self._handle_track_click(feature, target_folder, start_at_last=False)
+        elif layer_type == FOV_TYPE:
+            self._handle_fov_click(feature, target_folder)
 
     def deactivate(self):
         super().deactivate()
@@ -153,6 +170,34 @@ class BambiClickTool(QgsMapToolIdentify):
 
         viewer = FeatureViewerDialog.get_instance(self.iface.mainWindow())
         viewer.show_detection(title, image_path, green_boxes, blue_boxes)
+
+    def _handle_fov_click(self, feature, target_folder: str):
+        """Show the frame for a clicked FoV polygon, all detections in green."""
+        try:
+            frame_idx = int(feature["frame"])
+        except (TypeError, ValueError):
+            return
+
+        det_file = os.path.join(target_folder, "detections", "detections.txt")
+        all_dets = self._load_pixel_detections(det_file)
+
+        same_frame = [d for d in all_dets if d["frame"] == frame_idx]
+
+        # All detections on this frame are shown in green — there is no
+        # "clicked" detection to single out.
+        green_boxes = [
+            (d["x1"], d["y1"], d["x2"], d["y2"], d["confidence"], d["class_id"])
+            for d in same_frame
+        ]
+
+        image_path = self._resolve_image_path(target_folder, frame_idx)
+        title = (
+            f"FoV — Frame {frame_idx}"
+            f"   |   {len(green_boxes)} detection(s)"
+        )
+
+        viewer = FeatureViewerDialog.get_instance(self.iface.mainWindow())
+        viewer.show_detection(title, image_path, green_boxes, blue_boxes=[])
 
     def _handle_track_click(self, feature, target_folder: str, start_at_last: bool):
         """Show the navigable frame sequence for a clicked track."""
@@ -489,8 +534,19 @@ class BambiClickTool(QgsMapToolIdentify):
     # ------------------------------------------------------------------
 
     def _get_bambi_layers(self) -> List[QgsVectorLayer]:
-        """Return BAMBI vector layers that are currently visible in the layer panel."""
-        valid_types = {DETECTION_TYPE} | TRACK_TYPES
+        """Return BAMBI layers relevant to the current mode.
+
+        Detection/track mode: only visible layers are considered (so the user
+        can hide a layer to exclude it from clicking).
+
+        FoV mode: all FoV layers are considered regardless of visibility,
+        because the user may want to click a FoV polygon that sits beneath a
+        visible GeoTIFF raster.
+        """
+        valid_types = (
+            {FOV_TYPE} if self.mode == "fov"
+            else {DETECTION_TYPE} | TRACK_TYPES
+        )
         root = QgsProject.instance().layerTreeRoot()
         layers = []
         for layer in QgsProject.instance().mapLayers().values():
@@ -498,7 +554,9 @@ class BambiClickTool(QgsMapToolIdentify):
                 continue
             if layer.customProperty("bambi_layer_type", "") not in valid_types:
                 continue
-            node = root.findLayer(layer.id())
-            if node and node.isVisible():
-                layers.append(layer)
+            if self.mode != "fov":
+                node = root.findLayer(layer.id())
+                if not (node and node.isVisible()):
+                    continue
+            layers.append(layer)
         return layers

@@ -258,8 +258,13 @@ class BambiDockWidget(QDockWidget):
         # Flag to prevent recursive saves during config loading
         self._loading_config = False
 
-        # Inspector map tool (lazy-created on first activation)
+        # Inspector map tools (lazy-created on first activation)
         self._click_tool = None
+        self._fov_click_tool = None
+
+        # Toolbar QAction references — set via set_inspector_actions()
+        self._inspector_action = None
+        self._fov_inspector_action = None
 
         # Setup UI
         self.setup_ui()
@@ -1690,32 +1695,6 @@ class BambiDockWidget(QDockWidget):
         add_tracks_row.addWidget(self.add_layers_btn)
         add_tracks_row.addWidget(self.layers_status)
         steps_btn_layout.addLayout(add_tracks_row)
-
-        # -> Inspector tool
-        inspector_sep = QFrame()
-        inspector_sep.setFrameShape(QFrame.HLine)
-        inspector_sep.setFrameShadow(QFrame.Sunken)
-        steps_btn_layout.addWidget(inspector_sep)
-
-        inspector_row = QHBoxLayout()
-        self.inspector_btn = QPushButton("Inspector: Click a Detection / Track")
-        self.inspector_btn.setCheckable(True)
-        self.inspector_btn.setToolTip(
-            "Activate the feature inspector.\n"
-            "Click any detection or track bounding box on the map\n"
-            "to view the corresponding frame image with annotated boxes.\n"
-            "Green = clicked feature, Blue = other detections on the same frame."
-        )
-        self.inspector_btn.toggled.connect(self._toggle_inspector)
-        self.inspector_status = QLabel("⚪ Off")
-        inspector_row.addWidget(self.inspector_btn)
-        inspector_row.addWidget(self.inspector_status)
-        steps_btn_layout.addLayout(inspector_row)
-
-        inspector_sep2 = QFrame()
-        inspector_sep2.setFrameShape(QFrame.HLine)
-        inspector_sep2.setFrameShadow(QFrame.Sunken)
-        steps_btn_layout.addWidget(inspector_sep2)
 
         # -> Calculate Track Perpendicular
         track_perp_calc_row = QHBoxLayout()
@@ -3588,29 +3567,67 @@ class BambiDockWidget(QDockWidget):
         if folder and os.path.isdir(folder):
             self._check_existing_outputs(folder)
 
+    def set_inspector_actions(self, inspector_action, fov_inspector_action):
+        """Receive the toolbar QAction references from the main plugin class.
+
+        Called once, immediately after the dock widget is created.  The dock
+        widget uses these to keep the toolbar button checked-states in sync.
+        """
+        self._inspector_action = inspector_action
+        self._fov_inspector_action = fov_inspector_action
+
     def _toggle_inspector(self, checked: bool):
-        """Activate or deactivate the BAMBI feature inspector map tool."""
+        """Activate or deactivate the detection/track inspector map tool."""
         canvas = self.iface.mapCanvas()
         if checked:
+            self._set_fov_inspector_off()
             if self._click_tool is None:
-                self._click_tool = BambiClickTool(self.iface)
+                self._click_tool = BambiClickTool(self.iface, mode="detection_track")
             canvas.setMapTool(self._click_tool)
-            self.inspector_btn.setText("Inspector: ACTIVE — Click any detection / track")
-            self.inspector_status.setText("🟢 Active")
         else:
             if self._click_tool is not None:
                 canvas.unsetMapTool(self._click_tool)
-            self.inspector_btn.setText("Inspector: Click a Detection / Track")
-            self.inspector_status.setText("⚪ Off")
+        if self._inspector_action is not None:
+            self._inspector_action.blockSignals(True)
+            self._inspector_action.setChecked(checked)
+            self._inspector_action.blockSignals(False)
+
+    def _toggle_fov_inspector(self, checked: bool):
+        """Activate or deactivate the FoV inspector map tool."""
+        canvas = self.iface.mapCanvas()
+        if checked:
+            self._set_inspector_off()
+            if self._fov_click_tool is None:
+                self._fov_click_tool = BambiClickTool(self.iface, mode="fov")
+            canvas.setMapTool(self._fov_click_tool)
+        else:
+            if self._fov_click_tool is not None:
+                canvas.unsetMapTool(self._fov_click_tool)
+        if self._fov_inspector_action is not None:
+            self._fov_inspector_action.blockSignals(True)
+            self._fov_inspector_action.setChecked(checked)
+            self._fov_inspector_action.blockSignals(False)
+
+    def _set_inspector_off(self):
+        """Silently deactivate the detection/track inspector."""
+        if self._inspector_action is not None:
+            self._inspector_action.blockSignals(True)
+            self._inspector_action.setChecked(False)
+            self._inspector_action.blockSignals(False)
+
+    def _set_fov_inspector_off(self):
+        """Silently deactivate the FoV inspector."""
+        if self._fov_inspector_action is not None:
+            self._fov_inspector_action.blockSignals(True)
+            self._fov_inspector_action.setChecked(False)
+            self._fov_inspector_action.blockSignals(False)
 
     def _on_map_tool_changed(self, new_tool, old_tool):
-        """Uncheck the inspector button when the user switches to another map tool."""
+        """Keep toolbar action states in sync when the user switches map tools."""
         if self._click_tool is not None and new_tool is not self._click_tool:
-            self.inspector_btn.blockSignals(True)
-            self.inspector_btn.setChecked(False)
-            self.inspector_btn.setText("Inspector: Click a Detection / Track")
-            self.inspector_status.setText("⚪ Off")
-            self.inspector_btn.blockSignals(False)
+            self._set_inspector_off()
+        if self._fov_click_tool is not None and new_tool is not self._fov_click_tool:
+            self._set_fov_inspector_off()
 
     def _refresh_all_statuses(self):
         """Refresh all status indicators by checking outputs and QGIS layers."""
@@ -5062,6 +5079,10 @@ class BambiDockWidget(QDockWidget):
             # Persist layer to GeoPackage
             layer = self._persist_memory_layer(layer, layer_name, "fov_layers")
 
+            # Tag layer so the FoV inspector tool can identify and handle it
+            layer.setCustomProperty("bambi_layer_type", "fov")
+            layer.setCustomProperty("bambi_target_folder", self.target_folder_edit.text().strip())
+
             # Add layer to project and group
             QgsProject.instance().addMapLayer(layer, False)
             group.addLayer(layer)
@@ -5104,6 +5125,10 @@ class BambiDockWidget(QDockWidget):
 
         # Persist layer to GeoPackage
         layer = self._persist_memory_layer(layer, "FoV_Combined", "fov_layers")
+
+        # Tag layer so the FoV inspector tool can identify and handle it
+        layer.setCustomProperty("bambi_layer_type", "fov")
+        layer.setCustomProperty("bambi_target_folder", self.target_folder_edit.text().strip())
 
         # Add layer to project
         QgsProject.instance().addMapLayer(layer)

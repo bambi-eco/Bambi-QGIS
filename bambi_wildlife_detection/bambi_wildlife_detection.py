@@ -46,10 +46,14 @@ class BambiWildlifeDetection:
         self.menu = self.tr('&Bambi - QGIS Integration')
         self.toolbar = self.iface.addToolBar('BambiWildlifeDetection')
         self.toolbar.setObjectName('BambiWildlifeDetection')
-        
+
         # Dock widget
         self.dock_widget = None
         self.dock_widget_action = None
+
+        # Inspector toolbar actions (created in initGui)
+        self.inspector_action = None
+        self.fov_inspector_action = None
 
     def tr(self, message):
         """Get the translation for a string using Qt translation API.
@@ -113,7 +117,7 @@ class BambiWildlifeDetection:
     def initGui(self):
         """Create the menu entries and toolbar icons inside the QGIS GUI."""
         icon_path = os.path.join(self.plugin_dir, 'icons', 'icon.png')
-        
+
         # Add main action to show/hide the dock widget
         self.dock_widget_action = self.add_action(
             icon_path,
@@ -122,6 +126,28 @@ class BambiWildlifeDetection:
             parent=self.iface.mainWindow(),
             checkable=True,
             status_tip=self.tr('Open Bambi - QGIS Integration panel'))
+
+        # Inspector: Detection / Track
+        self.inspector_action = self.add_action(
+            os.path.join(self.plugin_dir, 'icons', 'icon_inspector_det.png'),
+            text=self.tr('Inspector: Click Detection / Track'),
+            callback=self._on_inspector_toggled,
+            parent=self.iface.mainWindow(),
+            checkable=True,
+            add_to_menu=False,
+            status_tip=self.tr(
+                'Click a detection or track bounding box to view the frame image'))
+
+        # Inspector: FoV
+        self.fov_inspector_action = self.add_action(
+            os.path.join(self.plugin_dir, 'icons', 'icon_inspector_fov.png'),
+            text=self.tr('Inspector: Click FoV'),
+            callback=self._on_fov_inspector_toggled,
+            parent=self.iface.mainWindow(),
+            checkable=True,
+            add_to_menu=False,
+            status_tip=self.tr(
+                'Click a Field of View polygon to view the corresponding frame image'))
 
     def unload(self):
         """Removes the plugin menu item and icon from QGIS GUI."""
@@ -141,22 +167,41 @@ class BambiWildlifeDetection:
             self.dock_widget.deleteLater()
             self.dock_widget = None
 
-    def toggle_dock_widget(self):
-        """Toggle the visibility of the dock widget."""
+    def _ensure_dock_widget(self):
+        """Create and register the dock widget if it does not yet exist."""
         if self.dock_widget is None:
-            # Create the dock widget
             self.dock_widget = BambiDockWidget(self.iface)
             self.iface.addDockWidget(Qt.RightDockWidgetArea, self.dock_widget)
             self.dock_widget.visibilityChanged.connect(self.on_dock_visibility_changed)
+            # Hand the toolbar actions to the dock widget so it can keep their
+            # checked state in sync when the map tool changes externally.
+            self.dock_widget.set_inspector_actions(
+                self.inspector_action, self.fov_inspector_action
+            )
+
+    def toggle_dock_widget(self):
+        """Toggle the visibility of the dock widget."""
+        self._ensure_dock_widget()
+        if self.dock_widget.isVisible():
+            self.dock_widget.hide()
+            self.dock_widget_action.setChecked(False)
+        else:
             self.dock_widget.show()
             self.dock_widget_action.setChecked(True)
-        else:
-            if self.dock_widget.isVisible():
-                self.dock_widget.hide()
-                self.dock_widget_action.setChecked(False)
-            else:
-                self.dock_widget.show()
-                self.dock_widget_action.setChecked(True)
+
+    def _on_inspector_toggled(self, checked: bool):
+        """Toolbar action: toggle the detection/track inspector."""
+        self._ensure_dock_widget()
+        self.dock_widget.show()
+        self.dock_widget_action.setChecked(True)
+        self.dock_widget._toggle_inspector(checked)
+
+    def _on_fov_inspector_toggled(self, checked: bool):
+        """Toolbar action: toggle the FoV inspector."""
+        self._ensure_dock_widget()
+        self.dock_widget.show()
+        self.dock_widget_action.setChecked(True)
+        self.dock_widget._toggle_fov_inspector(checked)
 
     def on_dock_visibility_changed(self, visible):
         """Handle dock widget visibility changes."""
