@@ -172,6 +172,9 @@ class BambiWildlifeDetection:
         if self.dock_widget is None:
             self.dock_widget = BambiDockWidget(self.iface)
             self.iface.addDockWidget(Qt.RightDockWidgetArea, self.dock_widget)
+            # addDockWidget shows the widget by default; keep it hidden until
+            # the user explicitly opens it via the main toolbar button.
+            self.dock_widget.hide()
             self.dock_widget.visibilityChanged.connect(self.on_dock_visibility_changed)
             # Hand the toolbar actions to the dock widget so it can keep their
             # checked state in sync when the map tool changes externally.
@@ -192,15 +195,11 @@ class BambiWildlifeDetection:
     def _on_inspector_toggled(self, checked: bool):
         """Toolbar action: toggle the detection/track inspector."""
         self._ensure_dock_widget()
-        self.dock_widget.show()
-        self.dock_widget_action.setChecked(True)
         self.dock_widget._toggle_inspector(checked)
 
     def _on_fov_inspector_toggled(self, checked: bool):
         """Toolbar action: toggle the FoV inspector."""
         self._ensure_dock_widget()
-        self.dock_widget.show()
-        self.dock_widget_action.setChecked(True)
         self.dock_widget._toggle_fov_inspector(checked)
 
     def on_dock_visibility_changed(self, visible):

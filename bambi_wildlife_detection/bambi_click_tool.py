@@ -90,20 +90,18 @@ class BambiClickTool(QgsMapToolIdentify):
                 None,
             )
         else:
-            # Detection/track mode: prefer track features over detection features
-            # because their polygons overlap geographically and detection layers
-            # are typically rendered on top.
-            track_result = next(
-                (r for r in results
-                 if r.mLayer.customProperty("bambi_layer_type", "") in TRACK_TYPES),
-                None,
-            )
-            detection_result = next(
-                (r for r in results
-                 if r.mLayer.customProperty("bambi_layer_type", "") == DETECTION_TYPE),
-                None,
-            )
-            chosen = track_result if track_result is not None else detection_result
+            # Detection/track mode: honour the layer hierarchy — whichever BAMBI
+            # layer sits higher in the layer tree wins.  Build an ordered list of
+            # layer IDs from the tree (top → bottom) and pick the result whose
+            # layer has the smallest index.
+            layer_order = self._get_layer_tree_order()
+            def _tree_rank(result):
+                try:
+                    return layer_order.index(result.mLayer.id())
+                except ValueError:
+                    return len(layer_order)  # not found → lowest priority
+
+            chosen = min(results, key=_tree_rank, default=None)
 
         if chosen is None:
             return
@@ -532,6 +530,21 @@ class BambiClickTool(QgsMapToolIdentify):
     # ------------------------------------------------------------------
     # Layer helpers
     # ------------------------------------------------------------------
+
+    def _get_layer_tree_order(self) -> List[str]:
+        """Return layer IDs in top-to-bottom order as they appear in the layer tree."""
+        order: List[str] = []
+
+        def _walk(node):
+            from qgis.core import QgsLayerTreeLayer
+            if isinstance(node, QgsLayerTreeLayer):
+                order.append(node.layerId())
+            else:
+                for child in node.children():
+                    _walk(child)
+
+        _walk(QgsProject.instance().layerTreeRoot())
+        return order
 
     def _get_bambi_layers(self) -> List[QgsVectorLayer]:
         """Return BAMBI layers relevant to the current mode.
