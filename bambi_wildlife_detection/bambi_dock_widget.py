@@ -1589,6 +1589,13 @@ class BambiDockWidget(QDockWidget):
         step1b_row.addWidget(self.extract_rgb_status)
         steps_btn_layout.addLayout(step1b_row)
 
+        correction_info_label = QLabel(
+            "If not already done: Use the correction tooling to determine positional and orientation errors after frame extraction."
+        )
+        correction_info_label.setWordWrap(True)
+        correction_info_label.setStyleSheet("color: gray; font-size: 10px;")
+        steps_btn_layout.addWidget(correction_info_label)
+
         # Separator after extraction
         separator1 = QFrame()
         separator1.setFrameShape(QFrame.HLine)
@@ -3566,6 +3573,13 @@ class BambiDockWidget(QDockWidget):
         folder = self.target_folder_edit.text().strip()
         if folder and os.path.isdir(folder):
             self._check_existing_outputs(folder)
+
+    def open_correction_wizard(self) -> None:
+        """Open the correction calibration wizard as a modal dialog."""
+        from .bambi_correction_wizard import BambiCorrectionWizard
+        config = self.get_config()
+        wizard = BambiCorrectionWizard(self.iface, config, parent=self)
+        wizard.exec_()
 
     def set_inspector_actions(self, inspector_action, fov_inspector_action):
         """Receive the toolbar QAction references from the main plugin class.

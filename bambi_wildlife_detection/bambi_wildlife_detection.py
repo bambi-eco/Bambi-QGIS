@@ -54,6 +54,7 @@ class BambiWildlifeDetection:
         # Inspector toolbar actions (created in initGui)
         self.inspector_action = None
         self.fov_inspector_action = None
+        self.correction_wizard_action = None
 
     def tr(self, message):
         """Get the translation for a string using Qt translation API.
@@ -126,6 +127,16 @@ class BambiWildlifeDetection:
             parent=self.iface.mainWindow(),
             checkable=True,
             status_tip=self.tr('Open Bambi - QGIS Integration panel'))
+
+        # Correction Wizard (between main icon and inspector tools)
+        self.correction_wizard_action = self.add_action(
+            os.path.join(self.plugin_dir, 'icons', 'icon_correction.png'),
+            text=self.tr('Correction Wizard'),
+            callback=self._on_correction_wizard,
+            parent=self.iface.mainWindow(),
+            add_to_menu=False,
+            status_tip=self.tr(
+                'Open the correction calibration wizard'))
 
         # Inspector: Detection / Track
         self.inspector_action = self.add_action(
@@ -201,6 +212,11 @@ class BambiWildlifeDetection:
         """Toolbar action: toggle the FoV inspector."""
         self._ensure_dock_widget()
         self.dock_widget._toggle_fov_inspector(checked)
+
+    def _on_correction_wizard(self):
+        """Toolbar action: open the correction calibration wizard."""
+        self._ensure_dock_widget()
+        self.dock_widget.open_correction_wizard()
 
     def on_dock_visibility_changed(self, visible):
         """Handle dock widget visibility changes."""
