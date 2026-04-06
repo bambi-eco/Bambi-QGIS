@@ -70,6 +70,22 @@ class BambiClickTool(QgsMapToolIdentify):
 
         bambi_layers = self._get_bambi_layers()
         if not bambi_layers:
+            if self.mode == "fov":
+                QMessageBox.warning(
+                    None,
+                    "No Field of View Layers",
+                    "No Field of View layers were found in the layer hierarchy.\n\n"
+                    "Please add individual Field of View layers to QGIS before "
+                    "using this tool.",
+                )
+            else:
+                QMessageBox.warning(
+                    None,
+                    "No Detection / Track Layers",
+                    "No active detection or track layers were found in the layer hierarchy.\n\n"
+                    "Please add/activate individual detection or track layers to QGIS before "
+                    "using this tool.",
+                )
             return
 
         # Collect ALL results so we can apply mode-specific priority.
