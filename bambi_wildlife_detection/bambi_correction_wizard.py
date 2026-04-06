@@ -569,7 +569,7 @@ class _LightFieldRenderWorker(QThread):
         )
         from alfspy.render.data import BaseSettings, CameraPositioningMode
         from alfspy.core.rendering.renderer import Renderer
-        from alfspy.core.rendering import CtxShot, Resolution
+        from alfspy.core.rendering import CtxShot, Resolution, TextureData
         from alfspy.core.geo.transform import Transform
         from alfspy.core.util.pyrrs import quaternion_from_eulers
         from alfspy.core.util.geo import get_aabb
@@ -598,6 +598,15 @@ class _LightFieldRenderWorker(QThread):
         self.progress.emit(25)
 
         ctx = make_mgl_context()
+
+        # Load undistortion mask if available
+        mask = None
+        mask_path = p.get('mask_path')
+        if mask_path and os.path.isfile(mask_path):
+            mask_img = cv2.imread(mask_path, cv2.IMREAD_UNCHANGED)
+            if mask_img is not None:
+                mask = TextureData(CtxShot._cvt_img(mask_img))
+
         shots = []
         default_fov = 50.0
 
@@ -659,6 +668,7 @@ class _LightFieldRenderWorker(QThread):
         shot_loader = make_shot_loader(shots)
         result = renderer.render_integral(
             shot_loader,
+            mask=mask,
             save=False,
             release_shots=False,
             auto_contrast=True,
@@ -1614,11 +1624,22 @@ class BambiCorrectionWizard(QDialog):
             return
 
         render_size = self._render_size_combo.currentData() or 1024
+
+        # Resolve mask: prefer thermal, fall back to RGB, then None
+        folder = self._config.get('target_folder', '')
+        mask_path = None
+        for candidate in ('mask_T.png', 'mask_W.png'):
+            p = os.path.join(folder, candidate)
+            if os.path.isfile(p):
+                mask_path = p
+                break
+
         params = {
             'dem_path': self._config['dem_path'],
             'frames': frames_info,
             'correction': self._correction,
             'render_size': render_size,
+            'mask_path': mask_path,
         }
 
         self._render_pbar.setVisible(True)
