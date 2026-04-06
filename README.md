@@ -18,6 +18,8 @@ A comprehensive QGIS plugin for detecting and tracking wildlife in aerial drone 
 - [Usage](#usage)
 - [Processing Pipeline](#processing-pipeline)
 - [Configuration](#configuration)
+- [Interactive Selection Tools](#interactive-selection-tools)
+- [Correction Calibration Wizard](#correction-calibration-wizard)
 - [Input File Formats](#input-file-formats)
 - [Output Structure](#output-structure)
 - [Troubleshooting](#troubleshooting)
@@ -42,6 +44,8 @@ A comprehensive QGIS plugin for detecting and tracking wildlife in aerial drone 
 - **GeoTIFF Export**: Export individual frames as georeferenced GeoTIFFs for detailed analysis
 - **DEM Import**: Automatically download DEMs (currently limited to Austria), or convert any GeoTIFF DEM to the required GLB format — including source CRS override for files with incorrect embedded CRS metadata
 - **Full QGIS Integration**: All outputs are automatically added as styled layers to the QGIS layer panel
+- **Interactive Selection Tools**: Click directly on the QGIS map canvas to inspect detection/track bounding boxes or individual field-of-view polygons; the tools warn when the required layers are not loaded
+- **Correction Calibration Wizard**: Three-step guided workflow for finding and storing per-flight or per-frame-range positional and rotational correction factors, including automatic z-offset probing, yaw alignment, a circle-intersection visualizer, and a light-field preview
 
 ---
 
@@ -459,6 +463,88 @@ Provide a `.gltf` or `.glb` file and its companion `.json` metadata file directl
 
 ---
 
+## Interactive Selection Tools
+
+Two map-canvas click tools are available from the BAMBI toolbar to inspect layers that have already been loaded into QGIS.
+
+### Detection / Track Selection
+
+Click the **Select Detection or Track** tool in the toolbar, then click anywhere on the map canvas to highlight the detection or track bounding box nearest to the clicked point.
+
+- Works on any layer that was added via **→ Add Detections to QGIS** or **→ Add Tracks to QGIS**
+- The clicked feature is selected in the layer and its attributes are shown in the inspector panel
+- If no detection or track layers are present in the QGIS layer hierarchy, a warning dialog is shown:
+  > *"No active detection or track layers were found in the layer hierarchy. Please add/activate individual detection or track layers to QGIS before using this tool."*
+
+![Detection Selection Tool](images/selection_tool_detections.png)
+
+### Field-of-View Selection
+
+Click the **Select Field of View** tool in the toolbar, then click on the canvas to select the FoV polygon that contains the clicked point.
+
+- Works on any layer that was added via **→ Add Field of View to QGIS**
+- If no Field of View layers are present, a warning dialog is shown:
+  > *"No Field of View layers were found in the layer hierarchy. Please add individual Field of View layers to QGIS before using this tool."*
+
+![Field-of-View Selection Tool](images/selection_tool_fov.png)
+
+---
+
+## Correction Calibration Wizard
+
+The Correction Calibration Wizard helps you find and store the positional and rotational correction factors that align the camera poses with the DEM. It is opened via the dedicated toolbar button between the main BAMBI icon and the inspector tools.
+
+> **Prerequisite**: Frames must be extracted first (Step 1) so that `poses_t.json` / `poses_w.json` exist in the target folder.
+
+![Correction Wizard Toolbar Button](images/correction_wizard_toolbar.png)
+
+### Step 1 — Select Corresponding Ground Points
+
+Two side-by-side frame views (thermal or RGB) are shown. Load a frame for each side using the type selector and frame index, then **click on the same identifiable ground feature** in both images to place a reference point.
+
+- Any clearly visible fixed object on the ground works (road marking, building corner, etc.)
+- The "Next" button is enabled once both points are placed and the DEM has finished loading
+
+![Correction Wizard Step 1](images/correction_wizard_step1.png)
+
+### Step 2 — Calibration
+
+The two selected pixels are geo-referenced onto the DEM and visualized as circle markers in the **Circle Visualization** panel. Each circle is centred on the camera's XY position; the radius is the horizontal distance from the camera to the geo-referenced ground point. When the correction is correct the two circles intersect and the cross markers (×) overlap.
+
+![Correction Wizard Step 2](images/correction_wizard_step2.png)
+
+#### Automatic Mode
+
+Click **Run Z-Probe + Rotation Alignment** to let the wizard find a starting correction automatically:
+
+1. **Z-offset probe**: steps the z-translation in ±1 m increments until the two circles transition from non-intersecting to intersecting
+2. **Yaw alignment sweep**: scans 360 candidate yaw values and picks the one that minimises the distance between the two geo-referenced points
+
+#### Manual Fine-Tuning
+
+All six correction components (translation X/Y/Z, rotation X/Y/Z) can be adjusted with the spinboxes. The circle plot updates automatically 250 ms after the last change. Rotation values can be entered in **radians** or **degrees** via the unit toggle.
+
+> Typically only the **z-translation** (altitude offset) and **z-rotation** (yaw) need adjustment.
+
+### Step 3 — Light-Field Preview & Save
+
+A light-field integral image is rendered using the found correction and displayed in the preview panel.
+
+- Toggle **Show geo-referenced points** to overlay the two calibration reference points (red × and blue ×) on the render — no re-rendering needed
+- Use **Add neighbouring frames** to include frames before and after the selected indices for a denser render
+- Choose the render resolution (512, 1024, or 2048 pixels)
+
+![Correction Wizard Step 3](images/correction_wizard_step3.png)
+
+#### Saving
+
+| Button | Effect |
+|--------|--------|
+| **Save as Global Default** | Writes `translation` and `rotation` as the top-level values in `correction.json` — applied to all frames that have no local override |
+| **Save as Local Correction** | Appends an `additional` entry with the specified start/end frame range to `correction.json` — overrides the global default for those frames only |
+
+---
+
 ## Input File Formats
 
 ### Calibration JSON
@@ -699,6 +785,34 @@ If you use this plugin in your research, please cite:
 ### Segmentation
 
 ![Segmentation Output](images/segmentations.png)
+
+### Interactive Selection Tools
+
+#### Detection / Track Selection
+
+![Detection Selection Tool](images/selection_tool_detections.png)
+
+#### Field-of-View Selection
+
+![Field-of-View Selection Tool](images/selection_tool_fov.png)
+
+### Correction Calibration Wizard
+
+#### Toolbar Button
+
+![Correction Wizard Toolbar Button](images/correction_wizard_toolbar.png)
+
+#### Step 1 — Select Corresponding Ground Points
+
+![Correction Wizard Step 1](images/correction_wizard_step1.png)
+
+#### Step 2 — Calibration
+
+![Correction Wizard Step 2](images/correction_wizard_step2.png)
+
+#### Step 3 — Light-Field Preview & Save
+
+![Correction Wizard Step 3](images/correction_wizard_step3.png)
 
 ---
 
