@@ -9,8 +9,9 @@ image and annotated bounding boxes.
 
 Layer custom properties used
 ----------------------------
-``bambi_layer_type``    : "detection" | "track_final" | "track_path"
-``bambi_target_folder`` : absolute path to the plugin output root folder
+``bambi_layer_type``       : "detection" | "track_final" | "track_path"
+``bambi_target_folder``    : absolute path to the plugin output root folder
+``bambi_detection_camera`` : "T" (thermal) | "W" (RGB) — modality used for detection
 
 Data files read (relative to *target_folder*)
 ---------------------------------------------
@@ -126,18 +127,21 @@ class BambiClickTool(QgsMapToolIdentify):
         feature = chosen.mFeature
         layer_type = layer.customProperty("bambi_layer_type", "")
         target_folder = layer.customProperty("bambi_target_folder", "")
+        # "T" = thermal, "W" = RGB; determines which pixel space the boxes are in
+        detection_camera = layer.customProperty("bambi_detection_camera", "T")
+        boxes_modality = "t" if detection_camera == "T" else "w"
 
         if not target_folder:
             return
 
         if layer_type == DETECTION_TYPE:
-            self._handle_detection_click(feature, target_folder)
+            self._handle_detection_click(feature, target_folder, boxes_modality)
         elif layer_type == "track_final":
-            self._handle_track_click(feature, target_folder, start_at_last=True)
+            self._handle_track_click(feature, target_folder, boxes_modality, start_at_last=True)
         elif layer_type == "track_path":
-            self._handle_track_click(feature, target_folder, start_at_last=False)
+            self._handle_track_click(feature, target_folder, boxes_modality, start_at_last=False)
         elif layer_type == FOV_TYPE:
-            self._handle_fov_click(feature, target_folder)
+            self._handle_fov_click(feature, target_folder, boxes_modality)
 
     def deactivate(self):
         super().deactivate()
@@ -147,7 +151,7 @@ class BambiClickTool(QgsMapToolIdentify):
     # Click handlers
     # ------------------------------------------------------------------
 
-    def _handle_detection_click(self, feature, target_folder: str):
+    def _handle_detection_click(self, feature, target_folder: str, boxes_modality: str):
         """Show the frame for a clicked detection bounding box."""
         frame_idx = feature["frame"]
         det_conf  = float(feature["confidence"])
@@ -175,7 +179,7 @@ class BambiClickTool(QgsMapToolIdentify):
             for d in not_clicked
         ]
 
-        image_path = self._resolve_image_path(target_folder, frame_idx)
+        image_path_t, image_path_w = self._resolve_image_paths(target_folder, frame_idx)
         title = (
             f"Detection — Frame {frame_idx}"
             f"   |   conf: {det_conf:.3f}"
@@ -183,9 +187,13 @@ class BambiClickTool(QgsMapToolIdentify):
         )
 
         viewer = FeatureViewerDialog.get_instance(self.iface.mainWindow())
-        viewer.show_detection(title, image_path, green_boxes, blue_boxes)
+        viewer.show_detection(
+            title, green_boxes, blue_boxes,
+            image_path_t=image_path_t, image_path_w=image_path_w,
+            boxes_modality=boxes_modality,
+        )
 
-    def _handle_fov_click(self, feature, target_folder: str):
+    def _handle_fov_click(self, feature, target_folder: str, boxes_modality: str):
         """Show the frame for a clicked FoV polygon, all detections in green."""
         try:
             frame_idx = int(feature["frame"])
@@ -204,16 +212,20 @@ class BambiClickTool(QgsMapToolIdentify):
             for d in same_frame
         ]
 
-        image_path = self._resolve_image_path(target_folder, frame_idx)
+        image_path_t, image_path_w = self._resolve_image_paths(target_folder, frame_idx)
         title = (
             f"FoV — Frame {frame_idx}"
             f"   |   {len(green_boxes)} detection(s)"
         )
 
         viewer = FeatureViewerDialog.get_instance(self.iface.mainWindow())
-        viewer.show_detection(title, image_path, green_boxes, blue_boxes=[])
+        viewer.show_detection(
+            title, green_boxes, blue_boxes=[],
+            image_path_t=image_path_t, image_path_w=image_path_w,
+            boxes_modality=boxes_modality,
+        )
 
-    def _handle_track_click(self, feature, target_folder: str, start_at_last: bool):
+    def _handle_track_click(self, feature, target_folder: str, boxes_modality: str, start_at_last: bool):
         """Show the navigable frame sequence for a clicked track."""
         # GeoPackage may store integers as LongLong; cast explicitly.
         try:
@@ -250,7 +262,7 @@ class BambiClickTool(QgsMapToolIdentify):
 
         if track_dets_pixel:
             frames = self._build_frames_from_pixel_tracks(
-                track_dets_pixel, all_tracks, track_id, target_folder
+                track_dets_pixel, all_tracks, track_id, target_folder, boxes_modality
             )
         else:
             # --- Fallback: geo-referenced CSVs + detections.txt ---
@@ -267,7 +279,7 @@ class BambiClickTool(QgsMapToolIdentify):
                 )
                 return
             frames = self._build_frames_from_georef(
-                georef_dets, all_pixel_dets, target_folder
+                georef_dets, all_pixel_dets, target_folder, boxes_modality
             )
 
         if not frames:
@@ -291,7 +303,7 @@ class BambiClickTool(QgsMapToolIdentify):
     # ------------------------------------------------------------------
 
     def _build_frames_from_pixel_tracks(
-        self, track_dets, all_tracks, track_id, target_folder
+        self, track_dets, all_tracks, track_id, target_folder, boxes_modality: str
     ) -> List[dict]:
         """Build viewer frame list from pixel-space track data.
 
@@ -309,9 +321,12 @@ class BambiClickTool(QgsMapToolIdentify):
                 for d in dets
                 if d["frame"] == fi
             ]
+            path_t, path_w = self._resolve_image_paths(target_folder, fi)
             frames.append({
-                "frame_idx":   fi,
-                "image_path":  self._resolve_image_path(target_folder, fi),
+                "frame_idx":      fi,
+                "image_path_t":   path_t,
+                "image_path_w":   path_w,
+                "boxes_modality": boxes_modality,
                 "boxes_green": [
                     (det["x1"], det["y1"], det["x2"], det["y2"],
                      det["conf"], det["cls"], is_interp)
@@ -321,7 +336,7 @@ class BambiClickTool(QgsMapToolIdentify):
         return frames
 
     def _build_frames_from_georef(
-        self, georef_dets, all_pixel_dets, target_folder
+        self, georef_dets, all_pixel_dets, target_folder, boxes_modality: str
     ) -> List[dict]:
         """Build viewer frame list by matching geo-referenced track detections
         back to pixel detections via (frame, confidence, class_id).
@@ -347,9 +362,12 @@ class BambiClickTool(QgsMapToolIdentify):
             ]
             others = [d for d in same_frame if d not in matched]
 
+            path_t, path_w = self._resolve_image_paths(target_folder, fi)
             frames.append({
-                "frame_idx":  fi,
-                "image_path": self._resolve_image_path(target_folder, fi),
+                "frame_idx":      fi,
+                "image_path_t":   path_t,
+                "image_path_w":   path_w,
+                "boxes_modality": boxes_modality,
                 "boxes_green": [
                     (d["x1"], d["y1"], d["x2"], d["y2"],
                      d["confidence"], d["class_id"], is_interp)
@@ -517,31 +535,33 @@ class BambiClickTool(QgsMapToolIdentify):
             pass
         return result
 
-    def _resolve_image_path(self, target_folder: str, frame_idx: int) -> str:
-        """Return the filesystem path for frame *frame_idx*.
+    def _resolve_image_paths(self, target_folder: str, frame_idx: int) -> tuple:
+        """Return ``(path_t, path_w)`` for frame *frame_idx*.
 
-        Tries thermal (``poses_t.json`` / ``frames_t/``) first, then RGB.
-        Returns an empty string if the image cannot be found.
+        Each element is the filesystem path to the thermal / RGB frame image,
+        or an empty string when that frame type has not been extracted.
         """
+        paths = []
         for poses_name, frames_dir in [
             ("poses_t.json", "frames_t"),
             ("poses_w.json", "frames_w"),
         ]:
             poses_path = os.path.join(target_folder, poses_name)
-            if not os.path.isfile(poses_path):
-                continue
-            try:
-                with open(poses_path, "r", encoding="utf-8") as fh:
-                    data = json.load(fh)
-                images = data.get("images", [])
-                if 0 <= frame_idx < len(images):
-                    imagefile = images[frame_idx].get("imagefile", "")
-                    candidate = os.path.join(target_folder, frames_dir, imagefile)
-                    if imagefile and os.path.isfile(candidate):
-                        return candidate
-            except Exception:
-                continue
-        return ""
+            found = ""
+            if os.path.isfile(poses_path):
+                try:
+                    with open(poses_path, "r", encoding="utf-8") as fh:
+                        data = json.load(fh)
+                    images = data.get("images", [])
+                    if 0 <= frame_idx < len(images):
+                        imagefile = images[frame_idx].get("imagefile", "")
+                        candidate = os.path.join(target_folder, frames_dir, imagefile)
+                        if imagefile and os.path.isfile(candidate):
+                            found = candidate
+                except Exception:
+                    pass
+            paths.append(found)
+        return paths[0], paths[1]
 
     # ------------------------------------------------------------------
     # Layer helpers

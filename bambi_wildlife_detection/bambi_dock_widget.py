@@ -4834,6 +4834,7 @@ class BambiDockWidget(QDockWidget):
                 # Tag layer so the inspector tool can identify and handle it
                 bbox_layer.setCustomProperty("bambi_layer_type", "track_final")
                 bbox_layer.setCustomProperty("bambi_target_folder", config["target_folder"])
+                bbox_layer.setCustomProperty("bambi_detection_camera", config["detection_camera"])
                 QgsProject.instance().addMapLayer(bbox_layer, False)
                 track_group.addLayer(bbox_layer)
 
@@ -4846,6 +4847,7 @@ class BambiDockWidget(QDockWidget):
                     # Tag layer so the inspector tool can identify and handle it
                     path_layer.setCustomProperty("bambi_layer_type", "track_path")
                     path_layer.setCustomProperty("bambi_target_folder", config["target_folder"])
+                    path_layer.setCustomProperty("bambi_detection_camera", config["detection_camera"])
                     QgsProject.instance().addMapLayer(path_layer, False)
                     track_group.addLayer(path_layer)
 
@@ -5096,6 +5098,7 @@ class BambiDockWidget(QDockWidget):
             # Tag layer so the FoV inspector tool can identify and handle it
             layer.setCustomProperty("bambi_layer_type", "fov")
             layer.setCustomProperty("bambi_target_folder", self.target_folder_edit.text().strip())
+            layer.setCustomProperty("bambi_detection_camera", "T" if self.detection_camera_combo.currentIndex() == 0 else "W")
 
             # Add layer to project and group
             QgsProject.instance().addMapLayer(layer, False)
@@ -5143,6 +5146,7 @@ class BambiDockWidget(QDockWidget):
         # Tag layer so the FoV inspector tool can identify and handle it
         layer.setCustomProperty("bambi_layer_type", "fov")
         layer.setCustomProperty("bambi_target_folder", self.target_folder_edit.text().strip())
+        layer.setCustomProperty("bambi_detection_camera", "T" if self.detection_camera_combo.currentIndex() == 0 else "W")
 
         # Add layer to project
         QgsProject.instance().addMapLayer(layer)
@@ -5443,6 +5447,7 @@ class BambiDockWidget(QDockWidget):
             # Tag layer so the inspector tool can identify and handle it
             layer.setCustomProperty("bambi_layer_type", "detection")
             layer.setCustomProperty("bambi_target_folder", self.target_folder_edit.text().strip())
+            layer.setCustomProperty("bambi_detection_camera", "T" if self.detection_camera_combo.currentIndex() == 0 else "W")
 
             # Add layer to project and group
             QgsProject.instance().addMapLayer(layer, False)
@@ -5498,6 +5503,7 @@ class BambiDockWidget(QDockWidget):
         # Tag layer so the inspector tool can identify and handle it
         layer.setCustomProperty("bambi_layer_type", "detection")
         layer.setCustomProperty("bambi_target_folder", self.target_folder_edit.text().strip())
+        layer.setCustomProperty("bambi_detection_camera", "T" if self.detection_camera_combo.currentIndex() == 0 else "W")
 
         # Add layer to project
         QgsProject.instance().addMapLayer(layer)

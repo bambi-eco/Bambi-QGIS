@@ -6,6 +6,9 @@ BAMBI Feature Viewer
 Non-modal dialog that displays a drone frame image with detection bounding boxes.
 Green border = clicked/highlighted detection; blue border = all other detections.
 For tracks, forward/backward navigation through every frame of the track is provided.
+
+When both thermal and RGB frames have been extracted a toggle button lets the
+user switch between the two views without losing the current frame position.
 """
 
 from qgis.PyQt.QtWidgets import (
@@ -25,7 +28,8 @@ class FeatureViewerDialog(QDialog):
     Detection (single frame)::
 
         viewer = FeatureViewerDialog.get_instance(parent)
-        viewer.show_detection(title, image_path, green_boxes, blue_boxes)
+        viewer.show_detection(title, green_boxes, blue_boxes,
+                              image_path_t=..., image_path_w=...)
 
     Track (multiple navigable frames)::
 
@@ -34,6 +38,14 @@ class FeatureViewerDialog(QDialog):
 
     Box format: (x1, y1, x2, y2) or (x1, y1, x2, y2, confidence, class_id)
     in pixel coordinates of the source frame image.
+
+    Frame dict keys
+    ---------------
+    ``frame_idx``    : int or None
+    ``image_path_t`` : str — path to thermal frame (empty if not extracted)
+    ``image_path_w`` : str — path to RGB frame (empty if not extracted)
+    ``boxes_green``  : list of box tuples (highlighted detection)
+    ``boxes_blue``   : list of box tuples (other detections)
     """
 
     _instance = None
@@ -58,6 +70,7 @@ class FeatureViewerDialog(QDialog):
 
         self._frames = []       # list of frame-data dicts
         self._current_idx = 0   # index into self._frames
+        self._view_mode = "t"   # "t" = thermal, "w" = RGB
 
         self._setup_ui()
 
@@ -98,6 +111,19 @@ class FeatureViewerDialog(QDialog):
         self.nav_widget.setLayout(nav_layout)
         layout.addWidget(self.nav_widget)
 
+        # View toggle row (hidden when only one frame type is available)
+        toggle_layout = QHBoxLayout()
+        self.view_toggle_btn = QPushButton("Switch to RGB")
+        self.view_toggle_btn.setCheckable(False)
+        self.view_toggle_btn.clicked.connect(self._toggle_view_mode)
+        toggle_layout.addStretch()
+        toggle_layout.addWidget(self.view_toggle_btn)
+        toggle_layout.addStretch()
+        self.toggle_widget = QWidget()
+        self.toggle_widget.setLayout(toggle_layout)
+        self.toggle_widget.setVisible(False)
+        layout.addWidget(self.toggle_widget)
+
         # Info row (confidence, class, …)
         self.info_label = QLabel()
         self.info_label.setAlignment(Qt.AlignCenter)
@@ -107,23 +133,31 @@ class FeatureViewerDialog(QDialog):
     # Public API
     # ------------------------------------------------------------------
 
-    def show_detection(self, title, image_path, green_boxes, blue_boxes):
+    def show_detection(self, title, green_boxes, blue_boxes,
+                       image_path_t="", image_path_w="", boxes_modality="t"):
         """Show a single detection frame.
 
         :param title: String shown in the title label.
-        :param image_path: Absolute path to the frame image file.
         :param green_boxes: List of (x1,y1,x2,y2[,conf,cls]) tuples — highlighted.
         :param blue_boxes:  List of (x1,y1,x2,y2[,conf,cls]) tuples — background.
+        :param image_path_t: Absolute path to the thermal frame image (may be empty).
+        :param image_path_w: Absolute path to the RGB frame image (may be empty).
+        :param boxes_modality: ``"t"`` if boxes are in thermal pixel space,
+                               ``"w"`` if in RGB pixel space.
         """
         self._frames = [{
-            "frame_idx":  None,
-            "image_path": image_path,
-            "boxes_green": list(green_boxes),
-            "boxes_blue":  list(blue_boxes),
+            "frame_idx":      None,
+            "image_path_t":   image_path_t,
+            "image_path_w":   image_path_w,
+            "boxes_modality": boxes_modality,
+            "boxes_green":    list(green_boxes),
+            "boxes_blue":     list(blue_boxes),
         }]
         self._current_idx = 0
         self.title_label.setText(title)
         self.nav_widget.setVisible(False)
+        self._reset_view_mode()
+        self._update_toggle_btn()
         self._render_current_frame()
         self._show_and_raise()
 
@@ -132,16 +166,19 @@ class FeatureViewerDialog(QDialog):
 
         :param title: String shown in the title label.
         :param frames: List of dicts, each with keys:
-                       ``frame_idx``   (int)
-                       ``image_path``  (str)
-                       ``boxes_green`` (list of box tuples)
-                       ``boxes_blue``  (list of box tuples)
+                       ``frame_idx``    (int)
+                       ``image_path_t`` (str) — thermal frame path
+                       ``image_path_w`` (str) — RGB frame path
+                       ``boxes_green``  (list of box tuples)
+                       ``boxes_blue``   (list of box tuples)
         :param start_idx: Index into *frames* to display first.
         """
         self._frames = list(frames)
         self._current_idx = max(0, min(start_idx, len(frames) - 1))
         self.title_label.setText(title)
         self.nav_widget.setVisible(len(frames) > 1)
+        self._reset_view_mode()
+        self._update_toggle_btn()
         self._render_current_frame()
         self._show_and_raise()
 
@@ -160,6 +197,35 @@ class FeatureViewerDialog(QDialog):
             self._render_current_frame()
 
     # ------------------------------------------------------------------
+    # View mode toggle
+    # ------------------------------------------------------------------
+
+    def _reset_view_mode(self):
+        """Set initial view mode: thermal if available, otherwise RGB."""
+        if not self._frames:
+            return
+        has_any_thermal = any(f.get("image_path_t") for f in self._frames)
+        self._view_mode = "t" if has_any_thermal else "w"
+        self._update_toggle_btn_text()
+
+    def _toggle_view_mode(self):
+        self._view_mode = "w" if self._view_mode == "t" else "t"
+        self._update_toggle_btn_text()
+        self._render_current_frame()
+
+    def _update_toggle_btn_text(self):
+        if self._view_mode == "t":
+            self.view_toggle_btn.setText("Switch to RGB")
+        else:
+            self.view_toggle_btn.setText("Switch to Thermal")
+
+    def _update_toggle_btn(self):
+        """Show the toggle button only when both frame types are available."""
+        has_thermal = any(f.get("image_path_t") for f in self._frames)
+        has_rgb = any(f.get("image_path_w") for f in self._frames)
+        self.toggle_widget.setVisible(has_thermal and has_rgb)
+
+    # ------------------------------------------------------------------
     # Rendering
     # ------------------------------------------------------------------
 
@@ -168,11 +234,24 @@ class FeatureViewerDialog(QDialog):
             return
 
         data = self._frames[self._current_idx]
-        image_path  = data.get("image_path", "")
-        boxes_green = data.get("boxes_green", [])
-        boxes_blue  = data.get("boxes_blue", [])
         frame_idx   = data.get("frame_idx")
         total       = len(self._frames)
+
+        # Only show bounding boxes when the view mode matches the pixel space
+        # in which detections were run; suppress them on the other modality.
+        boxes_modality = data.get("boxes_modality", "t")
+        if self._view_mode == boxes_modality:
+            boxes_green = data.get("boxes_green", [])
+            boxes_blue  = data.get("boxes_blue", [])
+        else:
+            boxes_green = []
+            boxes_blue  = []
+
+        # Pick image path according to current view mode with fallback
+        if self._view_mode == "t":
+            image_path = data.get("image_path_t") or data.get("image_path_w", "")
+        else:
+            image_path = data.get("image_path_w") or data.get("image_path_t", "")
 
         # Navigation label + button states
         if total > 1:
