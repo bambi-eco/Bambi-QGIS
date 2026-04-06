@@ -242,14 +242,20 @@ class CirclePlotWidget(QWidget):
         wx_rng = max(wx_max - wx_min, 1e-6)
         wy_rng = max(wy_max - wy_min, 1e-6)
 
+        # Uniform scale: one pixels-per-metre factor for both axes so that
+        # circles remain true circles and geo-points lie exactly on them.
+        scale = min(pw / wx_rng, ph / wy_rng)
+        x_off = (pw - wx_rng * scale) / 2.0
+        y_off = (ph - wy_rng * scale) / 2.0
+
         def sx(wx):
-            return margin + (wx - wx_min) / wx_rng * pw
+            return margin + x_off + (wx - wx_min) * scale
 
         def sy(wy):
-            return self.height() - margin - (wy - wy_min) / wy_rng * ph
+            return self.height() - margin - y_off - (wy - wy_min) * scale
 
         def sr(r):
-            return max(1.0, r / wx_rng * pw)
+            return max(1.0, r * scale)
 
         circle_colors = [QColor(80, 140, 255), QColor(255, 140, 80)]
         point_colors = [QColor(80, 220, 80), QColor(220, 220, 60)]
