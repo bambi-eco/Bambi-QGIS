@@ -12,6 +12,8 @@ Layer custom properties used
 ``bambi_layer_type``       : "detection" | "track_final" | "track_path"
 ``bambi_target_folder``    : absolute path to the plugin output root folder
 ``bambi_detection_camera`` : "T" (thermal) | "W" (RGB) — modality used for detection
+``bambi_dem_path``         : absolute path to the DEM GLTF/GLB file
+``bambi_correction_path``  : absolute path to correction.json (may be empty)
 
 Data files read (relative to *target_folder*)
 ---------------------------------------------
@@ -125,23 +127,31 @@ class BambiClickTool(QgsMapToolIdentify):
 
         layer = chosen.mLayer
         feature = chosen.mFeature
-        layer_type = layer.customProperty("bambi_layer_type", "")
-        target_folder = layer.customProperty("bambi_target_folder", "")
+        layer_type        = layer.customProperty("bambi_layer_type", "")
+        target_folder     = layer.customProperty("bambi_target_folder", "")
+        dem_path          = layer.customProperty("bambi_dem_path", "")
+        correction_path   = layer.customProperty("bambi_correction_path", "")
         # "T" = thermal, "W" = RGB; determines which pixel space the boxes are in
-        detection_camera = layer.customProperty("bambi_detection_camera", "T")
-        boxes_modality = "t" if detection_camera == "T" else "w"
+        detection_camera  = layer.customProperty("bambi_detection_camera", "T")
+        boxes_modality    = "t" if detection_camera == "T" else "w"
 
         if not target_folder:
             return
 
         if layer_type == DETECTION_TYPE:
-            self._handle_detection_click(feature, target_folder, boxes_modality)
+            self._handle_detection_click(
+                feature, target_folder, boxes_modality, dem_path, correction_path)
         elif layer_type == "track_final":
-            self._handle_track_click(feature, target_folder, boxes_modality, start_at_last=True)
+            self._handle_track_click(
+                feature, target_folder, boxes_modality, dem_path, correction_path,
+                start_at_last=True)
         elif layer_type == "track_path":
-            self._handle_track_click(feature, target_folder, boxes_modality, start_at_last=False)
+            self._handle_track_click(
+                feature, target_folder, boxes_modality, dem_path, correction_path,
+                start_at_last=False)
         elif layer_type == FOV_TYPE:
-            self._handle_fov_click(feature, target_folder, boxes_modality)
+            self._handle_fov_click(
+                feature, target_folder, boxes_modality, dem_path, correction_path)
 
     def deactivate(self):
         super().deactivate()
@@ -151,7 +161,9 @@ class BambiClickTool(QgsMapToolIdentify):
     # Click handlers
     # ------------------------------------------------------------------
 
-    def _handle_detection_click(self, feature, target_folder: str, boxes_modality: str):
+    def _handle_detection_click(self, feature, target_folder: str,
+                                boxes_modality: str, dem_path: str,
+                                correction_path: str):
         """Show the frame for a clicked detection bounding box."""
         frame_idx = feature["frame"]
         det_conf  = float(feature["confidence"])
@@ -191,9 +203,13 @@ class BambiClickTool(QgsMapToolIdentify):
             title, green_boxes, blue_boxes,
             image_path_t=image_path_t, image_path_w=image_path_w,
             boxes_modality=boxes_modality,
+            target_folder=target_folder, dem_path=dem_path,
+            correction_path=correction_path,
+            frame_idx=frame_idx,
         )
 
-    def _handle_fov_click(self, feature, target_folder: str, boxes_modality: str):
+    def _handle_fov_click(self, feature, target_folder: str, boxes_modality: str,
+                          dem_path: str, correction_path: str):
         """Show the frame for a clicked FoV polygon, all detections in green."""
         try:
             frame_idx = int(feature["frame"])
@@ -223,9 +239,13 @@ class BambiClickTool(QgsMapToolIdentify):
             title, green_boxes, blue_boxes=[],
             image_path_t=image_path_t, image_path_w=image_path_w,
             boxes_modality=boxes_modality,
+            target_folder=target_folder, dem_path=dem_path,
+            correction_path=correction_path,
+            frame_idx=frame_idx,
         )
 
-    def _handle_track_click(self, feature, target_folder: str, boxes_modality: str, start_at_last: bool):
+    def _handle_track_click(self, feature, target_folder: str, boxes_modality: str,
+                            dem_path: str, correction_path: str, start_at_last: bool):
         """Show the navigable frame sequence for a clicked track."""
         # GeoPackage may store integers as LongLong; cast explicitly.
         try:
@@ -296,7 +316,11 @@ class BambiClickTool(QgsMapToolIdentify):
 
         title = f"Track {track_id}   |   {len(frames)} frame(s)"
         viewer = FeatureViewerDialog.get_instance(self.iface.mainWindow())
-        viewer.show_track(title, frames, start_idx)
+        viewer.show_track(
+            title, frames, start_idx,
+            target_folder=target_folder, dem_path=dem_path,
+            correction_path=correction_path,
+        )
 
     # ------------------------------------------------------------------
     # Frame-list builders

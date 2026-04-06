@@ -4835,6 +4835,8 @@ class BambiDockWidget(QDockWidget):
                 bbox_layer.setCustomProperty("bambi_layer_type", "track_final")
                 bbox_layer.setCustomProperty("bambi_target_folder", config["target_folder"])
                 bbox_layer.setCustomProperty("bambi_detection_camera", config["detection_camera"])
+                bbox_layer.setCustomProperty("bambi_dem_path", config.get("dem_path", ""))
+                bbox_layer.setCustomProperty("bambi_correction_path", config.get("correction_path", ""))
                 QgsProject.instance().addMapLayer(bbox_layer, False)
                 track_group.addLayer(bbox_layer)
 
@@ -4848,6 +4850,8 @@ class BambiDockWidget(QDockWidget):
                     path_layer.setCustomProperty("bambi_layer_type", "track_path")
                     path_layer.setCustomProperty("bambi_target_folder", config["target_folder"])
                     path_layer.setCustomProperty("bambi_detection_camera", config["detection_camera"])
+                    path_layer.setCustomProperty("bambi_dem_path", config.get("dem_path", ""))
+                    path_layer.setCustomProperty("bambi_correction_path", config.get("correction_path", ""))
                     QgsProject.instance().addMapLayer(path_layer, False)
                     track_group.addLayer(path_layer)
 
@@ -5099,6 +5103,8 @@ class BambiDockWidget(QDockWidget):
             layer.setCustomProperty("bambi_layer_type", "fov")
             layer.setCustomProperty("bambi_target_folder", self.target_folder_edit.text().strip())
             layer.setCustomProperty("bambi_detection_camera", "T" if self.detection_camera_combo.currentIndex() == 0 else "W")
+            layer.setCustomProperty("bambi_dem_path", self.dem_path_edit.text().strip())
+            layer.setCustomProperty("bambi_correction_path", self.correction_path_edit.text().strip())
 
             # Add layer to project and group
             QgsProject.instance().addMapLayer(layer, False)
@@ -5147,6 +5153,8 @@ class BambiDockWidget(QDockWidget):
         layer.setCustomProperty("bambi_layer_type", "fov")
         layer.setCustomProperty("bambi_target_folder", self.target_folder_edit.text().strip())
         layer.setCustomProperty("bambi_detection_camera", "T" if self.detection_camera_combo.currentIndex() == 0 else "W")
+        layer.setCustomProperty("bambi_dem_path", self.dem_path_edit.text().strip())
+        layer.setCustomProperty("bambi_correction_path", self.correction_path_edit.text().strip())
 
         # Add layer to project
         QgsProject.instance().addMapLayer(layer)
@@ -5448,6 +5456,8 @@ class BambiDockWidget(QDockWidget):
             layer.setCustomProperty("bambi_layer_type", "detection")
             layer.setCustomProperty("bambi_target_folder", self.target_folder_edit.text().strip())
             layer.setCustomProperty("bambi_detection_camera", "T" if self.detection_camera_combo.currentIndex() == 0 else "W")
+            layer.setCustomProperty("bambi_dem_path", self.dem_path_edit.text().strip())
+            layer.setCustomProperty("bambi_correction_path", self.correction_path_edit.text().strip())
 
             # Add layer to project and group
             QgsProject.instance().addMapLayer(layer, False)
@@ -5504,6 +5514,8 @@ class BambiDockWidget(QDockWidget):
         layer.setCustomProperty("bambi_layer_type", "detection")
         layer.setCustomProperty("bambi_target_folder", self.target_folder_edit.text().strip())
         layer.setCustomProperty("bambi_detection_camera", "T" if self.detection_camera_combo.currentIndex() == 0 else "W")
+        layer.setCustomProperty("bambi_dem_path", self.dem_path_edit.text().strip())
+        layer.setCustomProperty("bambi_correction_path", self.correction_path_edit.text().strip())
 
         # Add layer to project
         QgsProject.instance().addMapLayer(layer)

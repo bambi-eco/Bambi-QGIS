@@ -9,11 +9,15 @@ For tracks, forward/backward navigation through every frame of the track is prov
 
 When both thermal and RGB frames have been extracted a toggle button lets the
 user switch between the two views without losing the current frame position.
+
+When viewing the modality that was *not* used for detection the user can press
+"Project bounding boxes" to re-project the geo-referenced world-space boxes
+back into that modality's pixel space via camera projection math.
 """
 
 from qgis.PyQt.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QSizePolicy, QWidget
+    QSizePolicy, QWidget, QProgressBar
 )
 from qgis.PyQt.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QFont
 from qgis.PyQt.QtCore import Qt
@@ -29,23 +33,31 @@ class FeatureViewerDialog(QDialog):
 
         viewer = FeatureViewerDialog.get_instance(parent)
         viewer.show_detection(title, green_boxes, blue_boxes,
-                              image_path_t=..., image_path_w=...)
+                              image_path_t=..., image_path_w=...,
+                              boxes_modality="t",
+                              target_folder=..., dem_path=...,
+                              correction_path=...)
 
     Track (multiple navigable frames)::
 
         viewer = FeatureViewerDialog.get_instance(parent)
-        viewer.show_track(title, frames_list, start_idx)
+        viewer.show_track(title, frames_list, start_idx,
+                          target_folder=..., dem_path=...,
+                          correction_path=...)
 
     Box format: (x1, y1, x2, y2) or (x1, y1, x2, y2, confidence, class_id)
     in pixel coordinates of the source frame image.
 
     Frame dict keys
     ---------------
-    ``frame_idx``    : int or None
-    ``image_path_t`` : str — path to thermal frame (empty if not extracted)
-    ``image_path_w`` : str — path to RGB frame (empty if not extracted)
-    ``boxes_green``  : list of box tuples (highlighted detection)
-    ``boxes_blue``   : list of box tuples (other detections)
+    ``frame_idx``       : int or None
+    ``image_path_t``    : str — path to thermal frame (empty if not extracted)
+    ``image_path_w``    : str — path to RGB frame (empty if not extracted)
+    ``boxes_modality``  : str — "t" or "w", pixel space of the boxes
+    ``boxes_green``     : list of box tuples (highlighted detection)
+    ``boxes_blue``      : list of box tuples (other detections)
+    ``boxes_green_proj``: list of box tuples projected to the other modality (optional)
+    ``boxes_blue_proj`` : list of box tuples projected to the other modality (optional)
     """
 
     _instance = None
@@ -66,11 +78,17 @@ class FeatureViewerDialog(QDialog):
         )
         # Keep the Python object alive even when the user closes the window
         self.setAttribute(Qt.WA_DeleteOnClose, False)
-        self.resize(800, 620)
+        self.resize(800, 660)
 
         self._frames = []       # list of frame-data dicts
         self._current_idx = 0   # index into self._frames
         self._view_mode = "t"   # "t" = thermal, "w" = RGB
+
+        # Projection context
+        self._target_folder   = ""
+        self._dem_path        = ""
+        self._correction_path = ""
+        self._projection_worker = None
 
         self._setup_ui()
 
@@ -111,10 +129,9 @@ class FeatureViewerDialog(QDialog):
         self.nav_widget.setLayout(nav_layout)
         layout.addWidget(self.nav_widget)
 
-        # View toggle row (hidden when only one frame type is available)
+        # View toggle row (hidden when only one modality is available)
         toggle_layout = QHBoxLayout()
         self.view_toggle_btn = QPushButton("Switch to RGB")
-        self.view_toggle_btn.setCheckable(False)
         self.view_toggle_btn.clicked.connect(self._toggle_view_mode)
         toggle_layout.addStretch()
         toggle_layout.addWidget(self.view_toggle_btn)
@@ -123,6 +140,41 @@ class FeatureViewerDialog(QDialog):
         self.toggle_widget.setLayout(toggle_layout)
         self.toggle_widget.setVisible(False)
         layout.addWidget(self.toggle_widget)
+
+        # Box projection row (hidden until user is on the non-source modality)
+        proj_layout = QHBoxLayout()
+        self.proj_btn = QPushButton("Project bounding boxes")
+        self.proj_btn.setToolTip(
+            "Re-project geo-referenced bounding boxes into this modality's "
+            "pixel space via camera projection."
+        )
+        self.proj_btn.clicked.connect(self._start_box_projection)
+        self.proj_progress = QProgressBar()
+        self.proj_progress.setRange(0, 100)
+        self.proj_progress.setFixedHeight(16)
+        self.proj_progress.setVisible(False)
+        proj_layout.addStretch()
+        proj_layout.addWidget(self.proj_btn)
+        proj_layout.addWidget(self.proj_progress)
+        proj_layout.addStretch()
+        self.proj_widget = QWidget()
+        self.proj_widget.setLayout(proj_layout)
+        self.proj_widget.setVisible(False)
+        layout.addWidget(self.proj_widget)
+
+        # Projection quality notice (shown alongside the projection button)
+        self.proj_info_label = QLabel(
+            "Projection quality depends on camera calibration accuracy and correction "
+            "factors. If either is imprecise, projected boxes will be misaligned."
+        )
+        self.proj_info_label.setAlignment(Qt.AlignCenter)
+        self.proj_info_label.setWordWrap(True)
+        self.proj_info_label.setStyleSheet(
+            "color: #888; font-style: italic; background: #2a2a2a; "
+            "border-radius: 4px; padding: 4px 8px;"
+        )
+        self.proj_info_label.setVisible(False)
+        layout.addWidget(self.proj_info_label)
 
         # Info row (confidence, class, …)
         self.info_label = QLabel()
@@ -134,7 +186,9 @@ class FeatureViewerDialog(QDialog):
     # ------------------------------------------------------------------
 
     def show_detection(self, title, green_boxes, blue_boxes,
-                       image_path_t="", image_path_w="", boxes_modality="t"):
+                       image_path_t="", image_path_w="", boxes_modality="t",
+                       target_folder="", dem_path="", correction_path="",
+                       frame_idx=None):
         """Show a single detection frame.
 
         :param title: String shown in the title label.
@@ -144,9 +198,19 @@ class FeatureViewerDialog(QDialog):
         :param image_path_w: Absolute path to the RGB frame image (may be empty).
         :param boxes_modality: ``"t"`` if boxes are in thermal pixel space,
                                ``"w"`` if in RGB pixel space.
+        :param target_folder: Root output folder for geo-referenced data.
+        :param dem_path: Path to the DEM GLTF/GLB (needed for box projection).
+        :param correction_path: Explicit correction.json path (may be empty).
+        :param frame_idx: Integer index of the frame in the poses file (needed for
+                          box projection); None when unknown.
         """
+        self._stop_projection_worker()
+        self._target_folder   = target_folder
+        self._dem_path        = dem_path
+        self._correction_path = correction_path
+
         self._frames = [{
-            "frame_idx":      None,
+            "frame_idx":      frame_idx,
             "image_path_t":   image_path_t,
             "image_path_w":   image_path_w,
             "boxes_modality": boxes_modality,
@@ -158,10 +222,12 @@ class FeatureViewerDialog(QDialog):
         self.nav_widget.setVisible(False)
         self._reset_view_mode()
         self._update_toggle_btn()
+        self._update_proj_btn()
         self._render_current_frame()
         self._show_and_raise()
 
-    def show_track(self, title, frames, start_idx=0):
+    def show_track(self, title, frames, start_idx=0,
+                   target_folder="", dem_path="", correction_path=""):
         """Show a track with navigable frames.
 
         :param title: String shown in the title label.
@@ -169,16 +235,26 @@ class FeatureViewerDialog(QDialog):
                        ``frame_idx``    (int)
                        ``image_path_t`` (str) — thermal frame path
                        ``image_path_w`` (str) — RGB frame path
+                       ``boxes_modality`` (str) — "t" or "w"
                        ``boxes_green``  (list of box tuples)
                        ``boxes_blue``   (list of box tuples)
         :param start_idx: Index into *frames* to display first.
+        :param target_folder: Root output folder for geo-referenced data.
+        :param dem_path: Path to the DEM GLTF/GLB (needed for box projection).
+        :param correction_path: Explicit correction.json path (may be empty).
         """
+        self._stop_projection_worker()
+        self._target_folder   = target_folder
+        self._dem_path        = dem_path
+        self._correction_path = correction_path
+
         self._frames = list(frames)
         self._current_idx = max(0, min(start_idx, len(frames) - 1))
         self.title_label.setText(title)
         self.nav_widget.setVisible(len(frames) > 1)
         self._reset_view_mode()
         self._update_toggle_btn()
+        self._update_proj_btn()
         self._render_current_frame()
         self._show_and_raise()
 
@@ -211,6 +287,7 @@ class FeatureViewerDialog(QDialog):
     def _toggle_view_mode(self):
         self._view_mode = "w" if self._view_mode == "t" else "t"
         self._update_toggle_btn_text()
+        self._update_proj_btn()
         self._render_current_frame()
 
     def _update_toggle_btn_text(self):
@@ -220,10 +297,96 @@ class FeatureViewerDialog(QDialog):
             self.view_toggle_btn.setText("Switch to Thermal")
 
     def _update_toggle_btn(self):
-        """Show the toggle button only when both frame types are available."""
+        """Show the toggle button only when both modalities are available."""
         has_thermal = any(f.get("image_path_t") for f in self._frames)
-        has_rgb = any(f.get("image_path_w") for f in self._frames)
+        has_rgb     = any(f.get("image_path_w") for f in self._frames)
         self.toggle_widget.setVisible(has_thermal and has_rgb)
+
+    # ------------------------------------------------------------------
+    # Box projection
+    # ------------------------------------------------------------------
+
+    def _is_on_non_source_modality(self) -> bool:
+        """True when the displayed modality differs from the detection source."""
+        if not self._frames:
+            return False
+        boxes_modality = self._frames[0].get("boxes_modality", "t")
+        return self._view_mode != boxes_modality
+
+    def _projection_done(self) -> bool:
+        """True when at least one frame already has projected boxes."""
+        return any(
+            f.get("boxes_green_proj") is not None
+            for f in self._frames
+        )
+
+    def _update_proj_btn(self):
+        """Show the projection button when on the non-source modality and
+        projection has not yet been computed (or is in progress)."""
+        if not self.toggle_widget.isVisible():
+            self.proj_widget.setVisible(False)
+            return
+
+        visible = self._is_on_non_source_modality() and not self._projection_done()
+        self.proj_widget.setVisible(visible)
+        self.proj_info_label.setVisible(visible)
+        if not visible:
+            self.proj_progress.setVisible(False)
+
+    def _start_box_projection(self):
+        """Launch the background projection worker."""
+        from .bambi_box_projector import BoxProjectionWorker
+
+        if not self._target_folder:
+            return
+
+        # Determine the source modality from the first frame
+        src_modality = self._frames[0].get("boxes_modality", "t") if self._frames else "t"
+
+        self._stop_projection_worker()
+
+        self.proj_btn.setEnabled(False)
+        self.proj_progress.setValue(0)
+        self.proj_progress.setVisible(True)
+
+        self._projection_worker = BoxProjectionWorker(
+            target_folder   = self._target_folder,
+            dem_path        = self._dem_path,
+            correction_path = self._correction_path,
+            src_modality    = src_modality,
+            frames          = list(self._frames),
+        )
+        self._projection_worker.progress.connect(self._on_proj_progress)
+        self._projection_worker.finished.connect(self._on_proj_finished)
+        self._projection_worker.error.connect(self._on_proj_error)
+        self._projection_worker.start()
+
+    def _stop_projection_worker(self):
+        if self._projection_worker is not None and self._projection_worker.isRunning():
+            self._projection_worker.quit()
+            self._projection_worker.wait(3000)
+        self._projection_worker = None
+
+    def _on_proj_progress(self, value: int):
+        self.proj_progress.setValue(value)
+
+    def _on_proj_finished(self, results: dict):
+        """Store projected boxes in frames and re-render."""
+        for i, frame in enumerate(self._frames):
+            if i in results:
+                frame["boxes_green_proj"] = results[i].get("green", [])
+                frame["boxes_blue_proj"]  = results[i].get("blue",  [])
+
+        self.proj_btn.setEnabled(True)
+        self.proj_progress.setVisible(False)
+        self._update_proj_btn()
+        self._render_current_frame()
+
+    def _on_proj_error(self, msg: str):
+        from qgis.PyQt.QtWidgets import QMessageBox
+        self.proj_btn.setEnabled(True)
+        self.proj_progress.setVisible(False)
+        QMessageBox.warning(self, "Box Projection Failed", msg)
 
     # ------------------------------------------------------------------
     # Rendering
@@ -237,21 +400,23 @@ class FeatureViewerDialog(QDialog):
         frame_idx   = data.get("frame_idx")
         total       = len(self._frames)
 
-        # Only show bounding boxes when the view mode matches the pixel space
-        # in which detections were run; suppress them on the other modality.
-        boxes_modality = data.get("boxes_modality", "t")
-        if self._view_mode == boxes_modality:
-            boxes_green = data.get("boxes_green", [])
-            boxes_blue  = data.get("boxes_blue", [])
-        else:
-            boxes_green = []
-            boxes_blue  = []
-
         # Pick image path according to current view mode with fallback
         if self._view_mode == "t":
             image_path = data.get("image_path_t") or data.get("image_path_w", "")
         else:
             image_path = data.get("image_path_w") or data.get("image_path_t", "")
+
+        # Select boxes: native boxes on matching modality, projected otherwise
+        boxes_modality = data.get("boxes_modality", "t")
+        if self._view_mode == boxes_modality:
+            boxes_green = data.get("boxes_green", [])
+            boxes_blue  = data.get("boxes_blue",  [])
+            projected   = False
+        else:
+            # Use projected boxes if available, otherwise show none
+            boxes_green = data.get("boxes_green_proj", [])
+            boxes_blue  = data.get("boxes_blue_proj",  [])
+            projected   = True
 
         # Navigation label + button states
         if total > 1:
@@ -278,7 +443,7 @@ class FeatureViewerDialog(QDialog):
             return
 
         # Draw bounding boxes and scale to widget
-        annotated = self._draw_boxes(img, boxes_green, boxes_blue)
+        annotated = self._draw_boxes(img, boxes_green, boxes_blue, projected=projected)
         scaled = annotated.scaled(
             self.image_label.size(),
             Qt.KeepAspectRatio,
@@ -299,18 +464,19 @@ class FeatureViewerDialog(QDialog):
                 info_parts.append("interpolated")
         self.info_label.setText("   |   ".join(info_parts))
 
-    def _draw_boxes(self, img, green_boxes, blue_boxes):
+    def _draw_boxes(self, img, green_boxes, blue_boxes, projected=False):
         """Paint bounding boxes onto a copy of *img* and return the result.
 
         Box tuple format: (x1, y1, x2, y2[, conf, cls[, is_interpolated]])
         Interpolated boxes (is_interpolated=1) are drawn with a dashed line.
+        Native boxes use green/blue; projected boxes use red/orange.
         """
         result = img.copy()
         painter = QPainter(result)
         painter.setRenderHint(QPainter.Antialiasing, False)
 
-        lw_blue  = max(2, img.width() // 400)
-        lw_green = max(3, img.width() // 280)
+        lw_secondary = max(2, img.width() // 400)
+        lw_primary   = max(3, img.width() // 280)
 
         def make_pen(color, lw, dashed):
             pen = QPen(color, lw, Qt.DashLine if dashed else Qt.SolidLine)
@@ -319,10 +485,17 @@ class FeatureViewerDialog(QDialog):
         font = QFont("Arial", max(8, img.width() // 80))
         painter.setFont(font)
 
-        # Draw blue first so green is always on top
+        if projected:
+            color_primary   = QColor(220, 40,  40)   # red   — highlighted
+            color_secondary = QColor(255, 160, 0)    # orange — others
+        else:
+            color_primary   = QColor(0,   220, 0)    # green — highlighted
+            color_secondary = QColor(80,  140, 255)  # blue  — others
+
+        # Draw secondary first so primary is always on top
         for boxes, color, lw in [
-            (blue_boxes,  QColor(80, 140, 255), lw_blue),
-            (green_boxes, QColor(0, 220, 0),    lw_green),
+            (blue_boxes,  color_secondary, lw_secondary),
+            (green_boxes, color_primary,   lw_primary),
         ]:
             for box in boxes:
                 x1 = int(box[0])
@@ -356,3 +529,7 @@ class FeatureViewerDialog(QDialog):
         """Re-render on dialog resize so the image fills the new size."""
         super().resizeEvent(event)
         self._render_current_frame()
+
+    def closeEvent(self, event):
+        self._stop_projection_worker()
+        super().closeEvent(event)
