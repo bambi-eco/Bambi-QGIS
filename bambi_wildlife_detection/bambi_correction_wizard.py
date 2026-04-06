@@ -1025,9 +1025,9 @@ class BambiCorrectionWizard(QDialog):
             s.setSingleStep(step)
             return s
 
-        self._tx = _dspin()
-        self._ty = _dspin()
-        self._tz = _dspin(lo=-1000.0, hi=1000.0)
+        self._tx = _dspin(step=1)
+        self._ty = _dspin(step=1)
+        self._tz = _dspin(lo=-1000.0, hi=1000.0, step=1)
         self._rx = _dspin(-7.0, 7.0, decimals=5)
         self._ry = _dspin(-7.0, 7.0, decimals=5)
         self._rz = _dspin(-7.0, 7.0, decimals=5)
