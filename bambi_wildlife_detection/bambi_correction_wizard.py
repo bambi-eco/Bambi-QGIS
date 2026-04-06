@@ -652,6 +652,8 @@ class _LightFieldRenderWorker(QThread):
         )
 
         camera = make_camera(mesh_aabb, shots, settings, rotation=Quaternion())
+        cam_cx = float(camera.transform.position.x)
+        cam_cy = float(camera.transform.position.y)
 
         renderer = Renderer(settings.resolution, ctx, camera, mesh_data, texture_data)
         shot_loader = make_shot_loader(shots)
@@ -660,14 +662,20 @@ class _LightFieldRenderWorker(QThread):
             save=False,
             release_shots=False,
             auto_contrast=True,
-            alpha_threshold=2.0,
+            alpha_threshold=0.5,
         )
 
         self.progress.emit(95)
         renderer.release()
         release_all(ctx, shots)
         self.progress.emit(100)
-        return result
+        return {
+            'image': result,
+            'cam_cx': cam_cx,
+            'cam_cy': cam_cy,
+            'ortho_size': 70.0,
+            'render_sz': render_sz,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -719,6 +727,11 @@ class BambiCorrectionWizard(QDialog):
             'translation': dict(config.get('translation', {'x': 0.0, 'y': 0.0, 'z': 0.0})),
             'rotation': dict(config.get('rotation', {'x': 0.0, 'y': 0.0, 'z': 0.0})),
         }
+
+        # Render overlay state
+        self._render_base_pixmap: Optional[QPixmap] = None
+        self._render_cam_info: Optional[dict] = None
+        self._render_geo_world_points: Optional[list] = None
 
         self.setWindowTitle("BAMBI Correction Wizard")
         self.setMinimumSize(920, 660)
@@ -1094,6 +1107,12 @@ class BambiCorrectionWizard(QDialog):
         self._render_pbar.setVisible(False)
         layout.addWidget(self._render_pbar)
 
+        self._show_geopoint_chk = QCheckBox("Show geo-referenced points")
+        self._show_geopoint_chk.setChecked(True)
+        self._show_geopoint_chk.setEnabled(False)   # enabled once a render is available
+        self._show_geopoint_chk.toggled.connect(self._update_render_display)
+        layout.addWidget(self._show_geopoint_chk)
+
         self._render_img_lbl = QLabel(
             "Press 'Render Light Field' to generate a preview."
         )
@@ -1247,6 +1266,15 @@ class BambiCorrectionWizard(QDialog):
 
     def _goto_page3(self) -> None:
         self._correction = self._read_corr_from_spins()
+
+        # Snapshot geo-referenced world points for the render overlay
+        circles = self._compute_circles(self._correction)
+        if circles:
+            (_, _, p1), (_, _, p2) = circles
+            self._render_geo_world_points = [p1, p2]
+        else:
+            self._render_geo_world_points = None
+
         f0, f1 = self._frame_idx[0], self._frame_idx[1]
         lo, hi = min(f0, f1), max(f0, f1)
         self._rng_start.setValue(lo)
@@ -1602,15 +1630,54 @@ class BambiCorrectionWizard(QDialog):
         self._render_worker.error.connect(self._on_render_error)
         self._render_worker.start()
 
-    def _on_render_done(self, img_rgba) -> None:
+    def _on_render_done(self, result) -> None:
         self._render_pbar.setVisible(False)
-        if img_rgba is None:
+        if result is None or result.get('image') is None:
             self._render_img_lbl.setText("Render returned no image.")
             return
-        # RGBA uint8 → BGR for display
-        img_bgr = cv2.cvtColor(img_rgba, cv2.COLOR_RGBA2BGR)
-        pixmap = _bgr_to_qpixmap(img_bgr)
-        scaled = pixmap.scaled(
+        img_bgr = cv2.cvtColor(result['image'], cv2.COLOR_RGBA2BGR)
+        self._render_base_pixmap = _bgr_to_qpixmap(img_bgr)
+        self._render_cam_info = {
+            'cam_cx':    result['cam_cx'],
+            'cam_cy':    result['cam_cy'],
+            'ortho_size': result['ortho_size'],
+            'render_sz': result['render_sz'],
+        }
+        self._show_geopoint_chk.setEnabled(True)
+        self._update_render_display()
+
+    def _update_render_display(self) -> None:
+        """Redraw the render label from the cached base pixmap, optionally
+        overlaying the geo-referenced point markers.  No re-rendering needed."""
+        if self._render_base_pixmap is None:
+            return
+
+        px = QPixmap(self._render_base_pixmap)
+
+        if (self._show_geopoint_chk.isChecked()
+                and self._render_geo_world_points
+                and self._render_cam_info):
+            cam = self._render_cam_info
+            cx   = cam['cam_cx']
+            cy   = cam['cam_cy']
+            half = cam['ortho_size'] / 2.0
+            sz   = cam['render_sz']
+            arm  = max(8, sz // 64)
+            lw   = max(2, sz // 256)
+
+            painter = QPainter(px)
+            painter.setRenderHint(QPainter.Antialiasing)
+            colors = [QColor(255, 80, 80), QColor(80, 200, 255)]
+            for i, (wx, wy) in enumerate(self._render_geo_world_points):
+                px_x = int((wx - (cx - half)) / cam['ortho_size'] * sz)
+                px_y = int(((cy + half) - wy) / cam['ortho_size'] * sz)
+                pen = QPen(colors[i % len(colors)], lw)
+                painter.setPen(pen)
+                painter.drawLine(px_x - arm, px_y - arm, px_x + arm, px_y + arm)
+                painter.drawLine(px_x + arm, px_y - arm, px_x - arm, px_y + arm)
+            painter.end()
+
+        scaled = px.scaled(
             self._render_img_lbl.size(),
             Qt.KeepAspectRatio,
             Qt.SmoothTransformation,
