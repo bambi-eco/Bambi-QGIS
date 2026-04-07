@@ -327,6 +327,19 @@ class FeatureViewerDialog(QDialog):
             self.proj_widget.setVisible(False)
             return
 
+        # Projection requires a single shared target_folder across all frames.
+        # When frames come from different layers (e.g. overlapping FoVs from
+        # multiple extractions), the projection worker cannot handle them all
+        # with one target_folder, so we hide the button.
+        frame_folders = {
+            f.get("target_folder") for f in self._frames if "target_folder" in f
+        }
+        if len(frame_folders) > 1:
+            self.proj_widget.setVisible(False)
+            self.proj_info_label.setVisible(False)
+            self.proj_progress.setVisible(False)
+            return
+
         visible = self._is_on_non_source_modality() and not self._projection_done()
         self.proj_widget.setVisible(visible)
         self.proj_info_label.setVisible(visible)
@@ -397,6 +410,15 @@ class FeatureViewerDialog(QDialog):
             return
 
         data = self._frames[self._current_idx]
+
+        # Per-frame projection context: FoV navigation stores target_folder etc.
+        # in each frame dict so that different overlapping FoVs (potentially from
+        # different layers) carry their own metadata.
+        if "target_folder" in data:
+            self._target_folder   = data["target_folder"]
+            self._dem_path        = data.get("dem_path", "")
+            self._correction_path = data.get("correction_path", "")
+
         frame_idx   = data.get("frame_idx")
         total       = len(self._frames)
 
@@ -451,11 +473,16 @@ class FeatureViewerDialog(QDialog):
         )
         self.image_label.setPixmap(QPixmap.fromImage(scaled))
 
-        # Info text from first green box
+        # Info text from first green box.
+        # FoV frames (identified by per-frame target_folder) only show the
+        # frame index and detection count — confidence/class are not meaningful.
+        is_fov_frame = "target_folder" in data
         info_parts = []
         if frame_idx is not None:
             info_parts.append(f"Frame: {frame_idx}")
-        if boxes_green:
+        if is_fov_frame:
+            info_parts.append(f"{len(boxes_green)} detection(s)")
+        elif boxes_green:
             b = boxes_green[0]
             if len(b) >= 6:
                 info_parts.append(f"Conf: {float(b[4]):.3f}")

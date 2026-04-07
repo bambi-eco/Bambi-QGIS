@@ -102,25 +102,28 @@ class BambiClickTool(QgsMapToolIdentify):
             return
 
         if self.mode == "fov":
-            # FoV mode: pick the first (topmost) FoV feature.
-            chosen = next(
-                (r for r in results
-                 if r.mLayer.customProperty("bambi_layer_type", "") == FOV_TYPE),
-                None,
-            )
-        else:
-            # Detection/track mode: honour the layer hierarchy — whichever BAMBI
-            # layer sits higher in the layer tree wins.  Build an ordered list of
-            # layer IDs from the tree (top → bottom) and pick the result whose
-            # layer has the smallest index.
-            layer_order = self._get_layer_tree_order()
-            def _tree_rank(result):
-                try:
-                    return layer_order.index(result.mLayer.id())
-                except ValueError:
-                    return len(layer_order)  # not found → lowest priority
+            # FoV mode: collect ALL FoV features at the clicked position so the
+            # viewer can cycle through them with prev/next navigation.
+            fov_results = [
+                r for r in results
+                if r.mLayer.customProperty("bambi_layer_type", "") == FOV_TYPE
+            ]
+            if fov_results:
+                self._handle_fov_click(fov_results)
+            return
 
-            chosen = min(results, key=_tree_rank, default=None)
+        # Detection/track mode: honour the layer hierarchy — whichever BAMBI
+        # layer sits higher in the layer tree wins.  Build an ordered list of
+        # layer IDs from the tree (top → bottom) and pick the result whose
+        # layer has the smallest index.
+        layer_order = self._get_layer_tree_order()
+        def _tree_rank(result):
+            try:
+                return layer_order.index(result.mLayer.id())
+            except ValueError:
+                return len(layer_order)  # not found → lowest priority
+
+        chosen = min(results, key=_tree_rank, default=None)
 
         if chosen is None:
             return
@@ -149,9 +152,6 @@ class BambiClickTool(QgsMapToolIdentify):
             self._handle_track_click(
                 feature, target_folder, boxes_modality, dem_path, correction_path,
                 start_at_last=False)
-        elif layer_type == FOV_TYPE:
-            self._handle_fov_click(
-                feature, target_folder, boxes_modality, dem_path, correction_path)
 
     def deactivate(self):
         super().deactivate()
@@ -208,40 +208,72 @@ class BambiClickTool(QgsMapToolIdentify):
             frame_idx=frame_idx,
         )
 
-    def _handle_fov_click(self, feature, target_folder: str, boxes_modality: str,
-                          dem_path: str, correction_path: str):
-        """Show the frame for a clicked FoV polygon, all detections in green."""
-        try:
-            frame_idx = int(feature["frame"])
-        except (TypeError, ValueError):
+    def _handle_fov_click(self, fov_results):
+        """Build a navigable frame list from all FoV features at the clicked position.
+
+        Each overlapping FoV becomes one entry in the frame list so the user can
+        cycle through all of them using the viewer's prev/next buttons.
+        """
+        frames = []
+        for result in fov_results:
+            layer   = result.mLayer
+            feature = result.mFeature
+
+            try:
+                frame_idx = int(feature["frame"])
+            except (TypeError, ValueError):
+                continue
+
+            target_folder    = layer.customProperty("bambi_target_folder", "")
+            dem_path         = layer.customProperty("bambi_dem_path", "")
+            correction_path  = layer.customProperty("bambi_correction_path", "")
+            detection_camera = layer.customProperty("bambi_detection_camera", "T")
+            boxes_modality   = "t" if detection_camera == "T" else "w"
+
+            if not target_folder:
+                continue
+
+            det_file   = os.path.join(target_folder, "detections", "detections.txt")
+            all_dets   = self._load_pixel_detections(det_file)
+            same_frame = [d for d in all_dets if d["frame"] == frame_idx]
+
+            # All detections on this frame are shown in green — there is no
+            # "clicked" detection to single out.
+            green_boxes = [
+                (d["x1"], d["y1"], d["x2"], d["y2"], d["confidence"], d["class_id"])
+                for d in same_frame
+            ]
+            image_path_t, image_path_w = self._resolve_image_paths(target_folder, frame_idx)
+
+            frames.append({
+                "frame_idx":      frame_idx,
+                "image_path_t":   image_path_t,
+                "image_path_w":   image_path_w,
+                "boxes_modality": boxes_modality,
+                "boxes_green":    green_boxes,
+                "boxes_blue":     [],
+                # Per-frame projection context (may differ across layers).
+                "target_folder":  target_folder,
+                "dem_path":       dem_path,
+                "correction_path": correction_path,
+            })
+
+        if not frames:
             return
 
-        det_file = os.path.join(target_folder, "detections", "detections.txt")
-        all_dets = self._load_pixel_detections(det_file)
+        frames.sort(key=lambda f: f["frame_idx"])
 
-        same_frame = [d for d in all_dets if d["frame"] == frame_idx]
-
-        # All detections on this frame are shown in green — there is no
-        # "clicked" detection to single out.
-        green_boxes = [
-            (d["x1"], d["y1"], d["x2"], d["y2"], d["confidence"], d["class_id"])
-            for d in same_frame
-        ]
-
-        image_path_t, image_path_w = self._resolve_image_paths(target_folder, frame_idx)
+        n_det = sum(len(f["boxes_green"]) for f in frames)
         title = (
-            f"FoV — Frame {frame_idx}"
-            f"   |   {len(green_boxes)} detection(s)"
+            f"FoV — {len(frames)} field(s) of view"
+            f"   |   {n_det} detection(s)"
         )
-
         viewer = FeatureViewerDialog.get_instance(self.iface.mainWindow())
-        viewer.show_detection(
-            title, green_boxes, blue_boxes=[],
-            image_path_t=image_path_t, image_path_w=image_path_w,
-            boxes_modality=boxes_modality,
-            target_folder=target_folder, dem_path=dem_path,
-            correction_path=correction_path,
-            frame_idx=frame_idx,
+        viewer.show_track(
+            title, frames, start_idx=0,
+            target_folder=frames[0]["target_folder"],
+            dem_path=frames[0]["dem_path"],
+            correction_path=frames[0]["correction_path"],
         )
 
     def _handle_track_click(self, feature, target_folder: str, boxes_modality: str,
