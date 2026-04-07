@@ -464,8 +464,12 @@ class FeatureViewerDialog(QDialog):
             self.image_label.setPixmap(QPixmap())
             return
 
-        # Draw bounding boxes and scale to widget
+        # Draw bounding boxes and optional click-position crosshair.
         annotated = self._draw_boxes(img, boxes_green, boxes_blue, projected=projected)
+        click_key = "click_point_t" if self._view_mode == "t" else "click_point_w"
+        click_pt  = data.get(click_key)
+        if click_pt is not None:
+            annotated = self._draw_crosshair(annotated, click_pt[0], click_pt[1])
         scaled = annotated.scaled(
             self.image_label.size(),
             Qt.KeepAspectRatio,
@@ -539,6 +543,31 @@ class FeatureViewerDialog(QDialog):
                     if is_interp:
                         label += " (interp)"
                     painter.drawText(x1 + 2, max(y1 - 4, 12), label)
+
+        painter.end()
+        return result
+
+    def _draw_crosshair(self, img: "QImage", px: float, py: float) -> "QImage":
+        """Draw a yellow crosshair at *(px, py)* in image pixel coordinates.
+
+        The crosshair consists of two diagonal lines (×) centred on the point,
+        scaled proportionally to the image size so it remains visible regardless
+        of resolution.
+        """
+        result  = img.copy()
+        painter = QPainter(result)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+
+        arm = max(8, img.width() // 60)
+        lw  = max(2, img.width() // 300)
+
+        pen = QPen(QColor(255, 220, 0), lw, Qt.SolidLine)   # yellow
+        pen.setCapStyle(Qt.RoundCap)
+        painter.setPen(pen)
+
+        cx, cy = int(px), int(py)
+        painter.drawLine(cx - arm, cy - arm, cx + arm, cy + arm)
+        painter.drawLine(cx + arm, cy - arm, cx - arm, cy + arm)
 
         painter.end()
         return result

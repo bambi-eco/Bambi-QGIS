@@ -32,10 +32,10 @@ Data files read (relative to *target_folder*)
 
 import os
 import json
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from qgis.gui import QgsMapToolIdentify
-from qgis.core import QgsVectorLayer, QgsProject
+from qgis.core import QgsVectorLayer, QgsProject, QgsMessageLog, Qgis
 from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtGui import QCursor
 from qgis.PyQt.QtWidgets import QMessageBox
@@ -62,6 +62,9 @@ class BambiClickTool(QgsMapToolIdentify):
         self.iface = iface
         self.mode = mode
         self.setCursor(QCursor(Qt.CrossCursor))
+        # DEM mesh cache: keyed by absolute mesh path so repeated FoV clicks
+        # on the same DEM don't reload and re-build the BVH every time.
+        self._dem_mesh_cache: Dict[str, object] = {}
 
     # ------------------------------------------------------------------
     # QgsMapTool overrides
@@ -109,7 +112,11 @@ class BambiClickTool(QgsMapToolIdentify):
                 if r.mLayer.customProperty("bambi_layer_type", "") == FOV_TYPE
             ]
             if fov_results:
-                self._handle_fov_click(fov_results)
+                # Convert canvas pixel → map coordinate for click projection.
+                map_pt = self.canvas().getCoordinateTransform().toMapCoordinates(
+                    event.x(), event.y()
+                )
+                self._handle_fov_click(fov_results, click_xy=(map_pt.x(), map_pt.y()))
             return
 
         # Detection/track mode: honour the layer hierarchy — whichever BAMBI
@@ -208,11 +215,16 @@ class BambiClickTool(QgsMapToolIdentify):
             frame_idx=frame_idx,
         )
 
-    def _handle_fov_click(self, fov_results):
+    def _handle_fov_click(self, fov_results, click_xy: Optional[Tuple[float, float]] = None):
         """Build a navigable frame list from all FoV features at the clicked position.
 
         Each overlapping FoV becomes one entry in the frame list so the user can
         cycle through all of them using the viewer's prev/next buttons.
+
+        *click_xy* — (map_x, map_y) geographic coordinate of the click.  When
+        provided it is projected into each FoV's image space (thermal and RGB)
+        and stored as ``click_point_t`` / ``click_point_w`` in the frame dict
+        so the viewer can draw a crosshair at the clicked location.
         """
         frames = []
         for result in fov_results:
@@ -233,6 +245,15 @@ class BambiClickTool(QgsMapToolIdentify):
             if not target_folder:
                 continue
 
+            # The DEM / correction paths may be missing on FoV layers that
+            # were created before those fields were filled in the UI.  Fall
+            # back to any other BAMBI layer that shares the same target
+            # folder and has the property set.
+            if not dem_path or not correction_path:
+                dem_path, correction_path = self._resolve_missing_paths(
+                    target_folder, dem_path, correction_path
+                )
+
             det_file   = os.path.join(target_folder, "detections", "detections.txt")
             all_dets   = self._load_pixel_detections(det_file)
             same_frame = [d for d in all_dets if d["frame"] == frame_idx]
@@ -245,7 +266,7 @@ class BambiClickTool(QgsMapToolIdentify):
             ]
             image_path_t, image_path_w = self._resolve_image_paths(target_folder, frame_idx)
 
-            frames.append({
+            frame_dict = {
                 "frame_idx":      frame_idx,
                 "image_path_t":   image_path_t,
                 "image_path_w":   image_path_w,
@@ -256,7 +277,25 @@ class BambiClickTool(QgsMapToolIdentify):
                 "target_folder":  target_folder,
                 "dem_path":       dem_path,
                 "correction_path": correction_path,
-            })
+            }
+
+            # Project the clicked map position into this frame's image space.
+            # Failures are non-fatal — the frame is still shown, just without
+            # the crosshair.
+            if click_xy is not None:
+                try:
+                    frame_dict["click_point_t"] = self._project_map_point(
+                        click_xy, frame_idx, image_path_t,
+                        target_folder, dem_path, correction_path, "t",
+                    )
+                    frame_dict["click_point_w"] = self._project_map_point(
+                        click_xy, frame_idx, image_path_w,
+                        target_folder, dem_path, correction_path, "w",
+                    )
+                except Exception:
+                    pass
+
+            frames.append(frame_dict)
 
         if not frames:
             return
@@ -489,6 +528,247 @@ class BambiClickTool(QgsMapToolIdentify):
 
             frame["boxes_green"] = [(x1, y1, x2, y2, conf, cls, 1)]
 
+    def _project_map_point(
+        self,
+        xy: Tuple[float, float],
+        frame_idx: int,
+        image_path: str,
+        target_folder: str,
+        dem_path: str,
+        correction_path: str,
+        modality: str,
+    ) -> Optional[Tuple[float, float]]:
+        """Project a geographic map coordinate into image pixel space.
+
+        Uses the same camera model as :class:`~.bambi_box_projector.BoxProjectionWorker`.
+        The z component of the world point is set to the DEM datum elevation
+        (i.e. ``local_z = 0`` after subtracting the DEM origin), which is a
+        good approximation for ground-level points.
+
+        Returns ``(pixel_x, pixel_y)`` when the projection falls within the
+        image bounds, or ``None`` on failure / out-of-frame.
+        """
+        poses_path = os.path.join(target_folder, f"poses_{modality}.json")
+        if not os.path.isfile(poses_path):
+            return None
+
+        try:
+            import numpy as np
+            from pyrr import Vector3, Quaternion
+            from alfspy.core.rendering import Camera
+            from .bambi_box_projector import (
+                _read_correction, _correction_for_frame, _world_to_pixel,
+            )
+        except ImportError:
+            return None
+
+        try:
+            with open(poses_path, "r", encoding="utf-8") as fh:
+                poses_data = json.load(fh)
+            images = poses_data.get("images", [])
+            if frame_idx >= len(images):
+                return None
+
+            # ---- DEM origin (mirrors BoxProjectionWorker fallback chain) ----
+            def _try_load_origin(json_path):
+                if not json_path or not os.path.isfile(json_path):
+                    return None
+                try:
+                    with open(json_path, "r", encoding="utf-8") as fh:
+                        d = json.load(fh)
+                    o = d.get("origin")
+                    if o and len(o) >= 3:
+                        return (float(o[0]), float(o[1]), float(o[2]))
+                except Exception:
+                    pass
+                return None
+
+            # Derive the candidate JSON paths from dem_path, handling both
+            # mesh files (.gltf/.glb) and the case where dem_path already
+            # points directly to the JSON metadata file.
+            origin = (0.0, 0.0, 0.0)
+            dem_json_found = None      # path of the JSON that provided the origin
+            dem_json_tried = "N/A"
+            if dem_path:
+                if dem_path.lower().endswith(".json"):
+                    dem_json_tried = dem_path
+                else:
+                    dem_json_tried = (
+                        dem_path.replace(".gltf", ".json").replace(".glb", ".json")
+                    )
+                o = _try_load_origin(dem_json_tried)
+                if o:
+                    origin = o
+                    dem_json_found = dem_json_tried
+
+            if origin == (0.0, 0.0, 0.0):
+                for search_dir in [target_folder, os.path.dirname(target_folder)]:
+                    if not search_dir or not os.path.isdir(search_dir):
+                        continue
+                    for fname in os.listdir(search_dir):
+                        if not fname.lower().endswith(".json"):
+                            continue
+                        json_path = os.path.join(search_dir, fname)
+                        o = _try_load_origin(json_path)
+                        if o and (o[0] != 0.0 or o[1] != 0.0):
+                            origin = o
+                            dem_json_found = json_path
+                            break
+                    if origin != (0.0, 0.0, 0.0):
+                        break
+
+            # ---- Terrain elevation at click position ---------------------
+            # Local (x, y) after removing DEM origin offset — needed for mesh
+            # ray-casting which operates in local coordinate space.
+            local_xy = (xy[0] - origin[0], xy[1] - origin[1])
+
+            # Try mesh ray-cast first (sub-metre accuracy); fall back to
+            # raster DEM sampling if the mesh is unavailable.
+            mesh_path = self._find_dem_mesh_path(dem_path, dem_json_found)
+            local_z = self._ray_cast_dem_z(local_xy, mesh_path)
+            elev_method = "mesh" if local_z is not None else "raster"
+            if local_z is None:
+                local_z = self._sample_dem_elevation(xy, origin, dem_json_found)
+
+            QgsMessageLog.logMessage(
+                f"[FoV click projection | {modality}]  Origin lookup\n"
+                f"  dem_path     : {dem_path!r}\n"
+                f"  JSON tried   : {dem_json_tried!r}  exists={os.path.isfile(dem_json_tried)}\n"
+                f"  origin found : {origin}\n"
+                f"  local_z      : {local_z:.3f}  (via {elev_method})",
+                "BAMBI", Qgis.Info,
+            )
+
+            # ---- Correction ---------------------------------------------
+            corr = _read_correction(target_folder, correction_path)
+            t_corr, r_corr = _correction_for_frame(frame_idx, corr)
+
+            # ---- Camera -------------------------------------------------
+            meta     = images[frame_idx]
+            fovy     = meta.get("fovy", 50)
+            if isinstance(fovy, list):
+                fovy = fovy[0]
+            position = Vector3(meta["location"])
+            rot_vals = meta["rotation"]
+
+            cor_t = Vector3(
+                [t_corr.get("x", 0.0), t_corr.get("y", 0.0), t_corr.get("z", 0.0)],
+                dtype="f4",
+            )
+            cor_r = Vector3(
+                [r_corr.get("x", 0.0), r_corr.get("y", 0.0), r_corr.get("z", 0.0)],
+                dtype="f4",
+            )
+            # Wrap to (-180, +180] before converting to radians — matches the
+            # correction wizard's _wrap_deg() to avoid edge cases near ±180°.
+            rotation_eulers = (
+                Vector3([np.deg2rad(((v + 180.0) % 360.0) - 180.0) for v in rot_vals]) - cor_r
+            ) * -1
+            position       = position + cor_t
+            rotation_quat  = Quaternion.from_eulers(rotation_eulers)
+            camera = Camera(fovy=fovy, aspect_ratio=1.0, position=position,
+                            rotation=rotation_quat)
+
+            # ---- Image dimensions ---------------------------------------
+            img_width, img_height = 640, 512  # sensible fallback
+            if image_path:
+                from qgis.PyQt.QtGui import QImage
+                qimg = QImage(image_path)
+                if not qimg.isNull():
+                    img_width  = qimg.width()
+                    img_height = qimg.height()
+
+            # ---- Project ------------------------------------------------
+            # Convert to local coords by subtracting the DEM origin.
+            local = np.array(
+                [[xy[0] - origin[0], xy[1] - origin[1], local_z]],
+                dtype=np.float64,
+            )
+
+            canvas_crs = self.canvas().mapSettings().destinationCrs().authid()
+            QgsMessageLog.logMessage(
+                f"[FoV click projection | {modality}]\n"
+                f"  Canvas CRS   : {canvas_crs}\n"
+                f"  Map click    : x={xy[0]:.3f}  y={xy[1]:.3f}\n"
+                f"  DEM origin   : x={origin[0]:.3f}  y={origin[1]:.3f}  z={origin[2]:.3f}\n"
+                f"  Local point  : x={local[0,0]:.3f}  y={local[0,1]:.3f}  z={local[0,2]:.3f}\n"
+                f"  Cam position : {list(meta.get('location', []))}\n"
+                f"  Correction t : {t_corr}\n"
+                f"  Correction r : {r_corr}\n"
+                f"  Image size   : {img_width} x {img_height}",
+                "BAMBI", Qgis.Info,
+            )
+
+            pxs, pys = _world_to_pixel(local, img_width, img_height, camera)
+            px, py = float(pxs[0]), float(pys[0])
+
+            QgsMessageLog.logMessage(
+                f"[FoV click projection | {modality}]  "
+                f"Projected pixel: px={px:.1f}  py={py:.1f}  "
+                f"(in bounds: {0 <= px <= img_width and 0 <= py <= img_height})",
+                "BAMBI", Qgis.Info,
+            )
+
+            if 0 <= px <= img_width and 0 <= py <= img_height:
+                return (px, py)
+            return None
+
+        except Exception as exc:
+            QgsMessageLog.logMessage(
+                f"[FoV click projection | {modality}]  Exception: {exc}",
+                "BAMBI", Qgis.Warning,
+            )
+            return None
+
+    def _sample_dem_elevation(
+        self,
+        xy: Tuple[float, float],
+        origin: Tuple[float, float, float],
+        dem_json_path: Optional[str],
+    ) -> float:
+        """Return the terrain elevation at *xy* in local z coordinates.
+
+        Looks for a raster DEM (GeoTIFF) alongside *dem_json_path*: first
+        a same-name ``.tif`` / ``.tiff``, then any ``.tif`` / ``.tiff`` in
+        the same directory.  Uses QgsRasterLayer to sample the elevation and
+        subtracts the DEM origin z so the result is in the same local
+        coordinate space as the camera poses.
+
+        Returns ``0.0`` when no raster is found or sampling fails.
+        """
+        if not dem_json_path:
+            return 0.0
+        try:
+            from qgis.core import QgsRasterLayer, QgsPointXY
+
+            dem_dir  = os.path.dirname(dem_json_path)
+            dem_base = os.path.splitext(dem_json_path)[0]
+
+            # Prefer same-name TIF; fall back to any TIF in the directory.
+            candidates: List[str] = []
+            for ext in (".tif", ".tiff", ".TIF", ".TIFF"):
+                p = dem_base + ext
+                if os.path.isfile(p):
+                    candidates.append(p)
+            for fname in os.listdir(dem_dir):
+                if fname.lower().endswith((".tif", ".tiff")):
+                    p = os.path.join(dem_dir, fname)
+                    if p not in candidates:
+                        candidates.append(p)
+
+            point = QgsPointXY(xy[0], xy[1])
+            for raster_path in candidates:
+                layer = QgsRasterLayer(raster_path, "_bambi_dem_tmp", "gdal")
+                if not layer.isValid():
+                    continue
+                value, ok = layer.dataProvider().sample(point, 1)
+                if ok and value is not None:
+                    return float(value) - origin[2]  # convert to local z
+
+        except Exception:
+            pass
+        return 0.0
+
     # ------------------------------------------------------------------
     # Data loaders
     # ------------------------------------------------------------------
@@ -622,6 +902,100 @@ class BambiClickTool(QgsMapToolIdentify):
     # ------------------------------------------------------------------
     # Layer helpers
     # ------------------------------------------------------------------
+
+    def _find_dem_mesh_path(
+        self,
+        dem_path: str,
+        dem_json_path: Optional[str],
+    ) -> Optional[str]:
+        """Return the path to the DEM mesh file (.glb / .gltf), or None."""
+        if dem_path and dem_path.lower().endswith((".glb", ".gltf")):
+            if os.path.isfile(dem_path):
+                return dem_path
+        if dem_json_path:
+            base = os.path.splitext(dem_json_path)[0]
+            for ext in (".glb", ".gltf"):
+                candidate = base + ext
+                if os.path.isfile(candidate):
+                    return candidate
+        return None
+
+    def _ray_cast_dem_z(
+        self,
+        local_xy: Tuple[float, float],
+        mesh_path: Optional[str],
+    ) -> Optional[float]:
+        """Return local z of the DEM mesh at *(local_x, local_y)* via a
+        downward vertical ray-cast.
+
+        The mesh and its BVH are cached by path so subsequent calls for the
+        same DEM are cheap.  Returns ``None`` on failure or if no mesh is
+        available.
+        """
+        if not mesh_path:
+            return None
+        try:
+            import numpy as np
+            from alfspy.render.render import read_gltf
+            from trimesh import Trimesh
+
+            if mesh_path not in self._dem_mesh_cache:
+                mesh_data, _ = read_gltf(mesh_path)
+                tri_mesh = Trimesh(
+                    vertices=mesh_data.vertices,
+                    faces=mesh_data.indices,
+                )
+                try:
+                    _ = tri_mesh.triangles_tree   # pre-build BVH
+                except Exception:
+                    pass
+                self._dem_mesh_cache[mesh_path] = tri_mesh
+
+            tri_mesh = self._dem_mesh_cache[mesh_path]
+
+            ray_origins    = np.array([[local_xy[0], local_xy[1], 10_000.0]])
+            ray_directions = np.array([[0.0, 0.0, -1.0]])
+            locations, _, _ = tri_mesh.ray.intersects_location(
+                ray_origins, ray_directions
+            )
+            if len(locations) > 0:
+                return float(np.max(locations[:, 2]))
+        except Exception:
+            pass
+        return None
+
+    def _resolve_missing_paths(
+        self,
+        target_folder: str,
+        dem_path: str,
+        correction_path: str,
+    ) -> Tuple[str, str]:
+        """Fill empty *dem_path* / *correction_path* from sibling BAMBI layers.
+
+        FoV layers created before the DEM or correction fields were set in the
+        UI will have empty custom properties.  Detection and track layers from
+        the same flight (same ``bambi_target_folder``) carry the correct paths,
+        so we borrow them when needed.
+        """
+        all_types = {DETECTION_TYPE} | TRACK_TYPES | {FOV_TYPE}
+        for layer in QgsProject.instance().mapLayers().values():
+            if not isinstance(layer, QgsVectorLayer):
+                continue
+            if layer.customProperty("bambi_layer_type", "") not in all_types:
+                continue
+            if layer.customProperty("bambi_target_folder", "") != target_folder:
+                continue
+            if not dem_path:
+                candidate = layer.customProperty("bambi_dem_path", "")
+                if candidate:
+                    dem_path = candidate
+            if not correction_path:
+                candidate = layer.customProperty("bambi_correction_path", "")
+                if candidate:
+                    correction_path = candidate
+            if dem_path and correction_path:
+                break
+        return dem_path, correction_path
 
     def _get_layer_tree_order(self) -> List[str]:
         """Return layer IDs in top-to-bottom order as they appear in the layer tree."""
