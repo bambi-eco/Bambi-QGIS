@@ -35,7 +35,10 @@ import json
 from typing import Dict, List, Optional, Tuple
 
 from qgis.gui import QgsMapToolIdentify
-from qgis.core import QgsVectorLayer, QgsProject, QgsMessageLog, Qgis
+from qgis.core import (
+    QgsVectorLayer, QgsProject, QgsMessageLog, Qgis,
+    QgsCoordinateTransform, QgsCoordinateReferenceSystem, QgsPointXY,
+)
 from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtGui import QCursor
 from qgis.PyQt.QtWidgets import QMessageBox
@@ -115,6 +118,18 @@ class BambiClickTool(QgsMapToolIdentify):
             ]
             if fov_results:
                 if self.mode == "fov_georef":
+                    if not self._dem_mesh_cache:
+                        reply = QMessageBox.question(
+                            None,
+                            "Load Digital Elevation Model",
+                            "The geo-referenced FoV inspector needs to load the "
+                            "digital elevation model.\n\n"
+                            "This may take some time on the first click. Continue?",
+                            QMessageBox.Yes | QMessageBox.No,
+                            QMessageBox.Yes,
+                        )
+                        if reply != QMessageBox.Yes:
+                            return
                     # Convert canvas pixel → map coordinate for click projection.
                     map_pt = self.canvas().getCoordinateTransform().toMapCoordinates(
                         event.x(), event.y()
@@ -290,12 +305,23 @@ class BambiClickTool(QgsMapToolIdentify):
             # the crosshair.
             if click_xy is not None:
                 try:
+                    # Transform click from canvas CRS → layer CRS if needed.
+                    layer_xy = click_xy
+                    canvas_crs = self.canvas().mapSettings().destinationCrs()
+                    layer_crs = layer.crs()
+                    if canvas_crs.isValid() and layer_crs.isValid() \
+                            and canvas_crs != layer_crs:
+                        xform = QgsCoordinateTransform(
+                            canvas_crs, layer_crs, QgsProject.instance())
+                        pt = xform.transform(QgsPointXY(*click_xy))
+                        layer_xy = (pt.x(), pt.y())
+
                     frame_dict["click_point_t"] = self._project_map_point(
-                        click_xy, frame_idx, image_path_t,
+                        layer_xy, frame_idx, image_path_t,
                         target_folder, dem_path, correction_path, "t",
                     )
                     frame_dict["click_point_w"] = self._project_map_point(
-                        click_xy, frame_idx, image_path_w,
+                        layer_xy, frame_idx, image_path_w,
                         target_folder, dem_path, correction_path, "w",
                     )
                 except Exception:
@@ -546,36 +572,44 @@ class BambiClickTool(QgsMapToolIdentify):
     ) -> Optional[Tuple[float, float]]:
         """Project a geographic map coordinate into image pixel space.
 
-        Uses the same camera model as :class:`~.bambi_box_projector.BoxProjectionWorker`.
-        The z component of the world point is set to the DEM datum elevation
-        (i.e. ``local_z = 0`` after subtracting the DEM origin), which is a
-        good approximation for ground-level points.
+        Replicates the exact camera construction and projection maths of
+        :class:`~.bambi_box_projector.BoxProjectionWorker` so the result is
+        pixel-identical to transferring a geo-referenced bounding box between
+        modalities — with a single point instead of eight box corners.
 
-        Returns ``(pixel_x, pixel_y)`` when the projection falls within the
-        image bounds, or ``None`` on failure / out-of-frame.
+        Returns ``(pixel_x, pixel_y)`` or ``None`` on failure / out-of-frame.
         """
-        poses_path = os.path.join(target_folder, f"poses_{modality}.json")
-        if not os.path.isfile(poses_path):
-            return None
+        import numpy as np
+        from .bambi_box_projector import (
+            _read_correction, _correction_for_frame, _world_to_pixel,
+        )
 
         try:
-            import numpy as np
             from pyrr import Vector3, Quaternion
             from alfspy.core.rendering import Camera
-            from .bambi_box_projector import (
-                _read_correction, _correction_for_frame, _world_to_pixel,
-            )
         except ImportError:
             return None
 
         try:
+            # ---- Poses ---------------------------------------------------
+            poses_path = os.path.join(target_folder, f"poses_{modality}.json")
+            if not os.path.isfile(poses_path):
+                QgsMessageLog.logMessage(
+                    f"[FoV click | {modality}]  poses file not found: {poses_path}",
+                    "BAMBI", Qgis.Warning)
+                return None
             with open(poses_path, "r", encoding="utf-8") as fh:
                 poses_data = json.load(fh)
             images = poses_data.get("images", [])
             if frame_idx >= len(images):
+                QgsMessageLog.logMessage(
+                    f"[FoV click | {modality}]  frame_idx {frame_idx} >= len(images) {len(images)}",
+                    "BAMBI", Qgis.Warning)
                 return None
 
-            # ---- DEM origin (mirrors BoxProjectionWorker fallback chain) ----
+            # ---- DEM origin (identical to BoxProjectionWorker) -----------
+            origin = (0.0, 0.0, 0.0)
+
             def _try_load_origin(json_path):
                 if not json_path or not os.path.isfile(json_path):
                     return None
@@ -589,23 +623,17 @@ class BambiClickTool(QgsMapToolIdentify):
                     pass
                 return None
 
-            # Derive the candidate JSON paths from dem_path, handling both
-            # mesh files (.gltf/.glb) and the case where dem_path already
-            # points directly to the JSON metadata file.
-            origin = (0.0, 0.0, 0.0)
-            dem_json_found = None      # path of the JSON that provided the origin
-            dem_json_tried = "N/A"
+            dem_json_found = None
             if dem_path:
-                if dem_path.lower().endswith(".json"):
-                    dem_json_tried = dem_path
-                else:
-                    dem_json_tried = (
-                        dem_path.replace(".gltf", ".json").replace(".glb", ".json")
-                    )
-                o = _try_load_origin(dem_json_tried)
+                dem_json_path = (
+                    dem_path
+                    .replace(".gltf", ".json")
+                    .replace(".glb",  ".json")
+                )
+                o = _try_load_origin(dem_json_path)
                 if o:
                     origin = o
-                    dem_json_found = dem_json_tried
+                    dem_json_found = dem_json_path
 
             if origin == (0.0, 0.0, 0.0):
                 for search_dir in [target_folder, os.path.dirname(target_folder)]:
@@ -624,104 +652,123 @@ class BambiClickTool(QgsMapToolIdentify):
                         break
 
             # ---- Terrain elevation at click position ---------------------
-            # Local (x, y) after removing DEM origin offset — needed for mesh
-            # ray-casting which operates in local coordinate space.
             local_xy = (xy[0] - origin[0], xy[1] - origin[1])
-
-            # Try mesh ray-cast first (sub-metre accuracy); fall back to
-            # raster DEM sampling if the mesh is unavailable.
             mesh_path = self._find_dem_mesh_path(dem_path, dem_json_found)
             local_z = self._ray_cast_dem_z(local_xy, mesh_path)
-            elev_method = "mesh" if local_z is not None else "raster"
+            elev_src = "mesh"
             if local_z is None:
                 local_z = self._sample_dem_elevation(xy, origin, dem_json_found)
+                elev_src = "raster" if local_z is not None else "NONE"
+            if local_z is None:
+                local_z = 0.0
+                elev_src = "fallback(0)"
 
-            QgsMessageLog.logMessage(
-                f"[FoV click projection | {modality}]  Origin lookup\n"
-                f"  dem_path     : {dem_path!r}\n"
-                f"  JSON tried   : {dem_json_tried!r}  exists={os.path.isfile(dem_json_tried)}\n"
-                f"  origin found : {origin}\n"
-                f"  local_z      : {local_z:.3f}  (via {elev_method})",
-                "BAMBI", Qgis.Info,
-            )
-
-            # ---- Correction ---------------------------------------------
+            # ---- Correction (identical to BoxProjectionWorker) -----------
             corr = _read_correction(target_folder, correction_path)
             t_corr, r_corr = _correction_for_frame(frame_idx, corr)
 
-            # ---- Camera -------------------------------------------------
-            meta     = images[frame_idx]
-            fovy     = meta.get("fovy", 50)
+            # ---- Camera (copied verbatim from BoxProjectionWorker) -------
+            meta = images[frame_idx]
+            fovy = meta.get("fovy", [50])
             if isinstance(fovy, list):
                 fovy = fovy[0]
+
             position = Vector3(meta["location"])
             rot_vals = meta["rotation"]
 
-            cor_t = Vector3(
-                [t_corr.get("x", 0.0), t_corr.get("y", 0.0), t_corr.get("z", 0.0)],
-                dtype="f4",
-            )
-            cor_r = Vector3(
-                [r_corr.get("x", 0.0), r_corr.get("y", 0.0), r_corr.get("z", 0.0)],
-                dtype="f4",
-            )
-            # Wrap to (-180, +180] before converting to radians — matches the
-            # correction wizard's _wrap_deg() to avoid edge cases near ±180°.
+            cor_t = Vector3([t_corr.get("x", 0), t_corr.get("y", 0), t_corr.get("z", 0)], dtype="f4")
+            cor_r = Vector3([r_corr.get("x", 0), r_corr.get("y", 0), r_corr.get("z", 0)], dtype="f4")
+
             rotation_eulers = (
-                Vector3([np.deg2rad(((v + 180.0) % 360.0) - 180.0) for v in rot_vals]) - cor_r
+                Vector3([np.deg2rad(v % 360.0) for v in rot_vals]) - cor_r
             ) * -1
-            position       = position + cor_t
-            rotation_quat  = Quaternion.from_eulers(rotation_eulers)
-            camera = Camera(fovy=fovy, aspect_ratio=1.0, position=position,
-                            rotation=rotation_quat)
+            position = position + cor_t
+            rotation_quat = Quaternion.from_eulers(rotation_eulers)
 
-            # ---- Image dimensions ---------------------------------------
-            img_width, img_height = 640, 512  # sensible fallback
-            if image_path:
-                from qgis.PyQt.QtGui import QImage
-                qimg = QImage(image_path)
-                if not qimg.isNull():
-                    img_width  = qimg.width()
-                    img_height = qimg.height()
+            camera = Camera(
+                fovy=fovy,
+                aspect_ratio=1.0,
+                position=position,
+                rotation=rotation_quat,
+            )
 
-            # ---- Project ------------------------------------------------
-            # Convert to local coords by subtracting the DEM origin.
-            local = np.array(
-                [[xy[0] - origin[0], xy[1] - origin[1], local_z]],
+            # ---- Image dimensions (same approach as BoxProjectionWorker) -
+            # Read from the first frame in the poses file, not from the
+            # specific image_path — matches BoxProjectionWorker exactly.
+            frames_dir = os.path.join(target_folder, f"frames_{modality}")
+            img_width, img_height = 640, 512  # fallback
+            if images:
+                first_file = images[0].get("imagefile", "")
+                candidate = os.path.join(frames_dir, first_file)
+                if first_file and os.path.isfile(candidate):
+                    try:
+                        import cv2
+                        img = cv2.imread(candidate)
+                        if img is not None:
+                            img_height, img_width = img.shape[:2]
+                    except Exception:
+                        pass
+
+            # ---- Project (single point, same as _project_georef_box_to_pixels)
+            ox, oy, oz = origin
+            point = np.array(
+                [[xy[0] - ox, xy[1] - oy, local_z]],
                 dtype=np.float64,
             )
 
-            canvas_crs = self.canvas().mapSettings().destinationCrs().authid()
-            QgsMessageLog.logMessage(
-                f"[FoV click projection | {modality}]\n"
-                f"  Canvas CRS   : {canvas_crs}\n"
-                f"  Map click    : x={xy[0]:.3f}  y={xy[1]:.3f}\n"
-                f"  DEM origin   : x={origin[0]:.3f}  y={origin[1]:.3f}  z={origin[2]:.3f}\n"
-                f"  Local point  : x={local[0,0]:.3f}  y={local[0,1]:.3f}  z={local[0,2]:.3f}\n"
-                f"  Cam position : {list(meta.get('location', []))}\n"
-                f"  Correction t : {t_corr}\n"
-                f"  Correction r : {r_corr}\n"
-                f"  Image size   : {img_width} x {img_height}",
-                "BAMBI", Qgis.Info,
-            )
-
-            pxs, pys = _world_to_pixel(local, img_width, img_height, camera)
+            pxs, pys = _world_to_pixel(point, img_width, img_height, camera)
             px, py = float(pxs[0]), float(pys[0])
 
+            in_bounds = 0 <= px <= img_width and 0 <= py <= img_height
+
+            # ---- Debug: find nearest georef entry for comparison ---------
+            georef_info = ""
+            try:
+                georef_path = os.path.join(target_folder, "georeferenced", "georeferenced.txt")
+                if os.path.isfile(georef_path):
+                    with open(georef_path, "r", encoding="utf-8") as gf:
+                        best_dist = float("inf")
+                        best_line = ""
+                        for line in gf:
+                            line = line.strip()
+                            if not line or line.startswith("#"):
+                                continue
+                            parts = line.split()
+                            if len(parts) >= 10 and int(parts[1]) == frame_idx:
+                                gx = (float(parts[2]) + float(parts[5])) / 2
+                                gy = (float(parts[3]) + float(parts[6])) / 2
+                                d = (gx - xy[0])**2 + (gy - xy[1])**2
+                                if d < best_dist:
+                                    best_dist = d
+                                    best_line = line
+                        if best_line:
+                            georef_info = f"\n  Nearest georef : {best_line}"
+            except Exception:
+                pass
+
             QgsMessageLog.logMessage(
-                f"[FoV click projection | {modality}]  "
-                f"Projected pixel: px={px:.1f}  py={py:.1f}  "
-                f"(in bounds: {0 <= px <= img_width and 0 <= py <= img_height})",
+                f"[FoV click | {modality}]  frame={frame_idx}\n"
+                f"  Click map      : x={xy[0]:.3f}  y={xy[1]:.3f}\n"
+                f"  Origin         : x={origin[0]:.3f}  y={origin[1]:.3f}  z={origin[2]:.3f}\n"
+                f"  Local point    : x={point[0,0]:.3f}  y={point[0,1]:.3f}  z={local_z:.3f} ({elev_src})\n"
+                f"  Cam location   : {list(meta['location'])}\n"
+                f"  Cam rotation   : {list(rot_vals)}\n"
+                f"  fovy={fovy}  img={img_width}x{img_height}\n"
+                f"  Correction t   : {dict(t_corr)}  r: {dict(r_corr)}\n"
+                f"  Projected pixel: px={px:.1f}  py={py:.1f}  in_bounds={in_bounds}"
+                f"{georef_info}",
                 "BAMBI", Qgis.Info,
             )
 
-            if 0 <= px <= img_width and 0 <= py <= img_height:
+            if in_bounds:
                 return (px, py)
             return None
 
         except Exception as exc:
+            import traceback
             QgsMessageLog.logMessage(
-                f"[FoV click projection | {modality}]  Exception: {exc}",
+                f"[FoV click | {modality}]  Exception: {exc}\n"
+                f"{traceback.format_exc()}",
                 "BAMBI", Qgis.Warning,
             )
             return None
