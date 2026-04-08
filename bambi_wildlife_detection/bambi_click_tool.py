@@ -54,7 +54,9 @@ class BambiClickTool(QgsMapToolIdentify):
     ----------
     mode : str
         ``"detection_track"`` — identifies detection and track layers (default).
-        ``"fov"``             — identifies FoV polygon layers.
+        ``"fov"``             — identifies FoV polygon layers (simple viewer, no geo-referencing).
+        ``"fov_georef"``      — identifies FoV polygon layers and projects the click position
+                                into each frame's image space using DEM elevation data.
     """
 
     def __init__(self, iface, mode: str = "detection_track"):
@@ -76,7 +78,7 @@ class BambiClickTool(QgsMapToolIdentify):
 
         bambi_layers = self._get_bambi_layers()
         if not bambi_layers:
-            if self.mode == "fov":
+            if self.mode in ("fov", "fov_georef"):
                 QMessageBox.warning(
                     None,
                     "No Field of View Layers",
@@ -104,7 +106,7 @@ class BambiClickTool(QgsMapToolIdentify):
         if not results:
             return
 
-        if self.mode == "fov":
+        if self.mode in ("fov", "fov_georef"):
             # FoV mode: collect ALL FoV features at the clicked position so the
             # viewer can cycle through them with prev/next navigation.
             fov_results = [
@@ -112,11 +114,15 @@ class BambiClickTool(QgsMapToolIdentify):
                 if r.mLayer.customProperty("bambi_layer_type", "") == FOV_TYPE
             ]
             if fov_results:
-                # Convert canvas pixel → map coordinate for click projection.
-                map_pt = self.canvas().getCoordinateTransform().toMapCoordinates(
-                    event.x(), event.y()
-                )
-                self._handle_fov_click(fov_results, click_xy=(map_pt.x(), map_pt.y()))
+                if self.mode == "fov_georef":
+                    # Convert canvas pixel → map coordinate for click projection.
+                    map_pt = self.canvas().getCoordinateTransform().toMapCoordinates(
+                        event.x(), event.y()
+                    )
+                    click_xy = (map_pt.x(), map_pt.y())
+                else:
+                    click_xy = None
+                self._handle_fov_click(fov_results, click_xy=click_xy)
             return
 
         # Detection/track mode: honour the layer hierarchy — whichever BAMBI
@@ -1023,7 +1029,7 @@ class BambiClickTool(QgsMapToolIdentify):
         visible GeoTIFF raster.
         """
         valid_types = (
-            {FOV_TYPE} if self.mode == "fov"
+            {FOV_TYPE} if self.mode in ("fov", "fov_georef")
             else {DETECTION_TYPE} | TRACK_TYPES
         )
         root = QgsProject.instance().layerTreeRoot()
@@ -1033,7 +1039,7 @@ class BambiClickTool(QgsMapToolIdentify):
                 continue
             if layer.customProperty("bambi_layer_type", "") not in valid_types:
                 continue
-            if self.mode != "fov":
+            if self.mode not in ("fov", "fov_georef"):
                 node = root.findLayer(layer.id())
                 if not (node and node.isVisible()):
                     continue

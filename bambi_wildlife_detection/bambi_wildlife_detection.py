@@ -54,6 +54,7 @@ class BambiWildlifeDetection:
         # Inspector toolbar actions (created in initGui)
         self.inspector_action = None
         self.fov_inspector_action = None
+        self.fov_georef_inspector_action = None
         self.correction_wizard_action = None
 
     def tr(self, message):
@@ -149,7 +150,7 @@ class BambiWildlifeDetection:
             status_tip=self.tr(
                 'Click a detection or track bounding box to view the frame image'))
 
-        # Inspector: FoV
+        # Inspector: FoV (simple viewer)
         self.fov_inspector_action = self.add_action(
             os.path.join(self.plugin_dir, 'icons', 'icon_inspector_fov.png'),
             text=self.tr('Inspector: Click FoV'),
@@ -159,6 +160,18 @@ class BambiWildlifeDetection:
             add_to_menu=False,
             status_tip=self.tr(
                 'Click a Field of View polygon to view the corresponding frame image'))
+
+        # Inspector: FoV with geo-referenced click projection
+        self.fov_georef_inspector_action = self.add_action(
+            os.path.join(self.plugin_dir, 'icons', 'icon_inspector_fov_georef.png'),
+            text=self.tr('Inspector: Click FoV (Geo-Referenced)'),
+            callback=self._on_fov_georef_inspector_toggled,
+            parent=self.iface.mainWindow(),
+            checkable=True,
+            add_to_menu=False,
+            status_tip=self.tr(
+                'Click a Field of View polygon to view the frame image with '
+                'the clicked map position projected into the image space'))
 
     def unload(self):
         """Removes the plugin menu item and icon from QGIS GUI."""
@@ -190,7 +203,9 @@ class BambiWildlifeDetection:
             # Hand the toolbar actions to the dock widget so it can keep their
             # checked state in sync when the map tool changes externally.
             self.dock_widget.set_inspector_actions(
-                self.inspector_action, self.fov_inspector_action
+                self.inspector_action,
+                self.fov_inspector_action,
+                self.fov_georef_inspector_action,
             )
 
     def toggle_dock_widget(self):
@@ -209,9 +224,14 @@ class BambiWildlifeDetection:
         self.dock_widget._toggle_inspector(checked)
 
     def _on_fov_inspector_toggled(self, checked: bool):
-        """Toolbar action: toggle the FoV inspector."""
+        """Toolbar action: toggle the FoV inspector (simple viewer)."""
         self._ensure_dock_widget()
         self.dock_widget._toggle_fov_inspector(checked)
+
+    def _on_fov_georef_inspector_toggled(self, checked: bool):
+        """Toolbar action: toggle the FoV geo-referenced inspector."""
+        self._ensure_dock_widget()
+        self.dock_widget._toggle_fov_georef_inspector(checked)
 
     def _on_correction_wizard(self):
         """Toolbar action: open the correction calibration wizard."""

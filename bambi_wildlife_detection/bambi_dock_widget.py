@@ -261,10 +261,12 @@ class BambiDockWidget(QDockWidget):
         # Inspector map tools (lazy-created on first activation)
         self._click_tool = None
         self._fov_click_tool = None
+        self._fov_georef_click_tool = None
 
         # Toolbar QAction references — set via set_inspector_actions()
         self._inspector_action = None
         self._fov_inspector_action = None
+        self._fov_georef_inspector_action = None
 
         # Setup UI
         self.setup_ui()
@@ -533,6 +535,25 @@ class BambiDockWidget(QDockWidget):
         photo_settings_group = QGroupBox("Photo Settings")
         photo_settings_layout = QFormLayout(photo_settings_group)
 
+        # Auto-detect checkbox
+        self.photo_tz_auto_check = QCheckBox("Auto")
+        self.photo_tz_auto_check.setChecked(True)
+        self.photo_tz_auto_check.setToolTip(
+            "Automatically determine the UTC offset by comparing average photo "
+            "timestamps (EXIF) with average AirData isPhoto timestamps.")
+        self.photo_tz_auto_check.stateChanged.connect(self._on_photo_tz_auto_changed)
+
+        # Auto-offset result label (shown when Auto is checked)
+        self.photo_tz_auto_result_label = QLabel()
+        self.photo_tz_auto_result_label.setStyleSheet("color: grey; font-size: 10px;")
+        self.photo_tz_auto_result_label.setVisible(True)
+
+        auto_row = QHBoxLayout()
+        auto_row.addWidget(self.photo_tz_auto_check)
+        auto_row.addWidget(self.photo_tz_auto_result_label)
+        photo_settings_layout.addRow("Offset:", auto_row)
+
+        # Manual timezone widgets
         self.photo_timezone_combo = QComboBox()
         self.photo_timezone_combo.setEditable(True)
         self.photo_timezone_combo.setToolTip(
@@ -561,19 +582,23 @@ class BambiDockWidget(QDockWidget):
         self.photo_timezone_offset_label.setStyleSheet("color: grey; font-size: 10px;")
         self._update_timezone_offset_label()
 
-        tz_row = QHBoxLayout()
+        self.photo_tz_manual_widget = QWidget()
+        self.photo_tz_manual_widget.setVisible(False)
+        tz_row = QHBoxLayout(self.photo_tz_manual_widget)
+        tz_row.setContentsMargins(0, 0, 0, 0)
         tz_row.addWidget(self.photo_timezone_combo)
         tz_row.addWidget(self.photo_timezone_offset_label)
-        photo_settings_layout.addRow("Timezone:", tz_row)
+        photo_settings_layout.addRow("Timezone:", self.photo_tz_manual_widget)
 
         self.photo_timezone_combo.currentTextChanged.connect(self._update_timezone_offset_label)
         photo_inputs_layout.addWidget(photo_settings_group)
 
-        timezone_label = QLabel(
+        self.photo_tz_manual_hint = QLabel(
             'Timezone of camera, when photos were created not current timezone (consider daylight saving time)!'
         )
-        timezone_label.setWordWrap(True)
-        photo_settings_layout.addWidget(timezone_label)
+        self.photo_tz_manual_hint.setWordWrap(True)
+        self.photo_tz_manual_hint.setVisible(False)
+        photo_settings_layout.addWidget(self.photo_tz_manual_hint)
 
         input_layout.addWidget(self.photo_inputs_widget)
 
@@ -2144,10 +2169,7 @@ class BambiDockWidget(QDockWidget):
                 RGB_CALIBRATIONS.get(self.rgb_photo_calib_preset_combo.currentText())
                 if self.rgb_photo_calib_preset_combo.currentIndex() > 0 else None
             ),
-            "photo_timezone_offset": (
-                self._compute_timezone_offset(self.photo_timezone_combo.currentText().strip())
-                or 0.0
-            ),
+            "photo_timezone_offset": self._get_photo_timezone_offset(),
 
             # Common inputs
             "airdata_path": self.airdata_path_edit.text(),
@@ -2469,6 +2491,150 @@ class BambiDockWidget(QDockWidget):
         else:
             sign = "+" if offset >= 0 else ""
             self.photo_timezone_offset_label.setText(f"UTC{sign}{offset:g}h")
+
+    def _on_photo_tz_auto_changed(self, state: int):
+        """Toggle between auto-detected and manual timezone offset."""
+        auto = bool(state)
+        self.photo_tz_manual_widget.setVisible(not auto)
+        self.photo_tz_manual_hint.setVisible(not auto)
+        self.photo_tz_auto_result_label.setVisible(auto)
+        if auto:
+            self._refresh_auto_timezone_offset()
+
+    def _refresh_auto_timezone_offset(self):
+        """Recompute the auto-detected offset and update the result label."""
+        offset = self._compute_auto_timezone_offset()
+        if offset is not None:
+            sign = "+" if offset >= 0 else ""
+            self.photo_tz_auto_result_label.setText(
+                f"Detected offset: UTC{sign}{offset:g}h")
+        else:
+            self.photo_tz_auto_result_label.setText(
+                "(could not detect — check photo dir & AirData)")
+
+    def _get_photo_timezone_offset(self) -> float:
+        """Return the timezone offset in hours, auto-detected or manual."""
+        if self.photo_tz_auto_check.isChecked():
+            offset = self._compute_auto_timezone_offset()
+            if offset is not None:
+                return offset
+            self.log("Warning: Auto timezone detection failed, falling back to manual timezone")
+        return self._compute_timezone_offset(
+            self.photo_timezone_combo.currentText().strip()) or 0.0
+
+    def _compute_auto_timezone_offset(self) -> Optional[float]:
+        """Determine the UTC offset by comparing photo EXIF hours with AirData isPhoto hours.
+
+        Reads all EXIF ``DateTimeOriginal`` timestamps from the thermal (or RGB)
+        photo directory and all ``datetime(utc)`` values from AirData rows where
+        ``isPhoto`` is truthy.  The offset is ``mean(photo hours) - mean(airdata hours)``
+        rounded to the nearest integer.
+        """
+        import csv
+        import glob as glob_mod
+        from datetime import datetime
+
+        # ── Collect photo timestamps (EXIF) ──────────────────────────────
+        photo_dir = (self.thermal_photo_dir_edit.text().strip()
+                     or self.rgb_photo_dir_edit.text().strip())
+        if not photo_dir or not os.path.isdir(photo_dir):
+            return None
+
+        photo_hours: list = []
+        _IMG_EXTS = ("*.jpg", "*.jpeg", "*.tiff", "*.tif", "*.png",
+                     "*.JPG", "*.JPEG", "*.TIFF", "*.TIF", "*.PNG")
+        image_paths: list = []
+        for ext in _IMG_EXTS:
+            image_paths.extend(glob_mod.glob(os.path.join(photo_dir, ext)))
+        if not image_paths:
+            return None
+
+        try:
+            from PIL import Image
+        except ImportError:
+            return None
+
+        for p in image_paths:
+            try:
+                with Image.open(p) as img:
+                    exif = img._getexif()
+                    if exif is None:
+                        continue
+                    # Tag 36867 = DateTimeOriginal
+                    dt_str = exif.get(36867)
+                    if not dt_str:
+                        continue
+                    dt = datetime.strptime(dt_str, "%Y:%m:%d %H:%M:%S")
+                    photo_hours.append(dt.hour + dt.minute / 60.0 + dt.second / 3600.0)
+            except Exception:
+                continue
+
+        if not photo_hours:
+            return None
+
+        # ── Collect AirData isPhoto timestamps (UTC) ─────────────────────
+        airdata_path = self.airdata_path_edit.text().strip()
+        if not airdata_path or not os.path.exists(airdata_path):
+            return None
+
+        airdata_hours: list = []
+        try:
+            with open(airdata_path, "r", encoding="utf-8-sig") as f:
+                reader = csv.DictReader(f)
+                headers = reader.fieldnames or []
+
+                # Find isPhoto column (case-insensitive)
+                is_photo_col = None
+                for h in headers:
+                    if h.strip().lower() == "isphoto":
+                        is_photo_col = h
+                        break
+                if is_photo_col is None:
+                    return None
+
+                # Find datetime(utc) column
+                datetime_col = None
+                for h in headers:
+                    hl = h.lower().strip()
+                    if "datetime" in hl and "utc" in hl:
+                        datetime_col = h
+                        break
+                if datetime_col is None:
+                    # Fall back to any datetime column
+                    for h in headers:
+                        if "datetime" in h.lower().strip():
+                            datetime_col = h
+                            break
+                if datetime_col is None:
+                    return None
+
+                for row in reader:
+                    val = row.get(is_photo_col, "").strip()
+                    if not val or val == "0" or val.lower() == "false":
+                        continue
+                    dt_str = row.get(datetime_col, "").strip()
+                    if not dt_str:
+                        continue
+                    for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ",
+                                "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S",
+                                "%Y-%m-%d %H:%M:%S.%f"):
+                        try:
+                            dt = datetime.strptime(dt_str, fmt)
+                            airdata_hours.append(
+                                dt.hour + dt.minute / 60.0 + dt.second / 3600.0)
+                            break
+                        except ValueError:
+                            continue
+        except Exception:
+            return None
+
+        if not airdata_hours:
+            return None
+
+        avg_photo = sum(photo_hours) / len(photo_hours)
+        avg_airdata = sum(airdata_hours) / len(airdata_hours)
+        offset = round(avg_photo - avg_airdata)
+        return float(offset)
 
     def _on_input_mode_changed(self, state: int):
         """Toggle between video and photo input panels."""
@@ -3581,7 +3747,8 @@ class BambiDockWidget(QDockWidget):
         wizard = BambiCorrectionWizard(self.iface, config, parent=self)
         wizard.exec_()
 
-    def set_inspector_actions(self, inspector_action, fov_inspector_action):
+    def set_inspector_actions(self, inspector_action, fov_inspector_action,
+                              fov_georef_inspector_action=None):
         """Receive the toolbar QAction references from the main plugin class.
 
         Called once, immediately after the dock widget is created.  The dock
@@ -3589,12 +3756,14 @@ class BambiDockWidget(QDockWidget):
         """
         self._inspector_action = inspector_action
         self._fov_inspector_action = fov_inspector_action
+        self._fov_georef_inspector_action = fov_georef_inspector_action
 
     def _toggle_inspector(self, checked: bool):
         """Activate or deactivate the detection/track inspector map tool."""
         canvas = self.iface.mapCanvas()
         if checked:
             self._set_fov_inspector_off()
+            self._set_fov_georef_inspector_off()
             if self._click_tool is None:
                 self._click_tool = BambiClickTool(self.iface, mode="detection_track")
             canvas.setMapTool(self._click_tool)
@@ -3607,10 +3776,11 @@ class BambiDockWidget(QDockWidget):
             self._inspector_action.blockSignals(False)
 
     def _toggle_fov_inspector(self, checked: bool):
-        """Activate or deactivate the FoV inspector map tool."""
+        """Activate or deactivate the FoV inspector map tool (simple, no geo-referencing)."""
         canvas = self.iface.mapCanvas()
         if checked:
             self._set_inspector_off()
+            self._set_fov_georef_inspector_off()
             if self._fov_click_tool is None:
                 self._fov_click_tool = BambiClickTool(self.iface, mode="fov")
             canvas.setMapTool(self._fov_click_tool)
@@ -3621,6 +3791,23 @@ class BambiDockWidget(QDockWidget):
             self._fov_inspector_action.blockSignals(True)
             self._fov_inspector_action.setChecked(checked)
             self._fov_inspector_action.blockSignals(False)
+
+    def _toggle_fov_georef_inspector(self, checked: bool):
+        """Activate or deactivate the FoV geo-referenced inspector map tool."""
+        canvas = self.iface.mapCanvas()
+        if checked:
+            self._set_inspector_off()
+            self._set_fov_inspector_off()
+            if self._fov_georef_click_tool is None:
+                self._fov_georef_click_tool = BambiClickTool(self.iface, mode="fov_georef")
+            canvas.setMapTool(self._fov_georef_click_tool)
+        else:
+            if self._fov_georef_click_tool is not None:
+                canvas.unsetMapTool(self._fov_georef_click_tool)
+        if self._fov_georef_inspector_action is not None:
+            self._fov_georef_inspector_action.blockSignals(True)
+            self._fov_georef_inspector_action.setChecked(checked)
+            self._fov_georef_inspector_action.blockSignals(False)
 
     def _set_inspector_off(self):
         """Silently deactivate the detection/track inspector."""
@@ -3636,12 +3823,21 @@ class BambiDockWidget(QDockWidget):
             self._fov_inspector_action.setChecked(False)
             self._fov_inspector_action.blockSignals(False)
 
+    def _set_fov_georef_inspector_off(self):
+        """Silently deactivate the FoV geo-referenced inspector."""
+        if self._fov_georef_inspector_action is not None:
+            self._fov_georef_inspector_action.blockSignals(True)
+            self._fov_georef_inspector_action.setChecked(False)
+            self._fov_georef_inspector_action.blockSignals(False)
+
     def _on_map_tool_changed(self, new_tool, old_tool):
         """Keep toolbar action states in sync when the user switches map tools."""
         if self._click_tool is not None and new_tool is not self._click_tool:
             self._set_inspector_off()
         if self._fov_click_tool is not None and new_tool is not self._fov_click_tool:
             self._set_fov_inspector_off()
+        if self._fov_georef_click_tool is not None and new_tool is not self._fov_georef_click_tool:
+            self._set_fov_georef_inspector_off()
 
     def _refresh_all_statuses(self):
         """Refresh all status indicators by checking outputs and QGIS layers."""
@@ -4325,6 +4521,28 @@ class BambiDockWidget(QDockWidget):
             self.update_status(step, "🟢 Completed")
             self.log(f"{step} completed successfully!")
             self.progress_bar.setValue(100)
+
+            # In photo mode, warn if 0 images were matched (likely a timezone issue)
+            if step in ("extract_thermal_frames", "extract_rgb_frames"):
+                config = self.get_config()
+                if config.get("input_mode") == "photo":
+                    suffix = "t" if step == "extract_thermal_frames" else "w"
+                    poses_path = os.path.join(
+                        config.get("target_folder", ""), f"poses_{suffix}.json"
+                    )
+                    try:
+                        with open(poses_path, "r", encoding="utf-8") as fh:
+                            poses = json.load(fh)
+                        if len(poses.get("images", [])) == 0:
+                            QMessageBox.warning(
+                                self,
+                                "No Photos Matched",
+                                "0 photos could be matched to the flight log.\n\n"
+                                "This is often caused by an incorrect Timezone setting.\n"
+                                "Please check the Timezone in the Photo Settings and try again."
+                            )
+                    except Exception:
+                        pass
         else:
             # Check if it was cancelled (worker would have logged it)
             self.update_status(step, "🔴 Cancelled/Failed")
@@ -6635,6 +6853,8 @@ class BambiDockWidget(QDockWidget):
                            "1" if self.rgb_photo_filter_check.isChecked() else "0")
         project.writeEntry(PLUGIN_SCOPE, "Input/PhotoTimezone",
                            self.photo_timezone_combo.currentText())
+        project.writeEntry(PLUGIN_SCOPE, "Input/PhotoTimezoneAuto",
+                           "1" if self.photo_tz_auto_check.isChecked() else "0")
         project.writeEntry(PLUGIN_SCOPE, "Input/AirdataPath",
                            self.airdata_path_edit.text())
         project.writeEntry(PLUGIN_SCOPE, "Input/DemPath",
@@ -6872,6 +7092,8 @@ class BambiDockWidget(QDockWidget):
                 self.photo_timezone_combo.setCurrentIndex(tz_idx)
             else:
                 self.photo_timezone_combo.setCurrentText(saved_tz)
+        self.photo_tz_auto_check.setChecked(
+            read_str("Input/PhotoTimezoneAuto") != "0")
         self.airdata_path_edit.setText(read_str("Input/AirdataPath"))
         self.dem_path_edit.setText(read_str("Input/DemPath"))
         self.dem_metadata_path_edit.setText(read_str("Input/DemMetadataPath"))
