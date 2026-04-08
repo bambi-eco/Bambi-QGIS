@@ -79,6 +79,16 @@ pip install git+https://github.com/bambi-eco/alfs_py.git
 
 **Note**: After installing new Python packages using OSGeo4W you will have to restart QGIS. QGIS loads its Python environment only at startup, so it won’t detect new packages dynamically.
 
+### Optional: AI GPU Support
+
+Per default the inference of the AI models is CPU bound. If you want to run e.g. the detection on your GPU you have to re-install PyTorch with bindings suitable for your GPU.
+E.g. for Nvidia Cuda 12.1+ use the following dependencies:
+
+```
+pip uninstall torch torchvision -y
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+```
+
 ### Optional: Extended Tracking Capabilities
 
 The plugin includes simple geo-based tracking strategies out of the box. For advanced tracking algorithms, install the following packages in the **QGIS OSGeo4W Shell**:
