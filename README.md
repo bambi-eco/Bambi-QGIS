@@ -465,7 +465,11 @@ Provide a `.gltf` or `.glb` file and its companion `.json` metadata file directl
 
 ## Interactive Selection Tools
 
-Two map-canvas click tools are available from the BAMBI toolbar to inspect layers that have already been loaded into QGIS.
+Three map-canvas click tools are available from the BAMBI toolbar to inspect layers that have already been loaded into QGIS.
+Additionally, we provide the correction wizard allowing to estimate positional/rotational offsets.
+
+![Correction Wizard Toolbar Button](images/correction_wizard_toolbar.png)
+
 
 ### Detection / Track Selection
 
@@ -480,25 +484,26 @@ Click the **Select Detection or Track** tool in the toolbar, then click anywhere
 
 ### Field-of-View Selection
 
-Click the **Select Field of View** tool in the toolbar, then click on the canvas to select the FoV polygon that contains the clicked point.
+Click the **Select Field of View** tool in the toolbar, then click on the canvas to select the FoV(s) that contains the clicked point.
 
-- Works on any layer that was added via **→ Add Field of View to QGIS**
+- Works on any layer that was added via **→ Add Field of View to QGIS** (not the merged FoV!)
 - If no Field of View layers are present, a warning dialog is shown:
   > *"No Field of View layers were found in the layer hierarchy. Please add individual Field of View layers to QGIS before using this tool."*
 
+> Note: There are two versions of the FoV tool. One fast version for just opening the related FoVs and one version that also geo-references your click and shows the geo-referenced click using a yellow cross. This requires loading the digital elevation model, which takes some time. Additionally, the result is highly dependent on your calibration parameters as well as your correction factors!
+
 ![Field-of-View Selection Tool](images/selection_tool_fov.png)
 
----
+![Field-of-View Selection Tool Geo-referenced](images/selection_tool_fov_geo.png)
 
-## Correction Calibration Wizard
+### Correction Calibration Wizard
 
 The Correction Calibration Wizard helps you find and store the positional and rotational correction factors that align the camera poses with the DEM. It is opened via the dedicated toolbar button between the main BAMBI icon and the inspector tools.
 
 > **Prerequisite**: Frames must be extracted first (Step 1) so that `poses_t.json` / `poses_w.json` exist in the target folder.
 
-![Correction Wizard Toolbar Button](images/correction_wizard_toolbar.png)
 
-### Step 1 — Select Corresponding Ground Points
+#### Step 1 — Select Corresponding Ground Points
 
 Two side-by-side frame views (thermal or RGB) are shown. Load a frame for each side using the type selector and frame index, then **click on the same identifiable ground feature** in both images to place a reference point.
 
@@ -507,13 +512,13 @@ Two side-by-side frame views (thermal or RGB) are shown. Load a frame for each s
 
 ![Correction Wizard Step 1](images/correction_wizard_step1.png)
 
-### Step 2 — Calibration
+#### Step 2 — Calibration
 
 The two selected pixels are geo-referenced onto the DEM and visualized as circle markers in the **Circle Visualization** panel. Each circle is centred on the camera's XY position; the radius is the horizontal distance from the camera to the geo-referenced ground point. When the correction is correct the two circles intersect and the cross markers (×) overlap.
 
 ![Correction Wizard Step 2](images/correction_wizard_step2.png)
 
-#### Automatic Mode
+##### Automatic Mode
 
 Click **Run Z-Probe + Rotation Alignment** to let the wizard find a starting correction automatically:
 
@@ -526,7 +531,7 @@ All six correction components (translation X/Y/Z, rotation X/Y/Z) can be adjuste
 
 > Typically only the **z-translation** (altitude offset) and **z-rotation** (yaw) need adjustment.
 
-### Step 3 — Light-Field Preview & Save
+#### Step 3 — Light-Field Preview & Save
 
 A light-field integral image is rendered using the found correction and displayed in the preview panel.
 
@@ -536,7 +541,7 @@ A light-field integral image is rendered using the found correction and displaye
 
 ![Correction Wizard Step 3](images/correction_wizard_step3.png)
 
-#### Saving
+##### Saving
 
 | Button | Effect |
 |--------|--------|
