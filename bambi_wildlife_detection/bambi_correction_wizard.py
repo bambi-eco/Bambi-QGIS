@@ -184,7 +184,26 @@ class ClickableImageLabel(QLabel):
 # ---------------------------------------------------------------------------
 
 class CirclePlotWidget(QWidget):
-    """Draws two circles (camera-to-point projections) and the world points."""
+    """Draws two circles (camera-to-point projections) and the world points.
+
+    Interactive: click and drag either geo-referenced point (the X markers) to
+    adjust the correction values directly on the plot.
+
+    * **Changing the distance** from the circle centre (radial drag) maps to a
+      change in z-translation (tz).  Moving the point away from its centre
+      increases tz; moving it closer decreases tz.
+    * **Changing the angle** around the circle centre (tangential drag) maps to
+      a change in z-rotation (rz).
+
+    During a drag both circles update live using a fast geometric approximation
+    (no ray-casting).  ``pointDragFinished(delta_tz, delta_rz)`` is emitted on
+    mouse-release so the wizard can trigger a full geo-reference recompute.
+    """
+
+    # Emitted on mouse-release: (delta_tz_metres, delta_rz_radians)
+    pointDragFinished = pyqtSignal(float, float)
+
+    _HIT_RADIUS_PX = 12   # pixels – how close the cursor must be to start drag
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -192,6 +211,29 @@ class CirclePlotWidget(QWidget):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setStyleSheet("background: #12122a; border: 1px solid #555;")
         self._d: Optional[dict] = None
+
+        # Coordinate transform locked at drag-start; used throughout the drag
+        # so the viewport does not jump as circles resize.
+        # Keys: scale, wx_min, wy_min, x_off, y_off, margin, height
+        self._tf: Optional[dict] = None
+
+        # Drag state
+        self._drag_side: Optional[int] = None
+        self._drag_start_world: Optional[Tuple[float, float]] = None
+        self._drag_center_world: Optional[Tuple[float, float]] = None
+        self._drag_cur_world: Optional[Tuple[float, float]] = None
+
+        # Snapshot of _d taken when a drag starts; used as the base for the
+        # geometric approximation so deltas stay consistent throughout a drag.
+        self._d_at_drag_start: Optional[dict] = None
+        # Live approximate circle data computed on every mouse-move event.
+        self._d_drag_preview: Optional[dict] = None
+
+        self.setMouseTracking(True)
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def set_data(
         self,
@@ -209,31 +251,183 @@ class CirclePlotWidget(QWidget):
         self.update()
 
     # ------------------------------------------------------------------
+    # Coordinate helpers (rely on self._tf being set)
+    # ------------------------------------------------------------------
+
+    def _world_to_screen(self, wx: float, wy: float) -> Tuple[float, float]:
+        tf = self._tf
+        sx = tf['margin'] + tf['x_off'] + (wx - tf['wx_min']) * tf['scale']
+        sy = tf['height'] - tf['margin'] - tf['y_off'] - (wy - tf['wy_min']) * tf['scale']
+        return sx, sy
+
+    def _screen_to_world(self, sx: float, sy: float) -> Tuple[float, float]:
+        tf = self._tf
+        wx = (sx - tf['margin'] - tf['x_off']) / tf['scale'] + tf['wx_min']
+        wy = (tf['height'] - sy - tf['margin'] - tf['y_off']) / tf['scale'] + tf['wy_min']
+        return wx, wy
+
+    def _near_point(self, ex: int, ey: int) -> Optional[int]:
+        """Return side index (0 or 1) if (ex, ey) is near a geo-point, else None."""
+        if self._d is None or self._tf is None:
+            return None
+        for side, p_key in enumerate(('p1', 'p2')):
+            p = self._d.get(p_key)
+            if p is None:
+                continue
+            psx, psy = self._world_to_screen(p[0], p[1])
+            if math.sqrt((ex - psx) ** 2 + (ey - psy) ** 2) <= self._HIT_RADIUS_PX:
+                return side
+        return None
+
+    # ------------------------------------------------------------------
+    # Live preview: geometric approximation during drag
+    # ------------------------------------------------------------------
+
+    def _update_drag_preview(self) -> None:
+        """Recompute approximate circle positions from current drag position.
+
+        Both circles are updated:
+        * Radius change (delta_tz) is applied equally to both sides.
+        * Angle change (delta_rz) rotates each geo-point around its own centre.
+
+        No ray-casting is performed — the result is an instantaneous
+        approximation that is replaced by a full geo-reference recompute on
+        mouse-release.
+        """
+        if self._d_at_drag_start is None or self._drag_cur_world is None:
+            self._d_drag_preview = None
+            return
+
+        d0 = self._d_at_drag_start
+        cx, cy = self._drag_center_world
+        sx_w, sy_w = self._drag_start_world
+        ex_w, ey_w = self._drag_cur_world
+
+        start_r = math.sqrt((sx_w - cx) ** 2 + (sy_w - cy) ** 2)
+        end_r   = math.sqrt((ex_w - cx) ** 2 + (ey_w - cy) ** 2)
+        start_a = math.atan2(sy_w - cy, sx_w - cx)
+        end_a   = math.atan2(ey_w - cy, ex_w - cx)
+
+        delta_tz = end_r - start_r
+        delta_rz = _wrap_rad(end_a - start_a)
+
+        preview = {'c1': d0['c1'], 'c2': d0['c2']}
+        for side, (r_key, p_key) in enumerate((('r1', 'p1'), ('r2', 'p2'))):
+            c  = d0['c1'] if side == 0 else d0['c2']
+            r  = d0[r_key]
+            p  = d0.get(p_key)
+            new_r = max(0.001, r + delta_tz)
+            if p is not None:
+                orig_a = math.atan2(p[1] - c[1], p[0] - c[0])
+                new_a  = orig_a + delta_rz
+                new_p  = (c[0] + new_r * math.cos(new_a),
+                          c[1] + new_r * math.sin(new_a))
+            else:
+                new_p = None
+            preview[r_key] = new_r
+            preview[p_key] = new_p
+
+        c1, r1 = preview['c1'], preview['r1']
+        c2, r2 = preview['c2'], preview['r2']
+        preview['intersects'] = _circles_intersect(c1, r1, c2, r2)
+        self._d_drag_preview = preview
+
+    # ------------------------------------------------------------------
+    # Mouse interaction
+    # ------------------------------------------------------------------
+
+    def mousePressEvent(self, event):
+        if event.button() != Qt.LeftButton:
+            super().mousePressEvent(event)
+            return
+        side = self._near_point(event.x(), event.y())
+        if side is None:
+            super().mousePressEvent(event)
+            return
+        d = self._d
+        p = d['p1'] if side == 0 else d['p2']
+        c = d['c1'] if side == 0 else d['c2']
+        self._drag_side        = side
+        self._drag_start_world = (p[0], p[1])
+        self._drag_center_world = (c[0], c[1])
+        self._drag_cur_world   = (p[0], p[1])
+        self._d_at_drag_start  = dict(self._d)   # snapshot for delta base
+        self._d_drag_preview   = None
+        # _tf is already set from the last paintEvent; lock it for the drag
+        self.setCursor(Qt.CrossCursor)
+        event.accept()
+
+    def mouseMoveEvent(self, event):
+        if self._drag_side is not None:
+            if self._tf is not None:
+                self._drag_cur_world = self._screen_to_world(event.x(), event.y())
+                self._update_drag_preview()
+                self.update()
+            event.accept()
+            return
+        # Hover cursor feedback
+        side = self._near_point(event.x(), event.y())
+        self.setCursor(Qt.OpenHandCursor if side is not None else Qt.ArrowCursor)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() != Qt.LeftButton or self._drag_side is None:
+            super().mouseReleaseEvent(event)
+            return
+        cx, cy = self._drag_center_world
+        sx_w, sy_w = self._drag_start_world
+        ex_w, ey_w = self._drag_cur_world
+        start_r = math.sqrt((sx_w - cx) ** 2 + (sy_w - cy) ** 2)
+        end_r   = math.sqrt((ex_w - cx) ** 2 + (ey_w - cy) ** 2)
+        start_a = math.atan2(sy_w - cy, sx_w - cx)
+        end_a   = math.atan2(ey_w - cy, ex_w - cx)
+        delta_tz = end_r - start_r
+        delta_rz = _wrap_rad(end_a - start_a)
+
+        # Clear drag state; paintEvent will show _d_drag_preview briefly until
+        # the wizard calls set_data() after recomputing geo-references.
+        self._drag_side         = None
+        self._drag_start_world  = None
+        self._drag_center_world = None
+        self._drag_cur_world    = None
+        self._d_at_drag_start   = None
+        self.unsetCursor()
+        self.pointDragFinished.emit(delta_tz, delta_rz)
+        event.accept()
+
+    # ------------------------------------------------------------------
+    # Painting
+    # ------------------------------------------------------------------
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         painter.fillRect(self.rect(), QColor(18, 18, 42))
 
-        if self._d is None:
+        # During a drag show the live approximation; otherwise show exact data.
+        d_draw = self._d_drag_preview if self._d_drag_preview is not None else self._d
+
+        if d_draw is None:
             painter.setPen(QColor(140, 140, 160))
             painter.drawText(self.rect(), Qt.AlignCenter,
                              "Run the probe to see the circles.")
             painter.end()
             return
 
-        d = self._d
         margin = 24
         pw = self.width() - 2 * margin
         ph = self.height() - 2 * margin
 
-        # World bounding box
-        all_x = [d['c1'][0], d['c2'][0]]
-        all_y = [d['c1'][1], d['c2'][1]]
-        for p in (d['p1'], d['p2']):
+        # Bounding box: always derived from the stable base data (_d) so the
+        # viewport does not jump while circles resize during drag.
+        d_bounds = self._d if self._d is not None else d_draw
+        all_x = [d_bounds['c1'][0], d_bounds['c2'][0]]
+        all_y = [d_bounds['c1'][1], d_bounds['c2'][1]]
+        for p in (d_bounds.get('p1'), d_bounds.get('p2')):
             if p is not None:
                 all_x.append(p[0])
                 all_y.append(p[1])
-        for c, r in ((d['c1'], d['r1']), (d['c2'], d['r2'])):
+        for c, r in ((d_bounds['c1'], d_bounds['r1']),
+                     (d_bounds['c2'], d_bounds['r2'])):
             all_x += [c[0] - r, c[0] + r]
             all_y += [c[1] - r, c[1] + r]
 
@@ -242,11 +436,17 @@ class CirclePlotWidget(QWidget):
         wx_rng = max(wx_max - wx_min, 1e-6)
         wy_rng = max(wy_max - wy_min, 1e-6)
 
-        # Uniform scale: one pixels-per-metre factor for both axes so that
-        # circles remain true circles and geo-points lie exactly on them.
         scale = min(pw / wx_rng, ph / wy_rng)
         x_off = (pw - wx_rng * scale) / 2.0
         y_off = (ph - wy_rng * scale) / 2.0
+
+        # Lock the transform at drag-start so _screen_to_world stays consistent.
+        if self._drag_side is None:
+            self._tf = dict(
+                scale=scale, wx_min=wx_min, wy_min=wy_min,
+                x_off=x_off, y_off=y_off, margin=margin,
+                height=self.height(),
+            )
 
         def sx(wx):
             return margin + x_off + (wx - wx_min) * scale
@@ -257,8 +457,9 @@ class CirclePlotWidget(QWidget):
         def sr(r):
             return max(1.0, r * scale)
 
+        d = d_draw
         circle_colors = [QColor(80, 140, 255), QColor(255, 140, 80)]
-        point_colors = [QColor(80, 220, 80), QColor(220, 220, 60)]
+        point_colors  = [QColor(80, 220, 80),  QColor(220, 220, 60)]
         intersects = d['intersects']
         line_style = Qt.SolidLine if intersects else Qt.DashLine
 
@@ -276,18 +477,28 @@ class CirclePlotWidget(QWidget):
             painter.setPen(Qt.NoPen)
             painter.drawEllipse(QPointF(cxs, cys), 4.0, 4.0)
 
-        for p, col in zip((d['p1'], d['p2']), point_colors):
+        for side, (p, col) in enumerate(
+            zip((d.get('p1'), d.get('p2')), point_colors)
+        ):
             if p is None:
                 continue
             pxs, pys = sx(p[0]), sy(p[1])
-            arm = 7
-            painter.setPen(QPen(col, 2))
+            is_active = (self._d_drag_preview is not None
+                         and self._drag_side == side)
+            draw_col  = col.lighter(160) if is_active else col
+            arm       = 9 if is_active else 7
+            painter.setPen(QPen(draw_col, 2))
             painter.setBrush(Qt.NoBrush)
-            # Draw an X
             painter.drawLine(int(pxs - arm), int(pys - arm),
                              int(pxs + arm), int(pys + arm))
             painter.drawLine(int(pxs + arm), int(pys - arm),
                              int(pxs - arm), int(pys + arm))
+            # Dotted ring signals the point is draggable; solid when active
+            ring_style = Qt.SolidLine if is_active else Qt.DotLine
+            painter.setPen(QPen(draw_col, 1, ring_style))
+            painter.drawEllipse(QPointF(pxs, pys),
+                                 float(self._HIT_RADIUS_PX),
+                                 float(self._HIT_RADIUS_PX))
 
         # Status text
         status_color = QColor(80, 220, 80) if intersects else QColor(220, 80, 80)
@@ -708,8 +919,18 @@ class BambiCorrectionWizard(QDialog):
         Current BAMBI configuration (as returned by
         ``BambiDockWidget.get_config()``).  Must contain ``dem_path`` and
         ``target_folder``.
+
+    Signals
+    -------
+    correctionFileSaved(path)
+        Emitted after any successful save (global or local).  ``path`` is the
+        absolute path of the written ``correction.json`` so the caller can
+        reload the values into its own UI.
     parent : QWidget, optional
     """
+
+    # Emitted after a successful save; carries the correction.json path.
+    correctionFileSaved = pyqtSignal(str)
 
     def __init__(self, iface, config: Dict[str, Any], parent=None):
         super().__init__(parent)
@@ -1001,11 +1222,19 @@ class BambiCorrectionWizard(QDialog):
         plot_grp = QGroupBox("Circle Visualization")
         pp = QVBoxLayout(plot_grp)
         self._circle_plot = CirclePlotWidget()
+        self._circle_plot.pointDragFinished.connect(self._on_point_dragged)
         pp.addWidget(self._circle_plot)
         self._compute_status = QLabel()
         self._compute_status.setStyleSheet("color: #f90; font-style: italic;")
         self._compute_status.setAlignment(Qt.AlignCenter)
         pp.addWidget(self._compute_status)
+        drag_hint = QLabel(
+            "Drag a point marker (⊕) to adjust:  "
+            "distance from centre → tz   |   angle around centre → rz"
+        )
+        drag_hint.setStyleSheet("color: #888; font-style: italic; font-size: 10px;")
+        drag_hint.setAlignment(Qt.AlignCenter)
+        pp.addWidget(drag_hint)
         mid.addWidget(plot_grp)
 
         self._ctrl_grp = QGroupBox("Step 2 — Manual Fine-Tuning")
@@ -1497,6 +1726,15 @@ class BambiCorrectionWizard(QDialog):
             self._compute_status.setText("Computing…")
             self._plot_timer.start()
 
+    def _on_point_dragged(self, delta_tz: float, delta_rz: float) -> None:
+        """Apply drag deltas from the circle plot to the correction spinboxes."""
+        corr = self._read_corr_from_spins()
+        corr['translation']['z'] += delta_tz
+        corr['rotation']['z'] = _wrap_rad(corr['rotation']['z'] + delta_rz)
+        self._correction = corr
+        self._load_corr_into_spins()
+        self._update_circle_plot()
+
     # ------------------------------------------------------------------
     # Correction spinbox <-> dict synchronisation
     # ------------------------------------------------------------------
@@ -1749,9 +1987,11 @@ class BambiCorrectionWizard(QDialog):
         data['rotation'] = dict(self._correction['rotation'])
         try:
             self._write_correction_json(data)
+            path = self._correction_json_path()
+            self.correctionFileSaved.emit(path)
             QMessageBox.information(
                 self, "Saved",
-                f"Global correction saved to:\n{self._correction_json_path()}",
+                f"Global correction saved to:\n{path}",
             )
         except Exception as exc:
             QMessageBox.critical(self, "Save Error", str(exc))
@@ -1774,10 +2014,11 @@ class BambiCorrectionWizard(QDialog):
         })
         try:
             self._write_correction_json(data)
+            path = self._correction_json_path()
+            self.correctionFileSaved.emit(path)
             QMessageBox.information(
                 self, "Saved",
-                f"Local correction for frames {start}–{end} appended to:\n"
-                f"{self._correction_json_path()}",
+                f"Local correction for frames {start}–{end} appended to:\n{path}",
             )
         except Exception as exc:
             QMessageBox.critical(self, "Save Error", str(exc))

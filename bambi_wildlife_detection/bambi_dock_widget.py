@@ -3745,6 +3745,7 @@ class BambiDockWidget(QDockWidget):
         from .bambi_correction_wizard import BambiCorrectionWizard
         config = self.get_config()
         wizard = BambiCorrectionWizard(self.iface, config, parent=self)
+        wizard.correctionFileSaved.connect(self.load_correction_values)
         wizard.exec_()
 
     def set_inspector_actions(self, inspector_action, fov_inspector_action,
