@@ -90,13 +90,20 @@ def _circles_intersect(c1, r1: float, c2, r2: float) -> bool:
 # ---------------------------------------------------------------------------
 
 class ClickableImageLabel(QLabel):
-    """QLabel subclass that lets the user click to place a single cross-hair point.
+    """QLabel subclass for placing ground-control points on a frame image.
 
-    Emits ``pointSet(norm_x, norm_y)`` with coordinates in [0, 1] relative to
-    the image (not the widget).
+    Two interaction modes are supported:
+
+    * **mapping** (default): a single cross-hair mapping point is placed /
+      replaced on each left-click.  Emits ``pointSet(norm_x, norm_y)``.
+    * **reference**: additional reference points are appended on each
+      left-click.  Emits ``refPointAdded(norm_x, norm_y)``.
+
+    All coordinates are in [0, 1] relative to the image (not the widget).
     """
 
-    pointSet = pyqtSignal(float, float)
+    pointSet     = pyqtSignal(float, float)   # mapping point placed/updated
+    refPointAdded = pyqtSignal(float, float)  # reference point added
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -108,24 +115,43 @@ class ClickableImageLabel(QLabel):
         self._src_pixmap: Optional[QPixmap] = None
         self._point: Optional[Tuple[float, float]] = None
         self._img_rect: Optional[QRect] = None
+        self._mode: str = 'mapping'                          # 'mapping' | 'reference'
+        self._ref_points: List[Tuple[float, float]] = []
 
     # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
     def set_image(self, img_bgr: "np.ndarray") -> None:
         self._src_pixmap = _bgr_to_qpixmap(img_bgr)
         self._point = None
+        self._ref_points = []
         self._recompute_rect()
         self.update()
 
     def clear_image(self) -> None:
         self._src_pixmap = None
         self._point = None
+        self._ref_points = []
         self._img_rect = None
         self.setText("Load a frame to begin.")
         self.update()
 
     def get_point(self) -> Optional[Tuple[float, float]]:
-        """Return (norm_x, norm_y) in [0, 1] or None."""
+        """Return the mapping point as (norm_x, norm_y) in [0, 1] or None."""
         return self._point
+
+    def get_ref_points(self) -> List[Tuple[float, float]]:
+        """Return a copy of all reference points."""
+        return list(self._ref_points)
+
+    def set_mode(self, mode: str) -> None:
+        """Switch interaction mode: ``'mapping'`` or ``'reference'``."""
+        self._mode = mode
+
+    def clear_ref_points(self) -> None:
+        self._ref_points = []
+        self.update()
 
     # ------------------------------------------------------------------
     def _recompute_rect(self) -> None:
@@ -154,9 +180,14 @@ class ClickableImageLabel(QLabel):
             return
         norm_x = ix / self._img_rect.width()
         norm_y = iy / self._img_rect.height()
-        self._point = (norm_x, norm_y)
-        self.update()
-        self.pointSet.emit(norm_x, norm_y)
+        if self._mode == 'reference':
+            self._ref_points.append((norm_x, norm_y))
+            self.update()
+            self.refPointAdded.emit(norm_x, norm_y)
+        else:
+            self._point = (norm_x, norm_y)
+            self.update()
+            self.pointSet.emit(norm_x, norm_y)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -166,9 +197,29 @@ class ClickableImageLabel(QLabel):
                 self._img_rect.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
             )
             painter.drawPixmap(self._img_rect.topLeft(), scaled)
+
+        # Reference points — small diamond markers
+        if self._ref_points and self._img_rect:
+            ref_col = QColor(200, 180, 80)
+            painter.setPen(QPen(ref_col, 1))
+            painter.setBrush(Qt.NoBrush)
+            for (rx, ry) in self._ref_points:
+                rpx = self._img_rect.left() + rx * self._img_rect.width()
+                rpy = self._img_rect.top()  + ry * self._img_rect.height()
+                r = 6.0
+                painter.drawLine(int(rpx), int(rpy - r),
+                                 int(rpx + r), int(rpy))
+                painter.drawLine(int(rpx + r), int(rpy),
+                                 int(rpx), int(rpy + r))
+                painter.drawLine(int(rpx), int(rpy + r),
+                                 int(rpx - r), int(rpy))
+                painter.drawLine(int(rpx - r), int(rpy),
+                                 int(rpx), int(rpy - r))
+
+        # Mapping point — red crosshair
         if self._point and self._img_rect:
             px = self._img_rect.left() + self._point[0] * self._img_rect.width()
-            py = self._img_rect.top() + self._point[1] * self._img_rect.height()
+            py = self._img_rect.top()  + self._point[1] * self._img_rect.height()
             pen = QPen(QColor(255, 60, 60), 2)
             painter.setPen(pen)
             arm = 14
@@ -240,10 +291,23 @@ class CirclePlotWidget(QWidget):
         c1, r1: float,
         c2, r2: float,
         p1=None, p2=None,
+        rp1=None, rp2=None,
         intersects: bool = False,
     ) -> None:
+        """Set circle data for display.
+
+        Parameters
+        ----------
+        c1/c2   : (x, y) circle centres (camera XY positions)
+        r1/r2   : circle radii
+        p1/p2   : (x, y) primary geo-referenced mapping points
+        rp1/rp2 : list of (x, y) reference geo-referenced points (optional)
+        """
         self._d = dict(c1=c1, r1=r1, c2=c2, r2=r2,
-                       p1=p1, p2=p2, intersects=intersects)
+                       p1=p1, p2=p2,
+                       rp1=list(rp1) if rp1 else [],
+                       rp2=list(rp2) if rp2 else [],
+                       intersects=intersects)
         self.update()
 
     def clear(self) -> None:
@@ -312,7 +376,9 @@ class CirclePlotWidget(QWidget):
         delta_rz = _wrap_rad(end_a - start_a)
 
         preview = {'c1': d0['c1'], 'c2': d0['c2']}
-        for side, (r_key, p_key) in enumerate((('r1', 'p1'), ('r2', 'p2'))):
+        for side, (r_key, p_key, rp_key) in enumerate(
+            (('r1', 'p1', 'rp1'), ('r2', 'p2', 'rp2'))
+        ):
             c  = d0['c1'] if side == 0 else d0['c2']
             r  = d0[r_key]
             p  = d0.get(p_key)
@@ -326,6 +392,15 @@ class CirclePlotWidget(QWidget):
                 new_p = None
             preview[r_key] = new_r
             preview[p_key] = new_p
+            # Approximate reference-point positions with the same deltas
+            new_rps = []
+            for rp in d0.get(rp_key, []):
+                rp_r = math.sqrt((rp[0] - c[0]) ** 2 + (rp[1] - c[1]) ** 2)
+                rp_a = math.atan2(rp[1] - c[1], rp[0] - c[0])
+                nr   = max(0.001, rp_r + delta_tz)
+                na   = rp_a + delta_rz
+                new_rps.append((c[0] + nr * math.cos(na), c[1] + nr * math.sin(na)))
+            preview[rp_key] = new_rps
 
         c1, r1 = preview['c1'], preview['r1']
         c2, r2 = preview['c2'], preview['r2']
@@ -430,6 +505,9 @@ class CirclePlotWidget(QWidget):
                      (d_bounds['c2'], d_bounds['r2'])):
             all_x += [c[0] - r, c[0] + r]
             all_y += [c[1] - r, c[1] + r]
+        for rp in d_bounds.get('rp1', []) + d_bounds.get('rp2', []):
+            all_x.append(rp[0])
+            all_y.append(rp[1])
 
         wx_min, wx_max = min(all_x), max(all_x)
         wy_min, wy_max = min(all_y), max(all_y)
@@ -499,6 +577,24 @@ class CirclePlotWidget(QWidget):
             painter.drawEllipse(QPointF(pxs, pys),
                                  float(self._HIT_RADIUS_PX),
                                  float(self._HIT_RADIUS_PX))
+
+        # Reference points — small diamond markers, one shade darker than the
+        # associated circle-centre colour; no ring, no drag interaction.
+        ref_colors = [QColor(50, 90, 180), QColor(180, 95, 40)]
+        for rps, col in zip((d.get('rp1', []), d.get('rp2', [])), ref_colors):
+            painter.setPen(QPen(col, 1))
+            painter.setBrush(Qt.NoBrush)
+            for rp in rps:
+                rpxs, rpys = sx(rp[0]), sy(rp[1])
+                r = 5.0
+                painter.drawLine(int(rpxs),     int(rpys - r),
+                                 int(rpxs + r), int(rpys))
+                painter.drawLine(int(rpxs + r), int(rpys),
+                                 int(rpxs),     int(rpys + r))
+                painter.drawLine(int(rpxs),     int(rpys + r),
+                                 int(rpxs - r), int(rpys))
+                painter.drawLine(int(rpxs - r), int(rpys),
+                                 int(rpxs),     int(rpys - r))
 
         # Status text
         status_color = QColor(80, 220, 80) if intersects else QColor(220, 80, 80)
@@ -1146,6 +1242,26 @@ class BambiCorrectionWizard(QDialog):
         pt_lbl.setStyleSheet("color: #aaa; font-style: italic;")
         layout.addWidget(pt_lbl)
 
+        # --- reference-point mode row ---
+        ref_row = QHBoxLayout()
+        mode_btn = QPushButton("+ Reference Points Mode")
+        mode_btn.setCheckable(True)
+        mode_btn.setChecked(False)
+        mode_btn.setToolTip(
+            "When active, each click adds a visual reference point.\n"
+            "Reference points are shown in the circle plot for correspondence checking\n"
+            "but do not affect the calibration."
+        )
+        ref_row.addWidget(mode_btn)
+        clear_ref_btn = QPushButton("Clear")
+        clear_ref_btn.setToolTip("Remove all reference points for this side")
+        clear_ref_btn.setFixedWidth(54)
+        ref_row.addWidget(clear_ref_btn)
+        ref_count_lbl = QLabel("")
+        ref_count_lbl.setStyleSheet("color: #aaa; font-style: italic;")
+        ref_row.addWidget(ref_count_lbl, stretch=1)
+        layout.addLayout(ref_row)
+
         # --- wire signals ---
         def _type_changed():
             key = type_combo.currentData() or 't'
@@ -1164,9 +1280,32 @@ class BambiCorrectionWizard(QDialog):
             pt_lbl.setStyleSheet("color: #6f6;")
             self._check_page1_ready()
 
+        def _mode_toggled(checked: bool):
+            img_lbl.set_mode('reference' if checked else 'mapping')
+            if checked:
+                mode_btn.setText("✕ Exit Reference Mode")
+                mode_btn.setStyleSheet(
+                    "QPushButton { background: #3a3a10; color: #ddd080; "
+                    "border: 1px solid #7a7a30; }"
+                )
+            else:
+                mode_btn.setText("+ Reference Points Mode")
+                mode_btn.setStyleSheet("")
+
+        def _ref_point_added(_nx: float, _ny: float):
+            n = len(img_lbl.get_ref_points())
+            ref_count_lbl.setText(f"{n} ref. point{'s' if n != 1 else ''}")
+
+        def _clear_ref():
+            img_lbl.clear_ref_points()
+            ref_count_lbl.setText("")
+
         type_combo.currentIndexChanged.connect(_type_changed)
         load_btn.clicked.connect(_load_clicked)
         img_lbl.pointSet.connect(_point_set)
+        img_lbl.refPointAdded.connect(_ref_point_added)
+        mode_btn.toggled.connect(_mode_toggled)
+        clear_ref_btn.clicked.connect(_clear_ref)
 
         self._side_widgets.append(
             {'type_combo': type_combo, 'idx_spin': idx_spin,
@@ -1581,18 +1720,16 @@ class BambiCorrectionWizard(QDialog):
         return Camera(fovy=fovy, aspect_ratio=1.0,
                       position=position, rotation=cam_quat)
 
-    def _geo_ref(self, side: int, correction: dict) -> Optional[Tuple[float, float, float]]:
-        """Project the selected pixel for *side* onto the DEM.
+    def _geo_ref_pt(
+        self, side: int, correction: dict,
+        pt: Tuple[float, float],
+    ) -> Optional[Tuple[float, float, float]]:
+        """Project an arbitrary normalised pixel *pt* for *side* onto the DEM.
 
-        Returns (x, y, z) in world space or None.
+        Returns ``(x, y, z)`` in world space or ``None``.
         """
         if self._tri_mesh is None:
             return None
-        sw = self._side_widgets[side]
-        pt = sw['img_lbl'].get_point()
-        if pt is None:
-            return None
-
         try:
             from alfspy.core.convert.convert import pixel_to_world_coord
         except ImportError:
@@ -1616,6 +1753,27 @@ class BambiCorrectionWizard(QDialog):
             return None
         wp = results[0]
         return (float(wp[0]), float(wp[1]), float(wp[2]))
+
+    def _geo_ref(self, side: int, correction: dict) -> Optional[Tuple[float, float, float]]:
+        """Project the mapping point for *side* onto the DEM."""
+        pt = self._side_widgets[side]['img_lbl'].get_point()
+        if pt is None:
+            return None
+        return self._geo_ref_pt(side, correction, pt)
+
+    def _geo_ref_list(
+        self, side: int, correction: dict,
+    ) -> List[Tuple[float, float]]:
+        """Geo-reference all reference points for *side*.
+
+        Returns a list of ``(x, y)`` world coordinates (z dropped).
+        """
+        result = []
+        for pt in self._side_widgets[side]['img_lbl'].get_ref_points():
+            wp = self._geo_ref_pt(side, correction, pt)
+            if wp is not None:
+                result.append((wp[0], wp[1]))
+        return result
 
     def _camera_xy(self, side: int, correction: dict) -> Optional[Tuple[float, float]]:
         """Return camera XY position with translation correction applied."""
@@ -1714,8 +1872,11 @@ class BambiCorrectionWizard(QDialog):
             self._circle_plot.clear()
             return
         (c1, r1, p1), (c2, r2, p2) = circles
+        rp1 = self._geo_ref_list(0, correction)
+        rp2 = self._geo_ref_list(1, correction)
         self._circle_plot.set_data(
             c1, r1, c2, r2, p1, p2,
+            rp1=rp1, rp2=rp2,
             intersects=_circles_intersect(c1, r1, c2, r2),
         )
 
