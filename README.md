@@ -515,16 +515,17 @@ The Correction Calibration Wizard helps you find and store the positional and ro
 
 #### Step 1 — Select Corresponding Ground Points
 
-Two side-by-side frame views (thermal or RGB) are shown. Load a frame for each side using the type selector and frame index, then **click on the same identifiable ground feature** in both images to place a reference point.
+Two side-by-side frame views (thermal or RGB) are shown. Load a frame for each side using the type selector and frame index, then **click on the same identifiable ground feature** in both images to place a corresponding point for matching.
 
 - Any clearly visible fixed object on the ground works (road marking, building corner, etc.)
+- With the "Reference Points Mode" you can add additional (optional) points for visually evaluate the match.
 - The "Next" button is enabled once both points are placed and the DEM has finished loading
 
 ![Correction Wizard Step 1](images/correction_wizard_step1.png)
 
 #### Step 2 — Calibration
 
-The two selected pixels are geo-referenced onto the DEM and visualized as circle markers in the **Circle Visualization** panel. Each circle is centred on the camera's XY position; the radius is the horizontal distance from the camera to the geo-referenced ground point. When the correction is correct the two circles intersect and the cross markers (×) overlap.
+The two selected points for matching are geo-referenced onto the DEM and visualized as circle markers in the **Circle Visualization** panel. Each circle is centred on the camera's XY position; the radius is the horizontal distance from the camera to the geo-referenced ground point. When the correction is correct the two circles intersect and the cross markers (×) as well as the additional visual reference points overlap.
 
 ![Correction Wizard Step 2](images/correction_wizard_step2.png)
 
@@ -533,7 +534,7 @@ The two selected pixels are geo-referenced onto the DEM and visualized as circle
 Click **Run Z-Probe + Rotation Alignment** to let the wizard find a starting correction automatically:
 
 1. **Z-offset probe**: steps the z-translation in ±1 m increments until the two circles transition from non-intersecting to intersecting
-2. **Yaw alignment sweep**: scans 360 candidate yaw values and picks the one that minimises the distance between the two geo-referenced points
+2. **Yaw alignment sweep**: scans 360 candidate yaw values and picks the one that minimises the distance between the two geo-referenced match points
 
 #### Manual Fine-Tuning
 
