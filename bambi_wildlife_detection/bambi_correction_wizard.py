@@ -45,11 +45,12 @@ from qgis.PyQt.QtCore import Qt, pyqtSignal, QThread, QPointF, QRect, QTimer
 from qgis.PyQt.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
     QFormLayout, QGroupBox, QHBoxLayout, QLabel, QMessageBox,
-    QProgressBar, QPushButton, QSizePolicy, QSpinBox, QSplitter,
+    QProgressBar, QPushButton, QShortcut, QSizePolicy, QSpinBox, QSplitter,
     QStackedWidget, QVBoxLayout, QWidget,
 )
 from qgis.PyQt.QtGui import (
-    QBrush, QColor, QFont, QImage, QPainter, QPen, QPixmap,
+    QBrush, QColor, QFont, QImage, QKeySequence, QPainter, QPainterPath,
+    QPen, QPixmap,
 )
 
 
@@ -227,6 +228,154 @@ class ClickableImageLabel(QLabel):
             painter.drawLine(int(px), int(py - arm), int(px), int(py + arm))
             painter.setBrush(Qt.NoBrush)
             painter.drawEllipse(QPointF(px, py), 6.0, 6.0)
+        painter.end()
+
+
+# ---------------------------------------------------------------------------
+# MagnifierLabel
+# ---------------------------------------------------------------------------
+
+class MagnifierLabel(QLabel):
+    """QLabel that shows a circular magnifier loupe on mouse hover.
+
+    Call :meth:`set_full_pixmap` with the full-resolution source image each
+    time the displayed pixmap is updated.  The loupe is drawn as a circular
+    overlay that zooms into the portion of the *full-resolution* image under
+    the cursor, giving crisp detail even when the displayed image is scaled
+    down to fit the widget.
+    """
+
+    _MAG_RADIUS = 90    # radius of the loupe circle on screen (px)
+    _MAG_ZOOM   = 3.0   # zoom factor inside the loupe
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMouseTracking(True)
+        self._full_pixmap: Optional[QPixmap] = None
+        self._mouse_pos = None          # QPoint | None
+        self._img_rect: Optional[QRect] = None
+        self._magnifier_enabled: bool = True
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def set_full_pixmap(self, px: QPixmap) -> None:
+        """Store *px* as the full-resolution source used by the loupe."""
+        self._full_pixmap = px
+        self._update_img_rect()
+
+    def set_magnifier_enabled(self, enabled: bool) -> None:
+        """Enable or disable the loupe overlay."""
+        self._magnifier_enabled = enabled
+        if not enabled:
+            self._mouse_pos = None
+        self.update()
+
+    # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
+
+    def _update_img_rect(self) -> None:
+        """Recompute the rect where the (scaled) pixmap sits inside the widget."""
+        pm = self.pixmap()
+        if pm is None or pm.isNull():
+            self._img_rect = None
+            return
+        pw, ph = pm.width(), pm.height()
+        x = (self.width()  - pw) // 2
+        y = (self.height() - ph) // 2
+        self._img_rect = QRect(x, y, pw, ph)
+
+    # ------------------------------------------------------------------
+    # Qt event overrides
+    # ------------------------------------------------------------------
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_img_rect()
+
+    def mouseMoveEvent(self, event):
+        self._mouse_pos = event.pos()
+        self.update()
+
+    def leaveEvent(self, event):
+        self._mouse_pos = None
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+
+        if (not self._magnifier_enabled
+                or self._mouse_pos is None
+                or self._full_pixmap is None
+                or self._full_pixmap.isNull()
+                or self._img_rect is None):
+            return
+
+        mx = self._mouse_pos.x()
+        my = self._mouse_pos.y()
+        ir = self._img_rect
+
+        if not ir.contains(mx, my):
+            return
+
+        # Map widget coords → full-pixmap coords
+        rel_x = (mx - ir.x()) / ir.width()
+        rel_y = (my - ir.y()) / ir.height()
+        fp_w  = self._full_pixmap.width()
+        fp_h  = self._full_pixmap.height()
+        fp_cx = rel_x * fp_w
+        fp_cy = rel_y * fp_h
+
+        # Source rect in the full pixmap (un-zoomed region)
+        src_half_w = self._MAG_RADIUS / self._MAG_ZOOM
+        src_half_h = self._MAG_RADIUS / self._MAG_ZOOM
+        src_rect = QRect(
+            max(0, int(fp_cx - src_half_w)),
+            max(0, int(fp_cy - src_half_h)),
+            int(src_half_w * 2),
+            int(src_half_h * 2),
+        )
+        # Clamp to pixmap bounds
+        src_rect = src_rect.intersected(QRect(0, 0, fp_w, fp_h))
+        if src_rect.isEmpty():
+            return
+
+        r  = self._MAG_RADIUS
+        cx = mx
+        cy = my
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform)
+
+        # Clip subsequent drawing to the loupe circle
+        clip = QPainterPath()
+        clip.addEllipse(cx - r, cy - r, 2 * r, 2 * r)
+        painter.setClipPath(clip)
+
+        # Draw the magnified region stretched to fill the loupe circle
+        painter.drawPixmap(
+            QRect(cx - r, cy - r, 2 * r, 2 * r),
+            self._full_pixmap,
+            src_rect,
+        )
+
+        # Cross-hair at loupe centre
+        painter.setClipping(False)
+        hair_pen = QPen(QColor(255, 255, 255, 160), 1)
+        painter.setPen(hair_pen)
+        half_hair = 10
+        painter.drawLine(cx - half_hair, cy, cx + half_hair, cy)
+        painter.drawLine(cx, cy - half_hair, cx, cy + half_hair)
+
+        # Loupe border ring
+        border_pen = QPen(QColor(220, 220, 220, 220), 2)
+        painter.setPen(border_pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawEllipse(cx - r, cy - r, 2 * r, 2 * r)
+
         painter.end()
 
 
@@ -1491,13 +1640,24 @@ class BambiCorrectionWizard(QDialog):
         self._render_pbar.setVisible(False)
         layout.addWidget(self._render_pbar)
 
+        overlay_row = QHBoxLayout()
+
         self._show_geopoint_chk = QCheckBox("Show geo-referenced points")
         self._show_geopoint_chk.setChecked(True)
         self._show_geopoint_chk.setEnabled(False)   # enabled once a render is available
         self._show_geopoint_chk.toggled.connect(self._update_render_display)
-        layout.addWidget(self._show_geopoint_chk)
+        overlay_row.addWidget(self._show_geopoint_chk)
 
-        self._render_img_lbl = QLabel(
+        self._magnifier_chk = QCheckBox("Magnifier on hover  [M]")
+        self._magnifier_chk.setChecked(True)
+        self._magnifier_chk.toggled.connect(
+            lambda on: self._render_img_lbl.set_magnifier_enabled(on)
+        )
+        overlay_row.addWidget(self._magnifier_chk)
+        overlay_row.addStretch()
+        layout.addLayout(overlay_row)
+
+        self._render_img_lbl = MagnifierLabel(
             "Press 'Render Light Field' to generate a preview."
         )
         self._render_img_lbl.setAlignment(Qt.AlignCenter)
@@ -1509,6 +1669,9 @@ class BambiCorrectionWizard(QDialog):
             "border: 1px solid #555; background: #12122a;"
         )
         layout.addWidget(self._render_img_lbl, stretch=1)
+
+        mag_shortcut = QShortcut(QKeySequence("M"), w)
+        mag_shortcut.activated.connect(self._magnifier_chk.toggle)
 
         # Save controls
         save_grp = QGroupBox("Save Correction")
@@ -2103,6 +2266,7 @@ class BambiCorrectionWizard(QDialog):
                 painter.drawLine(px_x + arm, px_y - arm, px_x - arm, px_y + arm)
             painter.end()
 
+        self._render_img_lbl.set_full_pixmap(px)
         scaled = px.scaled(
             self._render_img_lbl.size(),
             Qt.KeepAspectRatio,
