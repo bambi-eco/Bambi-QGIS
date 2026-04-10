@@ -830,7 +830,7 @@ class _DemLoadWorker(QThread):
     ``error(message)`` on failure.
     """
 
-    finished = pyqtSignal(object, object)
+    finished = pyqtSignal(object, object, object)   # tri_mesh, mesh_data, texture_data
     error = pyqtSignal(str)
 
     def __init__(self, dem_path: str):
@@ -842,7 +842,7 @@ class _DemLoadWorker(QThread):
             from alfspy.render.render import read_gltf
             from trimesh import Trimesh
 
-            mesh_data, _ = read_gltf(self._dem_path)
+            mesh_data, texture_data = read_gltf(self._dem_path)
             tri_mesh = Trimesh(
                 vertices=mesh_data.vertices, faces=mesh_data.indices
             )
@@ -852,7 +852,7 @@ class _DemLoadWorker(QThread):
                 _ = tri_mesh.triangles_tree
             except Exception:
                 pass
-            self.finished.emit(tri_mesh, mesh_data)
+            self.finished.emit(tri_mesh, mesh_data, texture_data)
         except Exception as exc:
             self.error.emit(str(exc))
 
@@ -1064,10 +1064,15 @@ class _LightFieldRenderWorker(QThread):
     """Renders an ALFS integral image (orthographic overview) in a background thread.
 
     ``params`` dict keys:
-        dem_path    : str   – path to DEM file
-        frames      : list  – [{'image_path', 'location', 'rotation', 'fovy'}, ...]
-        correction  : dict  – {'translation': {x,y,z}, 'rotation': {x,y,z}}
-        render_size : int   – output image side length in pixels (default 1024)
+        dem_path     : str    – path to DEM file (used only when mesh_data is absent)
+        mesh_data    : object – pre-loaded raw mesh from read_gltf (optional)
+        texture_data : object – pre-loaded raw texture from read_gltf (optional)
+        frames       : list   – [{'image_path', 'location', 'rotation', 'fovy'}, ...]
+        correction   : dict   – {'translation': {x,y,z}, 'rotation': {x,y,z}}
+        render_size  : int    – output image side length in pixels (default 1024)
+
+    When ``mesh_data`` and ``texture_data`` are supplied the DEM file is not
+    re-read from disk, saving the largest share of startup time.
     """
 
     finished = pyqtSignal(object)   # numpy RGBA uint8 array
@@ -1117,8 +1122,12 @@ class _LightFieldRenderWorker(QThread):
 
         self.progress.emit(5)
 
-        # Load and process DEM
-        mesh_data, texture_data = read_gltf(p['dem_path'])
+        # Use pre-loaded DEM data when available, otherwise load from disk
+        if 'mesh_data' in p and 'texture_data' in p:
+            mesh_data = p['mesh_data']
+            texture_data = p['texture_data']
+        else:
+            mesh_data, texture_data = read_gltf(p['dem_path'])
         mesh_data, texture_data = process_render_data(mesh_data, texture_data)
         mesh_aabb = get_aabb(mesh_data.vertices)
 
@@ -1250,6 +1259,7 @@ class BambiCorrectionWizard(QDialog):
         # Loaded once; released on close
         self._tri_mesh = None
         self._raw_mesh_data = None
+        self._raw_texture_data = None
         self._dem_worker: Optional[_DemLoadWorker] = None
         self._render_worker: Optional[_LightFieldRenderWorker] = None
         self._probe_worker: Optional[_ProbeWorker] = None
@@ -1278,7 +1288,8 @@ class BambiCorrectionWizard(QDialog):
         # Render overlay state
         self._render_base_pixmap: Optional[QPixmap] = None
         self._render_cam_info: Optional[dict] = None
-        self._render_geo_world_points: Optional[list] = None
+        self._render_geo_world_points: Optional[list] = None        # primary [p1, p2]
+        self._render_geo_ref_world_points: Optional[dict] = None    # {0: rp1, 1: rp2}
 
         self.setWindowTitle("BAMBI Correction Wizard")
         self.setMinimumSize(920, 660)
@@ -1379,12 +1390,40 @@ class BambiCorrectionWizard(QDialog):
 
         self._page1 = self._build_page1()
         self._page2 = self._build_page2()
-        self._page3 = self._build_page3()
         self._stack.addWidget(self._page1)
         self._stack.addWidget(self._page2)
-        self._stack.addWidget(self._page3)
+
+        # Dialog-level shortcuts — active whenever the dialog has focus,
+        # regardless of which child widget was last clicked.
+        # Each key dispatches to the correct handler based on the current page.
+        sc_r = QShortcut(QKeySequence("R"), self)
+        sc_r.activated.connect(self._on_shortcut_r)
+
+        sc_m = QShortcut(QKeySequence("M"), self)
+        sc_m.activated.connect(self._on_shortcut_m)
+
+        sc_l = QShortcut(QKeySequence("L"), self)
+        sc_l.activated.connect(self._on_shortcut_l)
 
         self._goto(0)
+
+    # ---- Keyboard shortcut dispatchers ------------------------------------
+
+    def _on_shortcut_r(self) -> None:
+        if self._stack.currentIndex() == 0:
+            self._ref_mode_btn.toggle()
+        else:
+            self._show_geopoint_chk.toggle()
+
+    def _on_shortcut_m(self) -> None:
+        if self._stack.currentIndex() == 0:
+            self._p1_magnifier_chk.toggle()
+        else:
+            self._magnifier_chk.toggle()
+
+    def _on_shortcut_l(self) -> None:
+        if self._stack.currentIndex() == 1:
+            self._render_light_field()
 
     # ---- Page 1 -------------------------------------------------------
 
@@ -1406,47 +1445,35 @@ class BambiCorrectionWizard(QDialog):
 
         controls_row = QHBoxLayout()
 
-        ref_mode_btn = QPushButton("+ Reference Points Mode")
-        ref_mode_btn.setCheckable(True)
-        ref_mode_btn.setChecked(False)
-        ref_mode_btn.setToolTip(
+        self._ref_mode_btn = QCheckBox("Reference Points Mode  [R]")
+        self._ref_mode_btn.setChecked(False)
+        self._ref_mode_btn.setToolTip(
             "When active, each click adds a visual reference point to both frames.\n"
             "Reference points are shown in the circle plot for correspondence checking\n"
-            "but do not affect the calibration."
+            "but do not affect the calibration.\n"
+            "Shortcut: R"
         )
-
         def _toggle_ref_mode(checked: bool):
+            mode = 'reference' if checked else 'mapping'
             for sw in self._side_widgets:
-                sw['img_lbl'].set_mode('reference' if checked else 'mapping')
-            if checked:
-                ref_mode_btn.setText("✕ Exit Reference Mode")
-                ref_mode_btn.setStyleSheet(
-                    "QPushButton { background: #3a3a10; color: #ddd080; "
-                    "border: 1px solid #7a7a30; }"
-                )
-            else:
-                ref_mode_btn.setText("+ Reference Points Mode")
-                ref_mode_btn.setStyleSheet("")
+                sw['img_lbl'].set_mode(mode)
 
-        ref_mode_btn.toggled.connect(_toggle_ref_mode)
-        controls_row.addWidget(ref_mode_btn)
+        self._ref_mode_btn.toggled.connect(_toggle_ref_mode)
+        controls_row.addWidget(self._ref_mode_btn)
 
         controls_row.addSpacing(16)
 
-        p1_magnifier_chk = QCheckBox("Magnifier on hover  [M]")
-        p1_magnifier_chk.setChecked(False)
+        self._p1_magnifier_chk = QCheckBox("Magnifier on hover  [M]")
+        self._p1_magnifier_chk.setChecked(False)
 
         def _toggle_p1_magnifier(on: bool):
             for sw in self._side_widgets:
                 sw['img_lbl'].set_magnifier_enabled(on)
 
-        p1_magnifier_chk.toggled.connect(_toggle_p1_magnifier)
-        controls_row.addWidget(p1_magnifier_chk)
+        self._p1_magnifier_chk.toggled.connect(_toggle_p1_magnifier)
+        controls_row.addWidget(self._p1_magnifier_chk)
         controls_row.addStretch()
         layout.addLayout(controls_row)
-
-        p1_mag_shortcut = QShortcut(QKeySequence("M"), w)
-        p1_mag_shortcut.activated.connect(p1_magnifier_chk.toggle)
 
         info = QLabel(
             "Tip: choose a sharp, unambiguous ground feature "
@@ -1548,7 +1575,7 @@ class BambiCorrectionWizard(QDialog):
         )
         return panel
 
-    # ---- Page 2 -------------------------------------------------------
+    # ---- Page 2 (merged Calibration + Light Field Preview) ---------------
 
     def _build_page2(self) -> QWidget:
         w = QWidget()
@@ -1590,9 +1617,10 @@ class BambiCorrectionWizard(QDialog):
         pg_layout.addWidget(self._probe_status, stretch=1)
         layout.addWidget(probe_grp)
 
-        # Plot | manual spinboxes
+        # Three-panel splitter: circle plot | form | light field
         mid = QSplitter(Qt.Horizontal)
 
+        # Left: circle visualization
         plot_grp = QGroupBox("Circle Visualization")
         pp = QVBoxLayout(plot_grp)
         self._circle_plot = CirclePlotWidget()
@@ -1611,11 +1639,11 @@ class BambiCorrectionWizard(QDialog):
         pp.addWidget(drag_hint)
         mid.addWidget(plot_grp)
 
+        # Middle: manual fine-tuning form
         self._ctrl_grp = QGroupBox("Step 2 — Manual Fine-Tuning")
         cf = QFormLayout(self._ctrl_grp)
         cf.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
 
-        # Rotation unit toggle
         self._rot_unit_combo = QComboBox()
         self._rot_unit_combo.addItem("Radians", "rad")
         self._rot_unit_combo.addItem("Degrees", "deg")
@@ -1639,7 +1667,6 @@ class BambiCorrectionWizard(QDialog):
         cf.addRow("Translation Y:", self._ty)
         cf.addRow("Translation Z:", self._tz)
 
-        # Keep label references so we can update the unit suffix on toggle
         self._rx_label = QLabel("Rotation X  (pitch, rad):")
         self._ry_label = QLabel("Rotation Y  (roll, rad):")
         self._rz_label = QLabel("Rotation Z  (yaw, rad):")
@@ -1657,26 +1684,12 @@ class BambiCorrectionWizard(QDialog):
         cf.addRow("", refresh_btn)
 
         mid.addWidget(self._ctrl_grp)
-        mid.setSizes([450, 380])
-        layout.addWidget(mid, stretch=1)
 
-        nav = QHBoxLayout()
-        back_btn = QPushButton("← Back")
-        back_btn.clicked.connect(lambda: self._goto(0))
-        nav.addWidget(back_btn)
-        nav.addStretch()
-        self._p2_next_btn = QPushButton("Accept Correction → Light Field Preview")
-        self._p2_next_btn.clicked.connect(self._goto_page3)
-        nav.addWidget(self._p2_next_btn)
-        layout.addLayout(nav)
-        return w
-
-    # ---- Page 3 -------------------------------------------------------
-
-    def _build_page3(self) -> QWidget:
-        w = QWidget()
-        layout = QVBoxLayout(w)
-        layout.setSpacing(6)
+        # Right: light field preview
+        lf_panel = QWidget()
+        lf_layout = QVBoxLayout(lf_panel)
+        lf_layout.setContentsMargins(0, 0, 0, 0)
+        lf_layout.setSpacing(4)
 
         frame_grp = QGroupBox("Frames to Render")
         fg = QFormLayout(frame_grp)
@@ -1715,22 +1728,21 @@ class BambiCorrectionWizard(QDialog):
         size_combo.setCurrentIndex(1)
         self._render_size_combo = size_combo
         fg.addRow("Render size:", size_combo)
-        layout.addWidget(frame_grp)
+        lf_layout.addWidget(frame_grp)
 
-        render_btn = QPushButton("▶  Render Light Field")
+        render_btn = QPushButton("▶  Render Light Field  [L]")
         render_btn.clicked.connect(self._render_light_field)
-        layout.addWidget(render_btn)
+        lf_layout.addWidget(render_btn)
 
         self._render_pbar = QProgressBar()
         self._render_pbar.setRange(0, 100)
         self._render_pbar.setVisible(False)
-        layout.addWidget(self._render_pbar)
+        lf_layout.addWidget(self._render_pbar)
 
         overlay_row = QHBoxLayout()
-
-        self._show_geopoint_chk = QCheckBox("Show geo-referenced points")
+        self._show_geopoint_chk = QCheckBox("Show geo-referenced points  [R]")
         self._show_geopoint_chk.setChecked(True)
-        self._show_geopoint_chk.setEnabled(False)   # enabled once a render is available
+        self._show_geopoint_chk.setEnabled(False)
         self._show_geopoint_chk.toggled.connect(self._update_render_display)
         overlay_row.addWidget(self._show_geopoint_chk)
 
@@ -1741,23 +1753,24 @@ class BambiCorrectionWizard(QDialog):
         )
         overlay_row.addWidget(self._magnifier_chk)
         overlay_row.addStretch()
-        layout.addLayout(overlay_row)
+        lf_layout.addLayout(overlay_row)
 
         self._render_img_lbl = MagnifierLabel(
             "Press 'Render Light Field' to generate a preview."
         )
         self._render_img_lbl.setAlignment(Qt.AlignCenter)
-        self._render_img_lbl.setMinimumHeight(280)
+        self._render_img_lbl.setMinimumHeight(200)
         self._render_img_lbl.setSizePolicy(
             QSizePolicy.Expanding, QSizePolicy.Expanding
         )
         self._render_img_lbl.setStyleSheet(
             "border: 1px solid #555; background: #12122a;"
         )
-        layout.addWidget(self._render_img_lbl, stretch=1)
+        lf_layout.addWidget(self._render_img_lbl, stretch=1)
 
-        mag_shortcut = QShortcut(QKeySequence("M"), w)
-        mag_shortcut.activated.connect(self._magnifier_chk.toggle)
+        mid.addWidget(lf_panel)
+        mid.setSizes([380, 280, 380])
+        layout.addWidget(mid, stretch=1)
 
         # Save controls
         save_grp = QGroupBox("Save Correction")
@@ -1791,7 +1804,7 @@ class BambiCorrectionWizard(QDialog):
 
         nav = QHBoxLayout()
         back_btn = QPushButton("← Back")
-        back_btn.clicked.connect(lambda: self._goto(1))
+        back_btn.clicked.connect(lambda: self._goto(0))
         nav.addWidget(back_btn)
         nav.addStretch()
         close_btn = QPushButton("Close")
@@ -1810,9 +1823,10 @@ class BambiCorrectionWizard(QDialog):
         self._dem_worker.error.connect(self._on_dem_error)
         self._dem_worker.start()
 
-    def _on_dem_loaded(self, tri_mesh, raw_mesh_data) -> None:
+    def _on_dem_loaded(self, tri_mesh, raw_mesh_data, raw_texture_data) -> None:
         self._tri_mesh = tri_mesh
         self._raw_mesh_data = raw_mesh_data
+        self._raw_texture_data = raw_texture_data
         self._dem_loading_widget.hide()
         self._check_page1_ready()
 
@@ -1877,16 +1891,25 @@ class BambiCorrectionWizard(QDialog):
 
     def _goto(self, index: int) -> None:
         titles = [
-            "Step 1 of 3  —  Select Corresponding Ground Points",
-            "Step 2 of 3  —  Calibrate Correction Factors",
-            "Step 3 of 3  —  Light Field Preview & Save",
+            "Step 1 of 2  —  Select Corresponding Ground Points",
+            "Step 2 of 2  —  Calibrate Correction & Light Field Preview",
         ]
         self._step_label.setText(titles[index])
         self._stack.setCurrentIndex(index)
+        # Move focus to the dialog so spin boxes don't consume shortcut keys.
+        self.setFocus()
 
     def _goto_page2(self) -> None:
         self._load_corr_into_spins()
         self._goto(1)
+        # Populate render frame range from the currently selected frames
+        f0, f1 = self._frame_idx[0], self._frame_idx[1]
+        lo, hi = min(f0, f1), max(f0, f1)
+        self._rng_start.setValue(lo)
+        self._rng_end.setValue(hi)
+        self._loc_start.setValue(lo)
+        self._loc_end.setValue(hi)
+        self._render_info_lbl.setText(f"Frame {f0} and frame {f1}")
         if self._tri_mesh is not None:
             # Defer by one event-loop cycle so the page renders before the
             # first (potentially slow) geo-referencing call.
@@ -1896,26 +1919,6 @@ class BambiCorrectionWizard(QDialog):
     def _deferred_initial_plot(self) -> None:
         self._update_circle_plot()
         self._compute_status.setText("")
-
-    def _goto_page3(self) -> None:
-        self._correction = self._read_corr_from_spins()
-
-        # Snapshot geo-referenced world points for the render overlay
-        circles = self._compute_circles(self._correction)
-        if circles:
-            (_, _, p1), (_, _, p2) = circles
-            self._render_geo_world_points = [p1, p2]
-        else:
-            self._render_geo_world_points = None
-
-        f0, f1 = self._frame_idx[0], self._frame_idx[1]
-        lo, hi = min(f0, f1), max(f0, f1)
-        self._rng_start.setValue(lo)
-        self._rng_end.setValue(hi)
-        self._loc_start.setValue(lo)
-        self._loc_end.setValue(hi)
-        self._render_info_lbl.setText(f"Frame {f0} and frame {f1}")
-        self._goto(2)
 
     # ------------------------------------------------------------------
     # Geo-referencing helpers
@@ -2054,7 +2057,6 @@ class BambiCorrectionWizard(QDialog):
 
     def _run_probe(self) -> None:
         self._probe_btn.setEnabled(False)
-        self._p2_next_btn.setEnabled(False)
         self._probe_status.setText("Starting…")
 
         correction = self._read_corr_from_spins()
@@ -2102,12 +2104,10 @@ class BambiCorrectionWizard(QDialog):
             )
 
         self._probe_btn.setEnabled(True)
-        self._p2_next_btn.setEnabled(True)
 
     def _on_probe_error(self, msg: str) -> None:
         self._probe_status.setText(f"Error: {msg[:200]}")
         self._probe_btn.setEnabled(True)
-        self._p2_next_btn.setEnabled(True)
 
     # ------------------------------------------------------------------
     # Circle plot
@@ -2277,6 +2277,20 @@ class BambiCorrectionWizard(QDialog):
             )
             return
 
+        # Snapshot the current correction and geo-referenced world points
+        self._correction = self._read_corr_from_spins()
+        circles = self._compute_circles(self._correction)
+        if circles:
+            (_, _, p1), (_, _, p2) = circles
+            self._render_geo_world_points = [p1, p2]
+            self._render_geo_ref_world_points = {
+                0: self._geo_ref_list(0, self._correction),
+                1: self._geo_ref_list(1, self._correction),
+            }
+        else:
+            self._render_geo_world_points = None
+            self._render_geo_ref_world_points = None
+
         render_size = self._render_size_combo.currentData() or 1024
 
         # Resolve mask: prefer thermal, fall back to RGB, then None
@@ -2295,6 +2309,10 @@ class BambiCorrectionWizard(QDialog):
             'render_size': render_size,
             'mask_path': mask_path,
         }
+        # Pass pre-loaded DEM data to avoid re-reading the file from disk
+        if self._raw_mesh_data is not None and self._raw_texture_data is not None:
+            params['mesh_data'] = self._raw_mesh_data
+            params['texture_data'] = self._raw_texture_data
 
         self._render_pbar.setVisible(True)
         self._render_pbar.setValue(0)
@@ -2339,17 +2357,42 @@ class BambiCorrectionWizard(QDialog):
             sz   = cam['render_sz']
             arm  = max(8, sz // 64)
             lw   = max(2, sz // 256)
+            ref_arm = max(5, sz // 96)  # slightly smaller diamonds for ref points
 
             painter = QPainter(px)
             painter.setRenderHint(QPainter.Antialiasing)
-            colors = [QColor(255, 80, 80), QColor(80, 200, 255)]
+
+            def _world_to_px(wx, wy):
+                return (
+                    int((wx - (cx - half)) / cam['ortho_size'] * sz),
+                    int(((cy + half) - wy) / cam['ortho_size'] * sz),
+                )
+
+            # Primary mapping points — coloured X markers
+            primary_colors = [QColor(255, 80, 80), QColor(80, 200, 255)]
             for i, (wx, wy) in enumerate(self._render_geo_world_points):
-                px_x = int((wx - (cx - half)) / cam['ortho_size'] * sz)
-                px_y = int(((cy + half) - wy) / cam['ortho_size'] * sz)
-                pen = QPen(colors[i % len(colors)], lw)
+                px_x, px_y = _world_to_px(wx, wy)
+                pen = QPen(primary_colors[i % len(primary_colors)], lw)
                 painter.setPen(pen)
                 painter.drawLine(px_x - arm, px_y - arm, px_x + arm, px_y + arm)
                 painter.drawLine(px_x + arm, px_y - arm, px_x - arm, px_y + arm)
+
+            # Additional reference points — diamond markers, matching circle-plot colours
+            ref_colors = [QColor(50, 90, 180), QColor(180, 95, 40)]
+            if self._render_geo_ref_world_points:
+                for side, col in zip((0, 1), ref_colors):
+                    pts = self._render_geo_ref_world_points.get(side, [])
+                    if not pts:
+                        continue
+                    painter.setPen(QPen(col, lw))
+                    for (wx, wy) in pts:
+                        rx, ry = _world_to_px(wx, wy)
+                        r = ref_arm
+                        painter.drawLine(rx, ry - r, rx + r, ry)
+                        painter.drawLine(rx + r, ry, rx, ry + r)
+                        painter.drawLine(rx, ry + r, rx - r, ry)
+                        painter.drawLine(rx - r, ry, rx, ry - r)
+
             painter.end()
 
         self._render_img_lbl.set_full_pixmap(px)
@@ -2393,6 +2436,7 @@ class BambiCorrectionWizard(QDialog):
             json.dump(data, fh, indent=4)
 
     def _save_global(self) -> None:
+        self._correction = self._read_corr_from_spins()
         data = self._read_correction_json()
         data['translation'] = dict(self._correction['translation'])
         data['rotation'] = dict(self._correction['rotation'])
@@ -2416,6 +2460,7 @@ class BambiCorrectionWizard(QDialog):
                 "Start frame must be ≤ end frame.",
             )
             return
+        self._correction = self._read_corr_from_spins()
         data = self._read_correction_json()
         data.setdefault('additional', []).append({
             'start': start,
@@ -2446,4 +2491,5 @@ class BambiCorrectionWizard(QDialog):
                 worker.wait(3000)
         self._tri_mesh = None
         self._raw_mesh_data = None
+        self._raw_texture_data = None
         super().closeEvent(event)

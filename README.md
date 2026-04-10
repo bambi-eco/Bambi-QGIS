@@ -538,11 +538,12 @@ Click **Run Z-Probe + Rotation Alignment** to let the wizard find a starting cor
 
 #### Manual Fine-Tuning
 
-All six correction components (translation X/Y/Z, rotation X/Y/Z) can be adjusted with the spinboxes. The circle plot updates automatically 250 ms after the last change. Rotation values can be entered in **radians** or **degrees** via the unit toggle.
+All six correction components (translation X/Y/Z, rotation X/Y/Z) can be adjusted with the spinboxes or via click/drag in the circle plot. 
+Rotation values can be entered in **radians** or **degrees** via the unit toggle.
 
 > Typically only the **z-translation** (altitude offset) and **z-rotation** (yaw) need adjustment.
 
-#### Step 3 — Light-Field Preview & Save
+#### Light-Field Preview & Save
 
 A light-field integral image is rendered using the found correction and displayed in the preview panel.
 
@@ -550,9 +551,7 @@ A light-field integral image is rendered using the found correction and displaye
 - Use **Add neighbouring frames** to include frames before and after the selected indices for a denser render
 - Choose the render resolution (512, 1024, or 2048 pixels)
 
-![Correction Wizard Step 3](images/correction_wizard_step3.png)
-
-##### Saving
+#### Saving
 
 | Button | Effect |
 |--------|--------|
