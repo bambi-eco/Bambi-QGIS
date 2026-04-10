@@ -1404,7 +1404,35 @@ class BambiCorrectionWizard(QDialog):
         splitter.setSizes([500, 500])
         layout.addWidget(splitter, stretch=1)
 
-        mag_row = QHBoxLayout()
+        controls_row = QHBoxLayout()
+
+        ref_mode_btn = QPushButton("+ Reference Points Mode")
+        ref_mode_btn.setCheckable(True)
+        ref_mode_btn.setChecked(False)
+        ref_mode_btn.setToolTip(
+            "When active, each click adds a visual reference point to both frames.\n"
+            "Reference points are shown in the circle plot for correspondence checking\n"
+            "but do not affect the calibration."
+        )
+
+        def _toggle_ref_mode(checked: bool):
+            for sw in self._side_widgets:
+                sw['img_lbl'].set_mode('reference' if checked else 'mapping')
+            if checked:
+                ref_mode_btn.setText("✕ Exit Reference Mode")
+                ref_mode_btn.setStyleSheet(
+                    "QPushButton { background: #3a3a10; color: #ddd080; "
+                    "border: 1px solid #7a7a30; }"
+                )
+            else:
+                ref_mode_btn.setText("+ Reference Points Mode")
+                ref_mode_btn.setStyleSheet("")
+
+        ref_mode_btn.toggled.connect(_toggle_ref_mode)
+        controls_row.addWidget(ref_mode_btn)
+
+        controls_row.addSpacing(16)
+
         p1_magnifier_chk = QCheckBox("Magnifier on hover  [M]")
         p1_magnifier_chk.setChecked(False)
 
@@ -1413,9 +1441,9 @@ class BambiCorrectionWizard(QDialog):
                 sw['img_lbl'].set_magnifier_enabled(on)
 
         p1_magnifier_chk.toggled.connect(_toggle_p1_magnifier)
-        mag_row.addWidget(p1_magnifier_chk)
-        mag_row.addStretch()
-        layout.addLayout(mag_row)
+        controls_row.addWidget(p1_magnifier_chk)
+        controls_row.addStretch()
+        layout.addLayout(controls_row)
 
         p1_mag_shortcut = QShortcut(QKeySequence("M"), w)
         p1_mag_shortcut.activated.connect(p1_magnifier_chk.toggle)
@@ -1472,20 +1500,10 @@ class BambiCorrectionWizard(QDialog):
         pt_lbl.setStyleSheet("color: #aaa; font-style: italic;")
         layout.addWidget(pt_lbl)
 
-        # --- reference-point mode row ---
+        # --- reference-point controls (clear + count; mode toggle is global) ---
         ref_row = QHBoxLayout()
-        mode_btn = QPushButton("+ Reference Points Mode")
-        mode_btn.setCheckable(True)
-        mode_btn.setChecked(False)
-        mode_btn.setToolTip(
-            "When active, each click adds a visual reference point.\n"
-            "Reference points are shown in the circle plot for correspondence checking\n"
-            "but do not affect the calibration."
-        )
-        ref_row.addWidget(mode_btn)
-        clear_ref_btn = QPushButton("Clear")
+        clear_ref_btn = QPushButton("Clear ref. points")
         clear_ref_btn.setToolTip("Remove all reference points for this side")
-        clear_ref_btn.setFixedWidth(54)
         ref_row.addWidget(clear_ref_btn)
         ref_count_lbl = QLabel("")
         ref_count_lbl.setStyleSheet("color: #aaa; font-style: italic;")
@@ -1510,18 +1528,6 @@ class BambiCorrectionWizard(QDialog):
             pt_lbl.setStyleSheet("color: #6f6;")
             self._check_page1_ready()
 
-        def _mode_toggled(checked: bool):
-            img_lbl.set_mode('reference' if checked else 'mapping')
-            if checked:
-                mode_btn.setText("✕ Exit Reference Mode")
-                mode_btn.setStyleSheet(
-                    "QPushButton { background: #3a3a10; color: #ddd080; "
-                    "border: 1px solid #7a7a30; }"
-                )
-            else:
-                mode_btn.setText("+ Reference Points Mode")
-                mode_btn.setStyleSheet("")
-
         def _ref_point_added(_nx: float, _ny: float):
             n = len(img_lbl.get_ref_points())
             ref_count_lbl.setText(f"{n} ref. point{'s' if n != 1 else ''}")
@@ -1534,7 +1540,6 @@ class BambiCorrectionWizard(QDialog):
         load_btn.clicked.connect(_load_clicked)
         img_lbl.pointSet.connect(_point_set)
         img_lbl.refPointAdded.connect(_ref_point_added)
-        mode_btn.toggled.connect(_mode_toggled)
         clear_ref_btn.clicked.connect(_clear_ref)
 
         self._side_widgets.append(
