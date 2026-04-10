@@ -106,18 +106,24 @@ class ClickableImageLabel(QLabel):
     pointSet     = pyqtSignal(float, float)   # mapping point placed/updated
     refPointAdded = pyqtSignal(float, float)  # reference point added
 
+    _MAG_RADIUS = 90
+    _MAG_ZOOM   = 3.0
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAlignment(Qt.AlignCenter)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setMinimumSize(280, 200)
         self.setStyleSheet("border: 1px solid #555; background: #12122a;")
+        self.setMouseTracking(True)
 
         self._src_pixmap: Optional[QPixmap] = None
         self._point: Optional[Tuple[float, float]] = None
         self._img_rect: Optional[QRect] = None
         self._mode: str = 'mapping'                          # 'mapping' | 'reference'
         self._ref_points: List[Tuple[float, float]] = []
+        self._magnifier_enabled: bool = False
+        self._mag_mouse_pos = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -154,6 +160,12 @@ class ClickableImageLabel(QLabel):
         self._ref_points = []
         self.update()
 
+    def set_magnifier_enabled(self, enabled: bool) -> None:
+        self._magnifier_enabled = enabled
+        if not enabled:
+            self._mag_mouse_pos = None
+        self.update()
+
     # ------------------------------------------------------------------
     def _recompute_rect(self) -> None:
         if self._src_pixmap is None:
@@ -169,6 +181,16 @@ class ClickableImageLabel(QLabel):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._recompute_rect()
+
+    def mouseMoveEvent(self, event):
+        self._mag_mouse_pos = event.pos()
+        if self._magnifier_enabled:
+            self.update()
+
+    def leaveEvent(self, event):
+        self._mag_mouse_pos = None
+        if self._magnifier_enabled:
+            self.update()
 
     def mousePressEvent(self, event):
         if event.button() != Qt.LeftButton:
@@ -228,6 +250,49 @@ class ClickableImageLabel(QLabel):
             painter.drawLine(int(px), int(py - arm), int(px), int(py + arm))
             painter.setBrush(Qt.NoBrush)
             painter.drawEllipse(QPointF(px, py), 6.0, 6.0)
+
+        # Magnifier loupe
+        if (self._magnifier_enabled
+                and self._mag_mouse_pos is not None
+                and self._src_pixmap is not None
+                and self._img_rect is not None):
+            mx = self._mag_mouse_pos.x()
+            my = self._mag_mouse_pos.y()
+            ir = self._img_rect
+            if ir.contains(mx, my):
+                fp_w = self._src_pixmap.width()
+                fp_h = self._src_pixmap.height()
+                fp_cx = (mx - ir.x()) / ir.width()  * fp_w
+                fp_cy = (my - ir.y()) / ir.height() * fp_h
+                src_half = self._MAG_RADIUS / self._MAG_ZOOM
+                src_rect = QRect(
+                    max(0, int(fp_cx - src_half)),
+                    max(0, int(fp_cy - src_half)),
+                    int(src_half * 2),
+                    int(src_half * 2),
+                ).intersected(QRect(0, 0, fp_w, fp_h))
+                if not src_rect.isEmpty():
+                    r  = self._MAG_RADIUS
+                    cx, cy = mx, my
+                    painter.setRenderHint(QPainter.Antialiasing)
+                    painter.setRenderHint(QPainter.SmoothPixmapTransform)
+                    clip = QPainterPath()
+                    clip.addEllipse(cx - r, cy - r, 2 * r, 2 * r)
+                    painter.setClipPath(clip)
+                    painter.drawPixmap(
+                        QRect(cx - r, cy - r, 2 * r, 2 * r),
+                        self._src_pixmap,
+                        src_rect,
+                    )
+                    painter.setClipping(False)
+                    painter.setPen(QPen(QColor(255, 255, 255, 160), 1))
+                    half_hair = 10
+                    painter.drawLine(cx - half_hair, cy, cx + half_hair, cy)
+                    painter.drawLine(cx, cy - half_hair, cx, cy + half_hair)
+                    painter.setPen(QPen(QColor(220, 220, 220, 220), 2))
+                    painter.setBrush(Qt.NoBrush)
+                    painter.drawEllipse(cx - r, cy - r, 2 * r, 2 * r)
+
         painter.end()
 
 
@@ -1338,6 +1403,22 @@ class BambiCorrectionWizard(QDialog):
             splitter.addWidget(self._build_frame_picker(side, title))
         splitter.setSizes([500, 500])
         layout.addWidget(splitter, stretch=1)
+
+        mag_row = QHBoxLayout()
+        p1_magnifier_chk = QCheckBox("Magnifier on hover  [M]")
+        p1_magnifier_chk.setChecked(False)
+
+        def _toggle_p1_magnifier(on: bool):
+            for sw in self._side_widgets:
+                sw['img_lbl'].set_magnifier_enabled(on)
+
+        p1_magnifier_chk.toggled.connect(_toggle_p1_magnifier)
+        mag_row.addWidget(p1_magnifier_chk)
+        mag_row.addStretch()
+        layout.addLayout(mag_row)
+
+        p1_mag_shortcut = QShortcut(QKeySequence("M"), w)
+        p1_mag_shortcut.activated.connect(p1_magnifier_chk.toggle)
 
         info = QLabel(
             "Tip: choose a sharp, unambiguous ground feature "
