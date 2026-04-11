@@ -1171,6 +1171,57 @@ class CameraCalibrationWizard(QDialog):
         self._result_metrics_lbl.setWordWrap(True)
         lay.addWidget(self._result_metrics_lbl)
 
+        # Visual preview — single: distorted vs undistorted; stereo: edge overlay
+        self._result_preview_grp = QGroupBox("Visual Preview")
+        preview_lay = QVBoxLayout(self._result_preview_grp)
+        preview_lay.setSpacing(4)
+
+        # Single-camera: side-by-side distorted / undistorted
+        self._preview_single_widget = QWidget()
+        single_preview_lay = QHBoxLayout(self._preview_single_widget)
+        single_preview_lay.setContentsMargins(0, 0, 0, 0)
+        single_preview_lay.setSpacing(6)
+        left_col = QVBoxLayout()
+        right_col = QVBoxLayout()
+        lbl_orig_title = QLabel("Original (distorted)")
+        lbl_orig_title.setAlignment(Qt.AlignCenter)
+        lbl_undist_title = QLabel("Undistorted")
+        lbl_undist_title.setAlignment(Qt.AlignCenter)
+        self._preview_orig_lbl = QLabel()
+        self._preview_orig_lbl.setAlignment(Qt.AlignCenter)
+        self._preview_orig_lbl.setMinimumHeight(180)
+        self._preview_orig_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._preview_undist_lbl = QLabel()
+        self._preview_undist_lbl.setAlignment(Qt.AlignCenter)
+        self._preview_undist_lbl.setMinimumHeight(180)
+        self._preview_undist_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        left_col.addWidget(lbl_orig_title)
+        left_col.addWidget(self._preview_orig_lbl, 1)
+        right_col.addWidget(lbl_undist_title)
+        right_col.addWidget(self._preview_undist_lbl, 1)
+        single_preview_lay.addLayout(left_col, 1)
+        single_preview_lay.addLayout(right_col, 1)
+        preview_lay.addWidget(self._preview_single_widget)
+
+        # Stereo: single edge overlay label
+        self._preview_stereo_widget = QWidget()
+        stereo_preview_lay = QVBoxLayout(self._preview_stereo_widget)
+        stereo_preview_lay.setContentsMargins(0, 0, 0, 0)
+        lbl_overlay_title = QLabel(
+            "Edge overlay — RGB Canny edges (green) on undistorted thermal"
+        )
+        lbl_overlay_title.setAlignment(Qt.AlignCenter)
+        self._preview_overlay_lbl = QLabel()
+        self._preview_overlay_lbl.setAlignment(Qt.AlignCenter)
+        self._preview_overlay_lbl.setMinimumHeight(200)
+        self._preview_overlay_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        stereo_preview_lay.addWidget(lbl_overlay_title)
+        stereo_preview_lay.addWidget(self._preview_overlay_lbl, 1)
+        preview_lay.addWidget(self._preview_stereo_widget)
+        self._preview_stereo_widget.setVisible(False)
+
+        lay.addWidget(self._result_preview_grp)
+
         # Parameter display
         self._result_text = QTextEdit()
         self._result_text.setReadOnly(True)
@@ -2035,6 +2086,105 @@ class CameraCalibrationWizard(QDialog):
             self._save_stereo_widget.setVisible(True)
             self._save_th_path_edit.setPlaceholderText("calibration_thermal.json")
             self._save_rgb_path_edit.setPlaceholderText("calibration_rgb.json")
+
+        QTimer.singleShot(50, lambda: self._populate_result_preview(result))
+
+    # ------------------------------------------------------------------
+
+    def _populate_result_preview(self, result: dict) -> None:
+        """Render the visual preview for the results page."""
+        if not _HAS_CV2:
+            self._result_preview_grp.setVisible(False)
+            return
+
+        mode = result.get("mode", self._mode)
+
+        if mode == "single":
+            self._preview_single_widget.setVisible(True)
+            self._preview_stereo_widget.setVisible(False)
+
+            # Pick first available input image
+            img_path = self._single_paths[0] if self._single_paths else None
+            if img_path is None or not os.path.isfile(img_path):
+                self._preview_orig_lbl.setText("(no image available)")
+                self._preview_undist_lbl.setText("(no image available)")
+                return
+
+            img = cv2.imread(img_path)
+            if img is None:
+                self._preview_orig_lbl.setText("(could not load image)")
+                self._preview_undist_lbl.setText("(could not load image)")
+                return
+
+            mtx = np.array(result["mtx"], dtype=np.float64)
+            dist = np.array(result["dist"], dtype=np.float64)
+            h, w = img.shape[:2]
+            new_mtx, roi = cv2.getOptimalNewCameraMatrix(mtx, dist, (w, h), alpha=0)
+            undist = cv2.undistort(img, mtx, dist, None, new_mtx)
+            x, y, rw, rh = roi
+            if rw > 0 and rh > 0:
+                undist = undist[y:y + rh, x:x + rw]
+
+            self._set_preview_pixmap(self._preview_orig_lbl, img)
+            self._set_preview_pixmap(self._preview_undist_lbl, undist)
+
+        else:  # stereo
+            self._preview_single_widget.setVisible(False)
+            self._preview_stereo_widget.setVisible(True)
+
+            # Need at least one RGB+thermal pair
+            if not self._rgb_paths or not self._th_paths:
+                self._preview_overlay_lbl.setText("(no images available)")
+                return
+
+            rgb_img = cv2.imread(self._rgb_paths[0])
+            th_img = cv2.imread(self._th_paths[0])
+            if rgb_img is None or th_img is None:
+                self._preview_overlay_lbl.setText("(could not load images)")
+                return
+
+            th = result["Thermal"]
+            wi = result["Wide"]
+            th_mtx = np.array(th["mtx"], dtype=np.float64)
+            th_dist = np.array(th["dist"], dtype=np.float64)
+            wi_mtx = np.array(wi["mtx"], dtype=np.float64)
+            wi_dist = np.array(wi["dist"], dtype=np.float64)
+
+            # Use RGB camera matrix as shared output space
+            dst_w = int(wi_mtx[0][2] * 2)
+            dst_h = int(wi_mtx[1][2] * 2)
+            dst_size = (dst_w, dst_h)
+
+            def _remap(img, cam_mtx, cam_dist):
+                mapx, mapy = cv2.initUndistortRectifyMap(
+                    cam_mtx, cam_dist, None, wi_mtx, dst_size, cv2.CV_32FC1
+                )
+                return cv2.remap(img, mapx, mapy, cv2.INTER_CUBIC)
+
+            rgb_undist = _remap(rgb_img, wi_mtx, wi_dist)
+            th_undist = _remap(th_img, th_mtx, th_dist)
+
+            # Resize thermal to match RGB output size if needed
+            if th_undist.shape[:2] != (dst_h, dst_w):
+                th_undist = cv2.resize(th_undist, dst_size)
+
+            # Canny edges from RGB → inject into green channel of thermal
+            rgb_gray = cv2.cvtColor(rgb_undist, cv2.COLOR_BGR2GRAY)
+            edges = cv2.Canny(rgb_gray, 100, 200)
+            edges_bgr = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
+
+            overlay = th_undist.copy()
+            overlay[:, :, 1] = edges_bgr[:, :, 1]  # green channel = RGB edges
+
+            self._set_preview_pixmap(self._preview_overlay_lbl, overlay)
+
+    @staticmethod
+    def _set_preview_pixmap(label: QLabel, img: "np.ndarray") -> None:
+        """Scale *img* to fit *label* and display it."""
+        pm = _bgr_to_qpixmap(img)
+        w = label.width() if label.width() > 10 else 480
+        h = label.height() if label.height() > 10 else 300
+        label.setPixmap(pm.scaled(w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation))
 
     def _browse_save_path(self, target: str = "single") -> None:
         if target == "thermal":
