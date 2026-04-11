@@ -56,6 +56,7 @@ class BambiWildlifeDetection:
         self.fov_inspector_action = None
         self.fov_georef_inspector_action = None
         self.correction_wizard_action = None
+        self.camera_calibration_action = None
 
     def tr(self, message):
         """Get the translation for a string using Qt translation API.
@@ -128,6 +129,20 @@ class BambiWildlifeDetection:
             parent=self.iface.mainWindow(),
             checkable=True,
             status_tip=self.tr('Open Bambi - QGIS Integration panel'))
+
+        # Camera Calibration Wizard
+        _calib_icon = os.path.join(self.plugin_dir, 'icons', 'icon_camera_calib.png')
+        if not os.path.isfile(_calib_icon):
+            _calib_icon = os.path.join(self.plugin_dir, 'icons', 'icon_calibration.png')
+        self.camera_calibration_action = self.add_action(
+            _calib_icon,
+            text=self.tr('Camera Calibration Wizard'),
+            callback=self._on_camera_calibration,
+            parent=self.iface.mainWindow(),
+            add_to_menu=True,
+            status_tip=self.tr(
+                'Open the camera calibration wizard (single-camera SfM or '
+                'stereo RGB+thermal)'))
 
         # Correction Wizard (between main icon and inspector tools)
         self.correction_wizard_action = self.add_action(
@@ -237,6 +252,12 @@ class BambiWildlifeDetection:
         """Toolbar action: open the correction calibration wizard."""
         self._ensure_dock_widget()
         self.dock_widget.open_correction_wizard()
+
+    def _on_camera_calibration(self):
+        """Toolbar action: open the camera calibration wizard."""
+        from .bambi_camera_calibration import CameraCalibrationWizard
+        dlg = CameraCalibrationWizard(self.iface.mainWindow())
+        dlg.exec_()
 
     def on_dock_visibility_changed(self, visible):
         """Handle dock widget visibility changes."""

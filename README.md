@@ -20,6 +20,7 @@ A comprehensive QGIS plugin for detecting and tracking wildlife in aerial drone 
 - [Configuration](#configuration)
 - [Interactive Selection Tools](#interactive-selection-tools)
 - [Correction Calibration Wizard](#correction-calibration-wizard)
+- [Camera Calibration Wizard](#camera-calibration-wizard)
 - [Input File Formats](#input-file-formats)
 - [Output Structure](#output-structure)
 - [Troubleshooting](#troubleshooting)
@@ -46,6 +47,7 @@ A comprehensive QGIS plugin for detecting and tracking wildlife in aerial drone 
 - **Full QGIS Integration**: All outputs are automatically added as styled layers to the QGIS layer panel
 - **Interactive Selection Tools**: Click directly on the QGIS map canvas to inspect detection/track bounding boxes or individual field-of-view polygons; the tools warn when the required layers are not loaded
 - **Correction Calibration Wizard**: Three-step guided workflow for finding and storing per-flight or per-frame-range positional and rotational correction factors, including automatic z-offset probing, yaw alignment, a circle-intersection visualizer, and a light-field preview
+- **Camera Calibration Wizard**: Guided two-mode calibration tool for estimating camera intrinsic parameters — Structure-from-Motion (SfM) for single cameras and manual point-correspondence + Nelder-Mead optimisation for stereo RGB + thermal setups; accepts images or video, and exports industry-standard calibration JSON files
 
 ---
 
@@ -79,15 +81,30 @@ pip install git+https://github.com/bambi-eco/alfs_py.git
 
 **Note**: After installing new Python packages using OSGeo4W you will have to restart QGIS. QGIS loads its Python environment only at startup, so it won’t detect new packages dynamically.
 
+### Optional: Single Camera Calibration
+
+When you want to calibrate a single camera setup (e.g. a drone only with a RGB camera), we need to apply a structure-from-motion process to estimate the camera's intrinsics.
+
+To do so we use pycolmap, which has to be installed.
+
+```
+pip install pycolmap==4.0.3
+```
+
+**Note**: This is not required for the stereo (thermal + rgb) calibration!
+
 ### Optional: AI GPU Support
 
 Per default the inference of the AI models is CPU bound. If you want to run e.g. the detection on your GPU you have to re-install PyTorch with bindings suitable for your GPU.
-E.g. for Nvidia Cuda 12.1+ use the following dependencies:
+E.g. for Nvidia Cuda 12.1+ use the following dependencies (use nvidia-smi to check for compatible Cuda versions):
 
 ```
 pip uninstall torch torchvision -y
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 ```
+
+> Tested with torch 2.5.1+cu121 and torchvision 0.20.1+cu121
+
 
 ### Optional: Extended Tracking Capabilities
 
@@ -100,7 +117,7 @@ The plugin includes simple geo-based tracking strategies out of the box. For adv
 For state-of-the-art multi-object tracking algorithms (DeepOCSORT, BoTSORT, StrongSORT, ByteTrack, etc.):
 
 ```bash
-pip install boxmot
+pip install boxmot==17.0.0
 ```
 
 Or install from source: [https://github.com/mikel-brostrom/boxmot](https://github.com/mikel-brostrom/boxmot)
@@ -476,7 +493,7 @@ Provide a `.gltf` or `.glb` file and its companion `.json` metadata file directl
 ## Interactive Selection Tools
 
 Three map-canvas click tools are available from the BAMBI toolbar to inspect layers that have already been loaded into QGIS.
-Additionally, we provide the correction wizard allowing to estimate positional/rotational offsets.
+Additionally, we provide the correction wizard allowing to estimate positional/rotational offsets and a calibration wizard for determining camera intrinsics for undistortion.
 
 ![Correction Wizard Toolbar Button](images/correction_wizard_toolbar.png)
 
@@ -557,6 +574,101 @@ A light-field integral image is rendered using the found correction and displaye
 |--------|--------|
 | **Save as Global Default** | Writes `translation` and `rotation` as the top-level values in `correction.json` — applied to all frames that have no local override |
 | **Save as Local Correction** | Appends an `additional` entry with the specified start/end frame range to `correction.json` — overrides the global default for those frames only |
+
+---
+
+## Camera Calibration Wizard
+
+Cameras show distortions due to the lenses. Because of this distortions image positions can't be mapped accurately. To address this, we need to calibrate the cameras and calculate distortion coefficients. 
+The Camera Calibration Wizard estimates intrinsic camera parameters and exports them as calibration JSON files that can be used directly as input for the main processing pipeline. It is opened via the dedicated toolbar button next to the Correction Wizard.
+
+> **Note:** Most drones do not support open gate recording, which means video and photo modes use different sensor crops and field-of-view settings. Calibrations from video footage are therefore **not interchangeable** with photo calibrations — always calibrate with the same input type you plan to use for processing. For video based calibration we recommend creating multiple short recordings ~1 sec showing a reference object from multiple perspectives. When using auto-focus mode, the drone could adapt the lense setup. Different setups can also lead to (at least small) differences, so try to have a comparable setup during calibration compared to your mission setup (e.g. distance from camera to object of interest). For stereo calibration setup, the recorded data should contain clearly distinguishable structures that are visible in both RGB and thermal imagery and appear across at least once everywhere in the image space (upper left corner, upper right corner, center of the image, lower left, lower right, etc.), to ensure robust calibration over the full field of view. Buildings have proven to be particularly suitable targets, especially roofs with sharp edges or solar panels, as they provide both geometric detail and strong thermal contrast. Facades with windows can also be used, although maintaining a consistent distance is more challenging in side views. It is important that the selected features are clearly recognizable in both modalities to achieve reliable results.
+
+
+### Calibration Modes
+
+#### Single Camera (Structure from Motion)
+
+Uses pycolmap's incremental SfM pipeline to recover intrinsic parameters (focal length, principal point, and distortion coefficients) from a set of overlapping images or video frames of a static scene.
+
+![Camera Calibration Wizard — Single Camera Setup](images/camera_calib_single_setup.png)
+
+**Input options:**
+
+| Option | Description |
+|--------|-------------|
+| Photo (images) | Add one or more still images showing the scene from multiple angles |
+| Video (extract frames) | Add one or more video files; frames are extracted automatically before SfM |
+
+When video input is selected, two extraction strategies are available:
+
+- **Every N frames** — extracts a configurable number of evenly-spaced frames per video (default: 20). A progress bar is shown during extraction.
+- **Central frame only** — extracts a single frame from the centre of each video. Useful when you have many short clips and want one representative frame per clip.
+
+**Output:** One JSON file per camera:
+```json
+{
+    "ret": 0.412,
+    "mtx": [[fx, 0, cx], [0, fy, cy], [0, 0, 1]],
+    "dist": [k1, k2, p1, p2, k3],
+    "name": "Camera"
+}
+```
+
+![Camera Calibration Wizard — Single Camera Results](images/camera_calib_single_results.png)
+
+---
+
+#### Stereo (RGB + Thermal)
+
+Calibrates a paired RGB and thermal camera system by optimising the thermal camera's intrinsics so that manually annotated corresponding points reproject correctly into RGB space. The RGB camera is treated as the fixed reference and is not modified. Process wise, we recommend to use a single calibration for the RGB camera first and apply a stereo calibration afterwards using the undistorted RGB frames, to spatially align the thermal frames. 
+
+**Algorithm:**
+1. An initial homography (RANSAC, 15 px threshold) maps thermal points into RGB space
+2. Nelder-Mead optimisation (10 × 50 000 iterations) refines the thermal intrinsics (fx, fy, cx, cy, and 5 distortion coefficients) by minimising the mean-squared reprojection error
+
+![Camera Calibration Wizard — Stereo Setup](images/camera_calib_stereo_setup.png)
+
+**Input options:**
+
+| Option | Description |
+|--------|-------------|
+| Photo (images) | Select one or more RGB images and the matching thermal images |
+| Video (extract frames) | Select one RGB video and one thermal video; the central frame of each is extracted automatically |
+
+##### Annotating Corresponding Points
+
+After input is configured, the annotation page shows the RGB and thermal frames side by side. Click on the same identifiable feature (e.g. a road marking, building corner, or any fixed object) in both images to place a point pair.
+
+- Either image can be clicked first to start a point pair — the other image then becomes active to complete it
+- Enable the **Magnifier** (checkbox or press `M`) to show a circular loupe under the cursor for sub-pixel precision
+- Use **Save Points…** / **Load Points…** to persist and reload annotation work between sessions
+
+![Camera Calibration Wizard — Stereo Annotation](images/camera_calib_stereo_annotation.png)
+
+**Output:** Two separate JSON files (one per camera):
+
+*Thermal:*
+```json
+{
+    "ret": null,
+    "mtx": [[fx, 0, cx], [0, fy, cy], [0, 0, 1]],
+    "dist": [k1, k2, p1, p2, k3],
+    "name": "Thermal"
+}
+```
+
+*RGB / Wide:*
+```json
+{
+    "ret": null,
+    "mtx": [[fx, 0, cx], [0, fy, cy], [0, 0, 1]],
+    "dist": [k1, k2, p1, p2, k3],
+    "name": "Wide"
+}
+```
+
+![Camera Calibration Wizard — Stereo Results](images/camera_calib_stereo_results.png)
 
 ---
 
@@ -828,6 +940,32 @@ If you use this plugin in your research, please cite:
 #### Step 3 — Light-Field Preview & Save
 
 ![Correction Wizard Step 3](images/correction_wizard_step3.png)
+
+### Camera Calibration Wizard
+
+#### Toolbar Button
+
+![Camera Calibration Wizard Toolbar Button](images/camera_calib_toolbar.png)
+
+#### Single Camera — Setup
+
+![Camera Calibration Wizard — Single Camera Setup](images/camera_calib_single_setup.png)
+
+#### Single Camera — Results
+
+![Camera Calibration Wizard — Single Camera Results](images/camera_calib_single_results.png)
+
+#### Stereo — Setup
+
+![Camera Calibration Wizard — Stereo Setup](images/camera_calib_stereo_setup.png)
+
+#### Stereo — Point Annotation
+
+![Camera Calibration Wizard — Stereo Annotation](images/camera_calib_stereo_annotation.png)
+
+#### Stereo — Results
+
+![Camera Calibration Wizard — Stereo Results](images/camera_calib_stereo_results.png)
 
 ---
 
