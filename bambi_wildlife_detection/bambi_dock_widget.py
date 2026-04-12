@@ -20,7 +20,7 @@ from qgis.PyQt.QtWidgets import (
     QFileDialog, QLabel, QProgressBar, QTextEdit, QComboBox,
     QCheckBox, QTabWidget, QMessageBox, QScrollArea, QSlider,
     QFrame, QListWidget, QListWidgetItem, QSizePolicy, QDialog,
-    QDialogButtonBox, QGridLayout
+    QDialogButtonBox, QGridLayout, QToolButton
 )
 from qgis.PyQt.QtGui import QFont, QColor
 from qgis.core import (
@@ -332,7 +332,29 @@ class BambiDockWidget(QDockWidget):
         self.video_mode_check.setToolTip(
             "Checked: use video files + SRT files as input.\n"
             "Unchecked: use a folder of still photos as input.")
-        input_layout.addWidget(self.video_mode_check)
+
+        self._input_mode_info_btn = QToolButton()
+        self._input_mode_info_btn.setText("?")
+        self._input_mode_info_btn.setFixedSize(20, 20)
+        self._input_mode_info_btn.setStyleSheet(
+            "QToolButton {"
+            "  border-radius: 10px;"
+            "  border: 1px solid palette(mid);"
+            "  background: palette(button);"
+            "  font-weight: bold;"
+            "  font-size: 11px;"
+            "}"
+            "QToolButton:hover { background: palette(light); }"
+            "QToolButton:pressed { background: palette(mid); }"
+        )
+        self._input_mode_info_btn.clicked.connect(self._show_input_mode_info)
+
+        input_mode_row = QHBoxLayout()
+        input_mode_row.setContentsMargins(0, 0, 0, 0)
+        input_mode_row.addWidget(self.video_mode_check)
+        input_mode_row.addStretch()
+        input_mode_row.addWidget(self._input_mode_info_btn)
+        input_layout.addLayout(input_mode_row)
 
         # ── Video inputs container ─────────────────────────────────────────
         self.video_inputs_widget = QWidget()
@@ -1590,6 +1612,28 @@ class BambiDockWidget(QDockWidget):
         processing_layout = QVBoxLayout(processing_tab)
         main_tabs.addTab(processing_tab, "Processing")
 
+        # Info button row
+        self._processing_info_btn = QToolButton()
+        self._processing_info_btn.setText("?")
+        self._processing_info_btn.setFixedSize(20, 20)
+        self._processing_info_btn.setStyleSheet(
+            "QToolButton {"
+            "  border-radius: 10px;"
+            "  border: 1px solid palette(mid);"
+            "  background: palette(button);"
+            "  font-weight: bold;"
+            "  font-size: 11px;"
+            "}"
+            "QToolButton:hover { background: palette(light); }"
+            "QToolButton:pressed { background: palette(mid); }"
+        )
+        self._processing_info_btn.clicked.connect(self._show_processing_info)
+        processing_info_row = QHBoxLayout()
+        processing_info_row.setContentsMargins(0, 0, 0, 0)
+        processing_info_row.addStretch()
+        processing_info_row.addWidget(self._processing_info_btn)
+        processing_layout.addLayout(processing_info_row)
+
         # Step buttons
         steps_group = QGroupBox("Processing Steps")
         steps_btn_layout = QVBoxLayout(steps_group)
@@ -1911,61 +1955,6 @@ class BambiDockWidget(QDockWidget):
 
         processing_layout.addWidget(log_group)
         processing_layout.addStretch()
-
-        # Info tab
-
-        info_tab = QWidget()
-        info_layout = QVBoxLayout(info_tab)
-        main_tabs.addTab(info_tab, "Info")
-
-        general_info_group = QGroupBox("General information")
-        general_info_group_layout = QVBoxLayout(general_info_group)
-        general_info_label = QLabel(
-            "The BAMBI plugin is not intended to process multiple flights within the same QGIS project (and the same output folder), since the result files in the output folder will be replaced after additional runs. If you want to combine multiple results, it is recommended to run processing independently with (1) different output folders (don't foregt to add all layers to QGIS before changing the output folder, otherwise you will have to change it back again!) or (2) group all layers of interest, export them as 'Layer Definition File' and import it again to QGIS."
-        )
-        general_info_label.setWordWrap(True)
-        general_info_label.setAlignment(Qt.AlignTop)
-        general_info_label.setStyleSheet("color: black; font-size: 10px;")
-        general_info_group_layout.addWidget(general_info_label)
-        info_layout.addWidget(general_info_group)
-
-        video_mode_info_group = QGroupBox("Video Mode Recommendations")
-        video_mode_info_group_layout = QVBoxLayout(video_mode_info_group)
-        video_mode_info_label = QLabel(
-            "To ensure high-quality and consistent video recordings, configure your drone mission with stable flight parameters and a fixed camera setup. Plan the flight at a constant altitude between 30 m and 60 m above ground, depending on the terrain and desired coverage, and maintain a steady speed of 3–7 m/s throughout the mission. "
-            "Although the exact heading is not critical, the drone’s orientation should remain constant for the entire flight, and yaw rotations should be avoided. A practical approach is to configure each waypoint so that the drone faces north, ensuring a stable and repeatable camera perspective. "
-            "Set the gimbal pitch to −90° so the camera is pointing straight down (nadir). This provides a consistent top-down view and simplifies later processing of the video data. "
-            "Finally, start video recording at the first waypoint and stop recording at the last waypoint to capture the full survey area in one continuous sequence while avoiding unnecessary footage. "
-        )
-        video_mode_info_label.setWordWrap(True)
-        video_mode_info_label.setAlignment(Qt.AlignTop)
-        video_mode_info_label.setStyleSheet("color: black; font-size: 10px;")
-        video_mode_info_group_layout.addWidget(video_mode_info_label)
-        info_layout.addWidget(video_mode_info_group)
-
-        photo_mode_info_group = QGroupBox("Photo Mode Info")
-        photo_mode_info_group_layout = QVBoxLayout(photo_mode_info_group)
-        photo_mode_info_label = QLabel(
-            "In photo mode, images are associated with the AirData file in a fixed sequential order due to timestamp ambiguities caused by second-level precision and the lack of sub-second information. Consequently, the complete dataset must always be provided. If individual images are missing, georeferencing will fail."
-        )
-        photo_mode_info_label.setWordWrap(True)
-        photo_mode_info_label.setAlignment(Qt.AlignTop)
-        photo_mode_info_label.setStyleSheet("color: black; font-size: 10px;")
-        photo_mode_info_group_layout.addWidget(photo_mode_info_label)
-        info_layout.addWidget(photo_mode_info_group)
-
-        calibration_group = QGroupBox("Camera Calibration")
-        calibration_group_layout = QVBoxLayout(calibration_group)
-        calibration_label = QLabel(
-            "Cameras show distortions due to the lenses. Because of this distortions image positions can't be mapped accurately. To address this, we need to calibrate the cameras and calculate distortion coefficients. For accurate calibration of the RGB and thermal cameras, a dedicated drone flight should be performed under conditions similar to your mission setup (e.g. when you typically fly with 100 m AGL, the calibration setup should also have about 100 m distance to the object used for calibration). The recorded data should contain clearly distinguishable structures that are visible in both RGB and thermal imagery and appear across at least once everywhere in the image space (upper left corner, upper right corner, center of the image, lower left, lower right, etc.), to ensure robust calibration over the full field of view. Buildings have proven to be particularly suitable targets, especially roofs with sharp edges or solar panels, as they provide both geometric detail and strong thermal contrast. Facades with windows can also be used, although maintaining a consistent distance is more challenging in side views. It is important that the selected features are clearly recognizable in both modalities to achieve reliable results. A key limitation of DJI cameras is that they do not operate in open gate mode, which leads to differences between video and photo data. As a result, separate calibrations are required for each, as parameters cannot be transferred between these acquisition types. Depending on what you use for your surveys, create create images and/or short video sequences (~1 sec) with the drone hovering stably and showing the object of interest used for calibration. For the calibration you can use our tool-chain: <a href='https://github.com/bambi-eco/camera-calib'>https://github.com/bambi-eco/camera-calib</a>."
-        )
-
-        calibration_label.setWordWrap(True)
-        calibration_label.setAlignment(Qt.AlignTop)
-        calibration_label.setStyleSheet("color: black; font-size: 10px;")
-        calibration_group_layout.addWidget(calibration_label)
-        info_layout.addWidget(calibration_group)
-
 
     def _populate_tracker_backends(self):
         """Populate the tracker backend dropdown with available trackers."""
@@ -2641,6 +2630,77 @@ class BambiDockWidget(QDockWidget):
         video_mode = bool(state)
         self.video_inputs_widget.setVisible(video_mode)
         self.photo_inputs_widget.setVisible(not video_mode)
+
+    def _show_input_mode_info(self):
+        """Show an info popup describing the currently active input mode."""
+        if self.video_mode_check.isChecked():
+            title = "Video Mode"
+            text = (
+                "<b>Video Mode</b> is active.<br><br>"
+                "The plugin processes continuous drone video recordings together with "
+                "SRT subtitle files, which provide per-frame timestamps used to match "
+                "each frame to a high-precision GPS position from the AirData flight log.<br><br>"
+                "Practical tips: To ensure high-quality and consistent video recordings, configure your drone mission with stable flight parameters and a fixed camera setup. Plan the flight at a constant altitude between 30 m and 60 m above ground, depending on the terrain and desired coverage, and maintain a steady speed of 3–7 m/s throughout the mission. "
+                "Although the exact heading is not critical, the drone’s orientation should remain constant for the entire flight, and yaw rotations should be avoided. A practical approach is to configure each waypoint so that the drone faces north, ensuring a stable and repeatable camera perspective. "
+                "Set the gimbal pitch to −90° so the camera is pointing straight down (nadir). This provides a consistent top-down view and simplifies later processing of the video data. "
+                "Finally, start video recording at the first waypoint and stop recording at the last waypoint to capture the full survey area in one continuous sequence while avoiding unnecessary footage. "
+            )
+        else:
+            title = "Photo Mode"
+            text = (
+                "<b>Photo Mode</b> is active.<br><br>"
+                "The plugin processes a series of still images captured during a mapping "
+                "flight. GPS positions and global orientation are matched to images by comparing image EXIF "
+                "timestamps with the AirData flight log.<br><br>"
+                "Note: In photo mode, images are associated with the AirData file in a fixed sequential order for cases with same timestamps due to temporal ambiguities caused by second-level precision and the lack of sub-second information. Consequently, the complete dataset must always be provided. If individual images are missing, georeferencing will fail."
+            )
+        msg = QMessageBox(self)
+        msg.setWindowTitle(title)
+        msg.setText(text)
+        msg.setIcon(QMessageBox.Information)
+        msg.exec_()
+
+    def _show_processing_info(self):
+        """Show an info popup describing the processing pipeline."""
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Processing Pipeline")
+        msg.setIcon(QMessageBox.Information)
+        msg.setText(
+            "<b>Processing Pipeline</b><br><br>"
+            "Execute the steps below in order. Each step builds on the outputs of the "
+            "previous one.<br><br>"
+            "<b>1a / 1b — Extract Frames</b><br>"
+            "Decodes and undistorts thermal and RGB frames; matches GPS positions from "
+            "the AirData log via SRT timestamps (video) or EXIF timestamps (photo).<br><br>"
+            "<b>2 — Generate Flight Route</b><br>"
+            "Creates a GPS flight-path line layer and per-frame camera-position points "
+            "from the extracted pose data.<br><br>"
+            "<b>3 — Detect Animals</b><br>"
+            "Runs YOLO-based detection on every extracted frame. The thermal model is "
+            "downloaded automatically on first use.<br><br>"
+            "<b>4 — Geo-Reference Detections</b><br>"
+            "Projects pixel-space bounding boxes to UTM coordinates by ray-casting "
+            "against the DEM mesh.<br><br>"
+            "<b>→ Calculate Perpendicular</b><br>"
+            "Measures the perpendicular distance from each geo-referenced detection "
+            "to the flight route line — useful for transect-based surveys.<br><br>"
+            "<b>5 — Track Animals</b><br>"
+            "Links detections across frames into continuous tracks using the selected "
+            "tracking backend.<br><br>"
+            "<b>6 — Calculate Field of View</b><br>"
+            "Computes per-frame camera footprint polygons on the ground using the DEM.<br><br>"
+            "<b>7 — Generate Orthomosaic</b><br>"
+            "Projects all frames onto the DEM surface and blends them into a "
+            "georeferenced GeoTIFF mosaic.<br><br>"
+            "<b>8 — Export Frames as GeoTIFF</b><br>"
+            "Exports individual frames as separate georeferenced GeoTIFFs.<br><br>"
+            "<b>9 / 10 — Object Segmentation</b><br>"
+            "Segments detected objects using Roboflow SAM3 and projects masks to "
+            "world coordinates.<br><br>"
+
+            "The BAMBI plugin is not intended to process multiple flights within the same QGIS project (and the same output folder), since the result files in the output folder will be replaced after additional runs. If you want to combine multiple results, it is recommended to run processing independently with (1) different output folders (don't foregt to add all layers to QGIS before changing the output folder, otherwise you will have to change it back again!) or (2) group all layers of interest, export them as 'Layer Definition File' and import it again to QGIS."
+        )
+        msg.exec_()
 
     def _on_thermal_calib_preset_changed(self, index: int):
         """Show/hide custom file row depending on combo selection."""

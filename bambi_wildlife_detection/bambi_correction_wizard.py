@@ -1365,14 +1365,38 @@ class BambiCorrectionWizard(QDialog):
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(6)
 
-        # Step header
+        # Step header row (label centred, info button pinned to the right)
         self._step_label = QLabel()
         self._step_label.setAlignment(Qt.AlignCenter)
         hdr_font = QFont()
         hdr_font.setBold(True)
         hdr_font.setPointSize(hdr_font.pointSize() + 1)
         self._step_label.setFont(hdr_font)
-        root.addWidget(self._step_label)
+
+        self._wizard_info_btn = QPushButton("?")
+        self._wizard_info_btn.setFixedSize(20, 20)
+        self._wizard_info_btn.setStyleSheet(
+            "QPushButton {"
+            "  border-radius: 10px;"
+            "  border: 1px solid palette(mid);"
+            "  background: palette(button);"
+            "  font-weight: bold;"
+            "  font-size: 11px;"
+            "}"
+            "QPushButton:hover { background: palette(light); }"
+            "QPushButton:pressed { background: palette(mid); }"
+        )
+        self._wizard_info_btn.clicked.connect(self._show_wizard_info)
+
+        hdr_row = QHBoxLayout()
+        hdr_row.setContentsMargins(0, 0, 0, 0)
+        # Left spacer the same fixed width as the button so the label stays centred
+        left_spacer = QWidget()
+        left_spacer.setFixedSize(20, 20)
+        hdr_row.addWidget(left_spacer)
+        hdr_row.addWidget(self._step_label, 1)
+        hdr_row.addWidget(self._wizard_info_btn)
+        root.addLayout(hdr_row)
 
         # DEM loading indicator (hidden once ready)
         self._dem_loading_widget = QWidget()
@@ -2482,6 +2506,63 @@ class BambiCorrectionWizard(QDialog):
     # ------------------------------------------------------------------
     # Cleanup
     # ------------------------------------------------------------------
+
+    def _show_wizard_info(self) -> None:
+        """Show an info popup describing the correction wizard."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Correction Wizard — How It Works")
+        dlg.setMinimumWidth(520)
+        lay = QVBoxLayout(dlg)
+        lay.setSpacing(10)
+
+        lbl = QLabel(
+            "<b>Correction Wizard</b><br><br>"
+            "The Correction Wizard helps you find and store the positional and "
+            "rotational offsets that align the camera poses with the Digital "
+            "Elevation Model (DEM). These corrections compensate for systematic "
+            "errors in the drone's GPS and IMU data.<br><br>"
+            "<b>Step 1 — Select Corresponding Ground Points</b><br>"
+            "Load one frame per camera side (thermal or RGB) and click on the "
+            "same clearly identifiable ground feature in both images — for example "
+            "a road marking, building corner, or any fixed object. Optionally add "
+            "extra reference points to visually evaluate the match quality later. "
+            "The DEM must finish loading before you can proceed.<br><br>"
+            "<b>Step 2 — Calibration</b><br>"
+            "The selected points are geo-referenced onto the DEM. Each camera's "
+            "XY position becomes a circle centre; the horizontal distance to its "
+            "ground point is the radius. When the correction is accurate, the two "
+            "circles intersect and the cross markers overlap.<br><br>"
+            "Use <b>Run Z-Probe + Rotation Alignment</b> to find a starting "
+            "correction automatically: the wizard steps the z-translation until "
+            "the circles begin to intersect, then sweeps 360 yaw candidates and "
+            "picks the one that minimises the distance between the two "
+            "geo-referenced points.<br><br>"
+            "All six correction components (translation X/Y/Z, rotation X/Y/Z) "
+            "can be fine-tuned manually with the spinboxes or by clicking and "
+            "dragging in the circle plot. Rotations can be entered in radians or "
+            "degrees. Typically only the <b>z-translation</b> (altitude offset) "
+            "and <b>z-rotation</b> (yaw) need adjustment.<br><br>"
+            "<b>Step 3 — Light-Field Preview &amp; Save</b><br>"
+            "A light-field integral image is rendered with the found correction. "
+            "Toggle <i>Show geo-referenced points</i> to overlay the calibration "
+            "reference points on the render. Use <i>Add neighbouring frames</i> "
+            "for a denser preview.<br><br>"
+            "Save the result as a <b>Global Default</b> (applies to all frames) "
+            "or as a <b>Local Correction</b> for a specific frame range, which "
+            "overrides the global default for those frames only."
+        )
+        lbl.setWordWrap(True)
+        lbl.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        lay.addWidget(lbl)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dlg.accept)
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn_row.addWidget(close_btn)
+        lay.addLayout(btn_row)
+
+        dlg.exec_()
 
     def closeEvent(self, event) -> None:
         self._plot_timer.stop()

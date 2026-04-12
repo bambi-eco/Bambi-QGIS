@@ -798,8 +798,32 @@ class CameraCalibrationWizard(QDialog):
         )
         self._rb_single.setChecked(True)
         self._rb_single.toggled.connect(self._on_mode_toggled)
-        mode_lay.addWidget(self._rb_single)
-        mode_lay.addWidget(self._rb_stereo)
+
+        self._calib_mode_info_btn = QPushButton("?")
+        self._calib_mode_info_btn.setFixedSize(20, 20)
+        self._calib_mode_info_btn.setStyleSheet(
+            "QPushButton {"
+            "  border-radius: 10px;"
+            "  border: 1px solid palette(mid);"
+            "  background: palette(button);"
+            "  font-weight: bold;"
+            "  font-size: 11px;"
+            "}"
+            "QPushButton:hover { background: palette(light); }"
+            "QPushButton:pressed { background: palette(mid); }"
+        )
+        self._calib_mode_info_btn.clicked.connect(self._show_calib_mode_info)
+
+        radio_row = QHBoxLayout()
+        radio_row.setContentsMargins(0, 0, 0, 0)
+        radio_col = QVBoxLayout()
+        radio_col.setSpacing(4)
+        radio_col.addWidget(self._rb_single)
+        radio_col.addWidget(self._rb_stereo)
+        radio_row.addLayout(radio_col)
+        radio_row.addStretch()
+        radio_row.addWidget(self._calib_mode_info_btn, alignment=Qt.AlignTop)
+        mode_lay.addLayout(radio_row)
         layout.addWidget(mode_grp)
 
         # ---- Input Type ----
@@ -839,6 +863,26 @@ class CameraCalibrationWizard(QDialog):
     def _build_single_inputs(self) -> QWidget:
         outer = QGroupBox("Input Files")
         outer_lay = QVBoxLayout(outer)
+
+        info_row = QHBoxLayout()
+        info_row.setContentsMargins(0, 0, 0, 0)
+        info_row.addStretch()
+        _single_info_btn = QPushButton("?")
+        _single_info_btn.setFixedSize(20, 20)
+        _single_info_btn.setStyleSheet(
+            "QPushButton {"
+            "  border-radius: 10px;"
+            "  border: 1px solid palette(mid);"
+            "  background: palette(button);"
+            "  font-weight: bold;"
+            "  font-size: 11px;"
+            "}"
+            "QPushButton:hover { background: palette(light); }"
+            "QPushButton:pressed { background: palette(mid); }"
+        )
+        _single_info_btn.clicked.connect(self._show_input_files_info)
+        info_row.addWidget(_single_info_btn)
+        outer_lay.addLayout(info_row)
 
         # --- Photo sub-panel ---
         self._single_photo_widget = QWidget()
@@ -909,6 +953,26 @@ class CameraCalibrationWizard(QDialog):
     def _build_stereo_inputs(self) -> QWidget:
         outer = QGroupBox("Input Files")
         outer_lay = QVBoxLayout(outer)
+
+        info_row = QHBoxLayout()
+        info_row.setContentsMargins(0, 0, 0, 0)
+        info_row.addStretch()
+        _stereo_info_btn = QPushButton("?")
+        _stereo_info_btn.setFixedSize(20, 20)
+        _stereo_info_btn.setStyleSheet(
+            "QPushButton {"
+            "  border-radius: 10px;"
+            "  border: 1px solid palette(mid);"
+            "  background: palette(button);"
+            "  font-weight: bold;"
+            "  font-size: 11px;"
+            "}"
+            "QPushButton:hover { background: palette(light); }"
+            "QPushButton:pressed { background: palette(mid); }"
+        )
+        _stereo_info_btn.clicked.connect(self._show_input_files_info)
+        info_row.addWidget(_stereo_info_btn)
+        outer_lay.addLayout(info_row)
 
         # --- Photo sub-panel ---
         self._stereo_photo_widget = QWidget()
@@ -1358,6 +1422,100 @@ class CameraCalibrationWizard(QDialog):
     # =========================================================================
     # Setup page callbacks
     # =========================================================================
+
+    def _show_input_files_info(self) -> None:
+        """Show an info popup explaining calibration data collection."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Input Files — Calibration Guide")
+        dlg.setMinimumWidth(520)
+        lay = QVBoxLayout(dlg)
+        lay.setSpacing(10)
+
+        lbl = QLabel(
+            "Cameras show distortions due to the lenses. Because of this, image "
+            "positions can't be mapped accurately. To address this, we need to "
+            "calibrate the cameras and calculate distortion coefficients.<br><br>"
+            "For accurate calibration of the RGB and thermal cameras, a dedicated "
+            "drone flight should be performed under conditions similar to your mission "
+            "setup (e.g. when you typically fly with 100 m AGL, the calibration setup "
+            "should also have about 100 m distance to the object used for calibration). "
+            "For stereo mode, the recorded data should contain clearly distinguishable structures that "
+            "are visible in both RGB and thermal imagery and appear across at least once "
+            "everywhere in the image space (upper left corner, upper right corner, "
+            "center of the image, lower left, lower right, etc.), to ensure robust "
+            "calibration over the full field of view. For single-camera mode, the same requirement applies but only for one modality.<br><br>"
+            "Buildings have proven to be particularly suitable targets, especially roofs "
+            "with sharp edges or solar panels, as they provide both geometric detail and "
+            "strong thermal contrast. Facades with windows can also be used, although "
+            "maintaining a consistent distance is more challenging in side views. It is "
+            "important that the selected features are clearly recognizable in both "
+            "modalities to achieve reliable results.<br><br>"
+            "A key limitation of most cameras mounted to DJI drones is that they do not operate in open gate "
+            "mode, which leads to differences between video and photo data. As a result, "
+            "separate calibrations are required for each, as parameters cannot be "
+            "transferred between these acquisition types.<br><br>"
+            "Depending on what you use for your surveys, create images and/or short "
+            "video sequences (~1 sec) with the drone hovering stably and showing the "
+            "object of interest used for calibration.<br><br>"
+        )
+        lbl.setWordWrap(True)
+        lbl.setOpenExternalLinks(True)
+        lbl.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        lay.addWidget(lbl)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dlg.accept)
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn_row.addWidget(close_btn)
+        lay.addLayout(btn_row)
+
+        dlg.exec_()
+
+    def _show_calib_mode_info(self) -> None:
+        """Show an info popup describing the currently selected calibration mode."""
+        if self._rb_single.isChecked():
+            title = "Single Camera Calibration"
+            text = (
+                "<b>Single Camera — Structure from Motion (SfM)</b><br><br>"
+                "Estimates intrinsic camera parameters (focal length, principal point, "
+                "and distortion coefficients) from a set of overlapping images or video "
+                "frames of a static scene using pycolmap's incremental SfM pipeline.<br><br>"
+                "<b>When to use:</b> Your drone has only one camera (e.g. RGB only), or "
+                "you need to calibrate each camera independently before a stereo "
+                "session.<br><br>"
+                "<b>Input:</b> At least 10–20 images or video frames showing the scene "
+                "from different angles with sufficient overlap. More images improve "
+                "accuracy.<br><br>"
+                "<b>Output:</b> A single calibration JSON with focal length, principal "
+                "point, and distortion coefficients."
+            )
+        else:
+            title = "Stereo Calibration (RGB + Thermal)"
+            text = (
+                "<b>Stereo — Manual Point Correspondences + Nelder-Mead Optimisation"
+                "</b><br><br>"
+                "Calibrates a paired RGB and thermal camera system. You manually place "
+                "corresponding point pairs on the same ground features in both images. "
+                "The thermal intrinsics are then optimised so that thermal points "
+                "reproject correctly into the RGB camera space. The RGB camera is used "
+                "as the fixed reference and is not modified.<br><br>"
+                "<b>When to use:</b> Your drone carries both an RGB and a thermal camera "
+                "and you need them spatially aligned for overlaid analysis.<br><br>"
+                "<b>Input:</b> One or more image pairs (RGB + thermal) showing the same "
+                "scene. At least 6–10 well-spread point correspondences per pair are "
+                "recommended.<br><br>"
+                "<b>Algorithm:</b> Initial homography (RANSAC) followed by Nelder-Mead "
+                "optimisation over thermal fx/fy/cx/cy and 5 distortion coefficients, "
+                "minimising reprojection error into RGB space.<br><br>"
+                "<b>Output:</b> Two separate calibration JSON files — one for the "
+                "thermal camera and one for the RGB camera."
+            )
+        msg = QMessageBox(self)
+        msg.setWindowTitle(title)
+        msg.setText(text)
+        msg.setIcon(QMessageBox.Information)
+        msg.exec_()
 
     def _on_mode_toggled(self) -> None:
         self._mode = "single" if self._rb_single.isChecked() else "stereo"
