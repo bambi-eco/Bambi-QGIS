@@ -47,7 +47,7 @@ from qgis.PyQt.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QDialog, QFileDialog,
     QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
     QListWidget, QMessageBox, QProgressBar, QProgressDialog,
-    QPushButton, QRadioButton, QShortcut, QSizePolicy, QSplitter,
+    QPushButton, QRadioButton, QScrollArea, QShortcut, QSizePolicy, QSplitter,
     QSpinBox, QStackedWidget, QTextEdit, QVBoxLayout, QWidget,
 )
 from qgis.PyQt.QtGui import (
@@ -1223,8 +1223,20 @@ class CameraCalibrationWizard(QDialog):
 
     def _build_results_page(self) -> QWidget:
         page = QWidget()
-        lay = QVBoxLayout(page)
+        page_lay = QVBoxLayout(page)
+        page_lay.setContentsMargins(0, 0, 0, 0)
+        page_lay.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        page_lay.addWidget(scroll)
+
+        inner = QWidget()
+        scroll.setWidget(inner)
+        lay = QVBoxLayout(inner)
         lay.setSpacing(8)
+        lay.setContentsMargins(4, 4, 4, 4)
 
         # Quality metrics
         self._result_metrics_lbl = QLabel()
@@ -1285,6 +1297,21 @@ class CameraCalibrationWizard(QDialog):
         self._preview_stereo_widget.setVisible(False)
 
         lay.addWidget(self._result_preview_grp)
+
+        # Feature coverage heatmap
+        self._heatmap_grp = QGroupBox("Feature Coverage Heatmap")
+        heatmap_grp_lay = QVBoxLayout(self._heatmap_grp)
+        heatmap_grp_lay.setSpacing(4)
+        self._heatmap_lbl = QLabel()
+        self._heatmap_lbl.setAlignment(Qt.AlignCenter)
+        self._heatmap_lbl.setMinimumHeight(120)
+        self._heatmap_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self._heatmap_subtitle = QLabel()
+        self._heatmap_subtitle.setAlignment(Qt.AlignCenter)
+        self._heatmap_subtitle.setStyleSheet("color: palette(mid); font-size: 11px;")
+        heatmap_grp_lay.addWidget(self._heatmap_lbl)
+        heatmap_grp_lay.addWidget(self._heatmap_subtitle)
+        lay.addWidget(self._heatmap_grp)
 
         # Parameter display
         self._result_text = QTextEdit()
@@ -2335,6 +2362,136 @@ class CameraCalibrationWizard(QDialog):
             overlay[:, :, 1] = edges_bgr[:, :, 1]  # green channel = RGB edges
 
             self._set_preview_pixmap(self._preview_overlay_lbl, overlay)
+
+        # --- Feature coverage heatmap ---
+        self._populate_coverage_heatmap(result)
+
+    def _populate_coverage_heatmap(self, result: dict) -> None:
+        """Compute and render the feature coverage heatmap."""
+        _COLS, _ROWS = 8, 5
+
+        mode = result.get("mode", self._mode)
+
+        if mode == "single":
+            # Detect SIFT keypoints across all calibration images
+            try:
+                sift = cv2.SIFT_create()
+            except AttributeError:
+                self._heatmap_grp.setVisible(False)
+                return
+
+            counts = np.zeros((_ROWS, _COLS), dtype=int)
+            img_w = img_h = 0
+            total_kp = 0
+
+            for path in self._single_paths:
+                gray = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+                if gray is None:
+                    continue
+                if img_w == 0:
+                    img_h, img_w = gray.shape[:2]
+                kps = sift.detect(gray, None)
+                total_kp += len(kps)
+                for kp in kps:
+                    c = min(int(kp.pt[0] / img_w * _COLS), _COLS - 1)
+                    r = min(int(kp.pt[1] / img_h * _ROWS), _ROWS - 1)
+                    counts[r, c] += 1
+
+            subtitle = (
+                f"SIFT keypoints aggregated across {len(self._single_paths)} image(s) "
+                f"— {total_kp:,} total detections"
+            )
+
+        else:  # stereo — use annotation correspondence points
+            # Determine image dimensions from the first RGB image
+            img_w = img_h = 0
+            if self._rgb_paths:
+                probe = cv2.imread(self._rgb_paths[0])
+                if probe is not None:
+                    img_h, img_w = probe.shape[:2]
+            if img_w == 0:
+                # Fall back to cx/cy from the Wide camera matrix
+                wi_mtx = result.get("Wide", {}).get("mtx", [[0, 0, 0]] * 3)
+                img_w = int(wi_mtx[0][2] * 2)
+                img_h = int(wi_mtx[1][2] * 2)
+            if img_w == 0:
+                self._heatmap_grp.setVisible(False)
+                return
+
+            counts = np.zeros((_ROWS, _COLS), dtype=int)
+            total_pts = 0
+            for pa in self._pairs_annot:
+                for pt in pa["rgb_pts"]:
+                    c = min(int(pt[0] / img_w * _COLS), _COLS - 1)
+                    r = min(int(pt[1] / img_h * _ROWS), _ROWS - 1)
+                    counts[r, c] += 1
+                    total_pts += 1
+
+            n_pairs = len(self._pairs_annot)
+            subtitle = (
+                f"RGB correspondence points across {n_pairs} image pair(s) "
+                f"— {total_pts} total points"
+            )
+
+        self._heatmap_grp.setVisible(True)
+        pm = self._render_coverage_heatmap(counts)
+        w = self._heatmap_lbl.width() if self._heatmap_lbl.width() > 10 else 600
+        self._heatmap_lbl.setPixmap(
+            pm.scaled(w, 9999, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        )
+        self._heatmap_subtitle.setText(subtitle)
+
+    @staticmethod
+    def _render_coverage_heatmap(counts: "np.ndarray") -> QPixmap:
+        """Render *counts* (2-D int array, shape ROWS×COLS) as a colored grid QPixmap."""
+        rows, cols = counts.shape
+        cell_w, cell_h = 72, 52
+        margin = 2
+        pm_w = cols * cell_w + 2 * margin
+        pm_h = rows * cell_h + 2 * margin
+
+        pm = QPixmap(pm_w, pm_h)
+        pm.fill(QColor(30, 30, 30))
+
+        max_count = max(1, int(counts.max()))
+
+        painter = QPainter(pm)
+        painter.setRenderHint(QPainter.Antialiasing, False)
+
+        cell_font = painter.font()
+        cell_font.setPointSize(9)
+        cell_font.setBold(True)
+        painter.setFont(cell_font)
+
+        for r in range(rows):
+            for c in range(cols):
+                count = int(counts[r, c])
+                t = count / max_count          # 0..1
+                hue = int(t * 120)             # 0=red, 60=yellow, 120=green
+                sat = 210 if count > 0 else 0
+                val = 160 if count > 0 else 55
+                cell_color = QColor.fromHsv(hue, sat, val)
+
+                x = margin + c * cell_w
+                y = margin + r * cell_h
+                painter.fillRect(x, y, cell_w - 1, cell_h - 1, cell_color)
+
+                # Count label
+                text_color = QColor(255, 255, 255) if count > 0 else QColor(100, 100, 100)
+                painter.setPen(text_color)
+                painter.drawText(x, y, cell_w - 1, cell_h - 1, Qt.AlignCenter, str(count))
+
+        # Grid lines
+        painter.setPen(QPen(QColor(60, 60, 60), 1))
+        for c in range(cols + 1):
+            x = margin + c * cell_w
+            painter.drawLine(x, margin, x, pm_h - margin)
+        for r in range(rows + 1):
+            y = margin + r * cell_h
+            painter.drawLine(margin, y, pm_w - margin, y)
+
+        painter.end()
+        return pm
 
     @staticmethod
     def _set_preview_pixmap(label: QLabel, img: "np.ndarray") -> None:
