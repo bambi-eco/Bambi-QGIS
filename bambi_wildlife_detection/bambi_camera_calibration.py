@@ -711,7 +711,8 @@ class CameraCalibrationWizard(QDialog):
         self._th_paths: List[str] = []      # resolved image paths
         self._rgb_video_paths: List[str] = []   # RGB video files (video mode)
         self._th_video_paths: List[str] = []    # thermal video files (video mode)
-        self._initial_calib_data: Optional[dict] = None
+        self._rgb_calib_data: Optional[dict] = None
+        self._th_calib_data: Optional[dict] = None
         # Per-pair annotation: list of {"rgb_pts": [(x,y)…], "th_pts": [(x,y)…]}
         self._pairs_annot: List[dict] = []
         self._pair_idx: int = 0
@@ -1073,18 +1074,35 @@ class CameraCalibrationWizard(QDialog):
         sep.setFrameShadow(QLabel.Sunken)
         outer_lay.addWidget(sep)
 
-        calib_row = QHBoxLayout()
-        self._init_calib_lbl = QLabel("(none — will be estimated from image size)")
-        self._init_calib_lbl.setStyleSheet("color: #888;")
-        load_calib_btn = QPushButton("Load JSON…")
-        clear_calib_btn = QPushButton("Clear")
-        load_calib_btn.clicked.connect(self._load_initial_calib)
-        clear_calib_btn.clicked.connect(self._clear_initial_calib)
-        calib_row.addWidget(QLabel("Initial calibration:"))
-        calib_row.addWidget(self._init_calib_lbl, 1)
-        calib_row.addWidget(load_calib_btn)
-        calib_row.addWidget(clear_calib_btn)
-        outer_lay.addLayout(calib_row)
+        outer_lay.addWidget(QLabel(
+            "Initial calibration (optional — estimated from image size if not provided):"
+        ))
+
+        rgb_calib_row = QHBoxLayout()
+        self._rgb_calib_lbl = QLabel("(none)")
+        self._rgb_calib_lbl.setStyleSheet("color: #888;")
+        load_rgb_btn = QPushButton("Load JSON…")
+        clear_rgb_btn = QPushButton("Clear")
+        load_rgb_btn.clicked.connect(lambda: self._load_initial_calib("rgb"))
+        clear_rgb_btn.clicked.connect(lambda: self._clear_initial_calib("rgb"))
+        rgb_calib_row.addWidget(QLabel("RGB camera:"))
+        rgb_calib_row.addWidget(self._rgb_calib_lbl, 1)
+        rgb_calib_row.addWidget(load_rgb_btn)
+        rgb_calib_row.addWidget(clear_rgb_btn)
+        outer_lay.addLayout(rgb_calib_row)
+
+        th_calib_row = QHBoxLayout()
+        self._th_calib_lbl = QLabel("(none)")
+        self._th_calib_lbl.setStyleSheet("color: #888;")
+        load_th_btn = QPushButton("Load JSON…")
+        clear_th_btn = QPushButton("Clear")
+        load_th_btn.clicked.connect(lambda: self._load_initial_calib("th"))
+        clear_th_btn.clicked.connect(lambda: self._clear_initial_calib("th"))
+        th_calib_row.addWidget(QLabel("Thermal camera:"))
+        th_calib_row.addWidget(self._th_calib_lbl, 1)
+        th_calib_row.addWidget(load_th_btn)
+        th_calib_row.addWidget(clear_th_btn)
+        outer_lay.addLayout(th_calib_row)
 
         return outer
 
@@ -1704,35 +1722,61 @@ class CameraCalibrationWizard(QDialog):
             if row < len(paths_ref):
                 paths_ref.pop(row)
 
-    def _load_initial_calib(self) -> None:
+    def _load_initial_calib(self, side: str) -> None:
+        """Load a per-camera initial calibration JSON.
+
+        Accepts flat format (``{mtx, dist, …}`` — output of this tool) or the
+        legacy merged format (``{Wide: {…}, Thermal: {…}}``), extracting the
+        relevant camera section automatically.
+        """
+        label = "RGB" if side == "rgb" else "Thermal"
         path, _ = QFileDialog.getOpenFileName(
-            self, "Load Initial Calibration JSON", "", "JSON (*.json)"
+            self, f"Load {label} Calibration JSON", "", "JSON (*.json)"
         )
         if not path:
             return
         try:
             with open(path, "r", encoding="utf-8") as fh:
                 data = json.load(fh)
-            # Validate minimal structure
-            has_rgb = bool(
-                data.get("Wide") or data.get("RGB")
-                or data.get("wide") or data.get("rgb")
-            )
-            has_th = bool(data.get("Thermal") or data.get("thermal"))
-            if not (has_rgb and has_th):
-                raise ValueError(
-                    "File must contain 'Wide'/'RGB' and 'Thermal' sections."
-                )
-            self._initial_calib_data = data
-            self._init_calib_lbl.setText(os.path.basename(path))
-            self._init_calib_lbl.setStyleSheet("color: #88ff88;")
+
+            # Flat format: {mtx, dist, …}
+            if "mtx" in data and "dist" in data:
+                section = data
+            else:
+                # Legacy merged format: extract the relevant section
+                if side == "rgb":
+                    section = (
+                        data.get("Wide") or data.get("RGB")
+                        or data.get("wide") or data.get("rgb")
+                    )
+                else:
+                    section = data.get("Thermal") or data.get("thermal")
+                if section is None or "mtx" not in section or "dist" not in section:
+                    raise ValueError(
+                        "File must contain 'mtx' and 'dist' keys, "
+                        "or be a merged calibration file with the appropriate camera section."
+                    )
+
+            if side == "rgb":
+                self._rgb_calib_data = section
+                self._rgb_calib_lbl.setText(os.path.basename(path))
+                self._rgb_calib_lbl.setStyleSheet("color: #88ff88;")
+            else:
+                self._th_calib_data = section
+                self._th_calib_lbl.setText(os.path.basename(path))
+                self._th_calib_lbl.setStyleSheet("color: #88ff88;")
         except Exception as exc:
             QMessageBox.warning(self, "Invalid calibration file", str(exc))
 
-    def _clear_initial_calib(self) -> None:
-        self._initial_calib_data = None
-        self._init_calib_lbl.setText("(none — will be estimated)")
-        self._init_calib_lbl.setStyleSheet("color: #888;")
+    def _clear_initial_calib(self, side: str) -> None:
+        if side == "rgb":
+            self._rgb_calib_data = None
+            self._rgb_calib_lbl.setText("(none)")
+            self._rgb_calib_lbl.setStyleSheet("color: #888;")
+        else:
+            self._th_calib_data = None
+            self._th_calib_lbl.setText("(none)")
+            self._th_calib_lbl.setStyleSheet("color: #888;")
 
     # =========================================================================
     # Entering the calibration page
@@ -2151,24 +2195,28 @@ class CameraCalibrationWizard(QDialog):
                 self._run_calib_btn.setEnabled(True)
                 return
 
-            # Build or estimate initial calibration
-            if self._initial_calib_data:
-                init_calib = self._initial_calib_data
+            # Build initial calibration — use loaded file per camera, fall back to estimate
+            if self._rgb_calib_data:
+                rgb_init = self._rgb_calib_data
             else:
-                # Estimate from first image pair
                 rgb_img = _load_image_or_video_central(self._rgb_paths[0])
-                th_img = _load_image_or_video_central(self._th_paths[0])
-                rgb_intr = _estimate_intrinsics_from_image(rgb_img) if rgb_img is not None else {
+                rgb_init = _estimate_intrinsics_from_image(rgb_img) if rgb_img is not None else {
                     "ret": None, "mtx": [[1000, 0, 640], [0, 1000, 512], [0, 0, 1]],
-                    "dist": [0] * 5, "name": "Wide"
+                    "dist": [0] * 5,
                 }
-                th_intr = _estimate_intrinsics_from_image(th_img) if th_img is not None else {
+            rgb_init["name"] = "Wide"
+
+            if self._th_calib_data:
+                th_init = self._th_calib_data
+            else:
+                th_img = _load_image_or_video_central(self._th_paths[0])
+                th_init = _estimate_intrinsics_from_image(th_img) if th_img is not None else {
                     "ret": None, "mtx": [[800, 0, 320], [0, 800, 256], [0, 0, 1]],
-                    "dist": [0] * 5, "name": "Thermal"
+                    "dist": [0] * 5,
                 }
-                rgb_intr["name"] = "Wide"
-                th_intr["name"] = "Thermal"
-                init_calib = {"Wide": rgb_intr, "Thermal": th_intr}
+            th_init["name"] = "Thermal"
+
+            init_calib = {"Wide": rgb_init, "Thermal": th_init}
 
             params = {
                 "T_points": T_pts,
