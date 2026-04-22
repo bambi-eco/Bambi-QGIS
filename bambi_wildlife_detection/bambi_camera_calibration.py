@@ -709,8 +709,8 @@ class CameraCalibrationWizard(QDialog):
         # Stereo
         self._rgb_paths: List[str] = []     # resolved image paths
         self._th_paths: List[str] = []      # resolved image paths
-        self._rgb_video_path: str = ""      # single RGB video (video mode)
-        self._th_video_path: str = ""       # single thermal video (video mode)
+        self._rgb_video_paths: List[str] = []   # RGB video files (video mode)
+        self._th_video_paths: List[str] = []    # thermal video files (video mode)
         self._initial_calib_data: Optional[dict] = None
         # Per-pair annotation: list of {"rgb_pts": [(x,y)…], "th_pts": [(x,y)…]}
         self._pairs_annot: List[dict] = []
@@ -1022,34 +1022,48 @@ class CameraCalibrationWizard(QDialog):
         self._stereo_video_widget = QWidget()
         sv_lay = QVBoxLayout(self._stereo_video_widget)
         sv_lay.setContentsMargins(0, 0, 0, 0)
+
+        splitter_vid = QSplitter(Qt.Horizontal)
+
+        rgb_vid_grp = QGroupBox("RGB / Wide Camera")
+        rgb_vid_grp_lay = QVBoxLayout(rgb_vid_grp)
+        self._rgb_video_list = QListWidget()
+        self._rgb_video_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self._rgb_video_list.setMaximumHeight(110)
+        rgb_vid_grp_lay.addWidget(self._rgb_video_list)
+        rv_btn_row = QHBoxLayout()
+        add_rv = QPushButton("Add Videos…")
+        rem_rv = QPushButton("Remove")
+        add_rv.clicked.connect(lambda: self._stereo_add_videos("rgb"))
+        rem_rv.clicked.connect(lambda: self._stereo_remove_videos("rgb"))
+        rv_btn_row.addWidget(add_rv)
+        rv_btn_row.addWidget(rem_rv)
+        rv_btn_row.addStretch()
+        rgb_vid_grp_lay.addLayout(rv_btn_row)
+        splitter_vid.addWidget(rgb_vid_grp)
+
+        th_vid_grp = QGroupBox("Thermal Camera")
+        th_vid_grp_lay = QVBoxLayout(th_vid_grp)
+        self._th_video_list = QListWidget()
+        self._th_video_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self._th_video_list.setMaximumHeight(110)
+        th_vid_grp_lay.addWidget(self._th_video_list)
+        tv_btn_row = QHBoxLayout()
+        add_tv = QPushButton("Add Videos…")
+        rem_tv = QPushButton("Remove")
+        add_tv.clicked.connect(lambda: self._stereo_add_videos("th"))
+        rem_tv.clicked.connect(lambda: self._stereo_remove_videos("th"))
+        tv_btn_row.addWidget(add_tv)
+        tv_btn_row.addWidget(rem_tv)
+        tv_btn_row.addStretch()
+        th_vid_grp_lay.addLayout(tv_btn_row)
+        splitter_vid.addWidget(th_vid_grp)
+
+        sv_lay.addWidget(splitter_vid)
         sv_lay.addWidget(QLabel(
-            "Select one video per camera — the central frame will be extracted from each:"
+            "One central frame will be extracted per video. "
+            "Videos are paired in list order (first RGB ↔ first Thermal, etc.)."
         ))
-
-        form = QFormLayout()
-        form.setLabelAlignment(Qt.AlignRight)
-
-        rgb_vid_row = QHBoxLayout()
-        self._rgb_video_edit = QLineEdit()
-        self._rgb_video_edit.setReadOnly(True)
-        self._rgb_video_edit.setPlaceholderText("No video selected…")
-        rgb_vid_browse = QPushButton("Browse…")
-        rgb_vid_browse.clicked.connect(lambda: self._stereo_browse_video("rgb"))
-        rgb_vid_row.addWidget(self._rgb_video_edit, 1)
-        rgb_vid_row.addWidget(rgb_vid_browse)
-        form.addRow("RGB video:", rgb_vid_row)
-
-        th_vid_row = QHBoxLayout()
-        self._th_video_edit = QLineEdit()
-        self._th_video_edit.setReadOnly(True)
-        self._th_video_edit.setPlaceholderText("No video selected…")
-        th_vid_browse = QPushButton("Browse…")
-        th_vid_browse.clicked.connect(lambda: self._stereo_browse_video("th"))
-        th_vid_row.addWidget(self._th_video_edit, 1)
-        th_vid_row.addWidget(th_vid_browse)
-        form.addRow("Thermal video:", th_vid_row)
-
-        sv_lay.addLayout(form)
         self._stereo_video_widget.setVisible(False)
         outer_lay.addWidget(self._stereo_video_widget)
 
@@ -1558,7 +1572,7 @@ class CameraCalibrationWizard(QDialog):
         has_files = bool(
             self._single_paths or self._single_video_paths
             or self._rgb_paths or self._th_paths
-            or self._rgb_video_path or self._th_video_path
+            or self._rgb_video_paths or self._th_video_paths
         )
         if has_files:
             ans = QMessageBox.question(
@@ -1595,10 +1609,10 @@ class CameraCalibrationWizard(QDialog):
         self._th_paths.clear()
         self._rgb_photo_list.clear()
         self._th_photo_list.clear()
-        self._rgb_video_path = ""
-        self._th_video_path = ""
-        self._rgb_video_edit.clear()
-        self._th_video_edit.clear()
+        self._rgb_video_paths.clear()
+        self._th_video_paths.clear()
+        self._rgb_video_list.clear()
+        self._th_video_list.clear()
 
     # ---- Single camera — photo mode ----------------------------------------
 
@@ -1668,20 +1682,27 @@ class CameraCalibrationWizard(QDialog):
 
     # ---- Stereo — video mode -----------------------------------------------
 
-    def _stereo_browse_video(self, side: str) -> None:
+    def _stereo_add_videos(self, side: str) -> None:
         label = "RGB" if side == "rgb" else "Thermal"
-        path, _ = QFileDialog.getOpenFileName(
-            self, f"Select {label} Video", "",
+        lst = self._rgb_video_list if side == "rgb" else self._th_video_list
+        paths_ref = self._rgb_video_paths if side == "rgb" else self._th_video_paths
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, f"Select {label} Video(s)", "",
             "Videos (*.mp4 *.avi *.mov *.mkv *.wmv *.m4v *.mpg *.mpeg)"
         )
-        if not path:
-            return
-        if side == "rgb":
-            self._rgb_video_path = path
-            self._rgb_video_edit.setText(os.path.basename(path))
-        else:
-            self._th_video_path = path
-            self._th_video_edit.setText(os.path.basename(path))
+        for p in paths:
+            if p not in paths_ref:
+                paths_ref.append(p)
+                lst.addItem(os.path.basename(p))
+
+    def _stereo_remove_videos(self, side: str) -> None:
+        lst = self._rgb_video_list if side == "rgb" else self._th_video_list
+        paths_ref = self._rgb_video_paths if side == "rgb" else self._th_video_paths
+        for item in lst.selectedItems():
+            row = lst.row(item)
+            lst.takeItem(row)
+            if row < len(paths_ref):
+                paths_ref.pop(row)
 
     def _load_initial_calib(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -1807,35 +1828,45 @@ class CameraCalibrationWizard(QDialog):
                                         "Please add RGB and thermal images.")
                     return False
             else:  # video
-                if not self._rgb_video_path or not self._th_video_path:
+                if not self._rgb_video_paths or not self._th_video_paths:
                     QMessageBox.warning(self, "No input",
-                                        "Please select one RGB video and one thermal video.")
+                                        "Please add at least one RGB video and one thermal video.")
                     return False
                 if not _HAS_CV2:
                     QMessageBox.critical(self, "Missing dependency",
                                          "opencv-python is required to extract video frames.")
                     return False
-                # Extract central frame from each video into a temp dir
                 tmpdir = tempfile.mkdtemp(prefix="bambi_stereo_")
-                rgb_frame = _load_image_or_video_central(self._rgb_video_path)
-                th_frame = _load_image_or_video_central(self._th_video_path)
-                if rgb_frame is None or th_frame is None:
-                    QMessageBox.critical(self, "Frame extraction failed",
-                                         "Could not extract the central frame from one or "
-                                         "both of the selected videos.")
-                    return False
-                rgb_out = os.path.join(
-                    tmpdir,
-                    os.path.splitext(os.path.basename(self._rgb_video_path))[0] + "_central.jpg"
-                )
-                th_out = os.path.join(
-                    tmpdir,
-                    os.path.splitext(os.path.basename(self._th_video_path))[0] + "_central.jpg"
-                )
-                cv2.imwrite(rgb_out, rgb_frame)
-                cv2.imwrite(th_out, th_frame)
-                self._rgb_paths = [rgb_out]
-                self._th_paths = [th_out]
+                self._rgb_paths.clear()
+                self._th_paths.clear()
+                for vpath in self._rgb_video_paths:
+                    frame = _load_image_or_video_central(vpath)
+                    if frame is None:
+                        QMessageBox.critical(
+                            self, "Frame extraction failed",
+                            f"Could not extract a frame from:\n{vpath}"
+                        )
+                        return False
+                    out = os.path.join(
+                        tmpdir,
+                        os.path.splitext(os.path.basename(vpath))[0] + "_central.jpg"
+                    )
+                    cv2.imwrite(out, frame)
+                    self._rgb_paths.append(out)
+                for vpath in self._th_video_paths:
+                    frame = _load_image_or_video_central(vpath)
+                    if frame is None:
+                        QMessageBox.critical(
+                            self, "Frame extraction failed",
+                            f"Could not extract a frame from:\n{vpath}"
+                        )
+                        return False
+                    out = os.path.join(
+                        tmpdir,
+                        os.path.splitext(os.path.basename(vpath))[0] + "_central.jpg"
+                    )
+                    cv2.imwrite(out, frame)
+                    self._th_paths.append(out)
 
             n_pairs = min(len(self._rgb_paths), len(self._th_paths))
             if n_pairs == 0:
