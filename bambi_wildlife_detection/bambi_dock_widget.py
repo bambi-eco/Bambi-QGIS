@@ -10,6 +10,8 @@ import os
 import json
 import math
 import csv
+import subprocess
+import tempfile
 from typing import Optional, Dict, Any, List
 import sys
 
@@ -349,9 +351,20 @@ class BambiDockWidget(QDockWidget):
         )
         self._input_mode_info_btn.clicked.connect(self._show_input_mode_info)
 
+        self.embedded_srt_check = QCheckBox("Embedded SRT")
+        self.embedded_srt_check.setChecked(False)
+        self.embedded_srt_check.setVisible(True)  # video mode is on by default
+        self.embedded_srt_check.setToolTip(
+            "Checked: SRT timing data is embedded in the video file (newer DJI drones).\n"
+            "The SRT stream is extracted automatically — no separate .srt files needed.\n"
+            "Unchecked: SRT files are provided as separate files alongside the video."
+        )
+        self.embedded_srt_check.stateChanged.connect(self._on_embedded_srt_changed)
+
         input_mode_row = QHBoxLayout()
         input_mode_row.setContentsMargins(0, 0, 0, 0)
         input_mode_row.addWidget(self.video_mode_check)
+        input_mode_row.addWidget(self.embedded_srt_check)
         input_mode_row.addStretch()
         input_mode_row.addWidget(self._input_mode_info_btn)
         input_layout.addLayout(input_mode_row)
@@ -374,14 +387,17 @@ class BambiDockWidget(QDockWidget):
         thermal_video_row.addWidget(thermal_video_browse_btn)
         thermal_layout.addRow("Videos:", thermal_video_row)
 
+        self._thermal_srt_field = QWidget()
+        _t_srt_lay = QHBoxLayout(self._thermal_srt_field)
+        _t_srt_lay.setContentsMargins(0, 0, 0, 0)
         self.thermal_srt_paths_edit = QLineEdit()
         self.thermal_srt_paths_edit.setPlaceholderText("Comma-separated paths to thermal SRT files (_T_)")
         thermal_srt_browse_btn = QPushButton("Browse...")
         thermal_srt_browse_btn.clicked.connect(self.browse_thermal_srts)
-        thermal_srt_row = QHBoxLayout()
-        thermal_srt_row.addWidget(self.thermal_srt_paths_edit)
-        thermal_srt_row.addWidget(thermal_srt_browse_btn)
-        thermal_layout.addRow("SRT Files:", thermal_srt_row)
+        _t_srt_lay.addWidget(self.thermal_srt_paths_edit)
+        _t_srt_lay.addWidget(thermal_srt_browse_btn)
+        thermal_layout.addRow("SRT Files:", self._thermal_srt_field)
+        self._thermal_srt_label = thermal_layout.labelForField(self._thermal_srt_field)
 
         thermal_calib_container = QWidget()
         thermal_calib_vbox = QVBoxLayout(thermal_calib_container)
@@ -424,14 +440,17 @@ class BambiDockWidget(QDockWidget):
         rgb_video_row.addWidget(rgb_video_browse_btn)
         rgb_layout.addRow("Videos:", rgb_video_row)
 
+        self._rgb_srt_field = QWidget()
+        _r_srt_lay = QHBoxLayout(self._rgb_srt_field)
+        _r_srt_lay.setContentsMargins(0, 0, 0, 0)
         self.rgb_srt_paths_edit = QLineEdit()
         self.rgb_srt_paths_edit.setPlaceholderText("Comma-separated paths to RGB SRT files (_W_ or _V_)")
         rgb_srt_browse_btn = QPushButton("Browse...")
         rgb_srt_browse_btn.clicked.connect(self.browse_rgb_srts)
-        rgb_srt_row = QHBoxLayout()
-        rgb_srt_row.addWidget(self.rgb_srt_paths_edit)
-        rgb_srt_row.addWidget(rgb_srt_browse_btn)
-        rgb_layout.addRow("SRT Files:", rgb_srt_row)
+        _r_srt_lay.addWidget(self.rgb_srt_paths_edit)
+        _r_srt_lay.addWidget(rgb_srt_browse_btn)
+        rgb_layout.addRow("SRT Files:", self._rgb_srt_field)
+        self._rgb_srt_label = rgb_layout.labelForField(self._rgb_srt_field)
 
         rgb_calib_container = QWidget()
         rgb_calib_vbox = QVBoxLayout(rgb_calib_container)
@@ -2111,13 +2130,22 @@ class BambiDockWidget(QDockWidget):
             rot_z = math.radians(rot_z)
 
         video_mode = self.video_mode_check.isChecked()
+        embedded_srt = video_mode and self.embedded_srt_check.isChecked()
+
+        thermal_video_paths = [p.strip() for p in self.thermal_video_paths_edit.text().split(",") if p.strip()]
+        rgb_video_paths = [p.strip() for p in self.rgb_video_paths_edit.text().split(",") if p.strip()]
+
         return {
             # Input mode
             "input_mode": "video" if video_mode else "photo",
 
             # Video inputs
-            "thermal_video_paths": [p.strip() for p in self.thermal_video_paths_edit.text().split(",") if p.strip()],
-            "thermal_srt_paths": [p.strip() for p in self.thermal_srt_paths_edit.text().split(",") if p.strip()],
+            "thermal_video_paths": thermal_video_paths,
+            "thermal_srt_paths": (
+                self._resolve_embedded_srts(thermal_video_paths)
+                if embedded_srt
+                else [p.strip() for p in self.thermal_srt_paths_edit.text().split(",") if p.strip()]
+            ),
             "thermal_calibration_path": (
                 self.thermal_calibration_path_edit.text()
                 if self.thermal_calib_preset_combo.currentIndex() == 0 else ""
@@ -2126,8 +2154,12 @@ class BambiDockWidget(QDockWidget):
                 THERMAL_CALIBRATIONS.get(self.thermal_calib_preset_combo.currentText())
                 if self.thermal_calib_preset_combo.currentIndex() > 0 else None
             ),
-            "rgb_video_paths": [p.strip() for p in self.rgb_video_paths_edit.text().split(",") if p.strip()],
-            "rgb_srt_paths": [p.strip() for p in self.rgb_srt_paths_edit.text().split(",") if p.strip()],
+            "rgb_video_paths": rgb_video_paths,
+            "rgb_srt_paths": (
+                self._resolve_embedded_srts(rgb_video_paths)
+                if embedded_srt
+                else [p.strip() for p in self.rgb_srt_paths_edit.text().split(",") if p.strip()]
+            ),
             "rgb_calibration_path": (
                 self.rgb_calibration_path_edit.text()
                 if self.rgb_calib_preset_combo.currentIndex() == 0 else ""
@@ -2299,12 +2331,13 @@ class BambiDockWidget(QDockWidget):
             # Get the folder of the first video
             video_folder = os.path.dirname(thermal_files[0])
 
-            # Auto-populate thermal SRT paths
-            srts = [f.replace(".MP4", ".SRT").replace(".mp4", ".srt") for f in thermal_files]
-            existing_srts = [s for s in srts if os.path.exists(s)]
-            if existing_srts:
-                self.thermal_srt_paths_edit.setText(", ".join(existing_srts))
-                self.log(f"Auto-detected {len(existing_srts)} thermal SRT file(s)")
+            # Auto-populate thermal SRT paths (skipped in embedded SRT mode)
+            if not self.embedded_srt_check.isChecked():
+                srts = [f.replace(".MP4", ".SRT").replace(".mp4", ".srt") for f in thermal_files]
+                existing_srts = [s for s in srts if os.path.exists(s)]
+                if existing_srts:
+                    self.thermal_srt_paths_edit.setText(", ".join(existing_srts))
+                    self.log(f"Auto-detected {len(existing_srts)} thermal SRT file(s)")
 
             # Auto-detect T_calib.json (only when using custom file mode)
             if (self.thermal_calib_preset_combo.currentIndex() == 0
@@ -2333,12 +2366,13 @@ class BambiDockWidget(QDockWidget):
             # Get the folder of the first video
             video_folder = os.path.dirname(rgb_files[0])
 
-            # Auto-populate RGB SRT paths
-            srts = [f.replace(".MP4", ".SRT").replace(".mp4", ".srt") for f in rgb_files]
-            existing_srts = [s for s in srts if os.path.exists(s)]
-            if existing_srts:
-                self.rgb_srt_paths_edit.setText(", ".join(existing_srts))
-                self.log(f"Auto-detected {len(existing_srts)} RGB SRT file(s)")
+            # Auto-populate RGB SRT paths (skipped in embedded SRT mode)
+            if not self.embedded_srt_check.isChecked():
+                srts = [f.replace(".MP4", ".SRT").replace(".mp4", ".srt") for f in rgb_files]
+                existing_srts = [s for s in srts if os.path.exists(s)]
+                if existing_srts:
+                    self.rgb_srt_paths_edit.setText(", ".join(existing_srts))
+                    self.log(f"Auto-detected {len(existing_srts)} RGB SRT file(s)")
 
             # Auto-detect W_calib.json (only when using custom file mode)
             if (self.rgb_calib_preset_combo.currentIndex() == 0
@@ -2436,6 +2470,50 @@ class BambiDockWidget(QDockWidget):
 
         # Try to auto-detect CRS from available sources
         self._try_auto_detect_crs_silent()
+
+    def _resolve_embedded_srts(self, video_paths: List[str]) -> List[str]:
+        """Extract embedded SRT subtitle streams from video files using ffmpeg.
+
+        Uses a temp directory as a persistent cache — if a .srt file for a video
+        already exists there it is reused without re-running ffmpeg.
+        Returns a list of extracted .srt paths (one per video that succeeded).
+        """
+        try:
+            import imageio_ffmpeg
+            ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        except Exception:
+            self.log("ERROR: imageio-ffmpeg not available — cannot extract embedded SRT.")
+            return []
+
+        if not hasattr(self, "_srt_tmpdir") or not os.path.isdir(self._srt_tmpdir):
+            self._srt_tmpdir = tempfile.mkdtemp(prefix="bambi_srt_")
+
+        extracted = []
+        for vpath in video_paths:
+            stem = os.path.splitext(os.path.basename(vpath))[0]
+            out_srt = os.path.join(self._srt_tmpdir, stem + ".srt")
+            if os.path.exists(out_srt) and os.path.getsize(out_srt) > 0:
+                extracted.append(out_srt)
+                continue
+            try:
+                result = subprocess.run(
+                    [ffmpeg_exe, "-i", vpath, "-map", "0:s:0", "-y", out_srt],
+                    capture_output=True, text=True, timeout=60
+                )
+                if os.path.exists(out_srt) and os.path.getsize(out_srt) > 0:
+                    extracted.append(out_srt)
+                    self.log(f"Extracted embedded SRT from {os.path.basename(vpath)}")
+                else:
+                    self.log(
+                        f"WARNING: No subtitle stream found in {os.path.basename(vpath)}. "
+                        f"ffmpeg stderr: {result.stderr.strip()[-200:]}"
+                    )
+            except subprocess.TimeoutExpired:
+                self.log(f"ERROR: SRT extraction timed out for {os.path.basename(vpath)}")
+            except Exception as exc:
+                self.log(f"ERROR: SRT extraction failed for {os.path.basename(vpath)}: {exc}")
+
+        return extracted
 
     def browse_thermal_srts(self):
         """Browse for thermal SRT files."""
@@ -2630,6 +2708,17 @@ class BambiDockWidget(QDockWidget):
         video_mode = bool(state)
         self.video_inputs_widget.setVisible(video_mode)
         self.photo_inputs_widget.setVisible(not video_mode)
+        self.embedded_srt_check.setVisible(video_mode)
+        if not video_mode:
+            self.embedded_srt_check.setChecked(False)
+
+    def _on_embedded_srt_changed(self, state: int):
+        """Show/hide the SRT file input rows depending on embedded SRT mode."""
+        show_fields = not bool(state)
+        self._thermal_srt_field.setVisible(show_fields)
+        self._thermal_srt_label.setVisible(show_fields)
+        self._rgb_srt_field.setVisible(show_fields)
+        self._rgb_srt_label.setVisible(show_fields)
 
     def _show_input_mode_info(self):
         """Show an info popup describing the currently active input mode."""
@@ -4063,16 +4152,15 @@ class BambiDockWidget(QDockWidget):
                 config.get("thermal_calibration_data") is not None
                 or config.get("thermal_calibration_path")
             )
-            if not (config.get("thermal_video_paths") and
-                    config.get("thermal_srt_paths") and
-                    thermal_calib_ok):
+            srt_ok = self.embedded_srt_check.isChecked() or bool(config.get("thermal_srt_paths"))
+            if not (config.get("thermal_video_paths") and srt_ok and thermal_calib_ok):
                 QMessageBox.warning(
                     self,
                     "Missing Thermal Inputs",
                     "Please provide thermal video inputs:\n\n"
                     "• Thermal video files\n"
-                    "• Thermal SRT files\n"
-                    "• Thermal calibration (preset or custom file)"
+                    + ("" if self.embedded_srt_check.isChecked() else "• Thermal SRT files\n")
+                    + "• Thermal calibration (preset or custom file)"
                 )
                 return
 
@@ -4107,16 +4195,15 @@ class BambiDockWidget(QDockWidget):
                 config.get("rgb_calibration_data") is not None
                 or config.get("rgb_calibration_path")
             )
-            if not (config.get("rgb_video_paths") and
-                    config.get("rgb_srt_paths") and
-                    rgb_calib_ok):
+            srt_ok = self.embedded_srt_check.isChecked() or bool(config.get("rgb_srt_paths"))
+            if not (config.get("rgb_video_paths") and srt_ok and rgb_calib_ok):
                 QMessageBox.warning(
                     self,
                     "Missing RGB Inputs",
                     "Please provide RGB video inputs:\n\n"
                     "• RGB video files\n"
-                    "• RGB SRT files\n"
-                    "• RGB calibration (preset or custom file)"
+                    + ("" if self.embedded_srt_check.isChecked() else "• RGB SRT files\n")
+                    + "• RGB calibration (preset or custom file)"
                 )
                 return
 
@@ -6876,6 +6963,8 @@ class BambiDockWidget(QDockWidget):
         # ===== Input Mode =====
         project.writeEntry(PLUGIN_SCOPE, "Input/VideoMode",
                            "1" if self.video_mode_check.isChecked() else "0")
+        project.writeEntry(PLUGIN_SCOPE, "Input/EmbeddedSrt",
+                           "1" if self.embedded_srt_check.isChecked() else "0")
 
         # ===== Video Input Paths =====
         project.writeEntry(PLUGIN_SCOPE, "Input/ThermalVideoPaths",
@@ -7110,6 +7199,9 @@ class BambiDockWidget(QDockWidget):
         video_mode_val = read_str("Input/VideoMode")
         if video_mode_val != "":
             self.video_mode_check.setChecked(video_mode_val != "0")
+        embedded_srt_val = read_str("Input/EmbeddedSrt")
+        if embedded_srt_val != "":
+            self.embedded_srt_check.setChecked(embedded_srt_val != "0")
 
         # ===== Video Input Paths =====
         self.thermal_video_paths_edit.setText(read_str("Input/ThermalVideoPaths"))
