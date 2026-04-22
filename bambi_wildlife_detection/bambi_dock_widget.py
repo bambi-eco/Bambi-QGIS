@@ -2729,9 +2729,11 @@ class BambiDockWidget(QDockWidget):
                 "The plugin processes continuous drone video recordings together with "
                 "SRT subtitle files, which provide per-frame timestamps used to match "
                 "each frame to a high-precision GPS position from the AirData flight log.<br><br>"
+                "Note: When using newer drones like DJI's M4T SRT is embedded in the videos. In such a case, please activate the 'Embedded SRT' checkbox<br><br>"
                 "Practical tips: To ensure high-quality and consistent video recordings, configure your drone mission with stable flight parameters and a fixed camera setup. Plan the flight at a constant altitude between 30 m and 60 m above ground, depending on the terrain and desired coverage, and maintain a steady speed of 3–7 m/s throughout the mission. "
                 "Although the exact heading is not critical, the drone’s orientation should remain constant for the entire flight, and yaw rotations should be avoided. A practical approach is to configure each waypoint so that the drone faces north, ensuring a stable and repeatable camera perspective. "
                 "Set the gimbal pitch to −90° so the camera is pointing straight down (nadir). This provides a consistent top-down view and simplifies later processing of the video data. "
+                "Don't forget the subtitle feature in the video settings, otherwise no SRT file is created/embedded!"
                 "Finally, start video recording at the first waypoint and stop recording at the last waypoint to capture the full survey area in one continuous sequence while avoiding unnecessary footage. "
             )
         else:
