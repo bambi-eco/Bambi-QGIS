@@ -18,6 +18,7 @@ preset system.
 """
 
 import json
+import math
 import os
 import shutil
 import tempfile
@@ -48,7 +49,7 @@ from qgis.PyQt.QtWidgets import (
     QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
     QListWidget, QMessageBox, QProgressBar, QProgressDialog,
     QPushButton, QRadioButton, QScrollArea, QShortcut, QSizePolicy, QSplitter,
-    QSpinBox, QStackedWidget, QTextEdit, QVBoxLayout, QWidget,
+    QDoubleSpinBox, QSpinBox, QStackedWidget, QTextEdit, QVBoxLayout, QWidget,
 )
 from qgis.PyQt.QtGui import (
     QColor, QFont, QImage, QKeySequence, QPainter, QPainterPath, QPen, QPixmap,
@@ -128,6 +129,19 @@ def _extract_n_frames_to_dir(video_path: str, out_dir: str, n: int,
             progress_cb(done + 1, len(indices))
     cap.release()
     return paths
+
+
+def _fov_diag_to_mtx(fov_diag_deg: float, w: int, h: int) -> list:
+    """Compute a 3×3 camera matrix from a diagonal FoV (degrees) and image size.
+
+    DJI specs report the diagonal FoV.  The focal length is derived as:
+        f = (diagonal_px / 2) / tan(fov_diag / 2)
+    with the principal point placed at the image centre.
+    """
+    fov_rad = math.radians(fov_diag_deg)
+    d = math.sqrt(w * w + h * h)
+    f = (d / 2.0) / math.tan(fov_rad / 2.0)
+    return [[f, 0.0, w / 2.0], [0.0, f, h / 2.0], [0.0, 0.0, 1.0]]
 
 
 def _undistort_img(img: "np.ndarray", calib: dict) -> "np.ndarray":
@@ -470,6 +484,19 @@ class _CalibWorker(QObject):
 
             reader_opts = pycolmap.ImageReaderOptions()
             reader_opts.camera_model = "OPENCV"
+
+            fov_diag = self._params.get("fov_diag", 0.0)
+            if fov_diag > 0:
+                first_img = cv2.imread(image_paths[0])
+                if first_img is not None:
+                    h, w = first_img.shape[:2]
+                    f = (math.sqrt(w * w + h * h) / 2.0) / math.tan(math.radians(fov_diag) / 2.0)
+                    reader_opts.camera_params = f"{f},{f},{w/2.0},{h/2.0},0,0,0,0"
+                    self.log.emit(
+                        f"FoV prior: {fov_diag}° diagonal → f ≈ {f:.1f} px "
+                        f"(vert. FoV ≈ {math.degrees(2*math.atan(h/(2*f))):.1f}°)"
+                    )
+
             pycolmap.extract_features(
                 database_path=db_path,
                 image_path=img_dir,
@@ -968,6 +995,35 @@ class CameraCalibrationWizard(QDialog):
         name_row.addWidget(self._single_cam_name)
         outer_lay.addLayout(name_row)
 
+        # --- Diagonal FoV from specs ---
+        sep_s = QLabel()
+        sep_s.setFrameShape(QLabel.HLine)
+        sep_s.setFrameShadow(QLabel.Sunken)
+        outer_lay.addWidget(sep_s)
+
+        fov_note_s = QLabel(
+            "Diagonal FoV from specs (optional) — provides pycolmap with a focal-length "
+            "prior so SfM starts from a realistic estimate. DJI reports diagonal FoV."
+        )
+        fov_note_s.setWordWrap(True)
+        fov_note_s.setStyleSheet("color: palette(mid); font-size: 11px;")
+        outer_lay.addWidget(fov_note_s)
+
+        fov_row_s = QHBoxLayout()
+        fov_lbl_s = QLabel("Diagonal FoV:")
+        fov_lbl_s.setFixedWidth(110)
+        self._single_fov_spin = QDoubleSpinBox()
+        self._single_fov_spin.setRange(0.0, 180.0)
+        self._single_fov_spin.setDecimals(1)
+        self._single_fov_spin.setSingleStep(0.5)
+        self._single_fov_spin.setSuffix(" °")
+        self._single_fov_spin.setSpecialValueText("not set")
+        self._single_fov_spin.setValue(0.0)
+        fov_row_s.addWidget(fov_lbl_s)
+        fov_row_s.addWidget(self._single_fov_spin)
+        fov_row_s.addStretch()
+        outer_lay.addLayout(fov_row_s)
+
         return outer
 
     def _build_stereo_inputs(self) -> QWidget:
@@ -1122,6 +1178,49 @@ class CameraCalibrationWizard(QDialog):
         th_calib_row.addWidget(load_th_btn)
         th_calib_row.addWidget(clear_th_btn)
         outer_lay.addLayout(th_calib_row)
+
+        # --- Diagonal FoV from specs ---
+        sep2 = QLabel()
+        sep2.setFrameShape(QLabel.HLine)
+        sep2.setFrameShadow(QLabel.Sunken)
+        outer_lay.addWidget(sep2)
+
+        fov_note = QLabel(
+            "Diagonal FoV from specs (optional) — used as initial focal-length "
+            "estimate when no calibration file is loaded. DJI reports diagonal FoV; "
+            "it is converted to per-axis focal length automatically."
+        )
+        fov_note.setWordWrap(True)
+        fov_note.setStyleSheet("color: palette(mid); font-size: 11px;")
+        outer_lay.addWidget(fov_note)
+
+        def _fov_spin() -> QDoubleSpinBox:
+            s = QDoubleSpinBox()
+            s.setRange(0.0, 180.0)
+            s.setDecimals(1)
+            s.setSingleStep(0.5)
+            s.setSuffix(" °")
+            s.setSpecialValueText("not set")   # shown when value == 0
+            s.setValue(0.0)
+            return s
+
+        rgb_fov_row = QHBoxLayout()
+        rgb_fov_lbl = QLabel("RGB camera:")
+        rgb_fov_lbl.setFixedWidth(110)
+        self._rgb_fov_spin = _fov_spin()
+        rgb_fov_row.addWidget(rgb_fov_lbl)
+        rgb_fov_row.addWidget(self._rgb_fov_spin)
+        rgb_fov_row.addStretch()
+        outer_lay.addLayout(rgb_fov_row)
+
+        th_fov_row = QHBoxLayout()
+        th_fov_lbl = QLabel("Thermal camera:")
+        th_fov_lbl.setFixedWidth(110)
+        self._th_fov_spin = _fov_spin()
+        th_fov_row.addWidget(th_fov_lbl)
+        th_fov_row.addWidget(self._th_fov_spin)
+        th_fov_row.addStretch()
+        outer_lay.addLayout(th_fov_row)
 
         return outer
 
@@ -2198,6 +2297,7 @@ class CameraCalibrationWizard(QDialog):
             params = {
                 "image_paths": self._single_paths,
                 "camera_name": self._single_cam_name.text().strip() or "Camera",
+                "fov_diag": self._single_fov_spin.value(),
             }
         else:
             # Collect all corresponding points
@@ -2218,25 +2318,43 @@ class CameraCalibrationWizard(QDialog):
                 self._run_calib_btn.setEnabled(True)
                 return
 
-            # Build initial calibration — use loaded file per camera, fall back to estimate
+            # Build initial calibration — loaded file > FoV spec > image-size heuristic
             if self._rgb_calib_data:
                 rgb_init = self._rgb_calib_data
             else:
                 rgb_img = _load_image_or_video_central(self._rgb_paths[0])
-                rgb_init = _estimate_intrinsics_from_image(rgb_img) if rgb_img is not None else {
-                    "ret": None, "mtx": [[1000, 0, 640], [0, 1000, 512], [0, 0, 1]],
-                    "dist": [0] * 5,
-                }
+                rgb_fov = self._rgb_fov_spin.value()
+                if rgb_img is not None and rgb_fov > 0:
+                    h, w = rgb_img.shape[:2]
+                    rgb_init = {
+                        "ret": None,
+                        "mtx": _fov_diag_to_mtx(rgb_fov, w, h),
+                        "dist": [0.0] * 5,
+                    }
+                else:
+                    rgb_init = _estimate_intrinsics_from_image(rgb_img) if rgb_img is not None else {
+                        "ret": None, "mtx": [[1000, 0, 640], [0, 1000, 512], [0, 0, 1]],
+                        "dist": [0] * 5,
+                    }
             rgb_init["name"] = "Wide"
 
             if self._th_calib_data:
                 th_init = self._th_calib_data
             else:
                 th_img = _load_image_or_video_central(self._th_paths[0])
-                th_init = _estimate_intrinsics_from_image(th_img) if th_img is not None else {
-                    "ret": None, "mtx": [[800, 0, 320], [0, 800, 256], [0, 0, 1]],
-                    "dist": [0] * 5,
-                }
+                th_fov = self._th_fov_spin.value()
+                if th_img is not None and th_fov > 0:
+                    h, w = th_img.shape[:2]
+                    th_init = {
+                        "ret": None,
+                        "mtx": _fov_diag_to_mtx(th_fov, w, h),
+                        "dist": [0.0] * 5,
+                    }
+                else:
+                    th_init = _estimate_intrinsics_from_image(th_img) if th_img is not None else {
+                        "ret": None, "mtx": [[800, 0, 320], [0, 800, 256], [0, 0, 1]],
+                        "dist": [0] * 5,
+                    }
             th_init["name"] = "Thermal"
 
             init_calib = {"Wide": rgb_init, "Thermal": th_init}
