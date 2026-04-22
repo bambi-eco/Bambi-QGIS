@@ -130,6 +130,17 @@ def _extract_n_frames_to_dir(video_path: str, out_dir: str, n: int,
     return paths
 
 
+def _undistort_img(img: "np.ndarray", calib: dict) -> "np.ndarray":
+    """Return undistorted copy of *img* using calibration *calib* {mtx/K, dist}.
+    Falls back to the original image if anything goes wrong."""
+    try:
+        mtx = np.array(calib.get("mtx") or calib.get("K"), dtype=np.float64)
+        dist = np.array(calib["dist"], dtype=np.float64).flatten()
+        return cv2.undistort(img, mtx, dist)
+    except Exception:
+        return img
+
+
 def _estimate_intrinsics_from_image(img: "np.ndarray") -> dict:
     """Rough estimate of camera matrix from image dimensions."""
     h, w = img.shape[:2]
@@ -619,6 +630,14 @@ class _CalibWorker(QObject):
         rgb_dist5 = _pad5(rgb_dist)
         new_cm = rgb_mtx.copy()
 
+        # When annotation images were pre-undistorted the placed points are
+        # already in undistorted pixel space, so skip undistortPoints for that
+        # side.  The saved output still uses the original (non-zeroed) distortion.
+        rgb_pre_undist = self._params.get("rgb_pre_undistorted", False)
+        th_pre_undist  = self._params.get("th_pre_undistorted", False)
+        rgb_dist_warp = np.zeros(5) if rgb_pre_undist else rgb_dist5
+        th_dist_x0    = np.zeros(5) if th_pre_undist  else th_dist5
+
         def _warp(pts, cm, dc):
             p = np.array(pts, dtype=np.float32).reshape(-1, 1, 2)
             return cv2.undistortPoints(p, cm, dc.reshape(1, -1), P=new_cm).reshape(-1, 1, 2)
@@ -627,12 +646,12 @@ class _CalibWorker(QObject):
             th_fx, th_fy, th_cx, th_cy = x[0], x[1], x[2], x[3]
             th_d = np.array(x[4:9])
             th_cm = np.array([[th_fx, 0.0, th_cx], [0.0, th_fy, th_cy], [0.0, 0.0, 1.0]])
-            w_w = _warp(W_pts, rgb_mtx, rgb_dist5)
+            w_w = _warp(W_pts, rgb_mtx, rgb_dist_warp)
             t_w = _warp(T_pts, th_cm, th_d)
             stacked = np.concatenate([w_w, t_w], axis=1)
             return float(np.sum(np.diff(stacked, axis=1) ** 2, axis=2).mean())
 
-        x0 = [th_mtx[0, 0], th_mtx[1, 1], th_mtx[0, 2], th_mtx[1, 2]] + th_dist5.tolist()
+        x0 = [th_mtx[0, 0], th_mtx[1, 1], th_mtx[0, 2], th_mtx[1, 2]] + th_dist_x0.tolist()
 
         self.log.emit("Optimising thermal intrinsics (Nelder-Mead, 10 iterations)…")
         n_iters = 10
@@ -1172,7 +1191,11 @@ class CameraCalibrationWizard(QDialog):
         rgb_widget = QWidget()
         rgb_lay = QVBoxLayout(rgb_widget)
         rgb_lay.setContentsMargins(0, 0, 0, 0)
-        rgb_lay.addWidget(QLabel("RGB / Wide"))
+        rgb_hdr = QLabel(
+            "RGB / Wide" + (" — undistorted" if self._rgb_calib_data else "")
+        )
+        rgb_hdr.setStyleSheet("color: #88ff88;" if self._rgb_calib_data else "")
+        rgb_lay.addWidget(rgb_hdr)
         self._rgb_img_lbl = _AnnotImageLabel()
         self._rgb_img_lbl.pointPlaced.connect(self._on_rgb_point_placed)
         rgb_lay.addWidget(self._rgb_img_lbl)
@@ -1181,7 +1204,11 @@ class CameraCalibrationWizard(QDialog):
         th_widget = QWidget()
         th_lay = QVBoxLayout(th_widget)
         th_lay.setContentsMargins(0, 0, 0, 0)
-        th_lay.addWidget(QLabel("Thermal"))
+        th_hdr = QLabel(
+            "Thermal" + (" — undistorted" if self._th_calib_data else "")
+        )
+        th_hdr.setStyleSheet("color: #88ff88;" if self._th_calib_data else "")
+        th_lay.addWidget(th_hdr)
         self._th_img_lbl = _AnnotImageLabel()
         self._th_img_lbl.pointPlaced.connect(self._on_th_point_placed)
         th_lay.addWidget(self._th_img_lbl)
@@ -1399,14 +1426,6 @@ class CameraCalibrationWizard(QDialog):
         save_grp_lay.addWidget(self._save_single_widget)
         save_grp_lay.addWidget(self._save_stereo_widget)
         self._save_stereo_widget.setVisible(False)
-
-        self._save_btn = QPushButton("Save")
-        self._save_btn.setMinimumWidth(80)
-        self._save_btn.clicked.connect(self._save_calibration)
-        save_btn_row = QHBoxLayout()
-        save_btn_row.addStretch()
-        save_btn_row.addWidget(self._save_btn)
-        save_grp_lay.addLayout(save_btn_row)
 
         lay.addWidget(save_grp)
 
@@ -2071,8 +2090,12 @@ class CameraCalibrationWizard(QDialog):
         rgb_img = _load_image_or_video_central(self._rgb_paths[idx])
         th_img = _load_image_or_video_central(self._th_paths[idx])
         if rgb_img is not None:
+            if self._rgb_calib_data:
+                rgb_img = _undistort_img(rgb_img, self._rgb_calib_data)
             self._rgb_img_lbl.load_image(rgb_img)
         if th_img is not None:
+            if self._th_calib_data:
+                th_img = _undistort_img(th_img, self._th_calib_data)
             self._th_img_lbl.load_image(th_img)
 
         # Restore saved points for this pair
@@ -2222,6 +2245,8 @@ class CameraCalibrationWizard(QDialog):
                 "T_points": T_pts,
                 "W_points": W_pts,
                 "initial_calibration": init_calib,
+                "rgb_pre_undistorted": bool(self._rgb_calib_data),
+                "th_pre_undistorted": bool(self._th_calib_data),
             }
 
         self._worker = _CalibWorker(self._mode, params)
@@ -2580,108 +2605,105 @@ class CameraCalibrationWizard(QDialog):
         h = label.height() if label.height() > 10 else 300
         label.setPixmap(pm.scaled(w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation))
 
+    # ------------------------------------------------------------------
+    # Write helpers — each saves one file and notifies on success/error
+    # ------------------------------------------------------------------
+
+    def _do_write_single(self, path: str) -> bool:
+        if not self._result:
+            QMessageBox.warning(self, "No result", "Run calibration first.")
+            return False
+        data = {
+            "ret": self._result.get("ret"),
+            "mtx": self._result["mtx"],
+            "dist": self._result["dist"],
+            "name": self._result.get("camera_name", "Camera"),
+        }
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, indent=2)
+            QMessageBox.information(self, "Saved", f"Calibration saved to:\n{path}")
+            self.calibrationSaved.emit(path)
+            return True
+        except Exception as exc:
+            QMessageBox.critical(self, "Save failed", str(exc))
+            return False
+
+    def _do_write_thermal(self, path: str) -> bool:
+        if not self._result:
+            QMessageBox.warning(self, "No result", "Run calibration first.")
+            return False
+        data = {
+            "ret": self._result["Thermal"].get("ret"),
+            "mtx": self._result["Thermal"]["mtx"],
+            "dist": self._result["Thermal"]["dist"],
+            "name": "Thermal",
+        }
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, indent=2)
+            QMessageBox.information(self, "Saved", f"Thermal calibration saved to:\n{path}")
+            self.calibrationSaved.emit(path)
+            return True
+        except Exception as exc:
+            QMessageBox.critical(self, "Save failed", str(exc))
+            return False
+
+    def _do_write_rgb(self, path: str) -> bool:
+        if not self._result:
+            QMessageBox.warning(self, "No result", "Run calibration first.")
+            return False
+        data = {
+            "ret": self._result["Wide"].get("ret"),
+            "mtx": self._result["Wide"]["mtx"],
+            "dist": self._result["Wide"]["dist"],
+            "name": "Wide",
+        }
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, indent=2)
+            QMessageBox.information(self, "Saved", f"RGB calibration saved to:\n{path}")
+            self.calibrationSaved.emit(path)
+            return True
+        except Exception as exc:
+            QMessageBox.critical(self, "Save failed", str(exc))
+            return False
+
     def _browse_save_path(self, target: str = "single") -> None:
         if target == "thermal":
-            default = "calibration_thermal.json"
             path, _ = QFileDialog.getSaveFileName(
-                self, "Save Thermal Calibration JSON", default, "JSON (*.json)"
+                self, "Save Thermal Calibration JSON",
+                "calibration_thermal.json", "JSON (*.json)"
             )
             if path:
                 if not path.endswith(".json"):
                     path += ".json"
                 self._save_th_path_edit.setText(path)
+                self._do_write_thermal(path)
         elif target == "rgb":
-            default = "calibration_rgb.json"
             path, _ = QFileDialog.getSaveFileName(
-                self, "Save RGB Calibration JSON", default, "JSON (*.json)"
+                self, "Save RGB Calibration JSON",
+                "calibration_rgb.json", "JSON (*.json)"
             )
             if path:
                 if not path.endswith(".json"):
                     path += ".json"
                 self._save_rgb_path_edit.setText(path)
+                self._do_write_rgb(path)
         else:
-            default = "calibration.json"
             path, _ = QFileDialog.getSaveFileName(
-                self, "Save Calibration JSON", default, "JSON (*.json)"
+                self, "Save Calibration JSON",
+                "calibration.json", "JSON (*.json)"
             )
             if path:
                 if not path.endswith(".json"):
                     path += ".json"
                 self._save_path_edit.setText(path)
+                self._do_write_single(path)
 
-    def _save_calibration(self) -> None:
-        if not self._result:
-            QMessageBox.warning(self, "No result", "Run calibration first.")
-            return
-
-        mode = self._result.get("mode", self._mode)
-
-        if mode == "single":
-            path = self._save_path_edit.text().strip()
-            if not path:
-                self._browse_save_path("single")
-                path = self._save_path_edit.text().strip()
-            if not path:
-                return
-            if not path.endswith(".json"):
-                path += ".json"
-            data = {
-                "ret": self._result.get("ret"),
-                "mtx": self._result["mtx"],
-                "dist": self._result["dist"],
-                "name": self._result.get("camera_name", "Camera"),
-            }
-            try:
-                os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-                with open(path, "w", encoding="utf-8") as fh:
-                    json.dump(data, fh, indent=2)
-                QMessageBox.information(self, "Saved", f"Calibration saved to:\n{path}")
-                self.calibrationSaved.emit(path)
-            except Exception as exc:
-                QMessageBox.critical(self, "Save failed", str(exc))
-
-        else:  # stereo — two separate files
-            th_path = self._save_th_path_edit.text().strip()
-            rgb_path = self._save_rgb_path_edit.text().strip()
-            if not th_path:
-                self._browse_save_path("thermal")
-                th_path = self._save_th_path_edit.text().strip()
-            if not th_path:
-                return
-            if not rgb_path:
-                self._browse_save_path("rgb")
-                rgb_path = self._save_rgb_path_edit.text().strip()
-            if not rgb_path:
-                return
-            if not th_path.endswith(".json"):
-                th_path += ".json"
-            if not rgb_path.endswith(".json"):
-                rgb_path += ".json"
-
-            th_data = {
-                "ret": self._result["Thermal"].get("ret"),
-                "mtx": self._result["Thermal"]["mtx"],
-                "dist": self._result["Thermal"]["dist"],
-                "name": "Thermal",
-            }
-            rgb_data = {
-                "ret": self._result["Wide"].get("ret"),
-                "mtx": self._result["Wide"]["mtx"],
-                "dist": self._result["Wide"]["dist"],
-                "name": "Wide",
-            }
-            try:
-                for path, data in ((th_path, th_data), (rgb_path, rgb_data)):
-                    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-                    with open(path, "w", encoding="utf-8") as fh:
-                        json.dump(data, fh, indent=2)
-                    self.calibrationSaved.emit(path)
-                QMessageBox.information(
-                    self, "Saved",
-                    f"Thermal calibration saved to:\n{th_path}\n\nRGB calibration saved to:\n{rgb_path}"
-                )
-            except Exception as exc:
-                QMessageBox.critical(self, "Save failed", str(exc))
 
     # =========================================================================
     # Cleanup
