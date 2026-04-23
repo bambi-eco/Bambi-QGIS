@@ -1751,6 +1751,9 @@ class BambiProcessor:
             log_fn("Loading DEM mesh...")
 
         ctx = None
+        mesh_data = None
+        texture_data = None
+        tri_mesh = None
         try:
             mesh_data, texture_data = read_gltf(dem_path)
             tri_mesh = Trimesh(vertices=mesh_data.vertices, faces=mesh_data.indices)
@@ -1832,9 +1835,12 @@ class BambiProcessor:
         finally:
             if ctx:
                 release_all(ctx)
-            del mesh_data
-            del texture_data
-            del tri_mesh
+            if mesh_data is not None:
+                del mesh_data
+            if texture_data is not None:
+                del texture_data
+            if tri_mesh is not None:
+                del tri_mesh
 
         # Write georeferenced results
         output_file = os.path.join(georef_folder, "georeferenced.txt")
@@ -1967,6 +1973,9 @@ class BambiProcessor:
 
         # Load DEM mesh
         ctx = None
+        mesh_data = None
+        texture_data = None
+        tri_mesh = None
         try:
             mesh_data, texture_data = read_gltf(dem_path)
             tri_mesh = Trimesh(vertices=mesh_data.vertices, faces=mesh_data.indices)
@@ -2061,9 +2070,12 @@ class BambiProcessor:
         finally:
             if ctx:
                 release_all(ctx)
-            del mesh_data
-            del texture_data
-            del tri_mesh
+            if mesh_data is not None:
+                del mesh_data
+            if texture_data is not None:
+                del texture_data
+            if tri_mesh is not None:
+                del tri_mesh
 
         if log_fn:
             log_fn(f"FoV calculation complete. Output: {output_file}")
@@ -2879,6 +2891,9 @@ class BambiProcessor:
 
         # Load DEM mesh
         ctx = None
+        mesh_data = None
+        texture_data = None
+        tri_mesh = None
         georef_tracks = []
 
         try:
@@ -2954,9 +2969,12 @@ class BambiProcessor:
         finally:
             if ctx:
                 release_all(ctx)
-            del mesh_data
-            del texture_data
-            del tri_mesh
+            if mesh_data is not None:
+                del mesh_data
+            if texture_data is not None:
+                del texture_data
+            if tri_mesh is not None:
+                del tri_mesh
 
         # Write geo-referenced tracks
         output_file = os.path.join(tracks_folder, "tracks.csv")
@@ -4126,11 +4144,11 @@ class BambiProcessor:
                 log_fn(f"Warning: Could not save PRJ file: {e}")
 
     def run_export_geotiffs(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
-        """Export each frame as an individual GeoTIFF using optimized projection.
+        """Export each frame as an individual GeoTIFF.
 
-        This method uses an efficient single-pass approach that loads the DEM mesh
-        once and projects each frame individually without the overhead of the
-        full orthomosaic pipeline.
+        Uses the same alfspy projection pipeline as the orthomosaic, with
+        mask-polygon-derived bounds (like the FoV calculation) for accurate
+        georeferencing.
 
         :param config: Configuration dictionary
         :param progress_fn: Progress callback function
@@ -4138,481 +4156,315 @@ class BambiProcessor:
         """
         import numpy as np
         import cv2
-        from PIL import Image
-        from dataclasses import dataclass
 
-        # Check for required dependencies
-        try:
-            from scipy.interpolate import griddata
-            from scipy.signal import savgol_filter
-        except ImportError:
-            raise ImportError(
-                "scipy is required for GeoTIFF export.\n"
-                "Please install: pip install scipy"
-            )
+        from pyrr import Vector3, Quaternion
 
         try:
-            from pyrr import Quaternion
-        except ImportError:
+            from alfspy.core.geo.transform import Transform
+            from alfspy.core.rendering import Resolution, Camera, CtxShot, TextureData
+            from alfspy.core.rendering.renderer import Renderer
+            from alfspy.core.util.geo import get_aabb
+            from alfspy.core.util.pyrrs import quaternion_from_eulers
+            from alfspy.render.render import read_gltf, process_render_data, make_mgl_context, release_all
+            from trimesh import Trimesh
+        except ImportError as exc:
             raise ImportError(
-                "pyrr is required for GeoTIFF export.\n"
-                "Please install: pip install pyrr"
+                f"alfspy and trimesh are required for GeoTIFF export.\n"
+                f"Original error: {exc}"
             )
 
-        try:
-            from alfspy.render.render import read_gltf, process_render_data
-        except ImportError:
-            raise ImportError(
-                "alfspy is required for GeoTIFF export.\n"
-                "Please install alfspy"
-            )
-
-        camera = config.get("geotiff_camera", "T")
-        camera_suffix = "t" if camera == "T" else "w"
-        camera_name = "Thermal" if camera == "T" else "RGB"
+        camera_sel = config.get("geotiff_camera", "T")
+        camera_suffix = "t" if camera_sel == "T" else "w"
+        camera_name = "Thermal" if camera_sel == "T" else "RGB"
 
         if log_fn:
-            log_fn(f"Initializing optimized frame export for {camera_name} frames...")
+            log_fn(f"Initializing GeoTIFF export for {camera_name} frames...")
 
-        # Get configuration parameters
         target_folder = config["target_folder"]
         dem_path = config["dem_path"]
         target_epsg = config.get("target_epsg", 32633)
         use_all_frames = config.get("ortho_use_all_frames", True)
-        start_frame = config.get("ortho_start_frame", 0)
-        end_frame = config.get("ortho_end_frame", 999999)
+        start_frame = config.get("ortho_start_frame") or 0
+        end_frame_cfg = config.get("ortho_end_frame") or 999999
         ground_resolution = config.get("ortho_ground_resolution", 0.1)
         dem_metadata_path = config.get("ortho_dem_metadata_path")
-        apply_smoothing = config.get("geotiff_apply_smoothing", False)
-        mesh_subsample = config.get("geotiff_mesh_subsample", 1)
         frame_step = config.get("ortho_frame_step", 1)
+        mask_simplify_epsilon = config.get("geotiff_mask_simplify_epsilon", 2.0)
 
-        # Set frames folder based on camera selection
         frames_folder = os.path.join(target_folder, f"frames_{camera_suffix}")
 
         if log_fn:
-            if use_all_frames:
-                log_fn("Frame range: All frames")
-            else:
-                log_fn(f"Frame range: {start_frame} to {end_frame}")
-            if frame_step > 1:
-                log_fn(f"Frame step: every {frame_step} frames")
             log_fn(f"Output resolution: {ground_resolution} m/px")
 
         if progress_fn:
             progress_fn(2)
 
-        # ====== Load poses for selected camera ======
+        # Load poses
         poses_file = os.path.join(target_folder, f"poses_{camera_suffix}.json")
         if not os.path.exists(poses_file):
             raise FileNotFoundError(f"poses_{camera_suffix}.json not found at {poses_file}")
-
         with open(poses_file, 'r') as f:
             poses = json.load(f)
-
         all_images = poses.get("images", [])
-        total_all = len(all_images)
-
-        if total_all == 0:
+        if not all_images:
             raise RuntimeError("No images found in poses.json")
-
         if log_fn:
-            log_fn(f"Found {total_all} images in poses.json")
+            log_fn(f"Found {len(all_images)} images in poses.json")
 
-        # Apply pose smoothing if requested — stored separately to avoid mutating raw poses
-        # (run_georeference uses raw positions; mutating here would cause a mismatch)
-        smoothed_locations = None
-        if apply_smoothing and total_all >= 5:
-            window_length = min(11, total_all - 1 if (total_all - 1) % 2 == 1 else total_all - 2)
-            if window_length >= 3:
-                positions = np.array([img["location"] for img in all_images], dtype=float)
-                smoothed = savgol_filter(positions, window_length=window_length,
-                                         polyorder=2, axis=0, mode="interp")
-                smoothed_locations = {i: smoothed[i].tolist() for i in range(total_all)}
-                if log_fn:
-                    log_fn(f"Applied pose smoothing (window={window_length})")
-
-        # Build list of frame indices to export
-        frame_indices = []
-        for i in range(total_all):
-            if use_all_frames or (start_frame <= i <= end_frame):
-                frame_indices.append(i)
-
-        # Apply frame step filter
+        # Build frame index list
+        frame_indices = [
+            i for i in range(len(all_images))
+            if use_all_frames or (start_frame <= i <= end_frame_cfg)
+        ]
         if frame_step > 1:
             frame_indices = frame_indices[::frame_step]
-            if log_fn:
-                log_fn(f"After frame step: {len(frame_indices)} frames")
-
-        if len(frame_indices) == 0:
+        if not frame_indices:
             raise RuntimeError("No frames to export after filtering")
-
         if log_fn:
             log_fn(f"Will export {len(frame_indices)} frames as GeoTIFF")
 
         if progress_fn:
-            progress_fn(5)
+            progress_fn(4)
 
-        # ====== Load DEM mesh using alfspy ======
-        if log_fn:
-            log_fn(f"Loading DEM mesh from: {dem_path}")
-
-        if not os.path.exists(dem_path):
-            raise FileNotFoundError(f"DEM file not found: {dem_path}")
-
-        mesh_data, texture_data = read_gltf(dem_path)
-        vertices = np.array(mesh_data.vertices)
-        faces = np.array(mesh_data.indices).reshape(-1, 3)  # indices are flat, reshape to triangles
-
-        # Apply subsampling if requested
-        if mesh_subsample > 1:
-            face_indices = np.arange(0, len(faces), mesh_subsample)
-            faces = faces[face_indices]
-            unique_vertex_indices = np.unique(faces.flatten())
-            vertex_map = {old: new for new, old in enumerate(unique_vertex_indices)}
-            vertices = vertices[unique_vertex_indices]
-            faces = np.array([[vertex_map[v] for v in face] for face in faces])
-            if log_fn:
-                log_fn(f"Mesh subsampled by factor {mesh_subsample}")
-
-        if log_fn:
-            log_fn(f"Loaded {len(vertices)} vertices and {len(faces)} faces")
-            log_fn(f"Mesh bounds (local): X=[{vertices[:, 0].min():.2f}, {vertices[:, 0].max():.2f}]")
-            log_fn(f"                     Y=[{vertices[:, 1].min():.2f}, {vertices[:, 1].max():.2f}]")
-
-        if progress_fn:
-            progress_fn(10)
-
-        # ====== Load DEM metadata (coordinate offset) ======
-        coord_offset_x = 0.0
-        coord_offset_y = 0.0
-        coord_offset_z = 0.0
-
-        # Try explicit metadata path first
+        # Load DEM coordinate offset
+        x_offset = y_offset = z_offset = 0.0
+        dem_json_path = dem_path.replace(".gltf", ".json").replace(".glb", ".json")
         if dem_metadata_path and os.path.exists(dem_metadata_path):
-            if log_fn:
-                log_fn(f"Loading DEM metadata from: {dem_metadata_path}")
-            with open(dem_metadata_path, 'r') as f:
-                dem_metadata = json.load(f)
-            origin = dem_metadata.get("origin", [0, 0, 0])
-            coord_offset_x, coord_offset_y, coord_offset_z = float(origin[0]), float(origin[1]), float(origin[2])
-        else:
-            # Try to find metadata in same folder as DEM
-            auto_metadata_path = dem_path.replace(".gltf", ".json").replace(".glb", ".json")
-            if os.path.exists(auto_metadata_path):
-                if log_fn:
-                    log_fn(f"Found DEM metadata at: {auto_metadata_path}")
-                with open(auto_metadata_path, 'r') as f:
-                    dem_metadata = json.load(f)
-                origin = dem_metadata.get("origin", [0, 0, 0])
-                coord_offset_x, coord_offset_y, coord_offset_z = float(origin[0]), float(origin[1]), float(origin[2])
-
+            dem_json_path = dem_metadata_path
+        if os.path.exists(dem_json_path):
+            with open(dem_json_path) as f:
+                dem_json = json.load(f)
+            origin = dem_json.get("origin", [0, 0, 0])
+            x_offset, y_offset, z_offset = float(origin[0]), float(origin[1]), float(origin[2])
         if log_fn:
-            log_fn(f"DEM origin offset: ({coord_offset_x:.2f}, {coord_offset_y:.2f}, {coord_offset_z:.2f})")
+            log_fn(f"DEM origin: ({x_offset:.2f}, {y_offset:.2f}, {z_offset:.2f})")
 
-        # ====== Load mask if available ======
-        mask_array = None
+        # Determine input resolution from first available frame
+        input_resolution = None
+        for img_info_probe in all_images:
+            probe_path = os.path.join(frames_folder, img_info_probe.get("imagefile", ""))
+            if os.path.exists(probe_path):
+                probe_img = cv2.imread(probe_path)
+                if probe_img is not None:
+                    input_resolution = Resolution(probe_img.shape[1], probe_img.shape[0])
+                    break
+        if input_resolution is None:
+            input_resolution = Resolution(1024, 1024)
+        if log_fn:
+            log_fn(f"Input resolution: {input_resolution.width}x{input_resolution.height}")
+
+        # Load mask polygon for bound calculation (same source as orthomosaic mask)
         mask_filename = poses.get("mask")
-        if mask_filename:
-            mask_path = os.path.join(target_folder, mask_filename)
-            if os.path.exists(mask_path):
-                try:
-                    mask_img = Image.open(mask_path).convert('L')
-                    mask_array = np.array(mask_img)
-                    if mask_array.max() <= 1:
-                        mask_array = (mask_array * 255).astype(np.uint8)
-                    if log_fn:
-                        log_fn(f"Loaded mask from: {mask_path}")
-                except Exception as e:
-                    if log_fn:
-                        log_fn(f"Warning: Could not load mask: {e}")
+        mask_file_path = os.path.join(target_folder, mask_filename) if mask_filename else None
+        mask_polygon = None
+        if mask_file_path and os.path.exists(mask_file_path):
+            mask_polygon = self._extract_mask_polygon(mask_file_path, mask_simplify_epsilon, log_fn)
+            if log_fn and mask_polygon:
+                log_fn(f"Loaded mask polygon with {len(mask_polygon)} points")
+        if not mask_polygon:
+            w, h = input_resolution.width, input_resolution.height
+            mask_polygon = [
+                (0, 0), (w // 2, 0), (w, 0),
+                (w, h // 2), (w, h),
+                (w // 2, h), (0, h),
+                (0, h // 2)
+            ]
+            if log_fn:
+                log_fn("Using image corners as FoV polygon")
 
-        if progress_fn:
-            progress_fn(15)
-
-        # ====== Create output folder ======
+        # Create output folder
         geotiff_folder = os.path.join(target_folder, "geotiffs")
         os.makedirs(geotiff_folder, exist_ok=True)
 
-        # ====== Process frames ======
-        exported_count = 0
-        total_frames = len(frame_indices)
+        if progress_fn:
+            progress_fn(6)
 
-        if log_fn:
-            log_fn(f"Starting frame export...")
+        ctx = None
+        try:
+            # Load DEM mesh
+            if log_fn:
+                log_fn(f"Loading DEM mesh from: {dem_path}")
+            if not os.path.exists(dem_path):
+                raise FileNotFoundError(f"DEM file not found: {dem_path}")
 
-        for i, frame_idx in enumerate(frame_indices):
-            # Check for cancellation
-            if cancel_check and cancel_check():
-                if log_fn:
-                    log_fn("GeoTIFF export cancelled by user")
-                raise CancelledException("GeoTIFF export cancelled")
-            
-            try:
-                # Get image info
-                img_info = all_images[frame_idx]
-                image_file = img_info.get("imagefile")
-                image_path = os.path.join(frames_folder, image_file)
+            mesh_data, texture_data = read_gltf(dem_path)
+            # Build Trimesh for ray-casting before process_render_data modifies the data
+            tri_mesh = Trimesh(vertices=mesh_data.vertices, faces=mesh_data.indices)
+            mesh_data, texture_data = process_render_data(mesh_data, texture_data)
+            mesh_aabb = get_aabb(mesh_data.vertices)
 
-                if not os.path.exists(image_path):
-                    if log_fn and i < 5:
-                        log_fn(f"Warning: Image not found: {image_file}")
-                    continue
+            if log_fn:
+                log_fn(f"Mesh bounds: X[{mesh_aabb.p_min.x:.1f}, {mesh_aabb.p_max.x:.1f}] "
+                       f"Y[{mesh_aabb.p_min.y:.1f}, {mesh_aabb.p_max.y:.1f}]")
 
-                # Load image
-                img = Image.open(image_path).convert('RGB')
-                image = np.array(img)
-                img_h, img_w = image.shape[:2]
+            ctx = make_mgl_context()
 
-                # Apply mask
-                if mask_array is not None:
-                    if (mask_array.shape[0], mask_array.shape[1]) != (img_h, img_w):
-                        mask_resized = np.array(
-                            Image.fromarray(mask_array).resize((img_w, img_h), Image.Resampling.NEAREST))
-                    else:
-                        mask_resized = mask_array
-                    image_mask = mask_resized > 127
-                else:
-                    image_mask = np.ones((img_h, img_w), dtype=bool)
+            # Set up mask texture for rendering
+            mask_texture = None
+            if mask_file_path and os.path.exists(mask_file_path):
+                mask_img_cv = cv2.imread(mask_file_path, cv2.IMREAD_UNCHANGED)
+                if mask_img_cv is not None:
+                    mask_texture = TextureData(CtxShot._cvt_img(mask_img_cv))
 
-                # Get camera parameters
-                # Use smoothed position if available (raw positions are kept intact in img_info)
-                raw_location = img_info['location']
-                if smoothed_locations is not None:
-                    location = smoothed_locations[frame_idx]
-                else:
-                    location = raw_location
-                position = np.array(location, dtype=float)
-                rotation_deg = np.array(img_info['rotation'], dtype=float)
-                fovy = img_info.get('fovy', 45.0)
-                if isinstance(fovy, list):
-                    fovy = fovy[0]
+            # Orthographic camera Z: well above the highest terrain point
+            ortho_cam_z = float(mesh_aabb.p_max.z) + 100.0
 
-                # Get frame-specific correction factors
-                correction = self.get_correction_for_frame(frame_idx, config)
-                cor_translation = correction["translation"]
-                cor_rotation = correction["rotation"]
+            if progress_fn:
+                progress_fn(15)
 
-                # Apply translation correction
-                position[0] += cor_translation.get('x', 0)
-                position[1] += cor_translation.get('y', 0)
-                position[2] += cor_translation.get('z', 0)
+            exported_count = 0
+            total_frames = len(frame_indices)
+            if log_fn:
+                log_fn("Starting frame export...")
 
-                # Convert rotation to radians, apply correction (in radians), then negate
-                # Following the same pattern as other geo-referencing methods
-                cor_rotation_eulers = np.array([
-                    cor_rotation.get('x', 0),
-                    cor_rotation.get('y', 0),
-                    cor_rotation.get('z', 0)
-                ])
-                rotation_rad = (np.deg2rad(rotation_deg % 360.0) - cor_rotation_eulers) * -1
-                rotation = Quaternion.from_eulers(rotation_rad)
-                rotation_matrix = np.array(rotation.matrix33)
+            for i, frame_idx in enumerate(frame_indices):
+                if cancel_check and cancel_check():
+                    if log_fn:
+                        log_fn("GeoTIFF export cancelled by user")
+                    raise CancelledException("GeoTIFF export cancelled")
 
-                # Build camera transformation matrix
-                cam_to_world = np.eye(4)
-                cam_to_world[:3, :3] = rotation_matrix
-                cam_to_world[:3, 3] = position
-                world_to_cam = np.linalg.inv(cam_to_world)
+                try:
+                    img_info = all_images[frame_idx]
+                    image_file = img_info.get("imagefile")
+                    image_path = os.path.join(frames_folder, image_file)
+                    if not os.path.exists(image_path):
+                        if log_fn and i < 5:
+                            log_fn(f"Warning: Image not found: {image_file}")
+                        continue
 
-                # Calculate FOV
-                # Use aspect_ratio=1.0 to match the alfspy Camera model used in run_georeference
-                # (Camera(aspect_ratio=1.0) → horizontal half-FOV equals vertical half-FOV).
-                # Using img_w/img_h here would produce a wider horizontal projection, causing the
-                # same animal to appear at different geographic positions in consecutive GeoTIFFs.
-                fov_y_rad = np.deg2rad(fovy)
-                half_height = np.tan(fov_y_rad / 2)
-                half_width = half_height  # aspect_ratio = 1.0
+                    location = img_info.get("location", [0, 0, 0])
+                    rotation = img_info.get("rotation", [0, 0, 0])
+                    fovy = img_info.get("fovy", [45.0])
+                    if isinstance(fovy, (list, tuple)):
+                        fovy = fovy[0]
 
-                # Project mesh vertices to image coordinates (vectorized)
-                n_vertices = len(vertices)
-
-                # Convert all vertices to homogeneous coordinates
-                vertices_h = np.hstack([vertices, np.ones((n_vertices, 1))])
-
-                # Transform all vertices to camera space at once
-                vertices_cam = (world_to_cam @ vertices_h.T).T  # (N, 4)
-
-                # Find vertices in front of camera (z < 0 in camera space)
-                in_front = vertices_cam[:, 2] < 0
-
-                # Project to normalized device coordinates (only for valid vertices)
-                uvs = np.zeros((n_vertices, 2))
-                valid_mask = np.zeros(n_vertices, dtype=bool)
-
-                if np.any(in_front):
-                    z_neg = -vertices_cam[in_front, 2]
-                    x_ndc = vertices_cam[in_front, 0] / z_neg
-                    y_ndc = vertices_cam[in_front, 1] / z_neg
-
-                    # Convert to UV coordinates [0, 1]
-                    u = (x_ndc / half_width + 1) / 2
-                    v = 1.0 - (y_ndc / half_height + 1) / 2
-
-                    # Check which are within valid UV range
-                    uv_valid = (u >= 0) & (u <= 1) & (v >= 0) & (v <= 1)
-
-                    # Store results
-                    in_front_indices = np.where(in_front)[0]
-                    valid_indices_temp = in_front_indices[uv_valid]
-                    valid_mask[valid_indices_temp] = True
-                    uvs[valid_indices_temp, 0] = u[uv_valid]
-                    uvs[valid_indices_temp, 1] = v[uv_valid]
-
-                n_valid = np.sum(valid_mask)
-                if n_valid < 10:
-                    if log_fn and i < 5:
-                        log_fn(f"Warning: Too few valid vertices for frame {frame_idx} ({n_valid})")
-                    continue
-
-                # Get valid vertices
-                valid_indices = np.where(valid_mask)[0]
-                valid_vertices = vertices[valid_indices]
-                valid_uvs = uvs[valid_indices]
-
-                # Calculate bounds in local coordinates
-                local_min_x = valid_vertices[:, 0].min()
-                local_max_x = valid_vertices[:, 0].max()
-                local_min_y = valid_vertices[:, 1].min()
-                local_max_y = valid_vertices[:, 1].max()
-
-                # Calculate output dimensions
-                width_m = local_max_x - local_min_x
-                height_m = local_max_y - local_min_y
-                out_width = int(np.ceil(width_m / ground_resolution))
-                out_height = int(np.ceil(height_m / ground_resolution))
-
-                if out_width <= 0 or out_height <= 0:
-                    continue
-
-                # Limit maximum dimensions
-                max_dim = 8000
-                if out_width > max_dim or out_height > max_dim:
-                    scale = max_dim / max(out_width, out_height)
-                    out_width = int(out_width * scale)
-                    out_height = int(out_height * scale)
-
-                # Create output grid
-                x_coords = np.linspace(local_min_x, local_max_x, out_width)
-                y_coords = np.linspace(local_max_y, local_min_y, out_height)  # Top to bottom
-                grid_x, grid_y = np.meshgrid(x_coords, y_coords)
-                grid_points = np.column_stack([grid_x.ravel(), grid_y.ravel()])
-
-                # Interpolate UV coordinates at grid points
-                interp_u = griddata(
-                    valid_vertices[:, :2], valid_uvs[:, 0],
-                    grid_points, method='linear', fill_value=-1
-                ).reshape(out_height, out_width)
-
-                interp_v = griddata(
-                    valid_vertices[:, :2], valid_uvs[:, 1],
-                    grid_points, method='linear', fill_value=-1
-                ).reshape(out_height, out_width)
-
-                # Convert UV to pixel coordinates
-                pixel_x = interp_u * (img_w - 1)
-                pixel_y = interp_v * (img_h - 1)
-
-                # Valid output pixels
-                valid_output = (interp_u >= 0) & (interp_u <= 1) & (interp_v >= 0) & (interp_v <= 1)
-
-                # Create output arrays
-                n_channels = image.shape[2] if len(image.shape) == 3 else 1
-                if n_channels == 1:
-                    output_image = np.zeros((out_height, out_width), dtype=np.uint8)
-                else:
-                    output_image = np.zeros((out_height, out_width, n_channels), dtype=np.uint8)
-                output_valid = np.zeros((out_height, out_width), dtype=bool)
-
-                # Sample pixels using vectorized bilinear interpolation
-                valid_rows, valid_cols = np.where(valid_output)
-
-                if len(valid_rows) > 0:
-                    px = pixel_x[valid_rows, valid_cols]
-                    py = pixel_y[valid_rows, valid_cols]
-
-                    x0 = np.floor(px).astype(int)
-                    y0 = np.floor(py).astype(int)
-                    x1 = np.minimum(x0 + 1, img_w - 1)
-                    y1 = np.minimum(y0 + 1, img_h - 1)
-
-                    fx = px - x0
-                    fy = py - y0
-
-                    # Check mask for all four corners
-                    mask_valid = (
-                            image_mask[y0, x0] &
-                            image_mask[y0, x1] &
-                            image_mask[y1, x0] &
-                            image_mask[y1, x1]
+                    # Per-frame corrections
+                    correction_data = self.get_correction_for_frame(frame_idx, config)
+                    cor_t = correction_data["translation"]
+                    cor_r = correction_data["rotation"]
+                    cor_translation_v = Vector3(
+                        [cor_t.get('x', 0), cor_t.get('y', 0), cor_t.get('z', 0)], dtype='f4'
+                    )
+                    cor_rotation_v = Vector3(
+                        [cor_r.get('x', 0), cor_r.get('y', 0), cor_r.get('z', 0)], dtype='f4'
                     )
 
-                    # Filter to only valid pixels
-                    valid_px_rows = valid_rows[mask_valid]
-                    valid_px_cols = valid_cols[mask_valid]
-                    x0_v = x0[mask_valid]
-                    y0_v = y0[mask_valid]
-                    x1_v = x1[mask_valid]
-                    y1_v = y1[mask_valid]
-                    fx_v = fx[mask_valid]
-                    fy_v = fy[mask_valid]
+                    # Projection camera: manually corrected pose, same pattern as run_calculate_fov
+                    proj_position = Vector3(location, dtype='f4') + cor_translation_v
+                    proj_eulers = (
+                        Vector3([np.deg2rad(val % 360.0) for val in rotation]) - cor_rotation_v
+                    ) * -1
+                    proj_camera = Camera(
+                        fovy=fovy, aspect_ratio=1.0,
+                        position=proj_position,
+                        rotation=Quaternion.from_eulers(proj_eulers)
+                    )
 
-                    # Compute interpolation weights
-                    w00 = (1 - fx_v) * (1 - fy_v)
-                    w01 = fx_v * (1 - fy_v)
-                    w10 = (1 - fx_v) * fy_v
-                    w11 = fx_v * fy_v
+                    # Project mask polygon → world coords → UTM bounds
+                    georef_points = self._georeference_polygon(
+                        mask_polygon, input_resolution, tri_mesh, proj_camera,
+                        x_offset, y_offset, z_offset
+                    )
+                    valid_pts = [p for p in georef_points if p is not None]
+                    if len(valid_pts) < 3:
+                        if log_fn and i < 5:
+                            log_fn(f"Warning: Insufficient mask hits for frame {frame_idx}")
+                        continue
 
-                    if n_channels == 1:
-                        vals = (image[y0_v, x0_v] * w00 +
-                                image[y0_v, x1_v] * w01 +
-                                image[y1_v, x0_v] * w10 +
-                                image[y1_v, x1_v] * w11)
-                        output_image[valid_px_rows, valid_px_cols] = np.clip(vals, 0, 255).astype(np.uint8)
+                    xs = [p[0] for p in valid_pts]
+                    ys = [p[1] for p in valid_pts]
+                    utm_min_x, utm_max_x = min(xs), max(xs)
+                    utm_min_y, utm_max_y = min(ys), max(ys)
+                    width_m = utm_max_x - utm_min_x
+                    height_m = utm_max_y - utm_min_y
+                    if width_m <= 0 or height_m <= 0:
+                        continue
+
+                    out_w = max(1, int(np.ceil(width_m / ground_resolution)))
+                    out_h = max(1, int(np.ceil(height_m / ground_resolution)))
+                    max_dim = 8000
+                    if out_w > max_dim or out_h > max_dim:
+                        scale = max_dim / max(out_w, out_h)
+                        out_w = int(out_w * scale)
+                        out_h = int(out_h * scale)
+
+                    # CtxShot: raw pose + correction Transform, same as _run_orthomosaic_alfspy
+                    raw_eulers = [np.deg2rad(val % 360.0) for val in rotation]
+                    raw_rotation = quaternion_from_eulers(raw_eulers, 'zyx')
+                    cor_quat = Quaternion.from_eulers(cor_rotation_v)
+                    correction_transform = Transform(cor_translation_v, cor_quat)
+                    shot = CtxShot(
+                        ctx, image_path,
+                        Vector3(location, dtype='f4'), raw_rotation,
+                        fovy, 1, correction_transform, lazy=False
+                    )
+
+                    # Orthographic camera covering this frame's footprint (local DEM coords)
+                    local_min_x = utm_min_x - x_offset
+                    local_max_x = utm_max_x - x_offset
+                    local_min_y = utm_min_y - y_offset
+                    local_max_y = utm_max_y - y_offset
+                    center_x = (local_min_x + local_max_x) / 2
+                    center_y = (local_min_y + local_max_y) / 2
+                    ortho_camera = Camera(
+                        orthogonal=True,
+                        orthogonal_size=(local_max_x - local_min_x, local_max_y - local_min_y),
+                        position=Vector3([center_x, center_y, ortho_cam_z], dtype='f4'),
+                        rotation=Quaternion(),
+                        near=0.1,
+                        far=10000.0
+                    )
+
+                    # Render the frame as an orthophoto.
+                    # Use ShotOnly mode so only pixels actually covered by this shot
+                    # are returned — render_integral bleeds the DEM mesh texture into
+                    # the background producing noise.
+                    from alfspy.core.rendering import RenderResultMode
+                    tile_res = Resolution(out_w, out_h)
+                    renderer = Renderer(tile_res, ctx, ortho_camera, mesh_data, texture_data)
+                    proj_results = list(renderer.project_shots_iter(
+                        shot, RenderResultMode.ShotOnly,
+                        release_shots=True, mask=mask_texture
+                    ))
+                    renderer.release()
+
+                    if proj_results:
+                        rendered = np.array(proj_results[0])  # copy: GPU buffer is read-only
                     else:
-                        for c in range(n_channels):
-                            vals = (image[y0_v, x0_v, c] * w00 +
-                                    image[y0_v, x1_v, c] * w01 +
-                                    image[y1_v, x0_v, c] * w10 +
-                                    image[y1_v, x1_v, c] * w11)
-                            output_image[valid_px_rows, valid_px_cols, c] = np.clip(vals, 0, 255).astype(np.uint8)
+                        rendered = np.zeros((out_h, out_w, 4), dtype=np.uint8)
 
-                    output_valid[valid_px_rows, valid_px_cols] = True
+                    output_image = rendered[:, :, :3]
+                    output_valid = rendered[:, :, 3] > 0
 
-                # Convert bounds to UTM
-                utm_bounds = (
-                    local_min_x + coord_offset_x,
-                    local_min_y + coord_offset_y,
-                    local_max_x + coord_offset_x,
-                    local_max_y + coord_offset_y
-                )
+                    # Save GeoTIFF
+                    utm_bounds = (utm_min_x, utm_min_y, utm_max_x, utm_max_y)
+                    output_file = os.path.join(geotiff_folder, f"{frame_idx:08d}.tiff")
+                    self._save_frame_geotiff(output_image, output_valid, utm_bounds, output_file, target_epsg)
 
-                # Save GeoTIFF
-                output_file = os.path.join(geotiff_folder, f"{frame_idx:08d}.tiff")
-                self._save_frame_geotiff(output_image, output_valid, utm_bounds, output_file, target_epsg)
+                    if os.path.exists(output_file):
+                        exported_count += 1
 
-                if os.path.exists(output_file):
-                    exported_count += 1
+                except CancelledException:
+                    raise
+                except Exception as e:
+                    if log_fn and i < 10:
+                        import traceback
+                        log_fn(f"Warning: Failed to export frame {frame_idx}: {e}")
+                        if i < 3:
+                            log_fn(traceback.format_exc())
 
-            except Exception as e:
-                if log_fn and i < 10:
-                    import traceback
-                    log_fn(f"Warning: Failed to export frame {frame_idx}: {e}")
-                    if i < 3:
-                        log_fn(traceback.format_exc())
+                if progress_fn:
+                    progress_fn(15 + int((i + 1) / total_frames * 80))
 
-            # Update progress
-            if progress_fn:
-                progress = 15 + int((i + 1) / total_frames * 80)
-                progress_fn(min(progress, 95))
+                if log_fn and (i + 1) % 50 == 0:
+                    log_fn(f"Exported {exported_count}/{total_frames} frames so far...")
 
-            # Periodic status update
-            if log_fn and (i + 1) % 50 == 0:
-                log_fn(f"Exported {exported_count}/{total_frames} frames...")
+        finally:
+            if ctx:
+                release_all(ctx)
 
         if log_fn:
-            log_fn(f"Successfully exported {exported_count} of {total_frames} frames")
-            log_fn(f"Frame export complete. Files saved to: {geotiff_folder}")
+            log_fn(f"Frame export complete. {exported_count}/{total_frames} frames saved to: {geotiff_folder}")
 
         if progress_fn:
             progress_fn(100)
@@ -5022,6 +4874,9 @@ class BambiProcessor:
 
         # Load DEM mesh
         ctx = None
+        mesh_data = None
+        texture_data = None
+        tri_mesh = None
         georef_results = []
 
         try:
@@ -5138,9 +4993,12 @@ class BambiProcessor:
         finally:
             if ctx:
                 release_all(ctx)
-            del mesh_data
-            del texture_data
-            del tri_mesh
+            if mesh_data is not None:
+                del mesh_data
+            if texture_data is not None:
+                del texture_data
+            if tri_mesh is not None:
+                del tri_mesh
 
         # Save geo-referenced results
         output_file = os.path.join(segmentation_folder, "segmentation_georef.json")
