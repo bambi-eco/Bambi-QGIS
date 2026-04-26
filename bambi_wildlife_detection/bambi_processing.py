@@ -3226,14 +3226,27 @@ class BambiProcessor:
         # Check if a specific output file is requested (used by geotiff export)
         if config.get("ortho_output_file"):
             output_file = config["ortho_output_file"]
-            # Ensure parent directory exists
-            os.makedirs(os.path.dirname(output_file), exist_ok=True)
+            ortho_folder = os.path.dirname(output_file)
+            os.makedirs(ortho_folder, exist_ok=True)
         else:
             ortho_folder = os.path.join(target_folder, "orthomosaic")
             os.makedirs(ortho_folder, exist_ok=True)
             output_file = os.path.join(ortho_folder, "orthomosaic.tif")
 
-        if HAS_ALFSPY:
+        sampling_mode = config.get("ortho_sampling_mode", False)
+        sampling_rate = config.get("ortho_sampling_rate", 10)
+        sampling_range = config.get("ortho_sampling_range", 5)
+
+        if HAS_ALFSPY and sampling_mode:
+            self._run_orthomosaic_sampling(
+                config, images, dem_path, mask_path,
+                ortho_folder, ground_resolution, blend_mode,
+                coord_offset_x, coord_offset_y, target_epsg,
+                crop_to_content, create_overviews, max_tile_size,
+                frames_folder, sampling_rate, sampling_range,
+                progress_fn, log_fn, cancel_check
+            )
+        elif HAS_ALFSPY:
             # Use full alfspy-based rendering pipeline
             self._run_orthomosaic_alfspy(
                 config, images, poses, dem_path, mask_path,
@@ -3253,7 +3266,7 @@ class BambiProcessor:
             )
 
         if log_fn:
-            log_fn(f"Orthomosaic saved to: {output_file}")
+            log_fn(f"Orthomosaic tiles saved to: {os.path.dirname(output_file)}")
 
         if progress_fn:
             progress_fn(100)
@@ -3366,6 +3379,259 @@ class BambiProcessor:
                 continue
 
         return output
+
+    def _run_orthomosaic_sampling(
+            self, config, all_images, dem_path, mask_path,
+            ortho_folder, ground_resolution, blend_mode,
+            coord_offset_x, coord_offset_y, target_epsg,
+            crop_to_content, create_overviews, max_tile_size,
+            frames_folder, sampling_rate, sampling_range,
+            progress_fn, log_fn, cancel_check=None
+    ):
+        """Sampling-mode orthomosaic: render one small integral image per central frame.
+
+        Central frames are picked every `sampling_rate` frames across the filtered image
+        list.  Each central frame's orthomosaic blends the frames within
+        [central - sampling_range, central + sampling_range].  Results are saved as
+        orthomosaic/sample_XXXXXX/tile_RR_CC.tif.
+        """
+        import math
+        import cv2
+        import numpy as np
+        from pyrr import Quaternion, Vector3
+
+        from alfspy.core.geo.transform import Transform
+        from alfspy.core.rendering import Resolution, Camera, CtxShot, TextureData
+        from alfspy.core.rendering.renderer import Renderer
+        from alfspy.core.util.geo import get_aabb
+        from alfspy.core.util.pyrrs import quaternion_from_eulers
+        from alfspy.render.render import (
+            make_mgl_context, read_gltf, process_render_data,
+            make_shot_loader, release_all
+        )
+
+        if log_fn:
+            log_fn("Loading DEM mesh (sampling mode)...")
+
+        mesh_data, texture_data = read_gltf(dem_path)
+        mesh_data, texture_data = process_render_data(mesh_data, texture_data)
+        mesh_aabb = get_aabb(mesh_data.vertices)
+
+        ctx = make_mgl_context()
+
+        mask = None
+        if mask_path and os.path.exists(mask_path):
+            mask_img = cv2.imread(mask_path, cv2.IMREAD_UNCHANGED)
+            if mask_img is not None:
+                mask = TextureData(CtxShot._cvt_img(mask_img))
+
+        # Determine central frames from the available frame indices
+        all_frame_indices = sorted(img["_original_frame_idx"] for img in all_images)
+        if not all_frame_indices:
+            if log_fn:
+                log_fn("No frames available for sampling mode")
+            return
+
+        min_frame = all_frame_indices[0]
+        max_frame = all_frame_indices[-1]
+        central_frames = list(range(min_frame, max_frame + 1, sampling_rate))
+
+        if log_fn:
+            log_fn(
+                f"Sampling mode: {len(central_frames)} central frame(s), "
+                f"rate={sampling_rate}, range=±{sampling_range}"
+            )
+
+        total = len(central_frames)
+
+        for sample_i, central_frame in enumerate(central_frames):
+            if cancel_check and cancel_check():
+                if log_fn:
+                    log_fn("Sampling cancelled by user")
+                break
+
+            # Select images within the neighboring range
+            sample_images = [
+                img for img in all_images
+                if central_frame - sampling_range
+                <= img["_original_frame_idx"]
+                <= central_frame + sampling_range
+            ]
+
+            if not sample_images:
+                if log_fn:
+                    log_fn(f"  Sample {sample_i + 1}/{total} (frame {central_frame}): no images in range, skipping")
+                continue
+
+            if log_fn:
+                log_fn(
+                    f"  Sample {sample_i + 1}/{total}: central frame {central_frame}, "
+                    f"{len(sample_images)} frames"
+                )
+
+            # Load shots for this sample
+            shots = []
+            default_fovy = 50.0
+            for img_info in sample_images:
+                image_file = img_info.get("imagefile")
+                image_path = os.path.join(frames_folder, image_file)
+                if not os.path.exists(image_path):
+                    continue
+
+                frame_idx = img_info.get("_original_frame_idx", 0)
+                correction_data = self.get_correction_for_frame(frame_idx, config)
+                correction_translation = correction_data["translation"]
+                correction_rotation = correction_data["rotation"]
+
+                cor_translation = Vector3([
+                    correction_translation.get('x', 0),
+                    correction_translation.get('y', 0),
+                    correction_translation.get('z', 0)
+                ], dtype='f4')
+                cor_rotation_eulers = Vector3([
+                    correction_rotation.get('x', 0),
+                    correction_rotation.get('y', 0),
+                    correction_rotation.get('z', 0)
+                ], dtype='f4')
+                cor_quat = Quaternion.from_eulers(cor_rotation_eulers)
+                correction = Transform(cor_translation, cor_quat)
+
+                location = img_info.get("location", [0, 0, 0])
+                rotation = img_info.get("rotation", [0, 0, 0])
+                fovy = img_info.get("fovy", [default_fovy])
+                fov_value = fovy[0] if isinstance(fovy, (list, tuple)) else fovy
+
+                camera_position = Vector3(location, dtype='f4')
+                if len(rotation) == 3:
+                    eulers = [np.deg2rad(val % 360.0) for val in rotation]
+                    camera_rotation = quaternion_from_eulers(eulers, 'zyx')
+                elif len(rotation) == 4:
+                    camera_rotation = Quaternion(rotation)
+                else:
+                    continue
+
+                try:
+                    shot = CtxShot(
+                        ctx, image_path, camera_position, camera_rotation,
+                        fov_value, 1, correction, lazy=True
+                    )
+                    shots.append(shot)
+                except Exception as e:
+                    if log_fn:
+                        log_fn(f"    Warning: failed to load shot {image_file}: {e}")
+
+            if not shots:
+                if log_fn:
+                    log_fn(f"  Sample {sample_i + 1}/{total}: no valid shots, skipping")
+                continue
+
+            # Compute local bounds from shot positions only (not mesh AABB)
+            shot_positions = np.array([shot.camera.transform.position for shot in shots])
+            padding = 10.0
+            min_x = shot_positions[:, 0].min() - padding
+            min_y = shot_positions[:, 1].min() - padding
+            max_x = shot_positions[:, 0].max() + padding
+            max_y = shot_positions[:, 1].max() + padding
+            global_bounds = (min_x, min_y, max_x, max_y)
+
+            width_meters = max_x - min_x
+            height_meters = max_y - min_y
+            width_pixels = max(1, int(math.ceil(width_meters / ground_resolution)))
+            height_pixels = max(1, int(math.ceil(height_meters / ground_resolution)))
+            global_resolution = Resolution(width_pixels, height_pixels)
+
+            center_x = (min_x + max_x) / 2.0
+            center_y = (min_y + max_y) / 2.0
+            center_z = float(mesh_aabb.p_max.z) + 100.0
+            global_camera = Camera(
+                orthogonal=True,
+                orthogonal_size=(max_x - min_x, -(max_y - min_y)),
+                position=Vector3([center_x, center_y, center_z], dtype='f4'),
+                rotation=Quaternion(),
+                near=0.1,
+                far=10000.0
+            )
+
+            # Tile and render
+            pixel_size_x = (max_x - min_x) / width_pixels
+            pixel_size_y = (max_y - min_y) / height_pixels
+            n_cols = math.ceil(width_pixels / max_tile_size)
+            n_rows = math.ceil(height_pixels / max_tile_size)
+
+            sample_prefix = f"sample_{central_frame:06d}"
+
+            tiles = []
+            for row in range(n_rows):
+                ty = row * max_tile_size
+                th = min(max_tile_size, height_pixels - ty)
+                for col in range(n_cols):
+                    tx = col * max_tile_size
+                    tw = min(max_tile_size, width_pixels - tx)
+                    tiles.append((row, col, tx, ty, tw, th))
+
+            for tile_i, (row, col, tx, ty, tw, th) in enumerate(tiles):
+                tile_geo_bounds = (
+                    min_x + tx * pixel_size_x,
+                    max_y - (ty + th) * pixel_size_y,
+                    min_x + (tx + tw) * pixel_size_x,
+                    max_y - ty * pixel_size_y,
+                )
+
+                tile_camera = self._create_tile_camera(
+                    global_camera, global_bounds, global_resolution,
+                    tx, ty, tw, th, Vector3, Camera
+                )
+                tile_res = Resolution(tw, th)
+                renderer = Renderer(tile_res, ctx, tile_camera, mesh_data, texture_data)
+
+                if blend_mode == "integral":
+                    shot_loader = make_shot_loader(shots)
+                    tile_img = renderer.render_integral(
+                        shot_loader, mask=mask, save=False, release_shots=False,
+                        auto_contrast=True, alpha_threshold=0.5
+                    )
+                else:
+                    tile_img = self._render_sequential_alfspy(
+                        renderer, shots, mask, tile_res, blend_mode, tile_geo_bounds
+                    )
+
+                renderer.release()
+
+                if crop_to_content:
+                    tile_img, tile_geo_bounds = self._crop_to_content(tile_img, tile_geo_bounds)
+
+                geo_bounds = (
+                    tile_geo_bounds[0] + coord_offset_x,
+                    tile_geo_bounds[1] + coord_offset_y,
+                    tile_geo_bounds[2] + coord_offset_x,
+                    tile_geo_bounds[3] + coord_offset_y,
+                )
+
+                has_content = (
+                    tile_img[:, :, 3].max() > 0
+                    if tile_img.ndim == 3 and tile_img.shape[2] == 4
+                    else tile_img.max() > 0
+                )
+                if not has_content:
+                    continue
+
+                tile_path = os.path.join(ortho_folder, f"{sample_prefix}_tile_{row:02d}_{col:02d}.tif")
+                self._save_orthomosaic(tile_img, tile_path, geo_bounds, target_epsg, create_overviews, log_fn)
+
+            # Release shots for this sample to free GPU memory
+            for shot in shots:
+                try:
+                    shot.release()
+                except Exception:
+                    pass
+
+            if progress_fn:
+                progress_fn(10 + int(((sample_i + 1) / total) * 85))
+
+        try:
+            ctx.release()
+        except Exception:
+            pass
 
     def _run_orthomosaic_alfspy(
             self, config, images, poses, dem_path, mask_path,
@@ -3525,119 +3791,87 @@ class BambiProcessor:
             far=10000.0
         )
 
-        # 7. Render (always use tiled approach for consistency)
-        # Note: Single-pass rendering was producing empty outputs, so we always use
-        # the tiled approach. For small images, this simply creates one tile.
-        needs_tiling = True  # Always use tiling - single-pass has issues
+        # 7. Render tiles and save each as an individual GeoTIFF
+        output_dir = os.path.dirname(output_file)
+        pixel_size_x = (max_x - min_x) / width_pixels
+        pixel_size_y = (max_y - min_y) / height_pixels
 
-        if needs_tiling:
-            if log_fn:
-                if width_pixels > max_tile_size or height_pixels > max_tile_size:
-                    log_fn(f"Resolution exceeds {max_tile_size}px. Using tiled rendering...")
-                else:
-                    log_fn(f"Using tiled rendering (single tile)...")
+        n_cols = math.ceil(width_pixels / max_tile_size)
+        n_rows = math.ceil(height_pixels / max_tile_size)
 
-            # Initialize large output array
-            result = np.zeros((height_pixels, width_pixels, 4), dtype=np.uint8)
+        tiles = []
+        for row in range(n_rows):
+            ty = row * max_tile_size
+            th = min(max_tile_size, height_pixels - ty)
+            for col in range(n_cols):
+                tx = col * max_tile_size
+                tw = min(max_tile_size, width_pixels - tx)
+                tiles.append((row, col, tx, ty, tw, th))
 
-            # Generate tiles
-            tile_overlap = 128
-            effective_tile_size = max_tile_size - tile_overlap
+        if log_fn:
+            log_fn(f"Processing {len(tiles)} tile(s) ({n_rows}x{n_cols} grid)...")
 
-            tiles = []
-            for y in range(0, height_pixels, effective_tile_size):
-                for x in range(0, width_pixels, effective_tile_size):
-                    t_w = min(max_tile_size, width_pixels - x + tile_overlap)
-                    t_h = min(max_tile_size, height_pixels - y + tile_overlap)
-                    # Clamp
-                    t_w = min(t_w, width_pixels - x)
-                    t_h = min(t_h, height_pixels - y)
-                    tiles.append((x, y, t_w, t_h))
+        for i, (row, col, tx, ty, tw, th) in enumerate(tiles):
+            if cancel_check and cancel_check():
+                break
 
-            if log_fn:
-                log_fn(f"Processing {len(tiles)} tiles...")
+            # Tile geo bounds (before coord offset)
+            tile_geo_bounds = (
+                min_x + tx * pixel_size_x,
+                max_y - (ty + th) * pixel_size_y,
+                min_x + (tx + tw) * pixel_size_x,
+                max_y - ty * pixel_size_y,
+            )
 
-            for i, (tx, ty, tw, th) in enumerate(tiles):
-                # Calculate tile specific camera
-                tile_camera = self._create_tile_camera(
-                    global_camera, global_bounds, global_resolution,
-                    tx, ty, tw, th, Vector3, Camera
-                )
+            tile_camera = self._create_tile_camera(
+                global_camera, global_bounds, global_resolution,
+                tx, ty, tw, th, Vector3, Camera
+            )
 
-                # Render Tile
-                tile_res = Resolution(tw, th)
-                renderer = Renderer(tile_res, ctx, tile_camera, mesh_data, texture_data)
-
-                if blend_mode == "integral":
-                    shot_loader = make_shot_loader(shots)
-                    tile_img = renderer.render_integral(
-                        shot_loader, mask=mask, save=False, release_shots=False,
-                        auto_contrast=True, alpha_threshold=0.5
-                    )
-                else:
-                    # Calculate tile bounds for sequential logic
-                    pixel_size_x = (max_x - min_x) / width_pixels
-                    pixel_size_y = (max_y - min_y) / height_pixels
-                    tile_bounds = (
-                        min_x + tx * pixel_size_x,
-                        max_y - (ty + th) * pixel_size_y,
-                        min_x + (tx + tw) * pixel_size_x,
-                        max_y - ty * pixel_size_y
-                    )
-                    tile_img = self._render_sequential_alfspy(
-                        renderer, shots, mask, tile_res, blend_mode, tile_bounds
-                    )
-
-                # Copy to main result
-                result[ty:ty + th, tx:tx + tw] = tile_img
-                renderer.release()
-
-                if progress_fn:
-                    progress_fn(20 + int((i / len(tiles)) * 60))
-
-        else:
-            # Single pass rendering
-            if log_fn:
-                log_fn("Using single-pass rendering...")
-
-            renderer = Renderer(global_resolution, ctx, global_camera, mesh_data, texture_data)
+            tile_res = Resolution(tw, th)
+            renderer = Renderer(tile_res, ctx, tile_camera, mesh_data, texture_data)
 
             if blend_mode == "integral":
                 shot_loader = make_shot_loader(shots)
-                result = renderer.render_integral(
+                tile_img = renderer.render_integral(
                     shot_loader, mask=mask, save=False, release_shots=False,
                     auto_contrast=True, alpha_threshold=0.5
                 )
             else:
-                result = self._render_sequential_alfspy(
-                    renderer, shots, mask, global_resolution, blend_mode, global_bounds
+                tile_img = self._render_sequential_alfspy(
+                    renderer, shots, mask, tile_res, blend_mode, tile_geo_bounds
                 )
+
             renderer.release()
 
-        # 8. Post-Processing & Save
-        if result.max() == 0:
+            if crop_to_content:
+                tile_img, tile_geo_bounds = self._crop_to_content(tile_img, tile_geo_bounds)
+
+            geo_bounds = (
+                tile_geo_bounds[0] + coord_offset_x,
+                tile_geo_bounds[1] + coord_offset_y,
+                tile_geo_bounds[2] + coord_offset_x,
+                tile_geo_bounds[3] + coord_offset_y,
+            )
+
+            has_content = (
+                tile_img[:, :, 3].max() > 0
+                if tile_img.ndim == 3 and tile_img.shape[2] == 4
+                else tile_img.max() > 0
+            )
+            if not has_content:
+                if log_fn:
+                    log_fn(f"Skipping empty tile ({row}, {col})")
+                continue
+
+            tile_path = os.path.join(output_dir, f"tile_{row:02d}_{col:02d}.tif")
             if log_fn:
-                log_fn("WARNING: Rendered result is empty! (Check bounds/height)")
+                log_fn(f"Saving tile ({row}, {col}) to {os.path.basename(tile_path)}")
 
-        # Crop to content
-        if crop_to_content:
-            result, global_bounds = self._crop_to_content(result, global_bounds)
+            self._save_orthomosaic(tile_img, tile_path, geo_bounds, target_epsg, create_overviews, log_fn)
 
-        # Apply DEM coordinate offset
-        geo_bounds = (
-            global_bounds[0] + coord_offset_x,
-            global_bounds[1] + coord_offset_y,
-            global_bounds[2] + coord_offset_x,
-            global_bounds[3] + coord_offset_y
-        )
-
-        if log_fn:
-            log_fn(f"Saving to {output_file}")
-
-        self._save_orthomosaic(
-            result, output_file, geo_bounds, target_epsg,
-            create_overviews, log_fn
-        )
+            if progress_fn:
+                progress_fn(20 + int(((i + 1) / len(tiles)) * 70))
 
         # Cleanup
         release_all(ctx, shots)

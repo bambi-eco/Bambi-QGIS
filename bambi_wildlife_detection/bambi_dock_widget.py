@@ -1534,6 +1534,38 @@ class BambiDockWidget(QDockWidget):
         self.ortho_frame_step_spin.setToolTip("Process every Nth frame (1 = all frames, 2 = every 2nd frame, etc.)")
         ortho_layout.addRow("Frame Step:", self.ortho_frame_step_spin)
 
+        # Sampling mode
+        self.ortho_sampling_check = QCheckBox("Enable")
+        self.ortho_sampling_check.setChecked(False)
+        self.ortho_sampling_check.setToolTip(
+            "Create multiple small integral orthomosaics along the flight path instead of one large one"
+        )
+        self.ortho_sampling_check.stateChanged.connect(self.toggle_ortho_sampling)
+        ortho_layout.addRow("Sampling Mode:", self.ortho_sampling_check)
+
+        self.ortho_sampling_widget = QWidget()
+        sampling_layout = QHBoxLayout(self.ortho_sampling_widget)
+        sampling_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.ortho_sampling_rate_spin = QSpinBox()
+        self.ortho_sampling_rate_spin.setRange(1, 9999)
+        self.ortho_sampling_rate_spin.setValue(10)
+        self.ortho_sampling_rate_spin.setToolTip("One central frame is picked every N frames")
+        sampling_layout.addWidget(QLabel("Rate (frames):"))
+        sampling_layout.addWidget(self.ortho_sampling_rate_spin)
+
+        self.ortho_sampling_range_spin = QSpinBox()
+        self.ortho_sampling_range_spin.setRange(0, 999)
+        self.ortho_sampling_range_spin.setValue(5)
+        self.ortho_sampling_range_spin.setToolTip(
+            "Frames on each side of the central frame to include in each orthomosaic"
+        )
+        sampling_layout.addWidget(QLabel("Range ±:"))
+        sampling_layout.addWidget(self.ortho_sampling_range_spin)
+
+        self.ortho_sampling_widget.setEnabled(False)
+        ortho_layout.addRow("", self.ortho_sampling_widget)
+
         ortho_tab_layout.addWidget(ortho_group)
         ortho_tab_layout.addStretch()
 
@@ -2250,6 +2282,9 @@ class BambiDockWidget(QDockWidget):
             "ortho_create_overviews": self.ortho_overviews_check.isChecked(),
             "ortho_max_tile_size": self.ortho_tile_size_spin.value(),
             "ortho_frame_step": self.ortho_frame_step_spin.value() if hasattr(self, 'ortho_frame_step_spin') else 1,
+            "ortho_sampling_mode": self.ortho_sampling_check.isChecked() if hasattr(self, 'ortho_sampling_check') else False,
+            "ortho_sampling_rate": self.ortho_sampling_rate_spin.value() if hasattr(self, 'ortho_sampling_rate_spin') else 10,
+            "ortho_sampling_range": self.ortho_sampling_range_spin.value() if hasattr(self, 'ortho_sampling_range_spin') else 5,
 
             # Field of View
             "use_fov_mask": self.use_fov_mask_check.isChecked(),
@@ -4030,6 +4065,10 @@ class BambiDockWidget(QDockWidget):
     def toggle_ortho_frame_range(self, state):
         """Toggle the frame range controls based on checkbox state."""
         self.ortho_frame_range_widget.setEnabled(not state)
+
+    def toggle_ortho_sampling(self, state):
+        """Toggle sampling mode controls."""
+        self.ortho_sampling_widget.setEnabled(bool(state))
 
     def toggle_detect_frame_range(self, state):
         """Toggle the detection frame range controls based on checkbox state."""
@@ -5940,12 +5979,11 @@ class BambiDockWidget(QDockWidget):
         return dict(frame_detections)
 
     def add_orthomosaic_to_qgis(self):
-        """Add the generated orthomosaic to QGIS as a raster layer."""
+        """Add all GeoTIFFs in the orthomosaic folder to QGIS as raster layers."""
         config = self.get_config()
         ortho_folder = os.path.join(config["target_folder"], "orthomosaic")
-        ortho_file = os.path.join(ortho_folder, "orthomosaic.tif")
 
-        if not os.path.exists(ortho_file):
+        if not os.path.exists(ortho_folder):
             QMessageBox.warning(
                 self,
                 "Missing Orthomosaic",
@@ -5957,22 +5995,44 @@ class BambiDockWidget(QDockWidget):
             self.log("Adding orthomosaic to QGIS...")
             self.update_status("add_ortho", "🟡 Loading...")
 
-            # Create raster layer
-            layer_name = "BAMBI Orthomosaic"
-            layer = QgsRasterLayer(ortho_file, layer_name)
+            tif_files = sorted([
+                os.path.join(ortho_folder, f)
+                for f in os.listdir(ortho_folder)
+                if f.lower().endswith((".tif", ".tiff"))
+            ])
 
-            if not layer.isValid():
-                raise RuntimeError(f"Failed to load raster: {ortho_file}")
+            if not tif_files:
+                QMessageBox.warning(
+                    self,
+                    "Missing Orthomosaic",
+                    "Orthomosaic has not been generated.\nPlease run Step 6 first."
+                )
+                self.update_status("add_ortho", "🔴 No files")
+                return
 
-            # Add layer to project
-            QgsProject.instance().addMapLayer(layer)
+            if len(tif_files) == 1:
+                layer_name = os.path.splitext(os.path.basename(tif_files[0]))[0]
+                layer = QgsRasterLayer(tif_files[0], layer_name)
+                if not layer.isValid():
+                    raise RuntimeError(f"Failed to load raster: {tif_files[0]}")
+                QgsProject.instance().addMapLayer(layer)
+                self.log("Added orthomosaic layer to QGIS")
+            else:
+                group = self._create_layer_group("BAMBI Orthomosaic")
+                loaded_count = 0
+                for tif_path in tif_files:
+                    layer_name = os.path.splitext(os.path.basename(tif_path))[0]
+                    layer = QgsRasterLayer(tif_path, layer_name)
+                    if layer.isValid():
+                        QgsProject.instance().addMapLayer(layer, False)
+                        group.addLayer(layer)
+                        loaded_count += 1
+                    else:
+                        self.log(f"Warning: Could not load {os.path.basename(tif_path)}")
+                self.log(f"Added {loaded_count} orthomosaic file(s) to QGIS")
 
-            self.log(f"Added orthomosaic layer: {layer_name}")
             self.update_status("add_ortho", "🟢 Added")
-
-            # Zoom to layer extent
-            # self.iface.mapCanvas().setExtent(layer.extent())
-            # self.iface.mapCanvas().refresh()
+            self.iface.mapCanvas().refresh()
 
         except Exception as e:
             self.log(f"Error adding orthomosaic: {str(e)}")
@@ -7123,6 +7183,12 @@ class BambiDockWidget(QDockWidget):
                                  self.ortho_tile_size_spin.value())
         project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/FrameStep",
                                  self.ortho_frame_step_spin.value())
+        project.writeEntryBool(PLUGIN_SCOPE, "Ortho/SamplingMode",
+                               self.ortho_sampling_check.isChecked())
+        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/SamplingRate",
+                                 self.ortho_sampling_rate_spin.value())
+        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/SamplingRange",
+                                 self.ortho_sampling_range_spin.value())
 
         # ===== SAM3 Settings =====
         # Note: API key is intentionally NOT saved for security
@@ -7339,6 +7405,9 @@ class BambiDockWidget(QDockWidget):
         self.ortho_overviews_check.setChecked(read_bool("Ortho/Overviews", True))
         self.ortho_tile_size_spin.setValue(read_int("Ortho/TileSize", 8192))
         self.ortho_frame_step_spin.setValue(read_int("Ortho/FrameStep", 1))
+        self.ortho_sampling_check.setChecked(read_bool("Ortho/SamplingMode", False))
+        self.ortho_sampling_rate_spin.setValue(read_int("Ortho/SamplingRate", 10))
+        self.ortho_sampling_range_spin.setValue(read_int("Ortho/SamplingRange", 5))
 
         # ===== SAM3 Settings =====
         self.sam3_prompts_edit.setPlainText(read_str("SAM3/Prompts"))
