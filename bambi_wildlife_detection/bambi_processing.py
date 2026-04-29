@@ -3584,18 +3584,18 @@ class BambiProcessor:
                 tile_res = Resolution(tw, th)
                 renderer = Renderer(tile_res, ctx, tile_camera, mesh_data, texture_data)
 
-                if blend_mode == "integral":
-                    shot_loader = make_shot_loader(shots)
-                    tile_img = renderer.render_integral(
-                        shot_loader, mask=mask, save=False, release_shots=False,
-                        auto_contrast=True, alpha_threshold=0.5
-                    )
-                else:
-                    tile_img = self._render_sequential_alfspy(
-                        renderer, shots, mask, tile_res, blend_mode, tile_geo_bounds
-                    )
-
-                renderer.release()
+                try:
+                    if blend_mode == "integral":
+                        tile_img = renderer.render_integral(
+                            shots, mask=mask, save=False, release_shots=False,
+                            auto_contrast=True, alpha_threshold=0.5
+                        )
+                    else:
+                        tile_img = self._render_sequential_alfspy(
+                            renderer, shots, mask, tile_res, blend_mode, tile_geo_bounds
+                        )
+                finally:
+                    renderer.release()
 
                 if crop_to_content:
                     tile_img, tile_geo_bounds = self._crop_to_content(tile_img, tile_geo_bounds)
@@ -3613,12 +3613,26 @@ class BambiProcessor:
                     else tile_img.max() > 0
                 )
                 if not has_content:
+                    del tile_img
+                    for shot in shots:
+                        if shot.tex is not None:
+                            shot.tex.release()
+                            shot.tex = None
                     continue
 
                 tile_path = os.path.join(ortho_folder, f"{sample_prefix}_tile_{row:02d}_{col:02d}.tif")
                 self._save_orthomosaic(tile_img, tile_path, geo_bounds, target_epsg, create_overviews, log_fn)
 
-            # Release shots for this sample to free GPU memory
+                del tile_img
+
+                # Free GPU textures between tiles; keep CPU tex_data to avoid
+                # re-reading from disk on the next tile.
+                for shot in shots:
+                    if shot.tex is not None:
+                        shot.tex.release()
+                        shot.tex = None
+
+            # Release shots for this sample (including CPU tex_data)
             for shot in shots:
                 try:
                     shot.release()
@@ -3811,70 +3825,91 @@ class BambiProcessor:
         if log_fn:
             log_fn(f"Processing {len(tiles)} tile(s) ({n_rows}x{n_cols} grid)...")
 
-        for i, (row, col, tx, ty, tw, th) in enumerate(tiles):
-            if cancel_check and cancel_check():
-                break
+        try:
+            for i, (row, col, tx, ty, tw, th) in enumerate(tiles):
+                if cancel_check and cancel_check():
+                    break
 
-            # Tile geo bounds (before coord offset)
-            tile_geo_bounds = (
-                min_x + tx * pixel_size_x,
-                max_y - (ty + th) * pixel_size_y,
-                min_x + (tx + tw) * pixel_size_x,
-                max_y - ty * pixel_size_y,
-            )
-
-            tile_camera = self._create_tile_camera(
-                global_camera, global_bounds, global_resolution,
-                tx, ty, tw, th, Vector3, Camera
-            )
-
-            tile_res = Resolution(tw, th)
-            renderer = Renderer(tile_res, ctx, tile_camera, mesh_data, texture_data)
-
-            if blend_mode == "integral":
-                shot_loader = make_shot_loader(shots)
-                tile_img = renderer.render_integral(
-                    shot_loader, mask=mask, save=False, release_shots=False,
-                    auto_contrast=True, alpha_threshold=0.5
-                )
-            else:
-                tile_img = self._render_sequential_alfspy(
-                    renderer, shots, mask, tile_res, blend_mode, tile_geo_bounds
+                # Tile geo bounds (before coord offset)
+                tile_geo_bounds = (
+                    min_x + tx * pixel_size_x,
+                    max_y - (ty + th) * pixel_size_y,
+                    min_x + (tx + tw) * pixel_size_x,
+                    max_y - ty * pixel_size_y,
                 )
 
-            renderer.release()
+                tile_camera = self._create_tile_camera(
+                    global_camera, global_bounds, global_resolution,
+                    tx, ty, tw, th, Vector3, Camera
+                )
 
-            if crop_to_content:
-                tile_img, tile_geo_bounds = self._crop_to_content(tile_img, tile_geo_bounds)
+                tile_res = Resolution(tw, th)
+                renderer = Renderer(tile_res, ctx, tile_camera, mesh_data, texture_data)
 
-            geo_bounds = (
-                tile_geo_bounds[0] + coord_offset_x,
-                tile_geo_bounds[1] + coord_offset_y,
-                tile_geo_bounds[2] + coord_offset_x,
-                tile_geo_bounds[3] + coord_offset_y,
-            )
+                try:
+                    if blend_mode == "integral":
+                        # Pass shots list directly — re-iterable across tiles and
+                        # CtxShot.tex_use() handles lazy loading, so AsyncShotLoader
+                        # (which spawns 12 threads and is one-shot) is not needed.
+                        tile_img = renderer.render_integral(
+                            shots, mask=mask, save=False, release_shots=False,
+                            auto_contrast=True, alpha_threshold=0.5
+                        )
+                    else:
+                        tile_img = self._render_sequential_alfspy(
+                            renderer, shots, mask, tile_res, blend_mode, tile_geo_bounds
+                        )
+                finally:
+                    renderer.release()
 
-            has_content = (
-                tile_img[:, :, 3].max() > 0
-                if tile_img.ndim == 3 and tile_img.shape[2] == 4
-                else tile_img.max() > 0
-            )
-            if not has_content:
+                if crop_to_content:
+                    tile_img, tile_geo_bounds = self._crop_to_content(tile_img, tile_geo_bounds)
+
+                geo_bounds = (
+                    tile_geo_bounds[0] + coord_offset_x,
+                    tile_geo_bounds[1] + coord_offset_y,
+                    tile_geo_bounds[2] + coord_offset_x,
+                    tile_geo_bounds[3] + coord_offset_y,
+                )
+
+                has_content = (
+                    tile_img[:, :, 3].max() > 0
+                    if tile_img.ndim == 3 and tile_img.shape[2] == 4
+                    else tile_img.max() > 0
+                )
+                if not has_content:
+                    if log_fn:
+                        log_fn(f"Skipping empty tile ({row}, {col})")
+                    del tile_img
+                    for shot in shots:
+                        if shot.tex is not None:
+                            shot.tex.release()
+                            shot.tex = None
+                    continue
+
+                tile_path = os.path.join(output_dir, f"tile_{row:02d}_{col:02d}.tif")
                 if log_fn:
-                    log_fn(f"Skipping empty tile ({row}, {col})")
-                continue
+                    log_fn(f"Saving tile ({row}, {col}) to {os.path.basename(tile_path)}")
 
-            tile_path = os.path.join(output_dir, f"tile_{row:02d}_{col:02d}.tif")
-            if log_fn:
-                log_fn(f"Saving tile ({row}, {col}) to {os.path.basename(tile_path)}")
+                self._save_orthomosaic(tile_img, tile_path, geo_bounds, target_epsg, create_overviews, log_fn)
 
-            self._save_orthomosaic(tile_img, tile_path, geo_bounds, target_epsg, create_overviews, log_fn)
+                if progress_fn:
+                    progress_fn(20 + int(((i + 1) / len(tiles)) * 70))
 
-            if progress_fn:
-                progress_fn(20 + int(((i + 1) / len(tiles)) * 70))
+                del tile_img
 
-        # Cleanup
-        release_all(ctx, shots)
+                # Free the GPU textures for all shots after each tile so VRAM
+                # is released before the next Renderer (FBO + mesh re-upload)
+                # is allocated.  CPU-side tex_data is kept so re-upload on the
+                # next tile reads from RAM, not from disk.
+                # Note: shot.release() sets _released=True which permanently
+                # disables the shot, so we only null out shot.tex directly.
+                for shot in shots:
+                    if shot.tex is not None:
+                        shot.tex.release()
+                        shot.tex = None
+        finally:
+            release_all(ctx, shots)
 
     def _run_orthomosaic_simple(
             self, config, images, poses, dem_path, mask_path,
