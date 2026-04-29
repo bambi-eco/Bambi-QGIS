@@ -3215,9 +3215,19 @@ class BambiProcessor:
                     if log_fn:
                         log_fn(f"Warning: Could not load auto-detected metadata: {e}")
 
-        # Load mask if available
+        # Load mask if available.
+        # During photo-mode extraction the mask is renamed to mask_T.png /
+        # mask_W.png in target_folder, while poses.json still stores the
+        # original basename "mask.png".  Check the camera-specific name first.
+        camera_specific_mask = os.path.join(target_folder, f"mask_{camera}.png")
         mask_filename = poses.get("mask")
-        mask_path = os.path.join(target_folder, mask_filename) if mask_filename else None
+        poses_mask = os.path.join(target_folder, mask_filename) if mask_filename else None
+        if os.path.exists(camera_specific_mask):
+            mask_path = camera_specific_mask
+        elif poses_mask and os.path.exists(poses_mask):
+            mask_path = poses_mask
+        else:
+            mask_path = None
 
         if progress_fn:
             progress_fn(15)
