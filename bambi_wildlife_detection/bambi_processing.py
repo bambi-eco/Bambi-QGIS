@@ -3592,17 +3592,20 @@ class BambiProcessor:
                     tx, ty, tw, th, Vector3, Camera
                 )
                 tile_res = Resolution(tw, th)
+
+                tile_shots = self._filter_shots_for_tile(shots, tile_geo_bounds, log_fn)
+
                 renderer = Renderer(tile_res, ctx, tile_camera, mesh_data, texture_data)
 
                 try:
                     if blend_mode == "integral":
                         tile_img = renderer.render_integral(
-                            shots, mask=mask, save=False, release_shots=False,
+                            tile_shots, mask=mask, save=False, release_shots=False,
                             auto_contrast=True, alpha_threshold=0.5
                         )
                     else:
                         tile_img = self._render_sequential_alfspy(
-                            renderer, shots, mask, tile_res, blend_mode, tile_geo_bounds
+                            renderer, tile_shots, mask, tile_res, blend_mode, tile_geo_bounds
                         )
                 finally:
                     renderer.release()
@@ -3624,7 +3627,7 @@ class BambiProcessor:
                 )
                 if not has_content:
                     del tile_img
-                    for shot in shots:
+                    for shot in tile_shots:
                         if shot.tex is not None:
                             shot.tex.release()
                             shot.tex = None
@@ -3635,9 +3638,9 @@ class BambiProcessor:
 
                 del tile_img
 
-                # Free GPU textures between tiles; keep CPU tex_data to avoid
-                # re-reading from disk on the next tile.
-                for shot in shots:
+                # Free GPU textures for tile_shots only; unfiltered shots never
+                # had their textures loaded, so there's nothing to release there.
+                for shot in tile_shots:
                     if shot.tex is not None:
                         shot.tex.release()
                         shot.tex = None
@@ -3656,6 +3659,45 @@ class BambiProcessor:
             ctx.release()
         except Exception:
             pass
+
+    def _filter_shots_for_tile(self, shots, tile_geo_bounds, log_fn=None, fov_default=50.0):
+        """Return the subset of shots whose ground footprint overlaps tile_geo_bounds.
+
+        Uses circle-AABB intersection: the camera footprint is approximated as a
+        circle centred on the ground projection of the shot, with radius derived from
+        altitude and vertical FoV.  A generous 2.5× multiplier accounts for oblique
+        cameras and imprecise altitude values.
+
+        Falls back to the full shot list when no shot passes the filter (so tiles on
+        the boundary of the flight area still receive at least one shot).
+        """
+        import math
+        min_x, min_y, max_x, max_y = tile_geo_bounds
+        relevant = []
+        for shot in shots:
+            pos = shot.camera.transform.position
+            sx, sy, sz = float(pos.x), float(pos.y), float(pos.z)
+            altitude = abs(sz)
+            if altitude < 1.0:
+                # No meaningful altitude — include unconditionally
+                relevant.append(shot)
+                continue
+            try:
+                fov_y = shot.camera.fovy or fov_default
+            except Exception:
+                fov_y = fov_default
+            radius = altitude * math.tan(math.radians(fov_y / 2)) * 2.5
+            # Nearest point on the AABB to the shot position
+            near_x = max(min_x, min(sx, max_x))
+            near_y = max(min_y, min(sy, max_y))
+            dist_sq = (sx - near_x) ** 2 + (sy - near_y) ** 2
+            if dist_sq <= radius * radius:
+                relevant.append(shot)
+        if not relevant:
+            return shots
+        if log_fn and len(relevant) < len(shots):
+            log_fn(f"  Shot filter: {len(relevant)}/{len(shots)} shots relevant for this tile")
+        return relevant
 
     def _run_orthomosaic_alfspy(
             self, config, images, poses, dem_path, mask_path,
@@ -3854,20 +3896,26 @@ class BambiProcessor:
                 )
 
                 tile_res = Resolution(tw, th)
+
+                # Only upload GPU textures for shots whose footprint overlaps
+                # this tile — reduces peak VRAM from ~2.7 GB (all shots) to the
+                # few shots that actually cover the tile (~2-6 typically).
+                tile_shots = self._filter_shots_for_tile(shots, tile_geo_bounds, log_fn)
+
                 renderer = Renderer(tile_res, ctx, tile_camera, mesh_data, texture_data)
 
                 try:
                     if blend_mode == "integral":
-                        # Pass shots list directly — re-iterable across tiles and
+                        # Pass tile_shots list directly — re-iterable across tiles and
                         # CtxShot.tex_use() handles lazy loading, so AsyncShotLoader
                         # (which spawns 12 threads and is one-shot) is not needed.
                         tile_img = renderer.render_integral(
-                            shots, mask=mask, save=False, release_shots=False,
+                            tile_shots, mask=mask, save=False, release_shots=False,
                             auto_contrast=True, alpha_threshold=0.5
                         )
                     else:
                         tile_img = self._render_sequential_alfspy(
-                            renderer, shots, mask, tile_res, blend_mode, tile_geo_bounds
+                            renderer, tile_shots, mask, tile_res, blend_mode, tile_geo_bounds
                         )
                 finally:
                     renderer.release()
@@ -3891,7 +3939,7 @@ class BambiProcessor:
                     if log_fn:
                         log_fn(f"Skipping empty tile ({row}, {col})")
                     del tile_img
-                    for shot in shots:
+                    for shot in tile_shots:
                         if shot.tex is not None:
                             shot.tex.release()
                             shot.tex = None
@@ -3908,13 +3956,13 @@ class BambiProcessor:
 
                 del tile_img
 
-                # Free the GPU textures for all shots after each tile so VRAM
-                # is released before the next Renderer (FBO + mesh re-upload)
-                # is allocated.  CPU-side tex_data is kept so re-upload on the
-                # next tile reads from RAM, not from disk.
+                # Free GPU textures for the shots used in this tile so VRAM is
+                # released before the next Renderer (FBO + mesh re-upload) is
+                # allocated.  CPU-side tex_data is kept so re-upload on the next
+                # tile reads from RAM, not from disk.
                 # Note: shot.release() sets _released=True which permanently
                 # disables the shot, so we only null out shot.tex directly.
-                for shot in shots:
+                for shot in tile_shots:
                     if shot.tex is not None:
                         shot.tex.release()
                         shot.tex = None

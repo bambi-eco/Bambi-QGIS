@@ -7,7 +7,7 @@ author=Christoph Praschl, Anna Maschek, David C.Schedl
 email=christoph.praschl@fh-hagenberg.at
 
 about=A comprehensive QGIS plugin for wildlife detection and tracking in drone videos/photos.
-    Features include:Ca
+    Features include:
     - Frame extraction from drone videos with configurable sample rate
     - Animal detection using YOLO models
     - Geo-referencing of detections/video frames/photos using DEM and camera metadata
