@@ -360,6 +360,7 @@ class BambiProcessor:
 
         if config.get("input_mode") == "photo":
             from bambi.webgl.photo_pose_extractor import UniqueMatchPhotoPoseExtractor
+            from bambi.webgl.thermal_colorizer import ThermalColorizer
 
             calibration_res = config.get("thermal_photo_calibration_data")
             if calibration_res is None:
@@ -374,31 +375,69 @@ class BambiProcessor:
             if calibration_res is None:
                 raise ValueError("Thermal photo calibration data is None. Check the calibration file or preset.")
 
-            extractor = UniqueMatchPhotoPoseExtractor(
-                rel_transformer=rel_transformer,
-                calibration_res=calibration_res,
-            )
-            if log_fn:
-                log_fn(f"Photo mode: processing images in {config['thermal_photo_dir']}")
+            colormap = config.get("thermal_photo_colormap")
+            lo_threshold = config.get("thermal_photo_lo_threshold")
+            hi_threshold = config.get("thermal_photo_hi_threshold")
+            thermal_colorizer = None
+            thermal_instance = None
 
-            extract_kwargs = dict(
-                photo_dir=config["thermal_photo_dir"],
-                airdata_csv=airdata_path,
-                output_path=target_poses_t,
-                output_image_dir=frames_folder_t,
-                photo_timezone_offset_hours=config.get("photo_timezone_offset", 1.0),
-                origin=ad_origin,
-            )
-            if config.get("thermal_photo_filter"):
-                _exts = (".JPG", ".jpg", ".jpeg", ".JPEG", ".tiff", ".TIFF", ".png", ".PNG")
-                extract_kwargs["extensions"] = tuple(
-                    f"*_T_*{e}" for e in _exts
-                ) + tuple(
-                    f"*_T{e}" for e in _exts
+            if colormap is not None or lo_threshold is not None or hi_threshold is not None:
+                import numpy as np
+                from .bambi_thermal import Thermal
+                thermal_instance = Thermal(dtype=np.float32)
+                thermal_colorizer = ThermalColorizer(
+                    parse_fn=thermal_instance.parse,
+                    colormap=colormap or "white-hotspot",
+                    lo_threshold=lo_threshold,
+                    hi_threshold=hi_threshold,
                 )
                 if log_fn:
-                    log_fn("Thermal filter active: only images with _T_ or _T in filename")
-            extractor.extract(**extract_kwargs)
+                    log_fn(
+                        f"Thermal colormap '{colormap or 'white-hotspot'}' will be applied "
+                        f"during frame extraction."
+                    )
+
+            try:
+                extractor = UniqueMatchPhotoPoseExtractor(
+                    rel_transformer=rel_transformer,
+                    calibration_res=calibration_res,
+                    thermal_colorizer=thermal_colorizer,
+                )
+                if log_fn:
+                    log_fn(f"Photo mode: processing images in {config['thermal_photo_dir']}")
+                    # Monkey-patch per-image progress logging onto this instance
+                    # only — the class method is never touched.
+                    _orig_undistort = extractor._undistort_and_save
+                    _img_counter = [0]
+
+                    def _logged_undistort(source_path, filename, output_dir):
+                        _img_counter[0] += 1
+                        log_fn(f"  [{_img_counter[0]}] {filename}")
+                        return _orig_undistort(source_path, filename, output_dir)
+
+                    extractor._undistort_and_save = _logged_undistort
+
+                extract_kwargs = dict(
+                    photo_dir=config["thermal_photo_dir"],
+                    airdata_csv=airdata_path,
+                    output_path=target_poses_t,
+                    output_image_dir=frames_folder_t,
+                    photo_timezone_offset_hours=config.get("photo_timezone_offset", 1.0),
+                    origin=ad_origin,
+                )
+                if config.get("thermal_photo_filter"):
+                    _exts = (".JPG", ".jpg", ".jpeg", ".JPEG", ".tiff", ".TIFF", ".png", ".PNG")
+                    extract_kwargs["extensions"] = tuple(
+                        f"*_T_*{e}" for e in _exts
+                    ) + tuple(
+                        f"*_T{e}" for e in _exts
+                    )
+                    if log_fn:
+                        log_fn("Thermal filter active: only images with _T_ or _T in filename")
+                extractor.extract(**extract_kwargs)
+            finally:
+                if thermal_instance is not None:
+                    thermal_instance.close()
         else:
             from bambi.video.calibrated_video_frame_accessor import CalibratedVideoFrameAccessor
             from bambi.webgl.timed_pose_extractor import TimedPoseExtractor

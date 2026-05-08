@@ -857,6 +857,73 @@ class BambiDockWidget(QDockWidget):
         config_sub_tabs = QTabWidget()
         config_layout.addWidget(config_sub_tabs)
 
+        # ----- Sub-Tab: Extraction -----
+        extraction_tab = QWidget()
+        extraction_tab_layout = QVBoxLayout(extraction_tab)
+        config_sub_tabs.addTab(extraction_tab, "Extraction")
+
+        # DJI SDK info box
+        _plugins_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plugins")
+        sdk_info_group = QGroupBox("DJI Thermal SDK")
+        sdk_info_layout = QVBoxLayout(sdk_info_group)
+        sdk_info_label = QLabel(
+            "Parsing radiometric thermal JPEGs from DJI cameras (H20T, M3T, "
+            "M3TD, M30T, H30T, M4T, …) requires the official DJI Thermal SDK.<br><br>"
+            "<b>1.</b> Download the SDK from the DJI developer portal:<br>"
+            "&nbsp;&nbsp;&nbsp;&nbsp;"
+            "<a href=\"https://www.dji.com/at/downloads/softwares/dji-thermal-sdk\">"
+            "https://www.dji.com/at/downloads/softwares/dji-thermal-sdk</a><br><br>"
+            "<b>2.</b> Extract the <tt>dji_thermal_sdk_*</tt> folder directly into:<br>"
+            f"&nbsp;&nbsp;&nbsp;&nbsp;<tt>{_plugins_dir}</tt><br><br>"
+            "The plugin detects any <tt>dji_thermal_sdk_*</tt> subfolder automatically "
+            "— no further configuration is needed."
+        )
+        sdk_info_label.setWordWrap(True)
+        sdk_info_label.setTextFormat(Qt.RichText)
+        sdk_info_label.setOpenExternalLinks(True)
+        sdk_info_layout.addWidget(sdk_info_label)
+        extraction_tab_layout.addWidget(sdk_info_group)
+
+        thermal_vis_group = QGroupBox("Thermal Visualisation")
+        thermal_vis_layout = QFormLayout(thermal_vis_group)
+
+        self.thermal_vis_cmap_combo = QComboBox()
+        self.thermal_vis_cmap_combo.addItems([
+            "(none)",
+            "white-hotspot", "black-hotspot",
+            "plasma", "inferno", "magma", "viridis", "jet",
+        ])
+        thermal_vis_layout.addRow("Colormap:", self.thermal_vis_cmap_combo)
+
+        lo_row = QHBoxLayout()
+        self.thermal_vis_lo_check = QCheckBox("Enable")
+        self.thermal_vis_lo_spin = QDoubleSpinBox()
+        self.thermal_vis_lo_spin.setRange(-200.0, 3000.0)
+        self.thermal_vis_lo_spin.setDecimals(1)
+        self.thermal_vis_lo_spin.setSuffix(" °C")
+        self.thermal_vis_lo_spin.setEnabled(False)
+        self.thermal_vis_lo_check.toggled.connect(self.thermal_vis_lo_spin.setEnabled)
+        lo_row.addWidget(self.thermal_vis_lo_check)
+        lo_row.addWidget(self.thermal_vis_lo_spin)
+        lo_row.addStretch()
+        thermal_vis_layout.addRow("Lower threshold (→ black):", lo_row)
+
+        hi_row = QHBoxLayout()
+        self.thermal_vis_hi_check = QCheckBox("Enable")
+        self.thermal_vis_hi_spin = QDoubleSpinBox()
+        self.thermal_vis_hi_spin.setRange(-200.0, 3000.0)
+        self.thermal_vis_hi_spin.setDecimals(1)
+        self.thermal_vis_hi_spin.setSuffix(" °C")
+        self.thermal_vis_hi_spin.setEnabled(False)
+        self.thermal_vis_hi_check.toggled.connect(self.thermal_vis_hi_spin.setEnabled)
+        hi_row.addWidget(self.thermal_vis_hi_check)
+        hi_row.addWidget(self.thermal_vis_hi_spin)
+        hi_row.addStretch()
+        thermal_vis_layout.addRow("Upper threshold (→ black):", hi_row)
+
+        extraction_tab_layout.addWidget(thermal_vis_group)
+        extraction_tab_layout.addStretch()
+
         # ----- Sub-Tab 7: Flight Route Visualization -----
         flight_route_tab = QWidget()
         flight_route_tab_layout = QVBoxLayout(flight_route_tab)
@@ -2223,6 +2290,20 @@ class BambiDockWidget(QDockWidget):
                 if self.rgb_photo_calib_preset_combo.currentIndex() > 0 else None
             ),
             "photo_timezone_offset": self._get_photo_timezone_offset(),
+
+            # Thermal visualisation
+            "thermal_photo_colormap": (
+                self.thermal_vis_cmap_combo.currentText()
+                if self.thermal_vis_cmap_combo.currentText() != "(none)" else None
+            ),
+            "thermal_photo_lo_threshold": (
+                self.thermal_vis_lo_spin.value()
+                if self.thermal_vis_lo_check.isChecked() else None
+            ),
+            "thermal_photo_hi_threshold": (
+                self.thermal_vis_hi_spin.value()
+                if self.thermal_vis_hi_check.isChecked() else None
+            ),
 
             # Common inputs
             "airdata_path": self.airdata_path_edit.text(),
@@ -7067,6 +7148,16 @@ class BambiDockWidget(QDockWidget):
                            self.photo_timezone_combo.currentText())
         project.writeEntry(PLUGIN_SCOPE, "Input/PhotoTimezoneAuto",
                            "1" if self.photo_tz_auto_check.isChecked() else "0")
+        project.writeEntry(PLUGIN_SCOPE, "Input/ThermalVisColormap",
+                           self.thermal_vis_cmap_combo.currentText())
+        project.writeEntry(PLUGIN_SCOPE, "Input/ThermalVisLoEnable",
+                           "1" if self.thermal_vis_lo_check.isChecked() else "0")
+        project.writeEntryDouble(PLUGIN_SCOPE, "Input/ThermalVisLoValue",
+                                 self.thermal_vis_lo_spin.value())
+        project.writeEntry(PLUGIN_SCOPE, "Input/ThermalVisHiEnable",
+                           "1" if self.thermal_vis_hi_check.isChecked() else "0")
+        project.writeEntryDouble(PLUGIN_SCOPE, "Input/ThermalVisHiValue",
+                                 self.thermal_vis_hi_spin.value())
         project.writeEntry(PLUGIN_SCOPE, "Input/AirdataPath",
                            self.airdata_path_edit.text())
         project.writeEntry(PLUGIN_SCOPE, "Input/DemPath",
@@ -7315,6 +7406,18 @@ class BambiDockWidget(QDockWidget):
                 self.photo_timezone_combo.setCurrentText(saved_tz)
         self.photo_tz_auto_check.setChecked(
             read_str("Input/PhotoTimezoneAuto") != "0")
+        saved_cmap = read_str("Input/ThermalVisColormap")
+        cmap_idx = self.thermal_vis_cmap_combo.findText(saved_cmap)
+        if cmap_idx >= 0:
+            self.thermal_vis_cmap_combo.setCurrentIndex(cmap_idx)
+        self.thermal_vis_lo_check.setChecked(
+            read_str("Input/ThermalVisLoEnable") == "1")
+        self.thermal_vis_lo_spin.setValue(
+            read_double("Input/ThermalVisLoValue", 0.0))
+        self.thermal_vis_hi_check.setChecked(
+            read_str("Input/ThermalVisHiEnable") == "1")
+        self.thermal_vis_hi_spin.setValue(
+            read_double("Input/ThermalVisHiValue", 100.0))
         self.airdata_path_edit.setText(read_str("Input/AirdataPath"))
         self.dem_path_edit.setText(read_str("Input/DemPath"))
         self.dem_metadata_path_edit.setText(read_str("Input/DemMetadataPath"))
