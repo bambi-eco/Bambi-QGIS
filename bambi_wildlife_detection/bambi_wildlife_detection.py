@@ -57,6 +57,8 @@ class BambiWildlifeDetection:
         self.fov_georef_inspector_action = None
         self.correction_wizard_action = None
         self.camera_calibration_action = None
+        self.thermal_viewer_action = None
+        self._thermal_viewer_dlg = None
 
     def tr(self, message):
         """Get the translation for a string using Qt translation API.
@@ -144,6 +146,18 @@ class BambiWildlifeDetection:
                 'Open the camera calibration wizard (single-camera SfM or '
                 'stereo RGB+thermal)'))
 
+        # Thermal Image Viewer
+        _thermal_icon = os.path.join(self.plugin_dir, 'icons', 'icon_thermal.png')
+        if not os.path.isfile(_thermal_icon):
+            _thermal_icon = icon_path
+        self.thermal_viewer_action = self.add_action(
+            _thermal_icon,
+            text=self.tr('Thermal Image Viewer'),
+            callback=self._on_thermal_viewer,
+            parent=self.iface.mainWindow(),
+            add_to_menu=True,
+            status_tip=self.tr('Open the DJI radiometric thermal image viewer'))
+
         # Correction Wizard (between main icon and inspector tools)
         self.correction_wizard_action = self.add_action(
             os.path.join(self.plugin_dir, 'icons', 'icon_correction.png'),
@@ -197,6 +211,11 @@ class BambiWildlifeDetection:
         # Remove the toolbar
         del self.toolbar
         
+        # Close thermal viewer if open
+        if self._thermal_viewer_dlg is not None:
+            self._thermal_viewer_dlg.close()
+            self._thermal_viewer_dlg = None
+
         # Disconnect project signals and remove dock widget
         if self.dock_widget:
             # Disconnect project signals to prevent issues
@@ -258,6 +277,15 @@ class BambiWildlifeDetection:
         from .bambi_camera_calibration import CameraCalibrationWizard
         dlg = CameraCalibrationWizard(self.iface.mainWindow())
         dlg.exec_()
+
+    def _on_thermal_viewer(self):
+        """Toolbar action: open the thermal image viewer (non-modal)."""
+        from .bambi_thermal_viewer import ThermalViewerDialog
+        if self._thermal_viewer_dlg is None:
+            self._thermal_viewer_dlg = ThermalViewerDialog(self.iface.mainWindow())
+        self._thermal_viewer_dlg.show()
+        self._thermal_viewer_dlg.raise_()
+        self._thermal_viewer_dlg.activateWindow()
 
     def on_dock_visibility_changed(self, visible):
         """Handle dock widget visibility changes."""
