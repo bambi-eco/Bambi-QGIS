@@ -424,6 +424,8 @@ class BambiProcessor:
                     output_image_dir=frames_folder_t,
                     photo_timezone_offset_hours=config.get("photo_timezone_offset", 1.0),
                     origin=ad_origin,
+                    skip=config.get("extract_skip", 0),
+                    limit=config.get("extract_limit"),
                 )
                 if config.get("thermal_photo_filter"):
                     _exts = (".JPG", ".jpg", ".jpeg", ".JPEG", ".tiff", ".TIFF", ".png", ".PNG")
@@ -465,7 +467,10 @@ class BambiProcessor:
             with patch_frame_extraction_progress(progress_fn, total_frames, log_fn, cancel_check=cancel_check):
                 extractor.extract(
                     frames_folder_t, airdata_path, thermal_video_paths, thermal_srt_paths,
-                    origin=ad_origin, include_gps=True
+                    origin=ad_origin, include_gps=True,
+                    skip=config.get("extract_skip", 0),
+                    limit=config.get("extract_limit"),
+                    sampling_rate=config.get("extract_sampling_rate") or 0,
                 )
 
         # Move poses.json written into frames_folder to target folder with suffix
@@ -551,6 +556,8 @@ class BambiProcessor:
                 output_image_dir=frames_folder_w,
                 photo_timezone_offset_hours=config.get("photo_timezone_offset", 1.0),
                 origin=ad_origin,
+                skip=config.get("extract_skip", 0),
+                limit=config.get("extract_limit"),
             )
             if config.get("rgb_photo_filter"):
                 _exts = (".JPG", ".jpg", ".jpeg", ".JPEG", ".tiff", ".TIFF", ".png", ".PNG")
@@ -593,7 +600,10 @@ class BambiProcessor:
             with patch_frame_extraction_progress(progress_fn, total_frames, log_fn, cancel_check=cancel_check):
                 extractor.extract(
                     frames_folder_w, airdata_path, rgb_video_paths, rgb_srt_paths,
-                    origin=ad_origin, include_gps=True
+                    origin=ad_origin, include_gps=True,
+                    skip=config.get("extract_skip", 0),
+                    limit=config.get("extract_limit"),
+                    sampling_rate=config.get("extract_sampling_rate") or 0,
                 )
 
         # Move poses.json written into frames_folder to target folder with suffix

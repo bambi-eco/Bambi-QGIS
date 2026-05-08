@@ -864,6 +864,48 @@ class BambiDockWidget(QDockWidget):
 
         # DJI SDK info box
         _plugins_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plugins")
+
+        # Frame extraction parameters
+        frame_ext_group = QGroupBox("Frame Extraction")
+        frame_ext_layout = QFormLayout(frame_ext_group)
+
+        self.extract_skip_spin = QSpinBox()
+        self.extract_skip_spin.setRange(0, 999999)
+        self.extract_skip_spin.setValue(0)
+        self.extract_skip_spin.setToolTip(
+            "Skip this many matched images / frames at the start before processing begins.")
+        frame_ext_layout.addRow("Skip first:", self.extract_skip_spin)
+
+        limit_row = QHBoxLayout()
+        self.extract_limit_check = QCheckBox("Enable")
+        self.extract_limit_spin = QSpinBox()
+        self.extract_limit_spin.setRange(1, 999999)
+        self.extract_limit_spin.setValue(100)
+        self.extract_limit_spin.setEnabled(False)
+        self.extract_limit_spin.setToolTip("Maximum number of images / frames to process.")
+        self.extract_limit_check.toggled.connect(self.extract_limit_spin.setEnabled)
+        limit_row.addWidget(self.extract_limit_check)
+        limit_row.addWidget(self.extract_limit_spin)
+        limit_row.addStretch()
+        frame_ext_layout.addRow("Limit:", limit_row)
+
+        sampling_row = QHBoxLayout()
+        self.extract_sampling_rate_check = QCheckBox("Enable")
+        self.extract_sampling_rate_spin = QSpinBox()
+        self.extract_sampling_rate_spin.setRange(1, 9999)
+        self.extract_sampling_rate_spin.setValue(5)
+        self.extract_sampling_rate_spin.setEnabled(False)
+        self.extract_sampling_rate_spin.setToolTip(
+            "Video mode only. Take every N-th frame (e.g. 5 = every 5th frame).")
+        self.extract_sampling_rate_check.toggled.connect(self.extract_sampling_rate_spin.setEnabled)
+        sampling_row.addWidget(self.extract_sampling_rate_check)
+        sampling_row.addWidget(self.extract_sampling_rate_spin)
+        sampling_row.addStretch()
+        frame_ext_layout.addRow("Sampling rate (video only):", sampling_row)
+
+        extraction_tab_layout.addWidget(frame_ext_group)
+
+        # Thermal visualisation
         thermal_vis_group = QGroupBox("Thermal Visualisation")
         thermal_vis_layout = QFormLayout(thermal_vis_group)
 
@@ -2290,6 +2332,17 @@ class BambiDockWidget(QDockWidget):
             ),
             "photo_timezone_offset": self._get_photo_timezone_offset(),
 
+            # Frame extraction
+            "extract_skip": self.extract_skip_spin.value(),
+            "extract_limit": (
+                self.extract_limit_spin.value()
+                if self.extract_limit_check.isChecked() else None
+            ),
+            "extract_sampling_rate": (
+                self.extract_sampling_rate_spin.value()
+                if self.extract_sampling_rate_check.isChecked() else None
+            ),
+
             # Thermal visualisation
             "thermal_photo_colormap": (
                 self.thermal_vis_cmap_combo.currentText()
@@ -2826,6 +2879,9 @@ class BambiDockWidget(QDockWidget):
         self.embedded_srt_check.setVisible(video_mode)
         if not video_mode:
             self.embedded_srt_check.setChecked(False)
+        self.extract_sampling_rate_check.setEnabled(video_mode)
+        if not video_mode:
+            self.extract_sampling_rate_check.setChecked(False)
 
     def _on_embedded_srt_changed(self, state: int):
         """Show/hide the SRT file input rows depending on embedded SRT mode."""
@@ -7157,6 +7213,16 @@ class BambiDockWidget(QDockWidget):
                            "1" if self.thermal_vis_hi_check.isChecked() else "0")
         project.writeEntryDouble(PLUGIN_SCOPE, "Input/ThermalVisHiValue",
                                  self.thermal_vis_hi_spin.value())
+        project.writeEntry(PLUGIN_SCOPE, "Extraction/Skip",
+                           str(self.extract_skip_spin.value()))
+        project.writeEntry(PLUGIN_SCOPE, "Extraction/LimitEnable",
+                           "1" if self.extract_limit_check.isChecked() else "0")
+        project.writeEntry(PLUGIN_SCOPE, "Extraction/LimitValue",
+                           str(self.extract_limit_spin.value()))
+        project.writeEntry(PLUGIN_SCOPE, "Extraction/SamplingRateEnable",
+                           "1" if self.extract_sampling_rate_check.isChecked() else "0")
+        project.writeEntry(PLUGIN_SCOPE, "Extraction/SamplingRate",
+                           str(self.extract_sampling_rate_spin.value()))
         project.writeEntry(PLUGIN_SCOPE, "Input/AirdataPath",
                            self.airdata_path_edit.text())
         project.writeEntry(PLUGIN_SCOPE, "Input/DemPath",
@@ -7417,6 +7483,14 @@ class BambiDockWidget(QDockWidget):
             read_str("Input/ThermalVisHiEnable") == "1")
         self.thermal_vis_hi_spin.setValue(
             read_double("Input/ThermalVisHiValue", 100.0))
+        self.extract_skip_spin.setValue(read_int("Extraction/Skip", 0))
+        self.extract_limit_check.setChecked(
+            read_str("Extraction/LimitEnable") == "1")
+        self.extract_limit_spin.setValue(read_int("Extraction/LimitValue", 100))
+        self.extract_sampling_rate_check.setChecked(
+            read_str("Extraction/SamplingRateEnable") == "1")
+        self.extract_sampling_rate_spin.setValue(
+            read_int("Extraction/SamplingRate", 5))
         self.airdata_path_edit.setText(read_str("Input/AirdataPath"))
         self.dem_path_edit.setText(read_str("Input/DemPath"))
         self.dem_metadata_path_edit.setText(read_str("Input/DemMetadataPath"))
