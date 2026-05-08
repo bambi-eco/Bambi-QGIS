@@ -864,26 +864,6 @@ class BambiDockWidget(QDockWidget):
 
         # DJI SDK info box
         _plugins_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plugins")
-        sdk_info_group = QGroupBox("DJI Thermal SDK")
-        sdk_info_layout = QVBoxLayout(sdk_info_group)
-        sdk_info_label = QLabel(
-            "Parsing radiometric thermal JPEGs from DJI cameras (H20T, M3T, "
-            "M3TD, M30T, H30T, M4T, …) requires the official DJI Thermal SDK.<br><br>"
-            "<b>1.</b> Download the SDK from the DJI developer portal:<br>"
-            "&nbsp;&nbsp;&nbsp;&nbsp;"
-            "<a href=\"https://www.dji.com/at/downloads/softwares/dji-thermal-sdk\">"
-            "https://www.dji.com/at/downloads/softwares/dji-thermal-sdk</a><br><br>"
-            "<b>2.</b> Extract the <tt>dji_thermal_sdk_*</tt> folder directly into:<br>"
-            f"&nbsp;&nbsp;&nbsp;&nbsp;<tt>{_plugins_dir}</tt><br><br>"
-            "The plugin detects any <tt>dji_thermal_sdk_*</tt> subfolder automatically "
-            "— no further configuration is needed."
-        )
-        sdk_info_label.setWordWrap(True)
-        sdk_info_label.setTextFormat(Qt.RichText)
-        sdk_info_label.setOpenExternalLinks(True)
-        sdk_info_layout.addWidget(sdk_info_label)
-        extraction_tab_layout.addWidget(sdk_info_group)
-
         thermal_vis_group = QGroupBox("Thermal Visualisation")
         thermal_vis_layout = QFormLayout(thermal_vis_group)
 
@@ -920,6 +900,25 @@ class BambiDockWidget(QDockWidget):
         hi_row.addWidget(self.thermal_vis_hi_spin)
         hi_row.addStretch()
         thermal_vis_layout.addRow("Upper threshold (→ black):", hi_row)
+
+        sdk_row = QHBoxLayout()
+        sdk_info_label = QLabel(
+            "Parsing radiometric thermal JPEGs from DJI cameras (H20T, M3T, "
+            "M3TD, M30T, H30T, M4T, …) requires the official DJI Thermal SDK.<br><br>"
+            "<b>1.</b> Download the SDK from the DJI developer portal:<br>"
+            "&nbsp;&nbsp;&nbsp;&nbsp;"
+            "<a href=\"https://www.dji.com/at/downloads/softwares/dji-thermal-sdk\">"
+            "https://www.dji.com/at/downloads/softwares/dji-thermal-sdk</a><br><br>"
+            "<b>2.</b> Extract the <tt>dji_thermal_sdk_*</tt> folder directly into:<br>"
+            f"&nbsp;&nbsp;&nbsp;&nbsp;<tt>{_plugins_dir}</tt><br><br>"
+            "The plugin detects any <tt>dji_thermal_sdk_*</tt> subfolder automatically "
+            "— no further configuration is needed."
+        )
+        sdk_info_label.setWordWrap(True)
+        sdk_info_label.setTextFormat(Qt.RichText)
+        sdk_info_label.setOpenExternalLinks(True)
+        sdk_row.addWidget(sdk_info_label)
+        thermal_vis_layout.addRow(sdk_row)
 
         extraction_tab_layout.addWidget(thermal_vis_group)
         extraction_tab_layout.addStretch()
