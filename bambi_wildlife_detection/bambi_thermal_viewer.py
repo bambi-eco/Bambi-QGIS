@@ -19,7 +19,7 @@ import os
 from qgis.PyQt.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFileDialog, QDoubleSpinBox, QGroupBox, QFormLayout,
-    QSizePolicy, QCheckBox, QComboBox, QMessageBox,
+    QSizePolicy, QCheckBox, QComboBox, QMessageBox, QWidget,
 )
 from qgis.PyQt.QtGui import QPixmap, QImage
 from qgis.PyQt.QtCore import Qt
@@ -144,6 +144,8 @@ class ThermalViewerDialog(QDialog):
         self._file_info = ""
         self._get_cmap = None   # resolved on first render
         self._thermal = None    # Thermal instance, kept alive to hold DLL refs
+        self._image_list = []   # paths when a folder is open
+        self._image_index = -1  # -1 = single-file mode
 
         self._build_ui()
 
@@ -157,13 +159,35 @@ class ThermalViewerDialog(QDialog):
 
         # File selection row
         file_row = QHBoxLayout()
-        self._browse_btn = QPushButton("Open Thermal Image…")
+        self._browse_btn = QPushButton("Open Image…")
         self._browse_btn.clicked.connect(self._browse)
+        self._browse_folder_btn = QPushButton("Open Folder…")
+        self._browse_folder_btn.clicked.connect(self._browse_folder)
         self._path_label = QLabel("No file loaded")
         self._path_label.setWordWrap(True)
         file_row.addWidget(self._browse_btn)
+        file_row.addWidget(self._browse_folder_btn)
         file_row.addWidget(self._path_label, 1)
         root.addLayout(file_row)
+
+        # Navigation row — visible only in folder mode
+        nav_widget = QWidget()
+        nav_layout = QHBoxLayout(nav_widget)
+        nav_layout.setContentsMargins(0, 0, 0, 0)
+        self._prev_btn = QPushButton("◄  Previous")
+        self._prev_btn.clicked.connect(self._go_prev)
+        self._next_btn = QPushButton("Next  ►")
+        self._next_btn.clicked.connect(self._go_next)
+        self._nav_label = QLabel("")
+        self._nav_label.setAlignment(Qt.AlignCenter)
+        nav_layout.addWidget(self._prev_btn)
+        nav_layout.addStretch()
+        nav_layout.addWidget(self._nav_label)
+        nav_layout.addStretch()
+        nav_layout.addWidget(self._next_btn)
+        self._nav_widget = nav_widget
+        self._nav_widget.setVisible(False)
+        root.addWidget(self._nav_widget)
 
         # Display options
         ctrl = QGroupBox("Display Options")
@@ -232,7 +256,47 @@ class ThermalViewerDialog(QDialog):
             "JPEG Images (*.jpg *.jpeg);;All Files (*.*)",
         )
         if path:
+            self._image_list = []
+            self._image_index = -1
+            self._nav_widget.setVisible(False)
             self._load(path)
+
+    def _browse_folder(self):
+        folder = QFileDialog.getExistingDirectory(
+            self, "Open Folder of Thermal Images", ""
+        )
+        if not folder:
+            return
+        exts = {'.jpg', '.jpeg'}
+        images = sorted(
+            os.path.join(folder, f) for f in os.listdir(folder)
+            if os.path.splitext(f)[1].lower() in exts
+        )
+        if not images:
+            QMessageBox.information(
+                self, "No Images Found",
+                f"No JPEG images found in:\n{folder}"
+            )
+            return
+        self._image_list = images
+        self._nav_widget.setVisible(True)
+        self._navigate(0)
+
+    def _navigate(self, index):
+        self._image_index = index
+        total = len(self._image_list)
+        self._nav_label.setText(f"{index + 1}  /  {total}")
+        self._prev_btn.setEnabled(index > 0)
+        self._next_btn.setEnabled(index < total - 1)
+        self._load(self._image_list[index])
+
+    def _go_prev(self):
+        if self._image_index > 0:
+            self._navigate(self._image_index - 1)
+
+    def _go_next(self):
+        if self._image_index < len(self._image_list) - 1:
+            self._navigate(self._image_index + 1)
 
     def _load(self, path):
         # Lazy-create the Thermal instance once and reuse it for all files so
@@ -368,6 +432,16 @@ class ThermalViewerDialog(QDialog):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._update_label()
+
+    def keyPressEvent(self, event):
+        if self._image_list:
+            if event.key() == Qt.Key_Left:
+                self._go_prev()
+                return
+            if event.key() == Qt.Key_Right:
+                self._go_next()
+                return
+        super().keyPressEvent(event)
 
     def closeEvent(self, event):
         if self._thermal is not None:

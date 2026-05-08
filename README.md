@@ -132,6 +132,13 @@ pip install git+https://github.com/bambi-eco/Geo-Referenced-Tracking.git
 
 Or visit: [https://github.com/bambi-eco/Geo-Referenced-Tracking](https://github.com/bambi-eco/Geo-Referenced-Tracking)
 
+#### Thermal Image Viewer
+
+The plugin supports a radiometric thermal image viewer. However, this uses [DJI's Thermal SDK](https://www.dji.com/at/downloads/softwares/dji-thermal-sdk), which has to be manually added after the installation of the plugin by unzipping it to:
+```shell
+C:\Users\<YourUserName>\AppData\Roaming\QGIS\QGIS3\profiles\default\python\plugins\bambi_wildlife_detection\plugins\<dji_thermal_sdk_v*>
+```
+
 ---
 
 ## Installation

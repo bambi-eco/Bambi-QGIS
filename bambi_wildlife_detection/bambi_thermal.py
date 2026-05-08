@@ -441,25 +441,36 @@ class Thermal:
         if (os.path.isfile(self._filepath_dirp)
                 and os.path.isfile(self._filepath_dirp_sub)
                 and os.path.isfile(self._filepath_iirp)):
+            sdk_dir = os.path.dirname(self._filepath_dirp)
+            _dll_dir_cookie = None
+            _old_ldpath = None
             try:
-                sdk_dir = os.path.dirname(self._filepath_dirp)
-                # Add the SDK directory so Windows can resolve transitive DLL
-                # dependencies (libv_girp.dll, MicroIA_Release_x64.dll, …).
-                _dll_dir_cookie = None
                 if hasattr(os, 'add_dll_directory'):
+                    # Windows: register the SDK directory so the loader finds
+                    # transitive dependencies (libv_girp.dll, MicroIA_…dll, …).
                     _dll_dir_cookie = os.add_dll_directory(sdk_dir)
+                elif platform.system() == 'Linux':
+                    # Linux: prepend the SDK directory to LD_LIBRARY_PATH so
+                    # dlopen() resolves transitive .so dependencies (libv_girp,
+                    # libexif, MicroIA_…, …) without them needing to be on the
+                    # system library path.
+                    _old_ldpath = os.environ.get('LD_LIBRARY_PATH', '')
+                    os.environ['LD_LIBRARY_PATH'] = (
+                        sdk_dir + ':' + _old_ldpath if _old_ldpath else sdk_dir
+                    )
                 self._dll_dirp = CDLL(self._filepath_dirp)
                 self._dll_dirp_sub = CDLL(self._filepath_dirp_sub)
                 self._dll_iirp = CDLL(self._filepath_iirp)
-                if _dll_dir_cookie is not None:
-                    _dll_dir_cookie.close()
                 self._sdk_loaded = True
                 self._setup_sdk_functions()
             except OSError:
                 self._sdk_loaded = False
                 self._dll_dirp = None
+            finally:
                 if _dll_dir_cookie is not None:
                     _dll_dir_cookie.close()
+                if _old_ldpath is not None:
+                    os.environ['LD_LIBRARY_PATH'] = _old_ldpath
 
     def close(self):
         """Explicitly unload the SDK DLLs so the files are no longer locked."""
@@ -474,7 +485,10 @@ class Thermal:
                         _free(dll._handle)
             else:
                 import ctypes as _ct
-                _dl = _ct.CDLL('libdl.so')
+                # CDLL(None) opens the current process image (libc on Linux),
+                # which exports dlclose even on glibc >= 2.34 where libdl.so
+                # is merged into libc and may not exist as a separate file.
+                _dl = _ct.CDLL(None)
                 for dll in (self._dll_iirp, self._dll_dirp_sub, self._dll_dirp):
                     if dll is not None:
                         _dl.dlclose(dll._handle)
