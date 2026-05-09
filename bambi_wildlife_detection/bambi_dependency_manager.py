@@ -41,9 +41,9 @@ _VERSION_RANGES = {
     'bambi-detection':  ("0.1.0",  "0.1.0"),
     'AlfsPy':           ("0.0.0",  "0.0.0"),
     'pycolmap':         ('4.0.3', '4.0.3'),
-    'boxmot':           ('17.0.0', '17.0.0'),
+    'boxmot':           ('17.0.0', '18.0.0'),
     'georef-tracker':   ("0.1.0",  "0.1.0"),
-    'torch':            ("2.5.1",  "2.5.1"),
+    'torch':            (None,  None),
     'dji-thermal-sdk':  ('1.7', '1.8'),
 }
 
@@ -55,10 +55,10 @@ _VERSION_RANGES = {
 def _git_available():
     """Return git version string if git is on PATH, otherwise None."""
     try:
-        result = subprocess.run(
-            ['git', '--version'],
-            capture_output=True, check=True, timeout=5, text=True,
-        )
+        kwargs = dict(capture_output=True, check=True, timeout=5, text=True)
+        if sys.platform == 'win32':
+            kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+        result = subprocess.run(['git', '--version'], **kwargs)
         return result.stdout.strip()
     except Exception:
         return None
@@ -114,19 +114,45 @@ def _get_version_status(dist_name, plugins_dir=None):
     return ver_str, 'ok'
 
 
+def _find_python():
+    """Return the Python interpreter suitable for running pip.
+
+    On Windows, sys.executable inside QGIS is the QGIS application binary
+    (e.g. qgis-ltr-bin.exe), not python.exe.  Running that binary with
+    '-m pip' would relaunch the QGIS GUI and hang.  We look for python.exe /
+    python3.exe in the same directory first.
+    """
+    exe_dir = os.path.dirname(sys.executable)
+    for name in ('python3.exe', 'python.exe', 'python3', 'python'):
+        candidate = os.path.join(exe_dir, name)
+        if os.path.isfile(candidate):
+            return candidate
+    return sys.executable  # fallback – may not work on Windows QGIS
+
+
 def _run_pip(args, log_fn):
-    cmd = [sys.executable, '-m', 'pip'] + args
-    log_fn(f'Python: {sys.executable}')
-    log_fn('$ ' + ' '.join(cmd))
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-    if result.stdout:
-        for line in result.stdout.splitlines():
-            log_fn(line)
-    if result.stderr:
-        for line in result.stderr.splitlines():
-            log_fn(line)
-    if result.returncode != 0:
-        raise RuntimeError(f'pip exited with code {result.returncode}')
+    python = _find_python()
+    # -u: force unbuffered stdout/stderr so lines arrive in real time
+    cmd = [python, '-u', '-m', 'pip'] + args
+    log_fn(f'Python: {python}')
+    log_fn('$ ' + ' '.join(cmd[1:]))  # omit python path for readability
+
+    popen_kwargs = dict(
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,   # merge stderr into stdout stream
+        stdin=subprocess.DEVNULL,
+        text=True,
+        bufsize=1,                  # line-buffered on our side
+    )
+    if sys.platform == 'win32':
+        popen_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+
+    with subprocess.Popen(cmd, **popen_kwargs) as proc:
+        for line in proc.stdout:
+            log_fn(line.rstrip())
+
+    if proc.returncode != 0:
+        raise RuntimeError(f'pip exited with code {proc.returncode}')
     log_fn('pip finished successfully')
 
 
