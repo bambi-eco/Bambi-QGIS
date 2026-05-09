@@ -43,7 +43,8 @@ _VERSION_RANGES = {
     'pycolmap':         ('4.0.3', '4.0.3'),
     'boxmot':           ('17.0.0', '18.0.0'),
     'georef-tracker':   ("0.1.0",  "0.1.0"),
-    'torch':            (None,  None),
+    'torch':            ("2.5.1",  "2.11.0"),
+    'torchvision':      ("0.20.1", "0.26.0"),
     'dji-thermal-sdk':  ('1.7', '1.8'),
 }
 
@@ -332,7 +333,7 @@ class DependencyManagerDialog(QDialog):
                 'the CUDA 12.1 variant from pytorch.org.'
             ),
             callback=self._install_gpu,
-            dist_name='torch',
+            dist_names=[('torch', 'torch'), ('torchvision', 'torchvision')],
         ))
         vbox.addWidget(gpu_group)
 
@@ -374,7 +375,14 @@ class DependencyManagerDialog(QDialog):
                 layout.addWidget(sep)
         return group
 
-    def _make_row(self, key, label, desc, callback, dist_name=None, btn_label='Install'):
+    def _make_row(self, key, label, desc, callback,
+                  dist_name=None, dist_names=None, btn_label='Install'):
+        """Build one dependency row.
+
+        Pass ``dist_name`` (str) for a single package, or ``dist_names``
+        (list of ``(display_label, dist_name)`` pairs) to show stacked
+        per-package statuses (e.g. torch + torchvision).
+        """
         row = QHBoxLayout()
         row.setSpacing(8)
 
@@ -383,7 +391,6 @@ class DependencyManagerDialog(QDialog):
         btn.clicked.connect(callback)
         self._buttons[key] = btn
         self._button_labels[key] = btn_label
-        self._dist_names[key] = dist_name
 
         name_lbl = QLabel(f'<b>{label}</b>')
         name_lbl.setTextFormat(Qt.RichText)
@@ -396,34 +403,59 @@ class DependencyManagerDialog(QDialog):
         text_col.addWidget(name_lbl)
         text_col.addWidget(desc_lbl)
 
-        status_lbl = QLabel()
-        status_lbl.setFixedWidth(130)
-        status_lbl.setAlignment(Qt.AlignCenter)
-        status_lbl.setTextFormat(Qt.RichText)
-        if dist_name:
-            ver, status = _get_version_status(dist_name, self._plugins_dir)
-            self._apply_status_label(status_lbl, dist_name, ver, status)
+        if dist_names:
+            # ---- multi-package stacked status ----
+            self._dist_names[key] = None  # handled via _status_labels list
+            status_widget = QWidget()
+            status_layout_v = QVBoxLayout(status_widget)
+            status_layout_v.setContentsMargins(0, 0, 0, 0)
+            status_layout_v.setSpacing(2)
+            lbl_pairs = []
+            for display_name, dn in dist_names:
+                lbl = QLabel()
+                lbl.setFixedWidth(160)
+                lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+                lbl.setTextFormat(Qt.RichText)
+                ver, status = _get_version_status(dn, self._plugins_dir)
+                self._apply_status_label(lbl, dn, ver, status, prefix=display_name)
+                status_layout_v.addWidget(lbl)
+                lbl_pairs.append((dn, lbl))
+            self._status_labels[key] = lbl_pairs  # list of (dist_name, QLabel)
+            row.addWidget(btn)
+            row.addLayout(text_col, 1)
+            row.addWidget(status_widget)
         else:
-            status_lbl.setText('<span style="color:#888;">—</span>')
-        self._status_labels[key] = status_lbl
+            # ---- single-package status (existing behaviour) ----
+            self._dist_names[key] = dist_name
+            status_lbl = QLabel()
+            status_lbl.setFixedWidth(130)
+            status_lbl.setAlignment(Qt.AlignCenter)
+            status_lbl.setTextFormat(Qt.RichText)
+            if dist_name:
+                ver, status = _get_version_status(dist_name, self._plugins_dir)
+                self._apply_status_label(status_lbl, dist_name, ver, status)
+            else:
+                status_lbl.setText('<span style="color:#888;">—</span>')
+            self._status_labels[key] = status_lbl  # single QLabel
+            row.addWidget(btn)
+            row.addLayout(text_col, 1)
+            row.addWidget(status_lbl)
 
-        row.addWidget(btn)
-        row.addLayout(text_col, 1)
-        row.addWidget(status_lbl)
         return row
 
-    def _apply_status_label(self, lbl, dist_name, ver, status):
+    def _apply_status_label(self, lbl, dist_name, ver, status, prefix=None):
         """Update a status QLabel based on the version-check result."""
         lbl.setToolTip('')
+        pre = f'{prefix}: ' if prefix else ''
         if status == 'not_found':
-            lbl.setText('<span style="color:#888;">not found</span>')
+            lbl.setText(f'<span style="color:#888;">{pre}not found</span>')
         elif status == 'ok':
-            lbl.setText(f'<span style="color:green;">✔ v{ver}</span>')
+            lbl.setText(f'<span style="color:green;">{pre}✔ v{ver}</span>')
         elif status == 'untested':
             min_ver, max_ver = _VERSION_RANGES.get(dist_name, (None, None))
             range_str = f'{min_ver or "any"} – {max_ver or "any"}'
             lbl.setText(
-                f'<span style="color:#e67e00;">⚠ v{ver}'
+                f'<span style="color:#e67e00;">{pre}⚠ v{ver}'
                 f'<br><small>not tested</small></span>'
             )
             lbl.setToolTip(f'Installed version is outside the tested range: {range_str}')
@@ -482,30 +514,37 @@ class DependencyManagerDialog(QDialog):
 
     def _on_finished(self, btn_key, success, message):
         btn = self._buttons.get(btn_key)
-        lbl = self._status_labels.get(btn_key)
-        dist_name = self._dist_names.get(btn_key)
+        status_info = self._status_labels.get(btn_key)
         original_label = self._button_labels.get(btn_key, 'Install')
 
         if btn:
             btn.setEnabled(True)
             btn.setText(original_label)
 
+        # Determine whether this row has a single label or a list of (dn, lbl) pairs
+        is_multi = isinstance(status_info, list)
+        pairs = status_info if is_multi else [(self._dist_names.get(btn_key), status_info)]
+
         if success:
             self._log_line(f'✔ {message}')
             self._log_line('→ Please restart QGIS to activate the package.')
-            if lbl:
-                if dist_name:
-                    ver, status = _get_version_status(dist_name, self._plugins_dir)
+            for dn, lbl in pairs:
+                if lbl is None:
+                    continue
+                if dn:
+                    ver, status = _get_version_status(dn, self._plugins_dir)
+                    prefix = dn if is_multi else None
                     if ver:
-                        self._apply_status_label(lbl, dist_name, ver, status)
+                        self._apply_status_label(lbl, dn, ver, status, prefix=prefix)
                     else:
                         lbl.setText('<span style="color:green;">✔ installed</span>')
                 else:
                     lbl.setText('<span style="color:green;">✔ done</span>')
         else:
             self._log_line(f'✖ Error: {message}')
-            if lbl:
-                lbl.setText('<span style="color:red;">✖ error</span>')
+            for dn, lbl in pairs:
+                if lbl is not None:
+                    lbl.setText('<span style="color:red;">✖ error</span>')
 
     # ------------------------------------------------------------------
     # GitHub package helper
