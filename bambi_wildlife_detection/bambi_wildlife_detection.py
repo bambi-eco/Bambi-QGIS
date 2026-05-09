@@ -59,6 +59,8 @@ class BambiWildlifeDetection:
         self.camera_calibration_action = None
         self.thermal_viewer_action = None
         self._thermal_viewer_dlg = None
+        self.dependency_manager_action = None
+        self._dependency_manager_dlg = None
 
     def tr(self, message):
         """Get the translation for a string using Qt translation API.
@@ -202,6 +204,15 @@ class BambiWildlifeDetection:
                 'Click a Field of View polygon to view the frame image with '
                 'the clicked map position projected into the image space'))
 
+        # Dependency Manager
+        self.dependency_manager_action = self.add_action(
+            os.path.join(self.plugin_dir, 'icons', 'icon_depencies.png'),
+            text=self.tr('Dependency Manager'),
+            callback=self._on_dependency_manager,
+            parent=self.iface.mainWindow(),
+            add_to_menu=True,
+            status_tip=self.tr('Install or update BAMBI plugin dependencies'))
+
     def unload(self):
         """Removes the plugin menu item and icon from QGIS GUI."""
         for action in self.actions:
@@ -215,6 +226,11 @@ class BambiWildlifeDetection:
         if self._thermal_viewer_dlg is not None:
             self._thermal_viewer_dlg.close()
             self._thermal_viewer_dlg = None
+
+        # Close dependency manager if open
+        if self._dependency_manager_dlg is not None:
+            self._dependency_manager_dlg.close()
+            self._dependency_manager_dlg = None
 
         # Disconnect project signals and remove dock widget
         if self.dock_widget:
@@ -286,6 +302,18 @@ class BambiWildlifeDetection:
         self._thermal_viewer_dlg.show()
         self._thermal_viewer_dlg.raise_()
         self._thermal_viewer_dlg.activateWindow()
+
+    def _on_dependency_manager(self):
+        """Toolbar action: open the dependency manager (non-modal)."""
+        from .bambi_dependency_manager import DependencyManagerDialog
+        if self._dependency_manager_dlg is None:
+            self._dependency_manager_dlg = DependencyManagerDialog(
+                self.iface.mainWindow(),
+                plugin_dir=self.plugin_dir,
+            )
+        self._dependency_manager_dlg.show()
+        self._dependency_manager_dlg.raise_()
+        self._dependency_manager_dlg.activateWindow()
 
     def on_dock_visibility_changed(self, visible):
         """Handle dock widget visibility changes."""
