@@ -61,6 +61,8 @@ class BambiWildlifeDetection:
         self._thermal_viewer_dlg = None
         self.dependency_manager_action = None
         self._dependency_manager_dlg = None
+        self.flight_planner_action = None
+        self._flight_planner_dlg = None
 
     def tr(self, message):
         """Get the translation for a string using Qt translation API.
@@ -204,6 +206,15 @@ class BambiWildlifeDetection:
                 'Click a Field of View polygon to view the frame image with '
                 'the clicked map position projected into the image space'))
 
+        # Flight Strategy Planner
+        self.flight_planner_action = self.add_action(
+            os.path.join(self.plugin_dir, 'icons', 'icon_flight_planner.png'),
+            text=self.tr('Random Flight Strategy Planner'),
+            callback=self._on_flight_planner,
+            parent=self.iface.mainWindow(),
+            add_to_menu=True,
+            status_tip=self.tr('Open the random flight strategy planner'))
+
         # Dependency Manager
         self.dependency_manager_action = self.add_action(
             os.path.join(self.plugin_dir, 'icons', 'icon_depencies.png'),
@@ -226,6 +237,11 @@ class BambiWildlifeDetection:
         if self._thermal_viewer_dlg is not None:
             self._thermal_viewer_dlg.close()
             self._thermal_viewer_dlg = None
+
+        # Close flight planner if open
+        if self._flight_planner_dlg is not None:
+            self._flight_planner_dlg.close()
+            self._flight_planner_dlg = None
 
         # Close dependency manager if open
         if self._dependency_manager_dlg is not None:
@@ -302,6 +318,20 @@ class BambiWildlifeDetection:
         self._thermal_viewer_dlg.show()
         self._thermal_viewer_dlg.raise_()
         self._thermal_viewer_dlg.activateWindow()
+
+    def _on_flight_planner(self):
+        """Toolbar action: open the random flight strategy planner (non-modal)."""
+        from .bambi_flight_planner import FlightPlannerDialog
+        if self._flight_planner_dlg is None:
+            self._flight_planner_dlg = FlightPlannerDialog(
+                self.iface, parent=self.iface.mainWindow()
+            )
+            self._flight_planner_dlg.finished.connect(
+                lambda _: setattr(self, '_flight_planner_dlg', None)
+            )
+        self._flight_planner_dlg.show()
+        self._flight_planner_dlg.raise_()
+        self._flight_planner_dlg.activateWindow()
 
     def _on_dependency_manager(self):
         """Toolbar action: open the dependency manager (non-modal)."""
