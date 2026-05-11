@@ -258,14 +258,14 @@ class DependencyManagerDialog(QDialog):
             dict(
                 key='bambi_detection',
                 label='BAMBI Detection Framework',
-                desc='Core wildlife detection library – required for all detection workflows.',
+                desc='Utility library for geo-referencing drone flights.',
                 callback=self._install_bambi_detection,
                 dist_name='bambi-detection',
             ),
             dict(
                 key='alfs_py',
                 label='ALFS-PY Framework',
-                desc='Adaptive light-field synthesis framework – required for correction workflows.',
+                desc='Airborne light-field sampling framework for the actual geo-referencing processing.',
                 callback=self._install_alfs_py,
                 dist_name='AlfsPy',
             ),
@@ -276,7 +276,7 @@ class DependencyManagerDialog(QDialog):
             dict(
                 key='pycolmap',
                 label='pycolmap  (v4.0.3)',
-                desc='Structure-from-Motion via COLMAP – needed for single-camera calibration.',
+                desc='Structure-from-Motion via COLMAP for single-camera calibration.',
                 callback=self._install_pycolmap,
                 dist_name='pycolmap',
             ),
