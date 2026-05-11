@@ -217,7 +217,7 @@ class BambiWildlifeDetection:
 
         # Dependency Manager
         self.dependency_manager_action = self.add_action(
-            os.path.join(self.plugin_dir, 'icons', 'icon_depencies.png'),
+            os.path.join(self.plugin_dir, 'icons', 'icon_dependencies.png'),
             text=self.tr('Dependency Manager'),
             callback=self._on_dependency_manager,
             parent=self.iface.mainWindow(),

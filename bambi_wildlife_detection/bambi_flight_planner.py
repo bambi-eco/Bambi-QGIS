@@ -7,28 +7,143 @@ from the drone_flight_simulation package, then importing the results as
 persistent QGIS layers.
 """
 
+import io
+import json
 import os
 import sys
 import tempfile
 
-from qgis.PyQt.QtCore import Qt, QThread, QObject, pyqtSignal, QSettings
+from qgis.PyQt.QtCore import QSettings, QThread, QObject, pyqtSignal
+from qgis.PyQt.QtGui import QColor, QFont
 from qgis.PyQt.QtWidgets import (
     QButtonGroup, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
     QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
     QLineEdit, QMessageBox, QProgressBar, QPushButton, QRadioButton,
     QScrollArea, QSizePolicy, QSpinBox, QTextEdit, QVBoxLayout, QWidget,
 )
-from qgis.PyQt.QtGui import QColor
 from qgis.core import (
-    QgsLineSymbol, QgsMarkerSymbol, QgsProject,
-    QgsSingleSymbolRenderer, QgsVectorFileWriter, QgsVectorLayer,
+    QgsFillSymbol, QgsLineSymbol, QgsMarkerSymbol, QgsPalLayerSettings,
+    QgsProject, QgsSingleSymbolRenderer, QgsTextBufferSettings, QgsTextFormat,
+    QgsVectorFileWriter, QgsVectorLayer, QgsVectorLayerSimpleLabeling,
     QgsWkbTypes,
 )
+
+def _fix_std_streams():
+    # QGIS sets sys.stderr/stdout to None; numpy/geopandas crash when they
+    # try to write deprecation or error messages through those streams.
+    if sys.stderr is None:
+        sys.stderr = io.StringIO()
+    if sys.stdout is None:
+        sys.stdout = io.StringIO()
+
+
+def _write_route_line(src_path, out_path):
+    """Write a clean single-feature LineString GeoJSON containing only the
+    'total-route' feature from a mixed-geometry route GeoJSON.  Returns
+    *out_path* on success or None if the feature is not found."""
+    try:
+        with open(src_path, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return None
+    total = next(
+        (feat for feat in data.get("features", [])
+         if feat.get("properties", {}).get("name") == "total-route"),
+        None,
+    )
+    if total is None:
+        return None
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump({"type": "FeatureCollection", "features": [total]}, f)
+    return out_path
+
+
+def _write_route_transects(src_path, out_path):
+    """Extract individual survey transect LineStrings from a route GeoJSON,
+    tag each with a 1-based ``transect_no`` property, and write a clean
+    single-geometry-type GeoJSON to *out_path*.  Returns *out_path* on
+    success or None if no transects are found."""
+    _SKIP = {"arrival", "departure", "total-route"}
+    try:
+        with open(src_path, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return None
+    transects = []
+    no = 1
+    for feat in data.get("features", []):
+        if feat.get("geometry", {}).get("type") != "LineString":
+            continue
+        if feat.get("properties", {}).get("name") in _SKIP:
+            continue
+        feat = json.loads(json.dumps(feat))  # deep copy
+        feat.setdefault("properties", {})["transect_no"] = no
+        transects.append(feat)
+        no += 1
+    if not transects:
+        return None
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump({"type": "FeatureCollection", "features": transects}, f)
+    return out_path
+
+
+def _enable_transect_labels(layer, color_hex):
+    """Configure *layer* to display its ``transect_no`` field as map labels."""
+    fmt = QgsTextFormat()
+    font = QFont("Arial", 7)
+    font.setBold(True)
+    fmt.setFont(font)
+    fmt.setSize(7)
+    fmt.setColor(QColor(color_hex))
+
+    buf = QgsTextBufferSettings()
+    buf.setEnabled(True)
+    buf.setSize(0.8)
+    buf.setColor(QColor("white"))
+    fmt.setBuffer(buf)
+
+    settings = QgsPalLayerSettings()
+    settings.fieldName = "transect_no"
+    settings.placement = QgsPalLayerSettings.Line
+    settings.setFormat(fmt)
+
+    labeling = QgsVectorLayerSimpleLabeling(settings)
+    layer.setLabeling(labeling)
+    layer.setLabelsEnabled(True)
+
 
 _ROUTE_COLORS = [
     "#E53935", "#8E24AA", "#1E88E5", "#00ACC1",
     "#43A047", "#FB8C00", "#6D4C41", "#039BE5",
 ]
+
+_SETTINGS_PREFIX = "bambi/flight_planner/"
+
+_DEFAULTS = {
+    "strategy":                          "random",
+    "grid_size":                         400.0,
+    "max_start_and_stop_distance":       3000.0,
+    "min_transects":                     40,
+    "max_transects_enabled":             False,
+    "max_transects":                     100,
+    "max_distance":                      2000.0,
+    "min_transect_overlap":              0.75,
+    "number_of_retries":                 100,
+    "target_crs_epsg":                   32633,
+    "min_transects_per_route":           3,
+    "x_offset":                          0.0,
+    "y_offset":                          0.0,
+    "padding_north":                     0,
+    "padding_east":                      0,
+    "padding_south":                     0,
+    "padding_west":                      0,
+    "seed":                              "",
+    "max_number_of_overlapping_transects": 0,
+    "max_number_of_flights":             100,
+    "random_search":                     True,
+    "number_of_retries_per_route":       50,
+    "target_folder":                     "",
+}
 
 
 class _FlightPlanWorker(QObject):
@@ -45,6 +160,7 @@ class _FlightPlanWorker(QObject):
         self._invalid_path = invalid_path
 
     def run(self):
+        _fix_std_streams()
         try:
             try:
                 from fiona.drvsupport import supported_drivers
@@ -55,13 +171,14 @@ class _FlightPlanWorker(QObject):
                 pass
 
             strategy = self._strategy_cls(**self._strategy_kwargs)
-            strategy.create_routes(
+            routes = strategy.create_routes(
                 area_path=self._area_path,
                 start_points_path=self._start_path,
                 target_path=self._target_path,
                 invalid_areas_path=self._invalid_path,
             )
-            self.finished.emit(True, "")
+            count = len(routes) if routes else 0
+            self.finished.emit(True, str(count))
         except Exception:
             import traceback
             self.finished.emit(False, traceback.format_exc())
@@ -77,9 +194,12 @@ class FlightPlannerDialog(QDialog):
         self._thread = None
         self._temp_files = []
         self._target_path = ""
+        self._area_external_path = None
+        self._invalid_external_path = None
         self.setWindowTitle("Random Flight Strategy Planner")
-        self.resize(720, 860)
+        self.resize(720, 800)
         self._build_ui()
+        self._load_settings()
 
     # ------------------------------------------------------------------
     # UI construction
@@ -97,7 +217,6 @@ class FlightPlannerDialog(QDialog):
         sv.setSpacing(8)
         outer.addWidget(scroll, stretch=1)
 
-        sv.addWidget(self._build_module_group())
         sv.addWidget(self._build_inputs_group())
         sv.addWidget(self._build_strategy_group())
         sv.addWidget(self._build_params_group())
@@ -107,10 +226,13 @@ class FlightPlannerDialog(QDialog):
         btn_row = QHBoxLayout()
         self._run_btn = QPushButton("Run")
         self._run_btn.clicked.connect(self._run)
+        reset_btn = QPushButton("Reset to Defaults")
+        reset_btn.clicked.connect(lambda: self._apply_settings(_DEFAULTS))
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.close)
         btn_row.addWidget(self._run_btn)
         btn_row.addStretch()
+        btn_row.addWidget(reset_btn)
         btn_row.addWidget(close_btn)
         outer.addLayout(btn_row)
 
@@ -123,27 +245,6 @@ class FlightPlannerDialog(QDialog):
         self._log_edit.setReadOnly(True)
         self._log_edit.setFixedHeight(150)
         outer.addWidget(self._log_edit)
-
-    def _build_module_group(self):
-        grp = QGroupBox("Strategy Module")
-        fl = QFormLayout(grp)
-        self._module_path_edit = QLineEdit()
-        self._module_path_edit.setPlaceholderText(
-            r"Path to drone_flight_simulation\src"
-        )
-        saved = QSettings().value("bambi/flight_planner/module_path", "")
-        if not saved:
-            candidate = r"C:\D\Projects\drone_flight_simulation\src"
-            if os.path.isdir(candidate):
-                saved = candidate
-        self._module_path_edit.setText(saved)
-        browse = QPushButton("Browse…")
-        browse.clicked.connect(self._browse_module_path)
-        row = QHBoxLayout()
-        row.addWidget(self._module_path_edit)
-        row.addWidget(browse)
-        fl.addRow("Module path:", row)
-        return grp
 
     def _build_inputs_group(self):
         grp = QGroupBox("Input Data")
@@ -383,14 +484,6 @@ class FlightPlannerDialog(QDialog):
         if path:
             edit.setText(path)
 
-    def _browse_module_path(self):
-        folder = QFileDialog.getExistingDirectory(
-            self, "Select drone_flight_simulation/src directory"
-        )
-        if folder:
-            self._module_path_edit.setText(folder)
-            QSettings().setValue("bambi/flight_planner/module_path", folder)
-
     def _browse_target(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Target Folder")
         if folder:
@@ -485,27 +578,93 @@ class FlightPlannerDialog(QDialog):
         return kwargs
 
     # ------------------------------------------------------------------
+    # Settings persistence
+    # ------------------------------------------------------------------
+
+    def _apply_settings(self, values):
+        """Apply a values dict to every parameter widget."""
+        if values.get("strategy") == "loop":
+            self._random_loop_radio.setChecked(True)
+        else:
+            self._random_radio.setChecked(True)
+
+        self._grid_size_spin.setValue(float(values["grid_size"]))
+        self._max_start_dist_spin.setValue(float(values["max_start_and_stop_distance"]))
+        self._min_transects_spin.setValue(int(values["min_transects"]))
+
+        max_t_enabled = self._to_bool(values["max_transects_enabled"])
+        self._max_transects_none_chk.setChecked(not max_t_enabled)
+        self._max_transects_spin.setValue(int(values["max_transects"]))
+
+        self._max_distance_spin.setValue(float(values["max_distance"]))
+        self._min_overlap_spin.setValue(float(values["min_transect_overlap"]))
+        self._num_retries_spin.setValue(int(values["number_of_retries"]))
+        self._epsg_spin.setValue(int(values["target_crs_epsg"]))
+        self._min_per_route_spin.setValue(int(values["min_transects_per_route"]))
+        self._x_offset_spin.setValue(float(values["x_offset"]))
+        self._y_offset_spin.setValue(float(values["y_offset"]))
+        self._padding_north_spin.setValue(int(values["padding_north"]))
+        self._padding_east_spin.setValue(int(values["padding_east"]))
+        self._padding_south_spin.setValue(int(values["padding_south"]))
+        self._padding_west_spin.setValue(int(values["padding_west"]))
+        self._seed_edit.setText(str(values["seed"]))
+        self._max_overlapping_spin.setValue(int(values["max_number_of_overlapping_transects"]))
+        self._max_flights_spin.setValue(int(values["max_number_of_flights"]))
+        self._random_search_chk.setChecked(self._to_bool(values["random_search"]))
+        self._retries_per_route_spin.setValue(int(values["number_of_retries_per_route"]))
+        self._target_edit.setText(str(values["target_folder"]))
+
+    @staticmethod
+    def _to_bool(v):
+        if isinstance(v, bool):
+            return v
+        return str(v).lower() in ("true", "1", "yes")
+
+    def _load_settings(self):
+        s = QSettings()
+        values = {
+            key: s.value(_SETTINGS_PREFIX + key, default)
+            for key, default in _DEFAULTS.items()
+        }
+        self._apply_settings(values)
+
+    def _save_settings(self):
+        s = QSettings()
+        values = {
+            "strategy":    "random" if self._random_radio.isChecked() else "loop",
+            "grid_size":   self._grid_size_spin.value(),
+            "max_start_and_stop_distance": self._max_start_dist_spin.value(),
+            "min_transects":               self._min_transects_spin.value(),
+            "max_transects_enabled":       not self._max_transects_none_chk.isChecked(),
+            "max_transects":               self._max_transects_spin.value(),
+            "max_distance":                self._max_distance_spin.value(),
+            "min_transect_overlap":        self._min_overlap_spin.value(),
+            "number_of_retries":           self._num_retries_spin.value(),
+            "target_crs_epsg":             self._epsg_spin.value(),
+            "min_transects_per_route":     self._min_per_route_spin.value(),
+            "x_offset":                    self._x_offset_spin.value(),
+            "y_offset":                    self._y_offset_spin.value(),
+            "padding_north":               self._padding_north_spin.value(),
+            "padding_east":                self._padding_east_spin.value(),
+            "padding_south":               self._padding_south_spin.value(),
+            "padding_west":                self._padding_west_spin.value(),
+            "seed":                        self._seed_edit.text().strip(),
+            "max_number_of_overlapping_transects": self._max_overlapping_spin.value(),
+            "max_number_of_flights":       self._max_flights_spin.value(),
+            "random_search":               self._random_search_chk.isChecked(),
+            "number_of_retries_per_route": self._retries_per_route_spin.value(),
+            "target_folder":               self._target_edit.text().strip(),
+        }
+        for key, value in values.items():
+            s.setValue(_SETTINGS_PREFIX + key, value)
+
+    # ------------------------------------------------------------------
     # Run
     # ------------------------------------------------------------------
 
     def _run(self):
-        module_path = self._module_path_edit.text().strip()
-        if module_path and module_path not in sys.path:
-            sys.path.insert(0, module_path)
-        if module_path:
-            QSettings().setValue("bambi/flight_planner/module_path", module_path)
-
-        try:
-            from drone_survey_planner.evaluation_flight_strategy import (
-                RandomStrategy, RandomLoopStrategy,
-            )
-        except ImportError as exc:
-            QMessageBox.critical(
-                self, "Import Error",
-                f"Cannot import strategy module:\n{exc}\n\n"
-                "Set the correct 'Module path' to the drone_flight_simulation/src directory."
-            )
-            return
+        _fix_std_streams()
+        from .evaluation_flight_strategy import RandomStrategy, RandomLoopStrategy
 
         try:
             area_path = self._resolve_geo_input(self._area_combo, self._area_file_edit)
@@ -523,6 +682,8 @@ class FlightPlannerDialog(QDialog):
             return
         os.makedirs(target_path, exist_ok=True)
         self._target_path = target_path
+        self._area_external_path = self._area_file_edit.text().strip() or None
+        self._invalid_external_path = self._invalid_file_edit.text().strip() or None
 
         try:
             kwargs = self._collect_kwargs()
@@ -550,15 +711,18 @@ class FlightPlannerDialog(QDialog):
         self._thread.finished.connect(self._thread.deleteLater)
         self._thread.start()
 
-    def _on_finished(self, success, error_msg):
+    def _on_finished(self, success, msg):
         self._run_btn.setEnabled(True)
         self._progress_bar.setVisible(False)
         if not success:
-            self._log_edit.append("FAILED.\n\n" + error_msg)
+            self._log_edit.append("FAILED.\n\n" + msg)
             QMessageBox.critical(self, "Planning Failed",
                                  "Flight planning failed. See the log below for details.")
             return
-        self._log_edit.append("Completed successfully!")
+        count = int(msg) if msg.isdigit() else 0
+        self._log_edit.append(
+            f"Completed successfully! Generated {count} valid flight route(s)."
+        )
         self._load_results_to_qgis(self._target_path)
 
     # ------------------------------------------------------------------
@@ -581,6 +745,18 @@ class FlightPlannerDialog(QDialog):
             (parent or group).addLayer(lyr)
             return lyr
 
+        # --- Grid (full) ---
+        grid_all_lyr = add_layer(
+            os.path.join(target_path, "grid.geojson"), "Grid (All)"
+        )
+        if grid_all_lyr:
+            sym = QgsMarkerSymbol.createSimple(
+                {"name": "circle", "color": "#E0E0E0", "size": "1.0",
+                 "outline_style": "no"}
+            )
+            grid_all_lyr.setRenderer(QgsSingleSymbolRenderer(sym))
+
+        # --- Grid (filtered) ---
         grid_lyr = add_layer(
             os.path.join(target_path, "grid_filtered.geojson"), "Grid (Filtered)"
         )
@@ -591,15 +767,15 @@ class FlightPlannerDialog(QDialog):
             )
             grid_lyr.setRenderer(QgsSingleSymbolRenderer(sym))
 
+        # --- Transects (valid) ---
         transect_lyr = add_layer(
             os.path.join(target_path, "transects_valids.geojson"), "Transects (Valid)"
         )
         if transect_lyr:
-            sym = QgsLineSymbol.createSimple(
-                {"color": "#9E9E9E", "width": "0.3"}
-            )
+            sym = QgsLineSymbol.createSimple({"color": "#9E9E9E", "width": "0.3"})
             transect_lyr.setRenderer(QgsSingleSymbolRenderer(sym))
 
+        # --- Start Points ---
         start_lyr = add_layer(
             os.path.join(target_path, "startpoints.geojson"), "Start Points"
         )
@@ -610,19 +786,71 @@ class FlightPlannerDialog(QDialog):
             )
             start_lyr.setRenderer(QgsSingleSymbolRenderer(sym))
 
+        # --- Flight Routes ---
+        # Route GeoJSONs contain mixed geometry (Points + LineStrings).  OGR
+        # picks the first geometry type (Point) and silently drops the rest, so
+        # we extract the "total-route" LineString and the individual survey
+        # transects into separate clean files and load them as sub-layers.
         routes_dir = os.path.join(target_path, "routes", "valid")
         if os.path.isdir(routes_dir):
+            lines_dir = os.path.join(target_path, "routes", "valid_lines")
+            os.makedirs(lines_dir, exist_ok=True)
             routes_group = group.addGroup("Flight Routes")
             route_files = sorted(
                 f for f in os.listdir(routes_dir) if f.endswith(".geojson")
             )
             for idx, fname in enumerate(route_files):
-                label = os.path.splitext(fname)[0].replace("_", " ").title()
-                lyr = add_layer(os.path.join(routes_dir, fname), label, routes_group)
-                if lyr:
-                    color = _ROUTE_COLORS[idx % len(_ROUTE_COLORS)]
-                    sym = QgsLineSymbol.createSimple({"color": color, "width": "0.8"})
-                    lyr.setRenderer(QgsSingleSymbolRenderer(sym))
+                stem = os.path.splitext(fname)[0]
+                src = os.path.join(routes_dir, fname)
+                color = _ROUTE_COLORS[idx % len(_ROUTE_COLORS)]
+                route_label = stem.replace("_", " ").title()
+                route_sub = routes_group.addGroup(route_label)
+
+                # Total-route line
+                line_path = _write_route_line(
+                    src, os.path.join(lines_dir, fname)
+                )
+                if line_path:
+                    lyr = add_layer(line_path, "Route", route_sub)
+                    if lyr:
+                        sym = QgsLineSymbol.createSimple(
+                            {"color": color, "width": "0.8"}
+                        )
+                        lyr.setRenderer(QgsSingleSymbolRenderer(sym))
+
+                # Numbered survey transects
+                transect_path = _write_route_transects(
+                    src,
+                    os.path.join(lines_dir, f"{stem}_transects.geojson"),
+                )
+                if transect_path:
+                    t_lyr = add_layer(transect_path, "Transects", route_sub)
+                    if t_lyr:
+                        sym = QgsLineSymbol.createSimple(
+                            {"color": color, "width": "0.4",
+                             "line_style": "dash"}
+                        )
+                        t_lyr.setRenderer(QgsSingleSymbolRenderer(sym))
+                        _enable_transect_labels(t_lyr, color)
+
+        # --- External input files (monitoring area / invalid areas) ---
+        if self._area_external_path and os.path.exists(self._area_external_path):
+            area_lyr = add_layer(self._area_external_path, "Monitoring Area")
+            if area_lyr:
+                sym = QgsFillSymbol.createSimple(
+                    {"color": "33,150,243,40", "outline_color": "#1565C0",
+                     "outline_width": "0.8"}
+                )
+                area_lyr.setRenderer(QgsSingleSymbolRenderer(sym))
+
+        if self._invalid_external_path and os.path.exists(self._invalid_external_path):
+            inv_lyr = add_layer(self._invalid_external_path, "Invalid Areas")
+            if inv_lyr:
+                sym = QgsFillSymbol.createSimple(
+                    {"color": "244,67,54,60", "outline_color": "#B71C1C",
+                     "outline_width": "0.8"}
+                )
+                inv_lyr.setRenderer(QgsSingleSymbolRenderer(sym))
 
         self.iface.mapCanvas().refresh()
         QMessageBox.information(
@@ -635,6 +863,7 @@ class FlightPlannerDialog(QDialog):
     # ------------------------------------------------------------------
 
     def closeEvent(self, event):
+        self._save_settings()
         for tmp in self._temp_files:
             try:
                 if os.path.exists(tmp):

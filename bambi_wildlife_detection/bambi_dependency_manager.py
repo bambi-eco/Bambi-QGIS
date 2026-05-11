@@ -46,6 +46,8 @@ _VERSION_RANGES = {
     'torch':            ("2.5.1",  "2.11.0"),
     'torchvision':      ("0.20.1", "0.26.0"),
     'dji-thermal-sdk':  ('1.7', '1.8'),
+    'fiona':            ('1.10.1', '1.10.1'),
+    'simplekml':        ('1.3.6',  '1.3.6'),
 }
 
 
@@ -269,8 +271,8 @@ class DependencyManagerDialog(QDialog):
             ),
         ]))
 
-        # ---- Optional dependencies ----
-        vbox.addWidget(self._build_group('Optional Dependencies', [
+        # ---- Calibration (optional) ----
+        vbox.addWidget(self._build_group('Calibration  (optional)', [
             dict(
                 key='pycolmap',
                 label='pycolmap  (v4.0.3)',
@@ -278,6 +280,10 @@ class DependencyManagerDialog(QDialog):
                 callback=self._install_pycolmap,
                 dist_name='pycolmap',
             ),
+        ]))
+
+        # ---- Extended Tracking (optional) ----
+        vbox.addWidget(self._build_group('Extended Tracking  (optional)', [
             dict(
                 key='boxmot',
                 label='BoxMOT  (v17.0.0)',
@@ -294,8 +300,26 @@ class DependencyManagerDialog(QDialog):
             ),
         ]))
 
+        # ---- Flight route generation (optional) ----
+        vbox.addWidget(self._build_group('Flight Route Generation  (optional)', [
+            dict(
+                key='fiona',
+                label='Fiona  (v1.10.1)',
+                desc='Geospatial file I/O – required for reading KML/GeoJSON area files in the flight planner.',
+                callback=self._install_fiona,
+                dist_name='fiona',
+            ),
+            dict(
+                key='simplekml',
+                label='simplekml  (v1.3.6)',
+                desc='KML/KMZ export – required for writing flight routes in the flight planner.',
+                callback=self._install_simplekml,
+                dist_name='simplekml',
+            ),
+        ]))
+
         # ---- DJI Thermal SDK ----
-        vbox.addWidget(self._build_group('DJI Thermal SDK  (native library)', [
+        vbox.addWidget(self._build_group('DJI Thermal SDK  (optional)', [
             dict(
                 key='dji_sdk',
                 label='DJI Thermal SDK  (v1.8)',
@@ -343,7 +367,7 @@ class DependencyManagerDialog(QDialog):
 
         # ---- Restart notice ----
         restart_label = QLabel(
-            '<b>ℹ  After pressing any install button, you must restart QGIS '
+            '<b>After pressing any install button, you must restart QGIS '
             'to activate the newly installed packages.</b>'
         )
         restart_label.setWordWrap(True)
@@ -602,6 +626,18 @@ class DependencyManagerDialog(QDialog):
             'https://github.com/bambi-eco/Geo-Referenced-Tracking/archive/refs/heads/main.zip',
             'git+https://github.com/bambi-eco/Geo-Referenced-Tracking.git',
         )
+
+    def _install_fiona(self):
+        self._log_line('─── Fiona 1.10.1 ───')
+        def _do(log_fn):
+            _run_pip(['install', '--force-reinstall', 'fiona==1.10.1'], log_fn)
+        self._start_worker('fiona', _do)
+
+    def _install_simplekml(self):
+        self._log_line('─── simplekml 1.3.6 ───')
+        def _do(log_fn):
+            _run_pip(['install', '--force-reinstall', 'simplekml==1.3.6'], log_fn)
+        self._start_worker('simplekml', _do)
 
     def _install_gpu(self):
         self._log_line('─── GPU Support (CUDA 12.1) ───')
