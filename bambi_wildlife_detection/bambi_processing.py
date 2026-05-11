@@ -179,6 +179,23 @@ class BambiProcessor:
     DEFAULT_MODEL_REPO = "cpraschl/bambi-thermal-detection"
     DEFAULT_MODEL_FILENAME = "thermal_animal_detector.pt"
 
+    @staticmethod
+    def _get_default_model_dir() -> str:
+        """Return the shared directory used to cache the default detection model.
+
+        Uses the QGIS profile's ``bambi_deps/models/`` folder so the model is
+        downloaded once and shared across all projects, rather than being
+        re-downloaded into every project's output folder.
+        """
+        try:
+            from qgis.core import QgsApplication
+            return os.path.join(
+                QgsApplication.qgisSettingsDirPath(), 'bambi_deps', 'models'
+            )
+        except Exception:
+            import tempfile
+            return os.path.join(tempfile.gettempdir(), 'bambi_deps', 'models')
+
     def __init__(self):
         """Initialize the processor."""
         pass
@@ -214,17 +231,17 @@ class BambiProcessor:
 
         return default_correction
 
-    def download_default_model(self, target_folder: str, log_fn=None) -> str:
-        """Download the default model from HuggingFace.
+    def download_default_model(self, log_fn=None) -> str:
+        """Download the default detection model from HuggingFace to the shared
+        ``bambi_deps/models/`` folder in the QGIS profile directory.
 
-        :param target_folder: Folder to save the model
         :param log_fn: Optional logging function
         :return: Path to the downloaded model
         """
         import urllib.request
         import ssl
 
-        models_folder = os.path.join(target_folder, "models")
+        models_folder = self._get_default_model_dir()
         os.makedirs(models_folder, exist_ok=True)
 
         model_path = os.path.join(models_folder, self.DEFAULT_MODEL_FILENAME)
@@ -1574,7 +1591,7 @@ class BambiProcessor:
         if not model_path:
             if log_fn:
                 log_fn("No model specified, downloading default model...")
-            model_path = self.download_default_model(target_folder, log_fn)
+            model_path = self.download_default_model(log_fn)
 
         # Verify model exists
         if not os.path.exists(model_path):

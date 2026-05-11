@@ -4,25 +4,24 @@ QGIS-plugin shim for the BAMBI thermal parser.
 
 All parsing logic lives in the ``bambi.thermal`` package (alfs_detection).
 This module's sole responsibility is discovering the DJI SDK and exiftool
-inside the plugin's own ``plugins/`` subfolder and wiring those paths into
-the framework's ``Thermal`` class.
+inside the ``bambi_deps/`` folder of the active QGIS profile and wiring
+those paths into the framework's ``Thermal`` class.
 
 The ``Thermal`` subclass exported here is a drop-in replacement for
 direct instantiation — callers do not need to know about the path discovery.
 
-Required layout inside the plugin directory:
-  bambi_wildlife_detection/
-      bambi_thermal.py          ← this file
-      plugins/
-          exiftool-12.35.exe    (optional – enables camera-model detection)
-          dji_thermal_sdk_vX.Y_YYYYMMDD/   (any version folder)
-              utility/
-                  bin/
-                      windows/
-                          release_x64/
-                              libdirp.dll
-                              libv_dirp.dll
-                              libv_iirp.dll
+Required layout inside the QGIS profile directory
+(e.g. AppData/Roaming/QGIS/QGIS3/profiles/default/bambi_deps/):
+  bambi_deps/
+      exiftool-12.35.exe    (optional – enables camera-model detection)
+      dji_thermal_sdk_vX.Y_YYYYMMDD/   (any version folder)
+          utility/
+              bin/
+                  windows/
+                      release_x64/
+                          libdirp.dll
+                          libv_dirp.dll
+                          libv_iirp.dll
 """
 
 import os
@@ -42,7 +41,18 @@ __all__ = ['Thermal', 'parse_dji_rjpeg', 'apply_colormap']
 # ---------------------------------------------------------------------------
 
 _PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
-_PLUGINS_DIR = os.path.join(_PLUGIN_DIR, 'plugins')
+
+# Store downloaded/extracted dependencies outside the plugin installation
+# directory so that locked DLLs (e.g. DJI SDK) never block plugin
+# reinstallation.  The QGIS profile directory persists across plugin updates.
+def _get_bambi_deps_dir() -> str:
+    try:
+        from qgis.core import QgsApplication
+        return os.path.join(QgsApplication.qgisSettingsDirPath(), 'bambi_deps')
+    except Exception:
+        return os.path.join(_PLUGIN_DIR, 'plugins')
+
+_PLUGINS_DIR = _get_bambi_deps_dir()
 
 
 def _find_sdk_dir() -> Optional[str]:

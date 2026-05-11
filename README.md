@@ -155,7 +155,7 @@ Or visit: [https://github.com/bambi-eco/Geo-Referenced-Tracking](https://github.
 
 The plugin supports a radiometric thermal image viewer. However, this uses [DJI's Thermal SDK](https://www.dji.com/at/downloads/softwares/dji-thermal-sdk), which has to be manually added after the installation of the plugin by unzipping it to:
 ```shell
-C:\Users\<YourUserName>\AppData\Roaming\QGIS\QGIS3\profiles\default\python\plugins\bambi_wildlife_detection\plugins\<dji_thermal_sdk_v*>
+C:\Users\<YourUserName>\AppData\Roaming\QGIS\QGIS3\profiles\default\bambi_deps\<dji_thermal_sdk_v*>
 ```
 
 The **Dependency Manager** provides a one-click download button for the DJI Thermal SDK ZIP that extracts it to the correct location automatically.
@@ -919,7 +919,6 @@ target_folder/
 │   ├── segmentation_pixel.json                # Pixel-space segmentation masks
 │   └── segmentation_georef.json               # Geo-referenced segmentation polygons
 └── models/
-    ├── thermal_animal_detector.pt             # BAMBI thermal detection model
     ├── osnet_x0_5_bambi_thermal_omni.pt       # BAMBI Re-ID model
     └── osnet_x0_25_msmt17.pt                  # BoxMOT default Re-ID model
 ```
@@ -932,7 +931,7 @@ target_folder/
 
 - Check your internet connection
 - Download manually from HuggingFace: [Detection (thermal_animal_detector.pt)](https://huggingface.co/cpraschl/bambi-thermal-detection), [Re-ID (osnet_x0_5_bambi_thermal_omni.pt)](https://huggingface.co/cpraschl/bambi-thermal-omni)
-- Place the `.pt` file in `target_folder/models/`
+- Place `thermal_animal_detector.pt` in `%APPDATA%\QGIS\QGIS3\profiles\default\bambi_deps\models\` (or specify a custom path in the **Model Path** field of the Detection configuration)
 
 ### Geo-referencing Issues
 

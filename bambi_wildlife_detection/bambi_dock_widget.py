@@ -867,9 +867,15 @@ class BambiDockWidget(QDockWidget):
         config_sub_tabs.addTab(extraction_tab, "Extraction")
 
         # DJI SDK info box
-        self._thermal_plugins_dir = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "plugins"
-        )
+        try:
+            from qgis.core import QgsApplication
+            self._thermal_plugins_dir = os.path.join(
+                QgsApplication.qgisSettingsDirPath(), 'bambi_deps'
+            )
+        except Exception:
+            self._thermal_plugins_dir = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), 'plugins'
+            )
 
         # Frame extraction parameters
         frame_ext_group = QGroupBox("Frame Extraction")

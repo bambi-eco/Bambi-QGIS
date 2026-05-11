@@ -223,7 +223,15 @@ class DependencyManagerDialog(QDialog):
     def __init__(self, parent=None, plugin_dir=None):
         super().__init__(parent)
         self._plugin_dir = plugin_dir or os.path.dirname(__file__)
-        self._plugins_dir = os.path.join(self._plugin_dir, 'plugins')
+        # Store downloads outside the plugin folder so locked DLLs (e.g. the
+        # DJI SDK) never prevent plugin reinstallation.
+        try:
+            from qgis.core import QgsApplication
+            self._plugins_dir = os.path.join(
+                QgsApplication.qgisSettingsDirPath(), 'bambi_deps'
+            )
+        except Exception:
+            self._plugins_dir = os.path.join(self._plugin_dir, 'plugins')
         os.makedirs(self._plugins_dir, exist_ok=True)
 
         self._timers = []         # keep QTimer objects alive until worker finishes
