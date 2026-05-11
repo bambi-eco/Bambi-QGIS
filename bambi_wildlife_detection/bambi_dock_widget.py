@@ -918,7 +918,7 @@ class BambiDockWidget(QDockWidget):
         extraction_tab_layout.addWidget(frame_ext_group)
 
         # Thermal visualisation
-        self.thermal_vis_group = QGroupBox("Thermal Visualisation")
+        self.thermal_vis_group = QGroupBox("Thermal Visualisation (Photo Mode only)")
         thermal_vis_group = self.thermal_vis_group
         thermal_vis_layout = QFormLayout(thermal_vis_group)
 
