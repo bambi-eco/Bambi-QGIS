@@ -327,11 +327,14 @@ class ThermalViewerDialog(QDialog):
         self._img_label.set_temperature_array(arr)
 
         t_min, t_max = float(arr.min()), float(arr.max())
-        # Block signals while seeding so valueChanged doesn't fire mid-load
+        # Only reseed a spin when its threshold is not active so a user-set
+        # threshold persists across image navigation.
         for spin in (self._lo_spin, self._hi_spin):
             spin.blockSignals(True)
-        self._lo_spin.setValue(round(t_min, 1))
-        self._hi_spin.setValue(round(t_max, 1))
+        if not self._lo_check.isChecked():
+            self._lo_spin.setValue(round(t_min, 1))
+        if not self._hi_check.isChecked():
+            self._hi_spin.setValue(round(t_max, 1))
         for spin in (self._lo_spin, self._hi_spin):
             spin.blockSignals(False)
 
