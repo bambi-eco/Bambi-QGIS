@@ -28,7 +28,7 @@ from typing import Optional, Tuple, List, Callable
 
 import numpy as np
 
-from qgis.PyQt.QtCore import QObject, pyqtSignal, QThread
+from qgis.PyQt.QtCore import QObject, pyqtSignal
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -360,7 +360,7 @@ class BEVDownloader:
                 response = self.session.get(url, stream=True, timeout=600)
 
                 if response.status_code == 404:
-                    logger.debug(f"  Not found at this URL, trying next...")
+                    logger.debug(f"  Not found at this URL ({url}), trying next...")
                     continue
 
                 response.raise_for_status()

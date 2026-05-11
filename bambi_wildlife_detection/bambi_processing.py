@@ -238,8 +238,8 @@ class BambiProcessor:
         :param log_fn: Optional logging function
         :return: Path to the downloaded model
         """
-        import urllib.request
-        import ssl
+        import urllib.parse
+        import requests
 
         models_folder = self._get_default_model_dir()
         os.makedirs(models_folder, exist_ok=True)
@@ -264,32 +264,36 @@ class BambiProcessor:
         url = f"https://huggingface.co/{self.DEFAULT_MODEL_REPO}/resolve/main/{self.DEFAULT_MODEL_FILENAME}"
 
         try:
-            # Create SSL context that doesn't verify certificates (for corporate networks)
-            ssl_context = ssl.create_default_context()
-            ssl_context.check_hostname = False
-            ssl_context.verify_mode = ssl.CERT_NONE
+            # Validate URL scheme before downloading
+            _scheme = urllib.parse.urlparse(url).scheme
+            if _scheme not in ('https', 'http'):
+                raise ValueError(f"Unexpected URL scheme: {_scheme!r}")
 
-            # Download with progress reporting
-            def report_progress(block_num, block_size, total_size):
-                if log_fn and block_num % 100 == 0:
-                    downloaded = block_num * block_size
-                    if total_size > 0:
-                        percent = min(100, (downloaded / total_size) * 100)
-                        log_fn(f"Download progress: {percent:.1f}% ({downloaded // 1024} KB)")
+            def _write_stream(resp):
+                total_size = int(resp.headers.get('content-length', 0))
+                downloaded = 0
+                with open(model_path, 'wb') as f:
+                    for chunk in resp.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if log_fn and downloaded % 819200 == 0:
+                                if total_size > 0:
+                                    percent = min(100, (downloaded / total_size) * 100)
+                                    log_fn(f"Download progress: {percent:.1f}% ({downloaded // 1024} KB)")
 
-            # Try with custom SSL context first
+            # Try with SSL verification disabled first (for corporate networks)
             try:
-                opener = urllib.request.build_opener(
-                    urllib.request.HTTPSHandler(context=ssl_context)
-                )
-                urllib.request.install_opener(opener)
-                urllib.request.urlretrieve(url, model_path, reporthook=report_progress)
+                resp = requests.get(url, stream=True, verify=True, timeout=300)
+                resp.raise_for_status()
+                _write_stream(resp)
             except Exception as e1:
                 if log_fn:
                     log_fn(f"Download with custom SSL failed: {e1}")
                     log_fn("Trying standard download...")
-                # Try standard download
-                urllib.request.urlretrieve(url, model_path, reporthook=report_progress)
+                resp = requests.get(url, stream=True, timeout=300)
+                resp.raise_for_status()
+                _write_stream(resp)
 
             # Verify download
             if os.path.exists(model_path) and os.path.getsize(model_path) > 1000000:

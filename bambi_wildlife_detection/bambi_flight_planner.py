@@ -558,7 +558,8 @@ class FlightPlannerDialog(QDialog):
             return uri_path
 
         # Memory or unsupported provider — export to temp GeoJSON
-        tmp = tempfile.mktemp(suffix=".geojson")
+        fd, tmp = tempfile.mkstemp(suffix=".geojson")
+        os.close(fd)
         options = QgsVectorFileWriter.SaveVectorOptions()
         options.driverName = "GeoJSON"
         options.fileEncoding = "utf-8"

@@ -16,7 +16,7 @@ This plugin provides:
 
 def classFactory(iface):
     """Load BambiWildlifeDetection class from file bambi_wildlife_detection.
-    
+
     :param iface: A QGIS interface instance.
     :type iface: QgsInterface
     """
