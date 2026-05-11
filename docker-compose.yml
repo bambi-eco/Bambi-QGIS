@@ -1,0 +1,7 @@
+services:
+  checks:
+    build: .
+    volumes:
+      - .:/workspace
+    working_dir: /workspace
+    command: bash run_checks.sh

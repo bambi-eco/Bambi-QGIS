@@ -2,6 +2,10 @@
 .idea
 .claude/
 
+# Security / linting check artefacts
+reports/
+.secrets.baseline.new
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

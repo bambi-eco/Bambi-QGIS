@@ -1,0 +1,10 @@
+[flake8]
+max-line-length = 120
+extend-ignore =
+    # QGIS plugins commonly place imports after sys.path manipulation
+    E402,
+    # Whitespace before ':' — false positives with slice notation
+    E203,
+per-file-ignores =
+    # __init__.py re-exports via import without direct use
+    __init__.py: F401
