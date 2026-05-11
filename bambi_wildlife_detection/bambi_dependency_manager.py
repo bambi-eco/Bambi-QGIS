@@ -264,19 +264,19 @@ class DependencyManagerDialog(QDialog):
         # ---- Required dependencies ----
         vbox.addWidget(self._build_group('Required Dependencies', [
             dict(
-                key='bambi_detection',
-                label='BAMBI Detection Framework',
-                desc='Utility library for geo-referencing drone flights.',
-                callback=self._install_bambi_detection,
-                dist_name='bambi-detection',
-            ),
-            dict(
                 key='alfs_py',
                 label='ALFS-PY Framework',
                 desc='Airborne light-field sampling framework for the actual geo-referencing processing.',
                 callback=self._install_alfs_py,
                 dist_name='AlfsPy',
             ),
+            dict(
+                key='bambi_detection',
+                label='BAMBI Detection Framework',
+                desc='Utility library for geo-referencing drone flights.',
+                callback=self._install_bambi_detection,
+                dist_name='bambi-detection',
+            )
         ]))
 
         # ---- Calibration (optional) ----
