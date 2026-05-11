@@ -5,13 +5,17 @@ import os.path
 import shutil
 import sys
 from typing import List, Optional
+# pyproj must be imported before geopandas: geopandas checks pyproj
+# availability at import time and caches the result.  Importing pyproj first
+# ensures the correct (QGIS-bundled) version is in sys.modules when geopandas
+# runs its compatibility check.
+from pyproj import Transformer, CRS
 import geopandas as gpd
 from fiona.drvsupport import supported_drivers
 import shapely
 import json
 import random
 from collections import namedtuple
-from pyproj import Transformer, CRS
 import simplekml
 
 GridPosition = namedtuple("GridPosition", ["latitude", "longitude", "x", "y"])
@@ -49,12 +53,18 @@ class EvaluationFlightStrategy(abc.ABC):
     ):
         # read in all the data
         flight_areas = gpd.read_file(area_path)
+        if flight_areas.crs is None:
+            # GeoJSON (RFC 7946) and many exported files carry no CRS member;
+            # WGS-84 is the correct default for those formats.
+            flight_areas = flight_areas.set_crs("epsg:4326")
         # convert the file for later calculations like geod.fwd()
         if flight_areas.crs.srs != target_crs.srs:
             flight_areas = flight_areas.to_crs(target_crs)
         invalid_areas = None
         if invalid_areas_path is not None:
             invalid_areas = gpd.read_file(invalid_areas_path)
+            if invalid_areas.crs is None:
+                invalid_areas = invalid_areas.set_crs("epsg:4326")
             # convert the file for later calculations like geod.fwd()
             if invalid_areas.crs.srs != target_crs.srs:
                 invalid_areas = invalid_areas.to_crs(target_crs)

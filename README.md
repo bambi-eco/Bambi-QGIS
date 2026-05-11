@@ -15,12 +15,16 @@ A comprehensive QGIS plugin for detecting and tracking wildlife in aerial drone 
 - [Features](#features)
 - [Requirements](#requirements)
 - [Installation](#installation)
+- [Dependency Manager](#dependency-manager)
 - [Usage](#usage)
 - [Processing Pipeline](#processing-pipeline)
 - [Configuration](#configuration)
+  - [Extraction Configuration](#extraction-configuration)
 - [Interactive Selection Tools](#interactive-selection-tools)
 - [Correction Calibration Wizard](#correction-calibration-wizard)
 - [Camera Calibration Wizard](#camera-calibration-wizard)
+- [Thermal Image Viewer](#thermal-image-viewer)
+- [Random Flight Strategy Planner](#random-flight-strategy-planner)
 - [Input File Formats](#input-file-formats)
 - [Output Structure](#output-structure)
 - [Troubleshooting](#troubleshooting)
@@ -48,6 +52,10 @@ A comprehensive QGIS plugin for detecting and tracking wildlife in aerial drone 
 - **Interactive Selection Tools**: Click directly on the QGIS map canvas to inspect detection/track bounding boxes or individual field-of-view polygons; the tools warn when the required layers are not loaded
 - **Correction Calibration Wizard**: Three-step guided workflow for finding and storing per-flight or per-frame-range positional and rotational correction factors, including automatic z-offset probing, yaw alignment, a circle-intersection visualizer, and a light-field preview
 - **Camera Calibration Wizard**: Guided two-mode calibration tool for estimating camera intrinsic parameters — Structure-from-Motion (SfM) for single cameras and manual point-correspondence + Nelder-Mead optimisation for stereo RGB + thermal setups; accepts images or video, and exports industry-standard calibration JSON files
+- **Thermal Image Viewer**: Standalone radiometric viewer for DJI thermal images; supports multiple colormaps and adjustable temperature thresholds — requires the DJI Thermal SDK
+- **Random Flight Strategy Planner**: Generate randomized transect-based drone survey routes from a monitoring-area polygon, optional exclusion zones, and candidate start points; results (grid, transects, and numbered routes) are imported directly as styled QGIS layers
+- **Dependency Manager**: Install and update all optional and required Python packages from within QGIS — no OSGeo4W Shell required
+- **Frame Extraction Configuration**: Fine-grained control over frame extraction via the Configuration → Extraction tab: skip leading frames, cap the total frame count, set a per-frame sampling rate (video only), and configure thermal image colormap and temperature thresholds (requires DJI Thermal SDK)
 
 ---
 
@@ -69,7 +77,9 @@ A comprehensive QGIS plugin for detecting and tracking wildlife in aerial drone 
 
 ### Required Python Packages
 
-The plugin requires the **BAMBI Detection Framework** and the **ALFS-PY** framework. Install them using pip within the **OSGeo4W Shell** (Windows) or your QGIS Python environment:
+The plugin requires the **BAMBI Detection Framework** and the **ALFS-PY** framework.
+
+The easiest way to install them is via the built-in **Dependency Manager** (see [Dependency Manager](#dependency-manager)). Alternatively, use pip within the **OSGeo4W Shell** (Windows) or your QGIS Python environment:
 
 ```bash
 # Install BAMBI Detection Framework (required)
@@ -79,7 +89,16 @@ pip install git+https://github.com/bambi-eco/bambi_detection.git
 pip install git+https://github.com/bambi-eco/alfs_py.git
 ```
 
-**Note**: After installing new Python packages using OSGeo4W you will have to restart QGIS. QGIS loads its Python environment only at startup, so it won’t detect new packages dynamically.
+**Note**: After installing new Python packages you must restart QGIS. QGIS loads its Python environment only at startup and will not detect new packages dynamically.
+
+### Optional: Flight Route Generation
+
+To use the Random Flight Strategy Planner, install the following packages (or use the Dependency Manager):
+
+```bash
+pip install fiona==1.10.1
+pip install simplekml==1.3.6
+```
 
 ### Optional: Single Camera Calibration
 
@@ -139,6 +158,8 @@ The plugin supports a radiometric thermal image viewer. However, this uses [DJI'
 C:\Users\<YourUserName>\AppData\Roaming\QGIS\QGIS3\profiles\default\python\plugins\bambi_wildlife_detection\plugins\<dji_thermal_sdk_v*>
 ```
 
+The **Dependency Manager** provides a one-click download button for the DJI Thermal SDK ZIP that extracts it to the correct location automatically.
+
 ---
 
 ## Installation
@@ -169,6 +190,27 @@ C:\Users\<YourUserName>\AppData\Roaming\QGIS\QGIS3\profiles\default\python\plugi
 
 3. Restart QGIS
 4. Enable the plugin via **Plugins** → **Manage and Install Plugins...**
+
+---
+
+## Dependency Manager
+
+The Dependency Manager lets you install and update all BAMBI plugin dependencies directly from within QGIS — no terminal or OSGeo4W Shell required. Open it via the **Dependency Manager** toolbar button or the **Plugins → Bambi - QGIS Integration → Dependency Manager** menu entry.
+
+![Dependency Manager](images/dependency_manager.png)
+
+Each dependency group shows the currently installed version (green ✔, orange ⚠ for untested, or grey "not found") and an Install button that runs pip in a background thread, streaming the output to the log area at the bottom of the dialog.
+
+| Group | Packages |
+|-------|----------|
+| **Required Dependencies** | BAMBI Detection Framework, ALFS-PY Framework |
+| **Calibration (optional)** | pycolmap |
+| **Extended Tracking (optional)** | BoxMOT, Geo-Referenced Tracking |
+| **Flight Route Generation (optional)** | Fiona, simplekml |
+| **DJI Thermal SDK** | Download & extract to the correct plugin subfolder |
+| **GPU Support – CUDA** | torch + torchvision (CUDA 12.1 builds) |
+
+> **Note**: After any installation you must restart QGIS to activate the newly installed packages.
 
 ---
 
@@ -224,7 +266,7 @@ In photo mode, GPS positions are matched to images via timestamps in the AirData
 
 Before starting processing, configure per-step settings in the **Configuration** tab:
 
-- **Frame sampling**: Start/end frame, sample rate
+- **Extraction**: Frame skip, limit, sampling rate, and thermal visualisation (see below)
 - **Detection**: Confidence threshold, model path
 - **Tracking**: Backend selection, IoU threshold, interpolation
 - **Orthomosaic**: Resolution, tile size
@@ -233,6 +275,32 @@ Before starting processing, configure per-step settings in the **Configuration**
 - **Field of View**: Custom mask, simplification
 
 ![Configuration Tab](images/config_tab.png)
+
+---
+
+### Extraction Configuration
+
+The **Extraction** sub-tab (Configuration → Extraction) provides fine-grained control over which frames are processed and how thermal images are rendered.
+
+![Extraction Configuration](images/config_extraction.png)
+
+#### Frame Extraction
+
+| Setting | Description |
+|---------|-------------|
+| **Skip first** | Skip this many frames/images at the start before processing begins. Useful for ignoring take-off frames. |
+| **Limit** | Cap the total number of frames processed (enable the checkbox to activate). |
+| **Sampling rate** *(video only)* | Take every N-th frame (e.g. 5 = every 5th frame). Reduces processing time for long recordings. |
+
+#### Thermal Visualisation
+
+> **Requires DJI Thermal SDK.** Install it via the [Dependency Manager](#dependency-manager). The entire group is disabled and greyed out when the SDK is not detected.
+
+| Setting | Description |
+|---------|-------------|
+| **Colormap** | Apply a false-colour map to the exported thermal frames (e.g. `plasma`, `inferno`, `jet`, `white-hotspot`). Choose `(none)` to keep raw 8-bit grey values. |
+| **Lower threshold** | Pixels below this temperature (°C) are rendered black. Enable the checkbox to activate. |
+| **Upper threshold** | Pixels above this temperature (°C) are rendered black. Enable the checkbox to activate. |
 
 ---
 
@@ -679,6 +747,93 @@ After input is configured, the annotation page shows the RGB and thermal frames 
 
 ---
 
+## Thermal Image Viewer
+
+The Thermal Image Viewer is a standalone non-modal dialog for inspecting individual DJI radiometric thermal images. Open it via the **Thermal Image Viewer** toolbar button or the plugin menu.
+
+> **Requires DJI Thermal SDK** — install it via the [Dependency Manager](#dependency-manager).
+
+![Thermal Image Viewer](images/thermal_viewer.png)
+
+Key features:
+
+- Load any DJI radiometric thermal JPEG or TIFF directly
+- Choose from multiple **colormaps** (`white-hotspot`, `black-hotspot`, `plasma`, `inferno`, `magma`, `viridis`, `jet`)
+- Set optional **lower and upper temperature thresholds** (°C) that clip the display range, making it easier to isolate warm or cold targets
+- Pixel temperature readout on hover
+
+---
+
+## Random Flight Strategy Planner
+
+The Random Flight Strategy Planner generates randomized transect-based survey routes for drone wildlife missions. Open it via the **Random Flight Strategy Planner** toolbar button or the plugin menu.
+
+![Flight Strategy Planner — Dialog](images/flight_planner_dialog.png)
+
+> **Requires Fiona and simplekml** — install them via the [Dependency Manager](#dependency-manager).
+
+### Inputs
+
+| Input | Description |
+|-------|-------------|
+| **Monitoring Area** | Polygon layer or external file (GeoJSON, KML, Shapefile) defining the survey boundary |
+| **Start Points** | Point layer or external file with candidate take-off/landing positions |
+| **Invalid Areas** *(optional)* | Polygon layer or external file marking no-fly zones or exclusion areas |
+| **Target Folder** | Output directory for all generated files |
+
+### Strategy Options
+
+| Strategy | Description |
+|----------|-------------|
+| **Random** | Generates independent randomized transect routes |
+| **Random Loop** | Generates routes that form closed loops, returning to the start point |
+
+### Parameters
+
+| Parameter | Description |
+|-----------|-------------|
+| **Grid size** | Side length (m) of the grid cells used to discretise the monitoring area |
+| **Max start/stop distance** | Maximum allowed distance (m) from a start point to the first/last transect |
+| **Min / Max transects** | Minimum (and optional maximum) number of transects per route |
+| **Max distance** | Maximum total route length (m) |
+| **Min transect overlap** | Minimum required overlap fraction between consecutive transects |
+| **Number of retries** | How many times to retry route generation before giving up |
+| **Target CRS (EPSG)** | UTM CRS for all spatial computations |
+| **Min transects per route** | Minimum transects required for a route to be considered valid |
+| **Offset X / Y** | Translate the grid in X and Y (m) |
+| **Padding** | Shrink the effective planning area by this many metres on each side |
+| **Seed** | Random seed for reproducible results (leave empty for a random seed) |
+| **Max overlapping transects** | Maximum number of transects allowed to overlap with already-planned ones |
+| **Max number of flights** | Maximum total number of valid routes to generate |
+| **Random search** | When enabled, transects are selected randomly rather than sequentially |
+| **Retries per route** | Number of attempts per individual route before skipping |
+
+All parameter values are **persisted across sessions**. Use the **Reset to Defaults** button to restore factory values.
+
+### Outputs
+
+After planning completes, results are saved to the target folder and automatically imported as styled QGIS layers:
+
+```
+<target_folder>/
+├── grid.geojson                      # Full discretised grid (all candidate points)
+├── grid_filtered.geojson             # Grid points inside the monitoring area
+├── transects_valids.geojson          # All valid transect segments
+├── startpoints.geojson               # Candidate start positions
+└── routes/
+    └── valid/
+        ├── route_0.geojson           # Full mixed-geometry route (waypoints + segments)
+        └── ...
+```
+
+![Flight Strategy Planner — QGIS Results](images/flight_planner_results.png)
+
+Each route is imported as a sub-group containing:
+- **Route** — solid total-route `LineString` in a unique colour
+- **Transects** — dashed survey segments with sequential **1, 2, 3 … labels** visible on the map
+
+---
+
 ## Input File Formats
 
 ### Calibration JSON
@@ -872,6 +1027,14 @@ If you use this plugin in your research, please cite:
 
 ![Processing Tab](images/processing_tab.png)
 
+### Dependency Manager
+
+![Dependency Manager](images/dependency_manager.png)
+
+### Extraction Configuration
+
+![Extraction Configuration](images/config_extraction.png)
+
 #### Video Input
 
 ![Input Tab](images/input_tab_video.png)
@@ -948,6 +1111,20 @@ If you use this plugin in your research, please cite:
 
 ![Correction Wizard Step 3](images/correction_wizard_step3.png)
 
+### Thermal Image Viewer
+
+![Thermal Image Viewer](images/thermal_viewer.png)
+
+### Random Flight Strategy Planner
+
+#### Dialog
+
+![Flight Strategy Planner — Dialog](images/flight_planner_dialog.png)
+
+#### Results in QGIS
+
+![Flight Strategy Planner — QGIS Results](images/flight_planner_results.png)
+
 ### Camera Calibration Wizard
 
 #### Toolbar Button
@@ -998,6 +1175,9 @@ See [LICENSE](LICENSE) for details.
 - [Ultralytics YOLO](https://github.com/ultralytics/ultralytics)
 - [BoxMOT](https://github.com/mikel-brostrom/boxmot) (optional)
 - [Geo-Referenced Tracking](https://github.com/bambi-eco/Geo-Referenced-Tracking) (optional)
+- [DJI Thermal SDK](https://www.dji.com/at/downloads/softwares/dji-thermal-sdk) (optional, required for Thermal Image Viewer and thermal visualisation)
+- [Fiona](https://github.com/Toblerity/Fiona) (optional, required for Flight Strategy Planner)
+- [simplekml](https://simplekml.readthedocs.io/) (optional, required for Flight Strategy Planner)
 
 ---
 

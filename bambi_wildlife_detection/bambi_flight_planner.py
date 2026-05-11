@@ -13,6 +13,39 @@ import os
 import sys
 import tempfile
 
+
+def _fix_package_priority():
+    """Permanently move user site-packages to the end of sys.path.
+
+    QGIS embeds its own pyproj linked against the PROJ DLLs that are already
+    loaded in the process.  When the user has also pip-installed pyproj into
+    their user site-packages, Python finds that version first.  Its compiled
+    extension (_context.pyd) looks for PROJ DLLs that are not on the search
+    path → "DLL load failed".
+
+    Geopandas checks pyproj availability at *import time* and caches the
+    result in HAS_PYPROJ.  The fix must therefore run before geopandas is
+    first imported (which happens indirectly through evaluation_flight_strategy
+    on first use).  Applying the fix at module-load time here ensures the
+    correct order is in place for the whole QGIS session.
+    """
+    import site as _site
+    try:
+        user_site = _site.getusersitepackages()
+    except Exception:
+        return
+    if user_site not in sys.path:
+        return
+    # Demote user site-packages to the tail so QGIS-bundled packages win.
+    sys.path[:] = [p for p in sys.path if p != user_site] + [user_site]
+    # Remove any half-imported pyproj left by a prior failed attempt so the
+    # next import starts fresh from the now-prioritised QGIS location.
+    for _k in [k for k in sys.modules if k == 'pyproj' or k.startswith('pyproj.')]:
+        del sys.modules[_k]
+
+
+_fix_package_priority()
+
 from qgis.PyQt.QtCore import QSettings, QThread, QObject, pyqtSignal
 from qgis.PyQt.QtGui import QColor, QFont
 from qgis.PyQt.QtWidgets import (

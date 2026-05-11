@@ -867,7 +867,9 @@ class BambiDockWidget(QDockWidget):
         config_sub_tabs.addTab(extraction_tab, "Extraction")
 
         # DJI SDK info box
-        _plugins_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plugins")
+        self._thermal_plugins_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "plugins"
+        )
 
         # Frame extraction parameters
         frame_ext_group = QGroupBox("Frame Extraction")
@@ -910,7 +912,8 @@ class BambiDockWidget(QDockWidget):
         extraction_tab_layout.addWidget(frame_ext_group)
 
         # Thermal visualisation
-        thermal_vis_group = QGroupBox("Thermal Visualisation")
+        self.thermal_vis_group = QGroupBox("Thermal Visualisation")
+        thermal_vis_group = self.thermal_vis_group
         thermal_vis_layout = QFormLayout(thermal_vis_group)
 
         self.thermal_vis_cmap_combo = QComboBox()
@@ -948,25 +951,18 @@ class BambiDockWidget(QDockWidget):
         thermal_vis_layout.addRow("Upper threshold (→ black):", hi_row)
 
         sdk_row = QHBoxLayout()
-        sdk_info_label = QLabel(
-            "Parsing radiometric thermal JPEGs from DJI cameras (H20T, M3T, "
-            "M3TD, M30T, H30T, M4T, …) requires the official DJI Thermal SDK.<br><br>"
-            "<b>1.</b> Download the SDK from the DJI developer portal:<br>"
-            "&nbsp;&nbsp;&nbsp;&nbsp;"
-            "<a href=\"https://www.dji.com/at/downloads/softwares/dji-thermal-sdk\">"
-            "https://www.dji.com/at/downloads/softwares/dji-thermal-sdk</a><br><br>"
-            "<b>2.</b> Extract the <tt>dji_thermal_sdk_*</tt> folder directly into:<br>"
-            f"&nbsp;&nbsp;&nbsp;&nbsp;<tt>{_plugins_dir}</tt><br><br>"
-            "The plugin detects any <tt>dji_thermal_sdk_*</tt> subfolder automatically "
-            "— no further configuration is needed."
-        )
-        sdk_info_label.setWordWrap(True)
-        sdk_info_label.setTextFormat(Qt.RichText)
-        sdk_info_label.setOpenExternalLinks(True)
-        sdk_row.addWidget(sdk_info_label)
+        self._thermal_sdk_info_label = QLabel()
+        self._thermal_sdk_info_label.setWordWrap(True)
+        self._thermal_sdk_info_label.setTextFormat(Qt.RichText)
+        sdk_row.addWidget(self._thermal_sdk_info_label)
         thermal_vis_layout.addRow(sdk_row)
 
         extraction_tab_layout.addWidget(thermal_vis_group)
+
+        config_sub_tabs.currentChanged.connect(
+            lambda _: self._refresh_thermal_sdk_status()
+        )
+        self._refresh_thermal_sdk_status()
         extraction_tab_layout.addStretch()
 
         # ----- Sub-Tab 7: Flight Route Visualization -----
@@ -4073,6 +4069,26 @@ class BambiDockWidget(QDockWidget):
         wizard = BambiCorrectionWizard(self.iface, config, parent=self)
         wizard.correctionFileSaved.connect(self.load_correction_values)
         wizard.exec_()
+
+    def _refresh_thermal_sdk_status(self):
+        """Re-check DJI Thermal SDK availability and update the Thermal Visualisation group."""
+        plugins_dir = self._thermal_plugins_dir
+        available = (
+            os.path.isdir(plugins_dir) and
+            any(
+                e.startswith("dji_thermal_sdk_v") and
+                os.path.isdir(os.path.join(plugins_dir, e))
+                for e in os.listdir(plugins_dir)
+            )
+        )
+        self.thermal_vis_group.setEnabled(available)
+        if available:
+            self._thermal_sdk_info_label.setVisible(False)
+        else:
+            self._thermal_sdk_info_label.setText(
+                "⚠ DJI Thermal SDK not found – install it via the Dependency Manager."
+            )
+            self._thermal_sdk_info_label.setVisible(True)
 
     def set_inspector_actions(self, inspector_action, fov_inspector_action,
                               fov_georef_inspector_action=None):
