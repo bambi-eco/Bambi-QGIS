@@ -27,7 +27,7 @@ this worker subtracts it before calling ``world_to_pixel_coord``.
 
 import os
 import json
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from qgis.PyQt.QtCore import QThread, pyqtSignal
 
@@ -58,14 +58,14 @@ def _read_correction(target_folder: str, correction_path: str) -> dict:
 def _correction_for_frame(frame_idx: int, corr: dict) -> Tuple[dict, dict]:
     """Return (translation_dict, rotation_dict) for *frame_idx*."""
     default_t = corr.get("translation", {"x": 0.0, "y": 0.0, "z": 0.0})
-    default_r = corr.get("rotation",    {"x": 0.0, "y": 0.0, "z": 0.0})
+    default_r = corr.get("rotation", {"x": 0.0, "y": 0.0, "z": 0.0})
     for entry in corr.get("additional", []):
         s = entry.get("start", 0)
         e = entry.get("end", float("inf"))
         if s <= frame_idx <= e:
             return (
                 entry.get("translation", default_t),
-                entry.get("rotation",    default_r),
+                entry.get("rotation", default_r),
             )
     return default_t, default_r
 
@@ -89,15 +89,15 @@ def _load_georef(target_folder: str) -> List[dict]:
                 parts = line.split()
                 if len(parts) >= 10:
                     result.append({
-                        "frame":      int(parts[1]),
-                        "x1":         float(parts[2]),
-                        "y1":         float(parts[3]),
-                        "z1":         float(parts[4]),
-                        "x2":         float(parts[5]),
-                        "y2":         float(parts[6]),
-                        "z2":         float(parts[7]),
+                        "frame": int(parts[1]),
+                        "x1": float(parts[2]),
+                        "y1": float(parts[3]),
+                        "z1": float(parts[4]),
+                        "x2": float(parts[5]),
+                        "y2": float(parts[6]),
+                        "z2": float(parts[7]),
                         "confidence": float(parts[8]),
-                        "class_id":   int(parts[9]),
+                        "class_id": int(parts[9]),
                     })
     except Exception:
         pass
@@ -118,7 +118,7 @@ def _match_boxes_to_georef(
         if len(box) < 6:
             continue
         conf = float(box[4])
-        cls  = int(box[5])
+        cls = int(box[5])
         for g in georef_on_frame:
             if g["class_id"] == cls and abs(g["confidence"] - conf) < tol:
                 matched.append(g)
@@ -127,11 +127,11 @@ def _match_boxes_to_georef(
 
 
 def _world_to_pixel(
-    corners: "np.ndarray",
+    corners: Any,
     img_width: int,
     img_height: int,
     camera,
-) -> "Tuple[np.ndarray, np.ndarray]":
+) -> "Tuple[Any, Any]":
     """Project world-space coordinates to pixel space.
 
     Reimplements the math of ``alfspy.core.convert.world_to_pixel_coord``
@@ -154,14 +154,14 @@ def _world_to_pixel(
     view = np.array(camera.get_view(), dtype=np.float64)
     proj = np.array(camera.get_proj(), dtype=np.float64)
 
-    cam_coords = homo @ view          # (N, 4)
-    ndc        = cam_coords @ proj    # (N, 4)
+    cam_coords = homo @ view  # (N, 4)
+    ndc = cam_coords @ proj  # (N, 4)
 
     # Perspective divide — use column slice [:,3:4] so shape stays (N,1)
-    w          = ndc[:, 3:4]
-    ndc_norm   = ndc / w             # (N, 4)
+    w = ndc[:, 3:4]
+    ndc_norm = ndc / w  # (N, 4)
 
-    pixel_xs = (ndc_norm[:, 0] + 1.0) * img_width  / 2.0
+    pixel_xs = (ndc_norm[:, 0] + 1.0) * img_width / 2.0
     pixel_ys = img_height - (ndc_norm[:, 1] + 1.0) * img_height / 2.0
 
     return pixel_xs, pixel_ys
@@ -202,17 +202,15 @@ def _project_georef_box_to_pixels(
         return None
 
     # Keep only corners that project within the image
-    valid_mask = (
-        (pxs >= -0.5) & (pxs <= img_width  + 0.5) &
-        (pys >= -0.5) & (pys <= img_height + 0.5)
-    )
+    valid_mask = (pxs >= -0.5) & (pxs <= img_width + 0.5) & (pys >= -0.5) & (pys <= img_height + 0.5)
+
     if not np.any(valid_mask):
         return None
 
     return (
-        float(max(0.0,              pxs[valid_mask].min())),
-        float(max(0.0,              pys[valid_mask].min())),
-        float(min(img_width  - 1.0, pxs[valid_mask].max())),
+        float(max(0.0, pxs[valid_mask].min())),
+        float(max(0.0, pys[valid_mask].min())),
+        float(min(img_width - 1.0, pxs[valid_mask].max())),
         float(min(img_height - 1.0, pys[valid_mask].max())),
     )
 
@@ -243,8 +241,8 @@ class BoxProjectionWorker(QThread):
     """
 
     progress = pyqtSignal(int)
-    finished = pyqtSignal(dict)   # {frame_idx: {"green": [...], "blue": [...]}}
-    error    = pyqtSignal(str)
+    finished = pyqtSignal(dict)  # {frame_idx: {"green": [...], "blue": [...]}}
+    error = pyqtSignal(str)
 
     def __init__(
         self,
@@ -256,11 +254,11 @@ class BoxProjectionWorker(QThread):
         parent=None,
     ):
         super().__init__(parent)
-        self._target_folder   = target_folder
-        self._dem_path        = dem_path
+        self._target_folder = target_folder
+        self._dem_path = dem_path
         self._correction_path = correction_path
-        self._src_modality    = src_modality   # "t" or "w"
-        self._frames          = frames
+        self._src_modality = src_modality  # "t" or "w"
+        self._frames = frames
 
     def run(self):
         try:
@@ -374,7 +372,7 @@ class BoxProjectionWorker(QThread):
         img_width, img_height = 640, 512  # fallback
         if images:
             first_file = images[0].get("imagefile", "")
-            candidate  = os.path.join(frames_dir, first_file)
+            candidate = os.path.join(frames_dir, first_file)
             if first_file and os.path.isfile(candidate):
                 try:
                     import cv2
@@ -391,9 +389,9 @@ class BoxProjectionWorker(QThread):
         n = len(self._frames)
 
         for i, frame_data in enumerate(self._frames):
-            frame_idx   = frame_data.get("frame_idx")
+            frame_idx = frame_data.get("frame_idx")
             boxes_green = frame_data.get("boxes_green", [])
-            boxes_blue  = frame_data.get("boxes_blue",  [])
+            boxes_blue = frame_data.get("boxes_blue", [])
 
             if frame_idx is None or frame_idx >= len(images):
                 results[i] = {"green": [], "blue": []}
@@ -445,7 +443,7 @@ class BoxProjectionWorker(QThread):
 
             results[i] = {
                 "green": _project_list(boxes_green),
-                "blue":  _project_list(boxes_blue),
+                "blue": _project_list(boxes_blue),
             }
 
             progress = 45 + int(((i + 1) / max(1, n)) * 50)

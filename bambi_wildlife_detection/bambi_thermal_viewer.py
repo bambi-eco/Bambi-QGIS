@@ -61,6 +61,7 @@ def _make_get_cmap():
                 return mpl.colormaps[_CMAP_ALIASES.get(name, name)]
         else:
             import matplotlib.cm as cm
+
             def _get(name):
                 return cm.get_cmap(_CMAP_ALIASES.get(name, name))
         return _get, None

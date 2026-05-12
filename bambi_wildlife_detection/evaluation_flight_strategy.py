@@ -381,7 +381,8 @@ class EvaluationFlightStrategy(abc.ABC):
 
 class RandomStrategy(EvaluationFlightStrategy):
     """
-    Implementation of the "Random" strategy creating a set of completely random flights as basis for the actual planning.
+    Implementation of the "Random" strategy creating a set of completely random flights
+    as basis for the actual planning.
     """
 
     def __init__(
@@ -408,25 +409,36 @@ class RandomStrategy(EvaluationFlightStrategy):
     ):
         """
         :param grid_size: Horizontal/Vertical distance between individual grid points
-        :param max_start_and_stop_distance: Max. distance allowed between selected start point and first route point + selected start point and last route point
+        :param max_start_and_stop_distance: Max. distance allowed between selected start point and first route point
+            + selected start point and last route point
         :param min_transects: Min. number of expected transects within all routes of a plan
         :param max_transects: Optional upper bound on transects. When set, plan construction stops
             as soon as the transect count is in [min_transects, max_transects]. If None the
             behaviour is unchanged (all valid flights are accumulated until min_transects is met).
-        :param max_number_of_overlapping_transects: Ratio (0 to 1; based on min_transects) defining the maximum number of transects that may overlap (re-used) within a flight.
+        :param max_number_of_overlapping_transects: Ratio (0 to 1; based on min_transects) defining the maximum
+            number of transects that may overlap (re-used) within a flight.
         :param max_distance: Max. distance of a route (without start and stop distance)
         :param min_transect_overlap: Min. overlap ratio of a transect with the area to be assumed as valid
         :param number_of_retries: Max. number of retries to create a plan
-        :param max_number_of_flights: Number of flights that should be generated for the base collection from which the final plan will be selected
-        :param target_crs_epsg: EPSG code of the UTM tile of the area of interest needed for metric based calculations
+        :param max_number_of_flights: Number of flights that should be generated for the base collection
+            from which the final plan will be selected
+        :param target_crs_epsg: EPSG code of the UTM tile of the area of interest needed for metric based
+            calculations
         :param min_transects_per_route: Min. number of transects per route
-        :param x_offset: Offset of the grid along the West/East Axis. Positive value moves the grid to East. Negative value to west.
-        :param y_offset: Offset of the grid along the North/South Axis. Positive value moves the grid to North. Negative value to South.
-        :param padding_north: Add x additional lines of grid points to the North of the flight area (useful, y_offset is used)
-        :param padding_east: Add x additional lines of grid points to the East of the flight area (useful, x_offset is used)
-        :param padding_south: Add x additional lines of grid points to the South of the flight area (useful, y_offset is used)
-        :param padding_west: Add x additional lines of grid points to the West of the flight area (useful, x_offset is used)
-        :param random_search: Flag if random search should be used or sorted search based on the length of the generated sorts for selecting the final flights for the flight plan
+        :param x_offset: Offset of the grid along the West/East Axis. Positive value moves the grid to East.
+            Negative value to west.
+        :param y_offset: Offset of the grid along the North/South Axis. Positive value moves the grid to North.
+            Negative value to South.
+        :param padding_north: Add x additional lines of grid points to the North of the flight area
+            (useful, y_offset is used)
+        :param padding_east: Add x additional lines of grid points to the East of the flight area
+            (useful, x_offset is used)
+        :param padding_south: Add x additional lines of grid points to the South of the flight area
+            (useful, y_offset is used)
+        :param padding_west: Add x additional lines of grid points to the West of the flight area
+            (useful, x_offset is used)
+        :param random_search: Flag if random search should be used or sorted search based on the length of the
+            generated sorts for selecting the final flights for the flight plan
         :param seed: Seed information used for random process; If none random seed is used
         """
 
@@ -511,20 +523,18 @@ class RandomStrategy(EvaluationFlightStrategy):
         }
 
         with open(os.path.join(target_path, "log.txt"), "w") as logfile:
-            logfile.write(f"Parameters:\n")
+            logfile.write("Parameters:\n")
 
             parameters_to_print = copy.deepcopy(self.__dict__)
             del parameters_to_print["_RandomStrategy__random"]
-            parameters_to_print_renamed = {}
             for key, value in parameters_to_print.items():
                 logfile.write(f"{key[len('_RandomStrategy__'):]}={value},\n")
 
-            logfile.write(f"\n-----------------------------------\n")
-            number_of_valid_transects = len([x for x in transects.values() if x.is_valid == True])
+            logfile.write("\n-----------------------------------\n")
+            number_of_valid_transects = len([x for x in transects.values() if x.is_valid is True])
 
             logfile.write(f"Found {number_of_valid_transects} valid transects for the area.\n")
-            logfile.write(f"-----------------------------------\n")
-
+            logfile.write("-----------------------------------\n")
 
             flights = []
             route_idx = 0
@@ -541,7 +551,7 @@ class RandomStrategy(EvaluationFlightStrategy):
 
                 if len(possible_starts) == 0:
                     logfile.write(
-                        f"\nNo possible start points available, can't create new routes. Stopping...\n"
+                        "\nNo possible start points available, can't create new routes. Stopping...\n"
                     )
                     break
                 # randomly select a grid position as first route position
@@ -598,7 +608,7 @@ class RandomStrategy(EvaluationFlightStrategy):
                                 possible_directions.append(direction_idx)
 
                     if len(possible_directions) == 0:
-                        logfile.write(f"-- Found dead end\n")
+                        logfile.write("-- Found dead end\n")
                         dead_end = True
                         break
 
@@ -634,7 +644,8 @@ class RandomStrategy(EvaluationFlightStrategy):
                     transect = transects_copy[transect_key]
 
                     logfile.write(
-                        f"-- Going to next transect ({next_direction_idx}) between grid positions {min_x}/{min_y} and {max_x}/{max_y}\n"
+                        f"-- Going to next transect ({next_direction_idx}) between grid positions "
+                        f"{min_x}/{min_y} and {max_x}/{max_y}\n"
                     )
                     # if the transect is valid proceed and get the next global position from the grid
                     next_point = grid_copy[new_x][new_y]
@@ -670,7 +681,7 @@ class RandomStrategy(EvaluationFlightStrategy):
                     route.append(last_point)
                 num_transects = len(visited_transects)
                 if num_transects > self.__min_transects_per_route:
-                    logfile.write(f"-- Created valid route \n")
+                    logfile.write("-- Created valid route \n")
                     flights.append(
                         {
                             "route": route,
@@ -681,11 +692,11 @@ class RandomStrategy(EvaluationFlightStrategy):
                     )
                     route_idx += 1
                 else:
-                    logfile.write(f"-- Created invalid route. Too few transects. \n")
+                    logfile.write("-- Created invalid route. Too few transects. \n")
 
-            logfile.write(f"\n-----------------------------------\n")
-            logfile.write(f"Trying to assign start points to created routes \n")
-            logfile.write(f"-----------------------------------\n")
+            logfile.write("\n-----------------------------------\n")
+            logfile.write("Trying to assign start points to created routes \n")
+            logfile.write("-----------------------------------\n")
             flights_for_start_points = []
             filtered_flights = []
             for route_idx, flight in enumerate(flights):
@@ -707,7 +718,9 @@ class RandomStrategy(EvaluationFlightStrategy):
                     )
                     if back_distance + distance > self.__max_start_and_stop_distance:
                         logfile.write(
-                            f"-- Start point {start_point[0]} is invalid because of to long distance {back_distance + distance} to route's first and last points (route {route_idx})\n"
+                            f"-- Start point {start_point[0]} is invalid because of to long distance "
+                            f"{back_distance + distance} to route's first and last points "
+                            f"(route {route_idx})\n"
                         )
                         continue  # go to next start point
 
@@ -717,12 +730,15 @@ class RandomStrategy(EvaluationFlightStrategy):
                         line = shapely.geometry.LineString(
                             [start_point[1:3], first_point[0:2]]
                         )
-                        # check if there is any intersection between the start of the route and the selected start point and one of the no-go areas
+                        # check if there is any intersection between the start of the route and the
+                        # selected start point and one of the no-go areas
                         for geometry in invalid_areas.geometry:
                             intersection = shapely.intersection(line, geometry)
                             if intersection.length > 0:
                                 logfile.write(
-                                    f"-- Start point {start_point[0]} is invalid because of intersection with no-fly area on route to start of route {route_idx}\n"
+                                    f"-- Start point {start_point[0]} is invalid because of "
+                                    f"intersection with no-fly area on route to start of "
+                                    f"route {route_idx}\n"
                                 )
                                 touching_invalid_area = True
                                 break
@@ -732,12 +748,15 @@ class RandomStrategy(EvaluationFlightStrategy):
                         line = shapely.geometry.LineString(
                             [start_point[1:3], last_point[0:2]]
                         )
-                        # check if there is any intersection between the end of the route and the selected start point and one of the no-go areas
+                        # check if there is any intersection between the end of the route and the
+                        # selected start point and one of the no-go areas
                         for geometry in invalid_areas.geometry:
                             intersection = shapely.intersection(line, geometry)
                             if intersection.length > 0:
                                 logfile.write(
-                                    f"-- Start point {start_point[0]} is invalid because of intersection with no-fly area on route to end of route {route_idx}\n"
+                                    f"-- Start point {start_point[0]} is invalid because of "
+                                    f"intersection with no-fly area on route to end of "
+                                    f"route {route_idx}\n"
                                 )
                                 touching_invalid_area = True
                                 break
@@ -776,7 +795,8 @@ class RandomStrategy(EvaluationFlightStrategy):
                 # if the route is invalid write it to the invalid folder
                 if smallest_start_idx is None:
                     logfile.write(
-                        f"-- Could not find a valid start point within the min. start/end distance for route {route_idx}\n"
+                        f"-- Could not find a valid start point within the min. start/end distance "
+                        f"for route {route_idx}\n"
                     )
                     with open(
                         os.path.join(
@@ -799,22 +819,23 @@ class RandomStrategy(EvaluationFlightStrategy):
             current_try = 0
             filtered_flights_copy = copy.deepcopy(filtered_flights)
 
-            logfile.write(f"-----------------------------------\n")
+            logfile.write("-----------------------------------\n")
             for flight in filtered_flights_copy:
                 logfile.write(
                     f"Valid flight {flight['idx']} with transects: {','.join(flight['transects'])} \n"
                 )
-            logfile.write(f"-----------------------------------\n")
+            logfile.write("-----------------------------------\n")
 
             while (
                 len(current_selected_transects) < self.__min_transects
                 and current_try < self.__number_of_retries
             ):
-                logfile.write(f"-----------------------------------\n")
+                logfile.write("-----------------------------------\n")
                 logfile.write(
-                    f"Trying to create flight plan out of plans ouf of {len(filtered_flights_copy)} suitable flights (#{current_try + 1})! \n"
+                    f"Trying to create flight plan out of plans ouf of "
+                    f"{len(filtered_flights_copy)} suitable flights (#{current_try + 1})! \n"
                 )
-                logfile.write(f"-----------------------------------\n")
+                logfile.write("-----------------------------------\n")
                 current_selected_flights = []
                 current_selected_transects = set()
                 if self.__random_search:
@@ -825,7 +846,10 @@ class RandomStrategy(EvaluationFlightStrategy):
                         if transect in current_selected_transects:
                             num_of_overlaps += 1
                     if num_of_overlaps > self.__max_number_of_overlapping_transects:
-                        logfile.write(f"Flight {flight['idx']} can't be added because of {num_of_overlaps} overlapping transects (> {self.__max_number_of_overlapping_transects})\n")
+                        logfile.write(
+                            f"Flight {flight['idx']} can't be added because of {num_of_overlaps} "
+                            f"overlapping transects (> {self.__max_number_of_overlapping_transects})\n"
+                        )
                         continue
                     current_selected_flights.append(flight)
                     for transect in flight["transects"]:
@@ -834,7 +858,8 @@ class RandomStrategy(EvaluationFlightStrategy):
 
                     # early stopping if min_transects criteria is reached
                     # if len(current_selected_transects) >= self.__min_transects:
-                    #     logfile.write(f"Early stopping because min_transects criteria reached: {len(current_selected_transects)} >= {self.__min_transects}\n")
+                    #     logfile.write(f"Early stopping because min_transects criteria reached: "
+                    #                   f"{len(current_selected_transects)} >= {self.__min_transects}\n")
                     #     break  # out of for loop ("for flight_idx, flight in ...")
 
                     # early stopping when max_transects is set and count is already in [min, max]
@@ -852,7 +877,11 @@ class RandomStrategy(EvaluationFlightStrategy):
                     filtered_flights_copy = filtered_flights_copy[1:]
 
                 if len(current_selected_transects) < self.__min_transects:
-                    logfile.write(f"Min_transects criteria not reached. Currently selected {len(current_selected_transects)} unique of a minimum {self.__min_transects} transects.\n")
+                    logfile.write(
+                        f"Min_transects criteria not reached. Currently selected "
+                        f"{len(current_selected_transects)} unique of a minimum "
+                        f"{self.__min_transects} transects.\n"
+                    )
 
                 current_try += 1
 
@@ -866,12 +895,12 @@ class RandomStrategy(EvaluationFlightStrategy):
                 or exceeds_max
                 or current_try >= self.__number_of_retries
             ):
-                logfile.write(f"-----------------------------------\n")
-                logfile.write(f"Could not create a valid plan! \n")
-                logfile.write(f"-----------------------------------\n")
+                logfile.write("-----------------------------------\n")
+                logfile.write("Could not create a valid plan! \n")
+                logfile.write("-----------------------------------\n")
             else:
-                logfile.write(f"-----------------------------------\n")
-                logfile.write(f"Created flight plan! \n")
+                logfile.write("-----------------------------------\n")
+                logfile.write("Created flight plan! \n")
                 logfile.write(
                     f"Number of unique transects: {len(current_selected_transects)} \n"
                 )
@@ -928,7 +957,7 @@ class RandomStrategy(EvaluationFlightStrategy):
                         ),
                     )
 
-                logfile.write(f"-----------------------------------\n")
+                logfile.write("-----------------------------------\n")
             return res
 
 
@@ -967,7 +996,8 @@ class RandomLoopStrategy(EvaluationFlightStrategy):
     ):
         """
         :param grid_size: Horizontal/Vertical distance between individual grid points
-        :param max_start_and_stop_distance: Max. distance allowed between selected start point and first route point + selected start point and last route point
+        :param max_start_and_stop_distance: Max. distance allowed between selected start point and first route point
+            + selected start point and last route point
         :param min_transects: Min. number of expected transects within all routes of a plan
         :param max_transects: Optional upper bound on transects. When set, route accumulation stops
             as soon as the transect count is in [min_transects, max_transects]. If None the
@@ -976,14 +1006,21 @@ class RandomLoopStrategy(EvaluationFlightStrategy):
         :param min_transect_overlap: Min. overlap ratio of a transect with the area to be assumed as valid
         :param number_of_retries: Max. number of retries to create a plan
         :param number_of_retries_per_route: Max. number of retries to create an individual route
-        :param target_crs_epsg: EPSG code of the UTM tile of the area of interest needed for metric based calculations
+        :param target_crs_epsg: EPSG code of the UTM tile of the area of interest needed for metric based
+            calculations
         :param min_transects_per_route: Min. number of transects per route
-        :param x_offset: Offset of the grid along the West/East Axis. Positive value moves the grid to East. Negative value to west.
-        :param y_offset: Offset of the grid along the North/South Axis. Positive value moves the grid to North. Negative value to South.
-        :param padding_north: Add x additional lines of grid points to the North of the flight area (useful, y_offset is used)
-        :param padding_east: Add x additional lines of grid points to the East of the flight area (useful, x_offset is used)
-        :param padding_south: Add x additional lines of grid points to the South of the flight area (useful, y_offset is used)
-        :param padding_west: Add x additional lines of grid points to the West of the flight area (useful, x_offset is used)
+        :param x_offset: Offset of the grid along the West/East Axis. Positive value moves the grid to East.
+            Negative value to west.
+        :param y_offset: Offset of the grid along the North/South Axis. Positive value moves the grid to North.
+            Negative value to South.
+        :param padding_north: Add x additional lines of grid points to the North of the flight area
+            (useful, y_offset is used)
+        :param padding_east: Add x additional lines of grid points to the East of the flight area
+            (useful, x_offset is used)
+        :param padding_south: Add x additional lines of grid points to the South of the flight area
+            (useful, y_offset is used)
+        :param padding_west: Add x additional lines of grid points to the West of the flight area
+            (useful, x_offset is used)
         :param seed: Seed information used for random process; If none random seed is used
         """
         self.__min_transects = min_transects
@@ -1061,15 +1098,18 @@ class RandomLoopStrategy(EvaluationFlightStrategy):
         ]
 
         with open(os.path.join(target_path, "log.txt"), "w") as logfile:
-            logfile.write(f"Parameters:\n")
+            logfile.write("Parameters:\n")
             logfile.write(f"-- seed: {self.__seed}\n")
             logfile.write(f"-- flight area: {os.path.basename(area_path)}\n")
             logfile.write(
                 f"-- start positions: {os.path.basename(start_points_path)}\n"
             )
-            logfile.write(
-                f"-- invalid areas: {os.path.basename(invalid_areas_path) if invalid_areas_path is not None else invalid_areas_path}\n"
+            invalid_areas_name = (
+                os.path.basename(invalid_areas_path)
+                if invalid_areas_path is not None
+                else invalid_areas_path
             )
+            logfile.write(f"-- invalid areas: {invalid_areas_name}\n")
             logfile.write(f"-- grid_size: {self.__grid_size}\n")
             logfile.write(
                 f"-- max_start_and_stop_distance : {self.__max_start_and_stop_distance }\n"
@@ -1093,15 +1133,15 @@ class RandomLoopStrategy(EvaluationFlightStrategy):
             transect_count = 0
             planning_retries = 0
             valid_routes = 0
-            # try to create a plan with routes until you reach the moment of a valid plan (min. number of transects reached)
-            # or you touched the max. number of retries
+            # try to create a plan with routes until you reach the moment of a valid plan
+            # (min. number of transects reached) or you touched the max. number of retries
             while (
                 transect_count < self.__min_transects
                 and planning_retries < self.__number_of_retries
             ):
-                logfile.write(f"--------------------------\n")
+                logfile.write("--------------------------\n")
                 logfile.write(f"Plan creation try {planning_retries} \n")
-                logfile.write(f"--------------------------\n")
+                logfile.write("--------------------------\n")
                 grid_copy = copy.deepcopy(grid)
                 transects_copy = copy.deepcopy(transects)
                 res = []
@@ -1126,7 +1166,8 @@ class RandomLoopStrategy(EvaluationFlightStrategy):
 
                     if len(possible_starts) == 0:
                         logfile.write(
-                            f"\nNo possible start points available, can't create new routes. Stopping...\n"
+                            "\nNo possible start points available, can't create new routes. "
+                            "Stopping...\n"
                         )
                         break
                     # randomly select a grid position as first route position
@@ -1142,7 +1183,8 @@ class RandomLoopStrategy(EvaluationFlightStrategy):
                     route = [first_point]
                     new_visited_points = [[first_point_x, first_point_y]]
                     visited_transects = []
-                    # while we have not found too many dead ends or reached the max. distance continue finding positions for the route
+                    # while we have not found too many dead ends or reached the max. distance
+                    # continue finding positions for the route
                     dead_end_stop = False
                     length_stop = False
                     while (
@@ -1175,7 +1217,7 @@ class RandomLoopStrategy(EvaluationFlightStrategy):
                             else:
                                 # Should actually never happen
                                 direction_name = "Error"
-                            # calculate the new position based on the last grid position and the current flight direction
+                            # calculate the new position based on last grid position and flight direction
                             new_x = last_point_x + direction[0]
                             new_y = last_point_y + direction[1]
 
@@ -1198,7 +1240,8 @@ class RandomLoopStrategy(EvaluationFlightStrategy):
                                 or new_y >= height
                             ):
                                 logfile.write(
-                                    f"-- Next transect ({direction_name}) between grid positions {min_x}/{min_y} and {max_x}/{max_y} is invalid\n"
+                                    f"-- Next transect ({direction_name}) between grid positions "
+                                    f"{min_x}/{min_y} and {max_x}/{max_y} is invalid\n"
                                 )
                                 continue
 
@@ -1207,17 +1250,20 @@ class RandomLoopStrategy(EvaluationFlightStrategy):
                             # transect[0] defines if the transect is valid at all
                             if not transect[0]:
                                 logfile.write(
-                                    f"-- Next transect ({direction_name}) between grid positions {min_x}/{min_y} and {max_x}/{max_y} is invalid\n"
+                                    f"-- Next transect ({direction_name}) between grid positions "
+                                    f"{min_x}/{min_y} and {max_x}/{max_y} is invalid\n"
                                 )
                                 continue
                             # transect[1] defines if the transect has been visited before
                             if transect[1]:
                                 logfile.write(
-                                    f"-- Next transect ({direction_name}) between grid positions {min_x}/{min_y} and {max_x}/{max_y} has already been visited\n"
+                                    f"-- Next transect ({direction_name}) between grid positions "
+                                    f"{min_x}/{min_y} and {max_x}/{max_y} has already been visited\n"
                                 )
                                 continue
                             logfile.write(
-                                f"-- Going to next transect ({direction_name}) between grid positions {min_x}/{min_y} and {max_x}/{max_y}\n"
+                                f"-- Going to next transect ({direction_name}) between grid positions "
+                                f"{min_x}/{min_y} and {max_x}/{max_y}\n"
                             )
                             # if the transect is valid proceed and get the next global position from the grid
                             next_point = grid_copy[new_x][new_y]
@@ -1253,7 +1299,7 @@ class RandomLoopStrategy(EvaluationFlightStrategy):
                             last_point_y = new_y
                             route.append(last_point)
                         if dead_end:
-                            logfile.write(f"-- Found dead end\n")
+                            logfile.write("-- Found dead end\n")
                             dead_end_stop = True
                         # move on in the flight pattern and start with the next direction for the next iteration
                         flight_pattern.append(flight_pattern.pop(0))
@@ -1272,7 +1318,8 @@ class RandomLoopStrategy(EvaluationFlightStrategy):
                         res_transects.append(visited_transects)
                     else:
                         logfile.write(
-                            f"-- Created route {route_idx} is too short with {num_transects} transects - retrying...\n"
+                            f"-- Created route {route_idx} is too short with "
+                            f"{num_transects} transects - retrying...\n"
                         )
                         for new_visited_point in new_visited_points:
                             grid_copy[new_visited_point[0]][new_visited_point[1]][
@@ -1283,7 +1330,7 @@ class RandomLoopStrategy(EvaluationFlightStrategy):
                                 visited_transect
                             ]._replace(already_visited=False)
 
-                logfile.write(f"\nAssigning routes to closest start positions...\n")
+                logfile.write("\nAssigning routes to closest start positions...\n")
 
                 # now create the final routes and check them
                 valid_routes = 0
@@ -1309,7 +1356,9 @@ class RandomLoopStrategy(EvaluationFlightStrategy):
                             > self.__max_start_and_stop_distance
                         ):
                             logfile.write(
-                                f"-- Start point {start_point[0]} too far away for start/end of route {route_idx} with distance {back_distance + distance}m (start distance: {distance}; end distance: {back_distance})\n"
+                                f"-- Start point {start_point[0]} too far away for start/end of "
+                                f"route {route_idx} with distance {back_distance + distance}m "
+                                f"(start distance: {distance}; end distance: {back_distance})\n"
                             )
                             continue
 
@@ -1319,12 +1368,15 @@ class RandomLoopStrategy(EvaluationFlightStrategy):
                             line = shapely.geometry.LineString(
                                 [start_point[0:2], first_point[0:2]]
                             )
-                            # check if there is any intersection between the start of the route and the selected start point and one of the no-go areas
+                            # check if there is any intersection between the start of the route and
+                            # the selected start point and one of the no-go areas
                             for geometry in invalid_areas.geometry:
                                 intersection = shapely.intersection(line, geometry)
                                 if intersection.length > 0:
                                     logfile.write(
-                                        f"-- Start point {start_point[0]} is invalid because of intersection with no-fly area on route to start of route {route_idx}\n"
+                                        f"-- Start point {start_point[0]} is invalid because of "
+                                        f"intersection with no-fly area on route to start of "
+                                        f"route {route_idx}\n"
                                     )
                                     touching_invalid_area = True
                                     break
@@ -1334,12 +1386,15 @@ class RandomLoopStrategy(EvaluationFlightStrategy):
                             line = shapely.geometry.LineString(
                                 [start_point[0:2], last_point[0:2]]
                             )
-                            # check if there is any intersection between the end of the route and the selected start point and one of the no-go areas
+                            # check if there is any intersection between the end of the route
+                            # and the selected start point and one of the no-go areas
                             for geometry in invalid_areas.geometry:
                                 intersection = shapely.intersection(line, geometry)
                                 if intersection.length > 0:
                                     logfile.write(
-                                        f"-- Start point {start_point[0]} is invalid because of intersection with no-fly area on route to end of route {route_idx}\n"
+                                        f"-- Start point {start_point[0]} is invalid because of "
+                                        f"intersection with no-fly area on route to end of "
+                                        f"route {route_idx}\n"
                                     )
                                     touching_invalid_area = True
                                     break
@@ -1356,7 +1411,8 @@ class RandomLoopStrategy(EvaluationFlightStrategy):
 
                     if smallest_start_idx is None:
                         logfile.write(
-                            f"-- Could not find a valid start point within the min. start/end distance for route {route_idx}\n"
+                            f"-- Could not find a valid start point within the min. start/end "
+                            f"distance for route {route_idx}\n"
                         )
                         invalid_route = True
 
@@ -1412,7 +1468,7 @@ class RandomLoopStrategy(EvaluationFlightStrategy):
                         ) as f:
                             json.dump(route_geojson, f)
                         os.makedirs(
-                            os.path.join(target_path, "routes", f"valid"), exist_ok=True
+                            os.path.join(target_path, "routes", "valid"), exist_ok=True
                         )
                         with open(
                             os.path.join(
@@ -1427,7 +1483,7 @@ class RandomLoopStrategy(EvaluationFlightStrategy):
                         valid_routes += 1
                     else:
                         os.makedirs(
-                            os.path.join(target_path, "routes", f"invalid"),
+                            os.path.join(target_path, "routes", "invalid"),
                             exist_ok=True,
                         )
                         with open(
@@ -1530,7 +1586,6 @@ if __name__ == "__main__":
         seed=8607105702491822030,
     )
 
-
     target_folder = r"C:\Users\P41743\Desktop\ST_Feldbach_data\target5"
     # append "route_<date_time>" to the target folder
     # target_folder = os.path.join(
@@ -1539,10 +1594,11 @@ if __name__ == "__main__":
     os.makedirs(target_folder, exist_ok=True)
     print(f"Target folder: {target_folder}")
 
+    _base = r"C:\Users\P41743\Desktop\ST_Feldbach_data\Feldbach-Straden"
     strategy.create_routes(
-        area_path=r"C:\Users\P41743\Desktop\ST_Feldbach_data\Feldbach-Straden\UG_Feldbach-Straden.kml",
-        start_points_path=r"C:\Users\P41743\Desktop\ST_Feldbach_data\Feldbach-Straden\starting_points_Feldbach-Straden.kml",
-        invalid_areas_path=r"C:\Users\P41743\Desktop\ST_Feldbach_data\Feldbach-Straden\no_fly_Feldbach-Straden.kml",
+        area_path=_base + r"\UG_Feldbach-Straden.kml",
+        start_points_path=_base + r"\starting_points_Feldbach-Straden.kml",
+        invalid_areas_path=_base + r"\no_fly_Feldbach-Straden.kml",
         target_path=target_folder,
     )
 

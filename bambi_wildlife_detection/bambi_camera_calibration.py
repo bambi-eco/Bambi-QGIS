@@ -46,7 +46,7 @@ except ImportError:
 from qgis.PyQt.QtCore import Qt, QThread, QObject, pyqtSignal, QTimer, QRect
 from qgis.PyQt.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QDialog, QFileDialog,
-    QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
+    QGroupBox, QHBoxLayout, QLabel, QLineEdit,
     QListWidget, QMessageBox, QProgressBar, QProgressDialog,
     QPushButton, QRadioButton, QScrollArea, QShortcut, QSizePolicy, QSplitter,
     QDoubleSpinBox, QSpinBox, QStackedWidget, QTextEdit, QVBoxLayout, QWidget,
@@ -101,7 +101,7 @@ def _load_image_or_video_central(path: str) -> Optional["np.ndarray"]:
 
 
 def _extract_n_frames_to_dir(video_path: str, out_dir: str, n: int,
-                              progress_cb=None) -> List[str]:
+                             progress_cb=None) -> List[str]:
     """Extract *n* evenly-spaced frames from *video_path* into *out_dir*.
 
     *progress_cb*, if given, is called as ``progress_cb(frames_done, frames_total)``
@@ -191,7 +191,7 @@ class _AnnotImageLabel(QLabel):
     ]
 
     _MAG_RADIUS = 90    # loupe radius in screen pixels
-    _MAG_ZOOM   = 3.0   # zoom factor inside the loupe
+    _MAG_ZOOM = 3.0   # zoom factor inside the loupe
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -340,15 +340,13 @@ class _AnnotImageLabel(QLabel):
         if pm is None or pm.isNull():
             return None
         pw, ph = pm.width(), pm.height()
-        x = (self.width()  - pw) // 2
+        x = (self.width() - pw) // 2
         y = (self.height() - ph) // 2
         return QRect(x, y, pw, ph)
 
     def _draw_magnifier(self) -> None:
         """Paint a circular magnifier loupe on top of the widget contents."""
-        if (not self._magnifier_enabled
-                or self._mag_pos is None
-                or self._orig_pixmap is None):
+        if (not self._magnifier_enabledm or self._mag_pos is None or self._orig_pixmap is None):
             return
         ir = self._img_rect()
         if ir is None:
@@ -361,8 +359,8 @@ class _AnnotImageLabel(QLabel):
         # Map widget coords → original-image coords
         rel_x = (mx - ir.x()) / ir.width()
         rel_y = (my - ir.y()) / ir.height()
-        fp_w  = self._orig_pixmap.width()
-        fp_h  = self._orig_pixmap.height()
+        fp_w = self._orig_pixmap.width()
+        fp_h = self._orig_pixmap.height()
         fp_cx = rel_x * fp_w
         fp_cy = rel_y * fp_h
 
@@ -491,10 +489,10 @@ class _CalibWorker(QObject):
                 if first_img is not None:
                     h, w = first_img.shape[:2]
                     f = (math.sqrt(w * w + h * h) / 2.0) / math.tan(math.radians(fov_diag) / 2.0)
-                    reader_opts.camera_params = f"{f},{f},{w/2.0},{h/2.0},0,0,0,0"
+                    reader_opts.camera_params = f"{f},{f},{w / 2.0},{h / 2.0},0,0,0,0"
                     self.log.emit(
                         f"FoV prior: {fov_diag}° diagonal → f ≈ {f:.1f} px "
-                        f"(vert. FoV ≈ {math.degrees(2*math.atan(h/(2*f))):.1f}°)"
+                        f"(vert. FoV ≈ {math.degrees(2*math.atan(h/(2 * f))):.1f}°)"
                     )
 
             pycolmap.extract_features(
@@ -661,9 +659,9 @@ class _CalibWorker(QObject):
         # already in undistorted pixel space, so skip undistortPoints for that
         # side.  The saved output still uses the original (non-zeroed) distortion.
         rgb_pre_undist = self._params.get("rgb_pre_undistorted", False)
-        th_pre_undist  = self._params.get("th_pre_undistorted", False)
+        th_pre_undist = self._params.get("th_pre_undistorted", False)
         rgb_dist_warp = np.zeros(5) if rgb_pre_undist else rgb_dist5
-        th_dist_x0    = np.zeros(5) if th_pre_undist  else th_dist5
+        th_dist_x0 = np.zeros(5) if th_pre_undist else th_dist5
 
         def _warp(pts, cm, dc):
             p = np.array(pts, dtype=np.float32).reshape(-1, 1, 2)
@@ -1620,7 +1618,8 @@ class CameraCalibrationWizard(QDialog):
             "are visible in both RGB and thermal imagery and appear across at least once "
             "everywhere in the image space (upper left corner, upper right corner, "
             "center of the image, lower left, lower right, etc.), to ensure robust "
-            "calibration over the full field of view. For single-camera mode, the same requirement applies but only for one modality.<br><br>"
+            "calibration over the full field of view. For single-camera mode, the same "
+            "requirement applies but only for one modality.<br><br>"
             "Buildings have proven to be particularly suitable targets, especially roofs "
             "with sharp edges or solar panels, as they provide both geometric detail and "
             "strong thermal contrast. Facades with windows can also be used, although "
@@ -2140,8 +2139,8 @@ class CameraCalibrationWizard(QDialog):
             return
 
         file_pairs = data["pairs"]
-        n_file   = len(file_pairs)
-        n_annot  = len(self._pairs_annot)
+        n_file = len(file_pairs)
+        n_annot = len(self._pairs_annot)
 
         if n_file != n_annot:
             ans = QMessageBox.question(
@@ -2176,7 +2175,7 @@ class CameraCalibrationWizard(QDialog):
         for i in range(min(n_file, n_annot)):
             fp = file_pairs[i]
             self._pairs_annot[i]["rgb_pts"] = [tuple(pt) for pt in fp.get("rgb_points", [])]
-            self._pairs_annot[i]["th_pts"]  = [tuple(pt) for pt in fp.get("th_points",  [])]
+            self._pairs_annot[i]["th_pts"] = [tuple(pt) for pt in fp.get("th_points", [])]
 
         # Refresh the currently displayed pair
         self._load_pair(self._pair_idx)
@@ -2211,14 +2210,14 @@ class CameraCalibrationWizard(QDialog):
     def _refresh_annot_state(self) -> None:
         pa = self._pairs_annot[self._pair_idx]
         n_rgb = len(pa["rgb_pts"])
-        n_th  = len(pa["th_pts"])
+        n_th = len(pa["th_pts"])
         n_complete = min(n_rgb, n_th)
 
         # When counts are equal both panels are open — the user may start the
         # next pair from either side.  Once one side is ahead the lagging side
         # is the only one that accepts clicks until the pair is complete.
         self._rgb_img_lbl.set_accepting(n_rgb <= n_th)
-        self._th_img_lbl.set_accepting(n_th  <= n_rgb)
+        self._th_img_lbl.set_accepting(n_th <= n_rgb)
 
         next_idx = n_complete + 1
         if n_rgb == n_th:
@@ -2446,7 +2445,11 @@ class CameraCalibrationWizard(QDialog):
                 f"  k1={dist[0]:.6f}  k2={dist[1]:.6f}\n"
                 f"  p1={dist[2]:.6f}  p2={dist[3]:.6f}  k3={dist[4]:.6f}\n\n"
                 f"JSON preview:\n"
-                f"{json.dumps({'ret': result.get('ret'), 'mtx': mtx, 'dist': dist, 'name': result.get('camera_name', 'Camera')}, indent=2)}"
+                + json.dumps(
+                    {'ret': result.get('ret'), 'mtx': mtx, 'dist': dist,
+                     'name': result.get('camera_name', 'Camera')},
+                    indent=2,
+                )
             )
             self._result_text.setText(txt)
 
@@ -2468,8 +2471,6 @@ class CameraCalibrationWizard(QDialog):
 
             th = result["Thermal"]
             wi = result["Wide"]
-            th_mtx = th["mtx"]
-            wi_mtx = wi["mtx"]
 
             def _fmt_cam(name, d):
                 m = d["mtx"]
@@ -2821,7 +2822,6 @@ class CameraCalibrationWizard(QDialog):
                     path += ".json"
                 self._save_path_edit.setText(path)
                 self._do_write_single(path)
-
 
     # =========================================================================
     # Cleanup

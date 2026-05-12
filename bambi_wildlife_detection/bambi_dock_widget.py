@@ -13,15 +13,13 @@ import csv
 import subprocess
 import tempfile
 from typing import Optional, Dict, Any, List
-import sys
-
-from qgis.PyQt.QtCore import Qt, QThread, pyqtSignal
+from qgis.PyQt.QtCore import Qt, QThread
 from qgis.PyQt.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QGroupBox, QPushButton, QLineEdit, QSpinBox, QDoubleSpinBox,
     QFileDialog, QLabel, QProgressBar, QTextEdit, QComboBox,
-    QCheckBox, QTabWidget, QMessageBox, QScrollArea, QSlider,
-    QFrame, QListWidget, QListWidgetItem, QSizePolicy, QDialog,
+    QCheckBox, QTabWidget, QMessageBox, QScrollArea,
+    QFrame, QListWidget, QListWidgetItem, QDialog,
     QDialogButtonBox, QGridLayout, QToolButton
 )
 from qgis.PyQt.QtGui import QFont, QColor
@@ -36,7 +34,6 @@ from qgis.PyQt.QtCore import QVariant
 from .bambi_processing import BambiProcessor, ProcessingWorker
 from .austria_dem_downloader import DEMDownloadWorker, GeoTIFFConversionWorker
 from .bambi_click_tool import BambiClickTool
-from .bambi_feature_viewer import FeatureViewerDialog
 
 # Plugin scope for project settings storage
 PLUGIN_SCOPE = "BambiWildlifeDetection"
@@ -47,17 +44,68 @@ PLUGIN_SCOPE = "BambiWildlifeDetection"
 #   "Preset Name": { ... calibration JSON dict ... }
 # ---------------------------------------------------------------------------
 THERMAL_CALIBRATIONS: Dict[str, Any] = {
-    "DJI M30T (T;Video)": {"ret": 7.245051860689403, "mtx": [[1520.3107832839369, 0.0, 626.3977414191858], [0.0, 1485.995024483995, 503.3510429805098], [0.0, 0.0, 1.0]], "dist": [[-0.3394678906712876, 0.17727664454650988, 0.0009308512048568154, 0.0004890617951054967, 0]]},
-    "DJI M3T (T;Video)": {"ret": None, "mtx": [[762.1973876953125, 0.0, 315.58062744140625], [0.0, 745.9588012695312, 258.6109619140625], [0.0, 0.0, 1.0]], "dist": [-0.3735257089138031, 0.21459056437015533, -0.0011555751552805305, 0.0010070821736007929, -0.020840825513005257]},
-    "DJI M3T (T;Photo)": {"ret":None,"mtx":[[709.3034658056947,0.0,318.0197900353661],[0.0,715.0218212754917,253.83454206288621],[0.0,0.0,1.0]],"dist":[-0.36417697377032066,-0.7492640090863855,0.0027012890246737066,-0.006454815853424857,2.976724977835735]},
-    "DJI M4T (T;Video)": { "ret": 176.4337615966797, "mtx": [ [ 1662.104759978501, 0.0, 648.8363675934249 ], [ 0.0, 1672.1834465857696, 502.74606875083396 ], [ 0.0, 0.0, 1.0 ] ], "dist": [ -0.43796580202601854, 1.3580481451759991, -0.007547939222720769, 0.0056811990188386, -0.04550534737789148 ], "name": "Thermal" }
+    "DJI M30T (T;Video)": {
+        "ret": 7.245051860689403,
+        "mtx": [[1520.3107832839369, 0.0, 626.3977414191858],
+                [0.0, 1485.995024483995, 503.3510429805098],
+                [0.0, 0.0, 1.0]],
+        "dist": [[-0.3394678906712876, 0.17727664454650988,
+                  0.0009308512048568154, 0.0004890617951054967, 0]]},
+    "DJI M3T (T;Video)": {
+        "ret": None,
+        "mtx": [[762.1973876953125, 0.0, 315.58062744140625],
+                [0.0, 745.9588012695312, 258.6109619140625],
+                [0.0, 0.0, 1.0]],
+        "dist": [-0.3735257089138031, 0.21459056437015533,
+                 -0.0011555751552805305, 0.0010070821736007929,
+                 -0.020840825513005257]},
+    "DJI M3T (T;Photo)": {
+        "ret": None,
+        "mtx": [[709.3034658056947, 0.0, 318.0197900353661],
+                [0.0, 715.0218212754917, 253.83454206288621],
+                [0.0, 0.0, 1.0]],
+        "dist": [-0.36417697377032066, -0.7492640090863855,
+                 0.0027012890246737066, -0.006454815853424857,
+                 2.976724977835735]},
+    "DJI M4T (T;Video)": {
+        "ret": 176.4337615966797,
+        "mtx": [[1662.104759978501, 0.0, 648.8363675934249],
+                [0.0, 1672.1834465857696, 502.74606875083396],
+                [0.0, 0.0, 1.0]],
+        "dist": [-0.43796580202601854, 1.3580481451759991,
+                 -0.007547939222720769, 0.0056811990188386,
+                 -0.04550534737789148],
+        "name": "Thermal"},
 }
 
 RGB_CALIBRATIONS: Dict[str, Any] = {
-    "DJI M30T (W;Video)": {"ret": None, "mtx": [[2888.178324915765, 0.0, 1929.0179499431672], [0.0, 2819.3160759551897, 1070.7804294784548], [0.0, 0.0, 1.0]], "dist": [[0.13853585738444427, -0.25508562557544706, 0.00020336601637138113, -0.0009057472383396885, 0.0]]},
-    "DJI M3T (V;Video)": {"ret": None, "mtx": [[2985.574462890625, 0.0, 1933.8876953125], [0.0, 2916.530517578125, 1082.4605712890625], [0.0, 0.0, 1.0]], "dist": [0.1394435465335846, -0.26558583974838257, -0.0008494078647345304, -0.0012549880193546414, 0.0]},
-    "DJI M3T (V;Photo)": {"ret":None,"mtx":[[2702.844875891617,0.0,2000.0],[0.0,2702.844875891617,1500.0],[0.0,0.0,1.0]],"dist":[0.0,0.0,0.0,0.0,0.0]},
-    "DJI M4T (V;Video)": { "ret": 0.48876716192317926, "mtx": [ [ 2142.1766198992673, 0.0, 1920.0 ], [ 0.0, 2168.4652820703914, 1080.0 ], [ 0.0, 0.0, 1.0 ] ], "dist": [ 0.0576940464558883, -0.031006985358310316, -0.0003205738286388309, 0.0018687266868038911, 0.0 ]}
+    "DJI M30T (W;Video)": {
+        "ret": None,
+        "mtx": [[2888.178324915765, 0.0, 1929.0179499431672],
+                [0.0, 2819.3160759551897, 1070.7804294784548],
+                [0.0, 0.0, 1.0]],
+        "dist": [[0.13853585738444427, -0.25508562557544706,
+                  0.00020336601637138113, -0.0009057472383396885, 0.0]]},
+    "DJI M3T (V;Video)": {
+        "ret": None,
+        "mtx": [[2985.574462890625, 0.0, 1933.8876953125],
+                [0.0, 2916.530517578125, 1082.4605712890625],
+                [0.0, 0.0, 1.0]],
+        "dist": [0.1394435465335846, -0.26558583974838257,
+                 -0.0008494078647345304, -0.0012549880193546414, 0.0]},
+    "DJI M3T (V;Photo)": {
+        "ret": None,
+        "mtx": [[2702.844875891617, 0.0, 2000.0],
+                [0.0, 2702.844875891617, 1500.0],
+                [0.0, 0.0, 1.0]],
+        "dist": [0.0, 0.0, 0.0, 0.0, 0.0]},
+    "DJI M4T (V;Video)": {
+        "ret": 0.48876716192317926,
+        "mtx": [[2142.1766198992673, 0.0, 1920.0],
+                [0.0, 2168.4652820703914, 1080.0],
+                [0.0, 0.0, 1.0]],
+        "dist": [0.0576940464558883, -0.031006985358310316,
+                 -0.0003205738286388309, 0.0018687266868038911, 0.0]},
 }
 
 
@@ -788,7 +836,8 @@ class BambiDockWidget(QDockWidget):
         self.dem_download_btn.setToolTip(
             "Download DEM from Austrian BEV service based on AirData CSV GPS coordinates. "
             "Requires AirData CSV to be selected. Uses Austria-wide 1m ALS-DTM dataset. "
-            "Note, that this may take some time, since individual tiles are 10GB+ and it may be necessary to download multiple map tiles. "
+            "Note, that this may take some time, since individual tiles are 10GB+ "
+            "and it may be necessary to download multiple map tiles. "
             "Downloaded to \"<user profile>/.cache/austria_dem\""
         )
         self.dem_download_btn.clicked.connect(self.download_austria_dem)
@@ -801,7 +850,8 @@ class BambiDockWidget(QDockWidget):
             "Downloads DEM tiles from the Austrian BEV service based on GPS coordinates\n"
             "in the AirData CSV file. The area is determined automatically with the\n"
             "specified padding around the flight path.\n"
-            "Note, that this may take some time, since individual tiles are 10GB+ and it may be necessary to download multiple map tiles.\n"
+            "Note, that this may take some time, since individual tiles are 10GB+ "
+            "and it may be necessary to download multiple map tiles.\n"
             "Downloaded to \"<user profile>/.cache/austria_dem\""
         )
         download_info_label.setWordWrap(True)
@@ -1129,12 +1179,15 @@ class BambiDockWidget(QDockWidget):
         model_row.addWidget(model_browse_btn)
         detection_layout.addRow("Model Path:", model_row)
         detection_label = QLabel(
-            "Note, that the default BAMBI model was trained on white-hotspot thermal data showing roe deer, red deer and wild boar with an AGL between 30 to 60 m. So the applicability is limited to that scope. Additionally, the model is based on the Ultralytics framework so the utilization follows their license."
+            "Note, that the default BAMBI model was trained on white-hotspot thermal "
+            "data showing roe deer, red deer and wild boar with an AGL between 30 to "
+            "60 m. So the applicability is limited to that scope. Additionally, the "
+            "model is based on the Ultralytics framework so the utilization follows "
+            "their license."
         )
         detection_label.setWordWrap(True)
         detection_label.setStyleSheet("color: gray; font-size: 10px;")
         detection_layout.addWidget(detection_label)
-
 
         self.confidence_spin = QDoubleSpinBox()
         self.confidence_spin.setRange(0.0, 1.0)
@@ -1824,7 +1877,8 @@ class BambiDockWidget(QDockWidget):
         steps_btn_layout.addLayout(step1b_row)
 
         correction_info_label = QLabel(
-            "If not already done: Use the correction tooling to determine positional and orientation errors after frame extraction."
+            "If not already done: Use the correction tooling to determine "
+            "positional and orientation errors after frame extraction."
         )
         correction_info_label.setWordWrap(True)
         correction_info_label.setStyleSheet("color: gray; font-size: 10px;")
@@ -2138,8 +2192,6 @@ class BambiDockWidget(QDockWidget):
 
     def _refresh_trackers(self):
         """Refresh the available trackers list."""
-        from .tracker_manager import get_tracker_manager
-
         # Clear current items
         self.tracker_backend_combo.clear()
         self._tracker_ids = []
@@ -2218,8 +2270,8 @@ class BambiDockWidget(QDockWidget):
             QMessageBox.information(
                 self,
                 "Tracker Parameters",
-                f"No configurable parameters available for this tracker.\n\n"
-                f"The tracker uses its default settings."
+                "No configurable parameters available for this tracker.\n\n"
+                "The tracker uses its default settings."
             )
             return
 
@@ -2375,14 +2427,18 @@ class BambiDockWidget(QDockWidget):
             # Detection
             "model_path": self.model_path_edit.text() or None,
             "min_confidence": self.confidence_spin.value(),
-            "detect_use_all_frames": self.detect_all_frames_check.isChecked() if hasattr(self,
-                                                                                         'detect_all_frames_check') else True,
-            "detect_start_frame": self.detect_start_frame_spin.value() if hasattr(self,
-                                                                                  'detect_start_frame_spin') else 0,
-            "detect_end_frame": self.detect_end_frame_spin.value() if hasattr(self,
-                                                                              'detect_end_frame_spin') else 999999,
-            "detect_sample_rate": self.detect_sample_rate_spin.value() if hasattr(self,
-                                                                                  'detect_sample_rate_spin') else 1,
+            "detect_use_all_frames": (
+                self.detect_all_frames_check.isChecked()
+                if hasattr(self, 'detect_all_frames_check') else True),
+            "detect_start_frame": (
+                self.detect_start_frame_spin.value()
+                if hasattr(self, 'detect_start_frame_spin') else 0),
+            "detect_end_frame": (
+                self.detect_end_frame_spin.value()
+                if hasattr(self, 'detect_end_frame_spin') else 999999),
+            "detect_sample_rate": (
+                self.detect_sample_rate_spin.value()
+                if hasattr(self, 'detect_sample_rate_spin') else 1),
 
             # Correction factors (rotations always in radians)
             "translation": {
@@ -2415,15 +2471,27 @@ class BambiDockWidget(QDockWidget):
             "ortho_dem_metadata_path": self.dem_metadata_path_edit.text() or None,
             "ortho_blend_mode": self.blend_mode_combo.currentText().split(" - ")[0].lower(),
             "ortho_use_all_frames": self.ortho_all_frames_check.isChecked(),
-            "ortho_start_frame": self.ortho_start_frame_spin.value() if not self.ortho_all_frames_check.isChecked() else None,
-            "ortho_end_frame": self.ortho_end_frame_spin.value() if not self.ortho_all_frames_check.isChecked() else None,
+            "ortho_start_frame": (
+                self.ortho_start_frame_spin.value()
+                if not self.ortho_all_frames_check.isChecked() else None),
+            "ortho_end_frame": (
+                self.ortho_end_frame_spin.value()
+                if not self.ortho_all_frames_check.isChecked() else None),
             "ortho_crop_to_content": self.ortho_crop_check.isChecked(),
             "ortho_create_overviews": self.ortho_overviews_check.isChecked(),
             "ortho_max_tile_size": self.ortho_tile_size_spin.value(),
-            "ortho_frame_step": self.ortho_frame_step_spin.value() if hasattr(self, 'ortho_frame_step_spin') else 1,
-            "ortho_sampling_mode": self.ortho_sampling_check.isChecked() if hasattr(self, 'ortho_sampling_check') else False,
-            "ortho_sampling_rate": self.ortho_sampling_rate_spin.value() if hasattr(self, 'ortho_sampling_rate_spin') else 10,
-            "ortho_sampling_range": self.ortho_sampling_range_spin.value() if hasattr(self, 'ortho_sampling_range_spin') else 5,
+            "ortho_frame_step": (
+                self.ortho_frame_step_spin.value()
+                if hasattr(self, 'ortho_frame_step_spin') else 1),
+            "ortho_sampling_mode": (
+                self.ortho_sampling_check.isChecked()
+                if hasattr(self, 'ortho_sampling_check') else False),
+            "ortho_sampling_rate": (
+                self.ortho_sampling_rate_spin.value()
+                if hasattr(self, 'ortho_sampling_rate_spin') else 10),
+            "ortho_sampling_range": (
+                self.ortho_sampling_range_spin.value()
+                if hasattr(self, 'ortho_sampling_range_spin') else 5),
 
             # Field of View
             "use_fov_mask": self.use_fov_mask_check.isChecked(),
@@ -2440,14 +2508,23 @@ class BambiDockWidget(QDockWidget):
             "sam3_prompts": [p.strip() for p in self.sam3_prompts_edit.toPlainText().split("\n") if
                              p.strip()] if hasattr(self, 'sam3_prompts_edit') else [],
             "sam3_confidence": self.sam3_confidence_spin.value() if hasattr(self, 'sam3_confidence_spin') else 0.5,
-            "sam3_use_all_frames": self.sam3_all_frames_check.isChecked() if hasattr(self,
-                                                                                     'sam3_all_frames_check') else True,
-            "sam3_start_frame": self.sam3_start_frame_spin.value() if hasattr(self, 'sam3_start_frame_spin') else 0,
-            "sam3_end_frame": self.sam3_end_frame_spin.value() if hasattr(self, 'sam3_end_frame_spin') else 999999,
-            "sam3_step": self.sam3_step_spin.value() if hasattr(self, 'sam3_step_spin') else 1,
+            "sam3_use_all_frames": (
+                self.sam3_all_frames_check.isChecked()
+                if hasattr(self, 'sam3_all_frames_check') else True),
+            "sam3_start_frame": (
+                self.sam3_start_frame_spin.value()
+                if hasattr(self, 'sam3_start_frame_spin') else 0),
+            "sam3_end_frame": (
+                self.sam3_end_frame_spin.value()
+                if hasattr(self, 'sam3_end_frame_spin') else 999999),
+            "sam3_step": (
+                self.sam3_step_spin.value()
+                if hasattr(self, 'sam3_step_spin') else 1),
 
             # Flight Route options
-            "filter_gps_origin": self.filter_gps_origin_check.isChecked() if hasattr(self, 'filter_gps_origin_check') else True,
+            "filter_gps_origin": (
+                self.filter_gps_origin_check.isChecked()
+                if hasattr(self, 'filter_gps_origin_check') else True),
 
             # Camera selections for processing steps
             "flight_route_camera": "T" if self.flight_route_camera_combo.currentIndex() == 0 else "W",
@@ -2484,7 +2561,7 @@ class BambiDockWidget(QDockWidget):
             QMessageBox.warning(
                 self,
                 "Missing Inputs",
-                f"Please provide the following required inputs:\n\n• " + "\n• ".join(missing)
+                "Please provide the following required inputs:\n\n• " + "\n• ".join(missing)
             )
             return False
         return True
@@ -2519,7 +2596,7 @@ class BambiDockWidget(QDockWidget):
                 t_calib_path = os.path.join(video_folder, "T_calib.json")
                 if os.path.exists(t_calib_path):
                     self.thermal_calibration_path_edit.setText(t_calib_path)
-                    self.log(f"Auto-detected thermal calibration: T_calib.json")
+                    self.log("Auto-detected thermal calibration: T_calib.json")
 
             # Auto-detect common files if not already set
             self._auto_detect_common_files(video_folder)
@@ -2554,7 +2631,7 @@ class BambiDockWidget(QDockWidget):
                 w_calib_path = os.path.join(video_folder, "W_calib.json")
                 if os.path.exists(w_calib_path):
                     self.rgb_calibration_path_edit.setText(w_calib_path)
-                    self.log(f"Auto-detected RGB calibration: W_calib.json")
+                    self.log("Auto-detected RGB calibration: W_calib.json")
 
             # Auto-detect common files if not already set
             self._auto_detect_common_files(video_folder)
@@ -2609,7 +2686,7 @@ class BambiDockWidget(QDockWidget):
             t_calib_path = os.path.join(video_folder, "T_calib.json")
             if os.path.exists(t_calib_path):
                 self.thermal_calibration_path_edit.setText(t_calib_path)
-                self.log(f"Auto-detected thermal calibration: T_calib.json")
+                self.log("Auto-detected thermal calibration: T_calib.json")
 
         # Auto-detect RGB calibration if not set (only in custom file mode)
         if (self.rgb_calib_preset_combo.currentIndex() == 0
@@ -2617,7 +2694,7 @@ class BambiDockWidget(QDockWidget):
             w_calib_path = os.path.join(video_folder, "W_calib.json")
             if os.path.exists(w_calib_path):
                 self.rgb_calibration_path_edit.setText(w_calib_path)
-                self.log(f"Auto-detected RGB calibration: W_calib.json")
+                self.log("Auto-detected RGB calibration: W_calib.json")
 
         # Auto-detect correction.json and load values
         if not self.correction_path_edit.text():
@@ -2630,7 +2707,7 @@ class BambiDockWidget(QDockWidget):
         if not self.target_folder_edit.text():
             qgis_folder = os.path.join(video_folder, "qgis")
             self.target_folder_edit.setText(qgis_folder)
-            self.log(f"Auto-set target folder: qgis/")
+            self.log("Auto-set target folder: qgis/")
             # Create the folder if it doesn't exist
             if not os.path.exists(qgis_folder):
                 try:
@@ -2906,12 +2983,28 @@ class BambiDockWidget(QDockWidget):
                 "The plugin processes continuous drone video recordings together with "
                 "SRT subtitle files, which provide per-frame timestamps used to match "
                 "each frame to a high-precision GPS position from the AirData flight log.<br><br>"
-                "Note: When using newer drones like DJI's M4T SRT is embedded in the videos. In such a case, please activate the 'Embedded SRT' checkbox<br><br>"
-                "Practical tips: To ensure high-quality and consistent video recordings, configure your drone mission with stable flight parameters and a fixed camera setup. Plan the flight at a constant altitude between 30 m and 60 m above ground, depending on the terrain and desired coverage, and maintain a steady speed of 3–7 m/s throughout the mission. "
-                "Although the exact heading is not critical, the drone’s orientation should remain constant for the entire flight, and yaw rotations should be avoided. A practical approach is to configure each waypoint so that the drone faces north, ensuring a stable and repeatable camera perspective. "
-                "Set the gimbal pitch to −90° so the camera is pointing straight down (nadir). This provides a consistent top-down view and simplifies later processing of the video data. "
-                "Don't forget the subtitle feature in the video settings, otherwise no SRT file is created/embedded!"
-                "Finally, start video recording at the first waypoint and stop recording at the last waypoint to capture the full survey area in one continuous sequence while avoiding unnecessary footage. "
+                "Note: When using newer drones like DJI’s M4T SRT is embedded in "
+                "the videos. In such a case, please activate the ‘Embedded SRT’ "
+                "checkbox<br><br>"
+                "Practical tips: To ensure high-quality and consistent video "
+                "recordings, configure your drone mission with stable flight "
+                "parameters and a fixed camera setup. Plan the flight at a constant "
+                "altitude between 30 m and 60 m above ground, depending on the "
+                "terrain and desired coverage, and maintain a steady speed of "
+                "3–7 m/s throughout the mission. "
+                "Although the exact heading is not critical, the drone’s orientation "
+                "should remain constant for the entire flight, and yaw rotations "
+                "should be avoided. A practical approach is to configure each "
+                "waypoint so that the drone faces north, ensuring a stable and "
+                "repeatable camera perspective. "
+                "Set the gimbal pitch to −90° so the camera is pointing "
+                "straight down (nadir). This provides a consistent top-down view "
+                "and simplifies later processing of the video data. "
+                "Don’t forget the subtitle feature in the video settings, otherwise "
+                "no SRT file is created/embedded!"
+                "Finally, start video recording at the first waypoint and stop "
+                "recording at the last waypoint to capture the full survey area in "
+                "one continuous sequence while avoiding unnecessary footage. "
             )
         else:
             title = "Photo Mode"
@@ -2920,7 +3013,12 @@ class BambiDockWidget(QDockWidget):
                 "The plugin processes a series of still images captured during a mapping "
                 "flight. GPS positions and global orientation are matched to images by comparing image EXIF "
                 "timestamps with the AirData flight log.<br><br>"
-                "Note: In photo mode, images are associated with the AirData file in a fixed sequential order for cases with same timestamps due to temporal ambiguities caused by second-level precision and the lack of sub-second information. Consequently, the complete dataset must always be provided. If individual images are missing, georeferencing will fail."
+                "Note: In photo mode, images are associated with the AirData file "
+                "in a fixed sequential order for cases with same timestamps due to "
+                "temporal ambiguities caused by second-level precision and the lack "
+                "of sub-second information. Consequently, the complete dataset must "
+                "always be provided. If individual images are missing, "
+                "georeferencing will fail."
             )
         msg = QMessageBox(self)
         msg.setWindowTitle(title)
@@ -2966,7 +3064,15 @@ class BambiDockWidget(QDockWidget):
             "Segments detected objects using Roboflow SAM3 and projects masks to "
             "world coordinates.<br><br>"
 
-            "The BAMBI plugin is not intended to process multiple flights within the same QGIS project (and the same output folder), since the result files in the output folder will be replaced after additional runs. If you want to combine multiple results, it is recommended to run processing independently with (1) different output folders (don't foregt to add all layers to QGIS before changing the output folder, otherwise you will have to change it back again!) or (2) group all layers of interest, export them as 'Layer Definition File' and import it again to QGIS."
+            "The BAMBI plugin is not intended to process multiple flights within "
+            "the same QGIS project (and the same output folder), since the result "
+            "files in the output folder will be replaced after additional runs. "
+            "If you want to combine multiple results, it is recommended to run "
+            "processing independently with (1) different output folders (don't "
+            "foregt to add all layers to QGIS before changing the output folder, "
+            "otherwise you will have to change it back again!) or (2) group all "
+            "layers of interest, export them as 'Layer Definition File' and import "
+            "it again to QGIS."
         )
         msg.exec_()
 
@@ -3102,13 +3208,13 @@ class BambiDockWidget(QDockWidget):
         # Confirm download
         reply = QMessageBox.question(
             self, "Download DEM",
-            f"Download DEM from Austrian BEV service?\n\n"
+            "Download DEM from Austrian BEV service?\n\n"
             f"AirData CSV: {os.path.basename(airdata_path)}\n"
             f"Padding: {padding} m\n"
             f"Output CRS: {output_crs}\n"
             f"Output folder: {output_folder}\n\n"
-            f"This will download the Austria-wide 1m ALS-DTM dataset.\n"
-            f"Large areas may take several minutes.",
+            "This will download the Austria-wide 1m ALS-DTM dataset.\n"
+            "Large areas may take several minutes.",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.Yes
         )
@@ -3166,7 +3272,7 @@ class BambiDockWidget(QDockWidget):
 
             QMessageBox.information(
                 self, "DEM Download Complete",
-                f"DEM downloaded successfully!\n\n"
+                "DEM downloaded successfully!\n\n"
                 f"Mesh: {mesh_path}\n"
                 f"Metadata: {json_path}"
             )
@@ -3244,7 +3350,8 @@ class BambiDockWidget(QDockWidget):
         # Avoid to_epsg() — it uses the PROJ database which may be QGIS's outdated version.
         file_crs_label = "Unknown"
         try:
-            import rasterio, re
+            import rasterio
+            import re
             with rasterio.open(geotiff_path) as src:
                 if src.crs:
                     # Try WKT regex first (no DB lookup needed)
@@ -3267,7 +3374,7 @@ class BambiDockWidget(QDockWidget):
         crs_info += f"\nOutput CRS: {output_crs}" if output_crs else "\n(Using original CRS)"
         reply = QMessageBox.question(
             self, "Convert GeoTIFF",
-            f"Convert GeoTIFF to mesh?\n\n"
+            "Convert GeoTIFF to mesh?\n\n"
             f"Input: {os.path.basename(geotiff_path)}\n"
             f"Output folder: {output_folder}\n"
             f"Simplification: {simplify_factor}x{crs_info}",
@@ -3328,7 +3435,7 @@ class BambiDockWidget(QDockWidget):
 
             QMessageBox.information(
                 self, "Conversion Complete",
-                f"GeoTIFF converted successfully!\n\n"
+                "GeoTIFF converted successfully!\n\n"
                 f"Mesh: {mesh_path}\n"
                 f"Metadata: {json_path}"
             )
@@ -3363,7 +3470,7 @@ class BambiDockWidget(QDockWidget):
             is_southern = 32701 <= epsg <= 32760
 
             return is_northern or is_southern
-        except:
+        except Exception:
             return False
 
     def _parse_epsg_from_text(self, crs_text: str) -> Optional[int]:
@@ -3508,7 +3615,7 @@ class BambiDockWidget(QDockWidget):
                     crs_value = metadata['crs']
                     if self._is_valid_utm_crs(crs_value):
                         detected_crs = crs_value.upper()
-                        source = f"DEM metadata"
+                        source = "DEM metadata"
             except Exception:
                 pass
 
@@ -3518,7 +3625,7 @@ class BambiDockWidget(QDockWidget):
             if airdata_path and os.path.exists(airdata_path):
                 detected_crs = self._detect_utm_from_airdata(airdata_path)
                 if detected_crs:
-                    source = f"AirData GPS"
+                    source = "AirData GPS"
 
         # Apply result silently (just log, no message boxes)
         if detected_crs:
@@ -4675,7 +4782,7 @@ class BambiDockWidget(QDockWidget):
                     self,
                     "Many Frames",
                     f"Found {num_frames} frames with segmentation. Creating individual layer groups "
-                    f"for each may slow down QGIS.\n\nContinue with individual frame groups?",
+                    "for each may slow down QGIS.\n\nContinue with individual frame groups?",
                     QMessageBox.Yes | QMessageBox.No,
                     QMessageBox.Yes
                 )
@@ -5277,7 +5384,7 @@ class BambiDockWidget(QDockWidget):
                     self,
                     "Many Tracks",
                     f"Found {num_tracks} tracks. Creating individual layers for each may slow down QGIS.\n\n"
-                    f"Continue with individual layers?",
+                    "Continue with individual layers?",
                     QMessageBox.Yes | QMessageBox.No,
                     QMessageBox.Yes
                 )
@@ -5490,7 +5597,7 @@ class BambiDockWidget(QDockWidget):
         :param paths_layer: Line layer with track paths
         """
         from qgis.core import (
-            QgsSymbol, QgsFillSymbol, QgsLineSymbol,
+            QgsFillSymbol, QgsLineSymbol,
             QgsSingleSymbolRenderer
         )
 
@@ -5601,11 +5708,11 @@ class BambiDockWidget(QDockWidget):
                     self,
                     "Many Frames",
                     f"Found {num_frames} FoV polygons.\n"
-                    f"Loading all as separate layers may slow down QGIS.\n\n"
-                    f"Options:\n"
-                    f"- Yes: Load first 100 frames as separate layers\n"
-                    f"- No: Load all frames in a single combined layer\n"
-                    f"- Cancel: Cancel operation",
+                    "Loading all as separate layers may slow down QGIS.\n\n"
+                    "Options:\n"
+                    "- Yes: Load first 100 frames as separate layers\n"
+                    "- No: Load all frames in a single combined layer\n"
+                    "- Cancel: Cancel operation",
                     QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel
                 )
                 if reply == QMessageBox.Cancel:
@@ -5621,7 +5728,7 @@ class BambiDockWidget(QDockWidget):
             else:
                 self._add_fov_separate_layers(fov_polygons, target_crs)
 
-            self.log(f"Added FoV layers to QGIS")
+            self.log("Added FoV layers to QGIS")
             self.update_status("add_fov", "🟢 Completed")
             self.iface.mapCanvas().refresh()
 
@@ -5671,7 +5778,9 @@ class BambiDockWidget(QDockWidget):
             # Tag layer so the FoV inspector tool can identify and handle it
             layer.setCustomProperty("bambi_layer_type", "fov")
             layer.setCustomProperty("bambi_target_folder", self.target_folder_edit.text().strip())
-            layer.setCustomProperty("bambi_detection_camera", "T" if self.detection_camera_combo.currentIndex() == 0 else "W")
+            layer.setCustomProperty(
+                "bambi_detection_camera",
+                "T" if self.detection_camera_combo.currentIndex() == 0 else "W")
             layer.setCustomProperty("bambi_dem_path", self.dem_path_edit.text().strip())
             layer.setCustomProperty("bambi_correction_path", self.correction_path_edit.text().strip())
 
@@ -5721,7 +5830,9 @@ class BambiDockWidget(QDockWidget):
         # Tag layer so the FoV inspector tool can identify and handle it
         layer.setCustomProperty("bambi_layer_type", "fov")
         layer.setCustomProperty("bambi_target_folder", self.target_folder_edit.text().strip())
-        layer.setCustomProperty("bambi_detection_camera", "T" if self.detection_camera_combo.currentIndex() == 0 else "W")
+        layer.setCustomProperty(
+            "bambi_detection_camera",
+            "T" if self.detection_camera_combo.currentIndex() == 0 else "W")
         layer.setCustomProperty("bambi_dem_path", self.dem_path_edit.text().strip())
         layer.setCustomProperty("bambi_correction_path", self.correction_path_edit.text().strip())
 
@@ -5841,7 +5952,7 @@ class BambiDockWidget(QDockWidget):
             # Add layer to project
             QgsProject.instance().addMapLayer(layer)
 
-            self.log(f"Merged FoV layer added to QGIS")
+            self.log("Merged FoV layer added to QGIS")
             self.log(f"  Total coverage area: {area_m2:.2f} m² ({area_ha:.4f} ha)")
             self.update_status("add_merged_fov", "🟢 Completed")
             self.iface.mapCanvas().refresh()
@@ -5851,10 +5962,10 @@ class BambiDockWidget(QDockWidget):
                 self,
                 "Merged FoV Created",
                 f"Merged FoV polygon created from {len(fov_polygons)} frames.\n\n"
-                f"Total coverage area:\n"
+                "Total coverage area:\n"
                 f"  {area_m2:,.2f} m²\n"
                 f"  {area_ha:.4f} ha\n\n"
-                f"You can also use QGIS Field Calculator for precise area calculation."
+                "You can also use QGIS Field Calculator for precise area calculation."
             )
 
         except Exception as e:
@@ -5942,11 +6053,11 @@ class BambiDockWidget(QDockWidget):
                     self,
                     "Many Frames",
                     f"Found {total_dets} detections in {num_frames} frames.\n"
-                    f"Loading all as separate layers may slow down QGIS.\n\n"
-                    f"Options:\n"
-                    f"- Yes: Load first 100 frames as separate layers\n"
-                    f"- No: Load all in a single combined layer\n"
-                    f"- Cancel: Cancel operation",
+                    "Loading all as separate layers may slow down QGIS.\n\n"
+                    "Options:\n"
+                    "- Yes: Load first 100 frames as separate layers\n"
+                    "- No: Load all in a single combined layer\n"
+                    "- Cancel: Cancel operation",
                     QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel
                 )
                 if reply == QMessageBox.Cancel:
@@ -5960,7 +6071,7 @@ class BambiDockWidget(QDockWidget):
             else:
                 self._add_detections_separate_layers(frame_detections, target_crs)
 
-            self.log(f"Added detection layers to QGIS")
+            self.log("Added detection layers to QGIS")
             self.update_status("add_frame_detections", "🟢 Completed")
             self.iface.mapCanvas().refresh()
 
@@ -6024,7 +6135,9 @@ class BambiDockWidget(QDockWidget):
             # Tag layer so the inspector tool can identify and handle it
             layer.setCustomProperty("bambi_layer_type", "detection")
             layer.setCustomProperty("bambi_target_folder", self.target_folder_edit.text().strip())
-            layer.setCustomProperty("bambi_detection_camera", "T" if self.detection_camera_combo.currentIndex() == 0 else "W")
+            layer.setCustomProperty(
+                "bambi_detection_camera",
+                "T" if self.detection_camera_combo.currentIndex() == 0 else "W")
             layer.setCustomProperty("bambi_dem_path", self.dem_path_edit.text().strip())
             layer.setCustomProperty("bambi_correction_path", self.correction_path_edit.text().strip())
 
@@ -6082,7 +6195,9 @@ class BambiDockWidget(QDockWidget):
         # Tag layer so the inspector tool can identify and handle it
         layer.setCustomProperty("bambi_layer_type", "detection")
         layer.setCustomProperty("bambi_target_folder", self.target_folder_edit.text().strip())
-        layer.setCustomProperty("bambi_detection_camera", "T" if self.detection_camera_combo.currentIndex() == 0 else "W")
+        layer.setCustomProperty(
+            "bambi_detection_camera",
+            "T" if self.detection_camera_combo.currentIndex() == 0 else "W")
         layer.setCustomProperty("bambi_dem_path", self.dem_path_edit.text().strip())
         layer.setCustomProperty("bambi_correction_path", self.correction_path_edit.text().strip())
 
@@ -6239,7 +6354,7 @@ class BambiDockWidget(QDockWidget):
                     self,
                     "Many Files",
                     f"Found {len(geotiff_files)} GeoTIFF files.\n"
-                    f"Loading all may slow down QGIS.\n\n"
+                    "Loading all may slow down QGIS.\n\n"
                     f"Load only first {max_layers} files?",
                     QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel
                 )
@@ -6322,7 +6437,7 @@ class BambiDockWidget(QDockWidget):
                     loaded_count += 1
                     self.log("Added flight route line layer")
                 else:
-                    self.log(f"Warning: Could not load flight route line")
+                    self.log("Warning: Could not load flight route line")
 
             # Add camera positions
             camera_points_file = os.path.join(route_folder, "camera_positions.geojson")
@@ -6344,7 +6459,7 @@ class BambiDockWidget(QDockWidget):
                     loaded_count += 1
                     self.log("Added camera positions layer")
                 else:
-                    self.log(f"Warning: Could not load camera positions")
+                    self.log("Warning: Could not load camera positions")
 
             # Add frame markers if enabled
             if self.frame_markers_enabled_check.isChecked():
@@ -6414,7 +6529,7 @@ class BambiDockWidget(QDockWidget):
                 QMessageBox.warning(self, "No Layers", "No flight route layers found.")
                 self.update_status("add_flight_route", "🔴 No files")
                 # Remove empty group
-                root.removeChildNode(group)
+                QgsProject.instance().layerTreeRoot().removeChildNode(group)
                 return
 
             self.log(f"Added {loaded_count} flight route layers to QGIS")
@@ -6595,7 +6710,10 @@ class BambiDockWidget(QDockWidget):
             self.log(f"Total flight distance: {total_distance:.1f}m")
 
             # Create memory layer for distance markers
-            layer_uri = f"Point?crs=EPSG:{target_epsg}&field=distance:double&field=frame_idx:integer&field=label:string"
+            layer_uri = (
+                f"Point?crs=EPSG:{target_epsg}"
+                "&field=distance:double&field=frame_idx:integer&field=label:string"
+            )
             markers_layer = QgsVectorLayer(layer_uri, "Distance Markers", "memory")
 
             if not markers_layer.isValid():
@@ -6649,7 +6767,9 @@ class BambiDockWidget(QDockWidget):
 
             if not marker_features:
                 self.log(
-                    f"Warning: No distance markers created (interval {distance_interval}m > total {total_distance:.1f}m)")
+                    "Warning: No distance markers created "
+                    f"(interval {distance_interval}m > total {total_distance:.1f}m)"
+                )
                 return None
 
             # Add features to layer
@@ -6780,7 +6900,7 @@ class BambiDockWidget(QDockWidget):
                 reader = csv.DictReader(f)
                 headers = reader.fieldnames or []
 
-                col_ms  = _find_col(headers, "time", "millisecond")
+                col_ms = _find_col(headers, "time", "millisecond")
                 col_utc = _find_col(headers, "datetime", "utc") or _find_col(headers, "datetime")
                 col_lat = _find_col(headers, "latitude") or _find_col(headers, "lat")
                 col_lon = _find_col(headers, "longitude") or _find_col(headers, "lon")
@@ -6798,7 +6918,7 @@ class BambiDockWidget(QDockWidget):
                         lon = float(row[col_lon])
                         if lat == 0.0 and lon == 0.0:
                             continue
-                        ts_ms  = float(row[col_ms])  if col_ms  else None
+                        ts_ms = float(row[col_ms]) if col_ms else None
                         ts_utc = _parse_utc(row[col_utc]) if col_utc else None
                         raw_rows.append((ts_ms, ts_utc, lat, lon))
                     except (ValueError, KeyError):
@@ -6810,7 +6930,7 @@ class BambiDockWidget(QDockWidget):
 
             # ── Project to target CRS ─────────────────────────────────────────
             # Build (elapsed_sec, unix_ts_or_None, x, y)
-            first_ms  = raw_rows[0][0]
+            first_ms = raw_rows[0][0]
             first_utc = raw_rows[0][1]
 
             positions = []
@@ -6849,7 +6969,7 @@ class BambiDockWidget(QDockWidget):
             # ── Create memory layer ───────────────────────────────────────────
             layer_uri = (
                 f"Point?crs=EPSG:{target_epsg}"
-                f"&field=elapsed_sec:double&field=label:string"
+                "&field=elapsed_sec:double&field=label:string"
             )
             markers_layer = QgsVectorLayer(layer_uri, "Time Markers", "memory")
             if not markers_layer.isValid():
@@ -6888,7 +7008,7 @@ class BambiDockWidget(QDockWidget):
 
             if not marker_features:
                 self.log(
-                    f"Warning: No time markers created "
+                    "Warning: No time markers created "
                     f"(interval {time_interval}s > total {total_elapsed:.1f}s)")
                 return None
 
@@ -6966,7 +7086,7 @@ class BambiDockWidget(QDockWidget):
 
             layer_uri = (
                 f"Point?crs=EPSG:{target_epsg}"
-                f"&field=frame_idx:integer&field=imagefile:string&field=label:string"
+                "&field=frame_idx:integer&field=imagefile:string&field=label:string"
             )
             labels_layer = QgsVectorLayer(layer_uri, "Image Labels", "memory")
 

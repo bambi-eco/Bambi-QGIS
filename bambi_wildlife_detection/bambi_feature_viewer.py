@@ -85,8 +85,8 @@ class FeatureViewerDialog(QDialog):
         self._view_mode = "t"   # "t" = thermal, "w" = RGB
 
         # Projection context
-        self._target_folder   = ""
-        self._dem_path        = ""
+        self._target_folder = ""
+        self._dem_path = ""
         self._correction_path = ""
         self._projection_worker = None
 
@@ -205,17 +205,17 @@ class FeatureViewerDialog(QDialog):
                           box projection); None when unknown.
         """
         self._stop_projection_worker()
-        self._target_folder   = target_folder
-        self._dem_path        = dem_path
+        self._target_folder = target_folder
+        self._dem_path = dem_path
         self._correction_path = correction_path
 
         self._frames = [{
-            "frame_idx":      frame_idx,
-            "image_path_t":   image_path_t,
-            "image_path_w":   image_path_w,
+            "frame_idx": frame_idx,
+            "image_path_t": image_path_t,
+            "image_path_w": image_path_w,
             "boxes_modality": boxes_modality,
-            "boxes_green":    list(green_boxes),
-            "boxes_blue":     list(blue_boxes),
+            "boxes_green": list(green_boxes),
+            "boxes_blue": list(blue_boxes),
         }]
         self._current_idx = 0
         self.title_label.setText(title)
@@ -244,8 +244,8 @@ class FeatureViewerDialog(QDialog):
         :param correction_path: Explicit correction.json path (may be empty).
         """
         self._stop_projection_worker()
-        self._target_folder   = target_folder
-        self._dem_path        = dem_path
+        self._target_folder = target_folder
+        self._dem_path = dem_path
         self._correction_path = correction_path
 
         self._frames = list(frames)
@@ -299,7 +299,7 @@ class FeatureViewerDialog(QDialog):
     def _update_toggle_btn(self):
         """Show the toggle button only when both modalities are available."""
         has_thermal = any(f.get("image_path_t") for f in self._frames)
-        has_rgb     = any(f.get("image_path_w") for f in self._frames)
+        has_rgb = any(f.get("image_path_w") for f in self._frames)
         self.toggle_widget.setVisible(has_thermal and has_rgb)
 
     # ------------------------------------------------------------------
@@ -363,11 +363,11 @@ class FeatureViewerDialog(QDialog):
         self.proj_progress.setVisible(True)
 
         self._projection_worker = BoxProjectionWorker(
-            target_folder   = self._target_folder,
-            dem_path        = self._dem_path,
-            correction_path = self._correction_path,
-            src_modality    = src_modality,
-            frames          = list(self._frames),
+            target_folder=self._target_folder,
+            dem_path=self._dem_path,
+            correction_path=self._correction_path,
+            src_modality=src_modality,
+            frames=list(self._frames),
         )
         self._projection_worker.progress.connect(self._on_proj_progress)
         self._projection_worker.finished.connect(self._on_proj_finished)
@@ -388,7 +388,7 @@ class FeatureViewerDialog(QDialog):
         for i, frame in enumerate(self._frames):
             if i in results:
                 frame["boxes_green_proj"] = results[i].get("green", [])
-                frame["boxes_blue_proj"]  = results[i].get("blue",  [])
+                frame["boxes_blue_proj"] = results[i].get("blue", [])
 
         self.proj_btn.setEnabled(True)
         self.proj_progress.setVisible(False)
@@ -415,12 +415,12 @@ class FeatureViewerDialog(QDialog):
         # in each frame dict so that different overlapping FoVs (potentially from
         # different layers) carry their own metadata.
         if "target_folder" in data:
-            self._target_folder   = data["target_folder"]
-            self._dem_path        = data.get("dem_path", "")
+            self._target_folder = data["target_folder"]
+            self._dem_path = data.get("dem_path", "")
             self._correction_path = data.get("correction_path", "")
 
-        frame_idx   = data.get("frame_idx")
-        total       = len(self._frames)
+        frame_idx = data.get("frame_idx")
+        total = len(self._frames)
 
         # Pick image path according to current view mode with fallback
         if self._view_mode == "t":
@@ -432,13 +432,13 @@ class FeatureViewerDialog(QDialog):
         boxes_modality = data.get("boxes_modality", "t")
         if self._view_mode == boxes_modality:
             boxes_green = data.get("boxes_green", [])
-            boxes_blue  = data.get("boxes_blue",  [])
-            projected   = False
+            boxes_blue = data.get("boxes_blue", [])
+            projected = False
         else:
             # Use projected boxes if available, otherwise show none
             boxes_green = data.get("boxes_green_proj", [])
-            boxes_blue  = data.get("boxes_blue_proj",  [])
-            projected   = True
+            boxes_blue = data.get("boxes_blue_proj", [])
+            projected = True
 
         # Navigation label + button states
         if total > 1:
@@ -467,7 +467,7 @@ class FeatureViewerDialog(QDialog):
         # Draw bounding boxes and optional click-position crosshair.
         annotated = self._draw_boxes(img, boxes_green, boxes_blue, projected=projected)
         click_key = "click_point_t" if self._view_mode == "t" else "click_point_w"
-        click_pt  = data.get(click_key)
+        click_pt = data.get(click_key)
         if click_pt is not None:
             annotated = self._draw_crosshair(annotated, click_pt[0], click_pt[1])
         scaled = annotated.scaled(
@@ -507,7 +507,7 @@ class FeatureViewerDialog(QDialog):
         painter.setRenderHint(QPainter.Antialiasing, False)
 
         lw_secondary = max(2, img.width() // 400)
-        lw_primary   = max(3, img.width() // 280)
+        lw_primary = max(3, img.width() // 280)
 
         def make_pen(color, lw, dashed):
             pen = QPen(color, lw, Qt.DashLine if dashed else Qt.SolidLine)
@@ -517,16 +517,16 @@ class FeatureViewerDialog(QDialog):
         painter.setFont(font)
 
         if projected:
-            color_primary   = QColor(220, 40,  40)   # red   — highlighted
-            color_secondary = QColor(255, 160, 0)    # orange — others
+            color_primary = QColor(220, 40, 40)  # red — highlighted
+            color_secondary = QColor(255, 160, 0)  # orange — others
         else:
-            color_primary   = QColor(0,   220, 0)    # green — highlighted
-            color_secondary = QColor(80,  140, 255)  # blue  — others
+            color_primary = QColor(0, 220, 0)  # green — highlighted
+            color_secondary = QColor(80, 140, 255)  # blue — others
 
         # Draw secondary first so primary is always on top
         for boxes, color, lw in [
-            (blue_boxes,  color_secondary, lw_secondary),
-            (green_boxes, color_primary,   lw_primary),
+            (blue_boxes, color_secondary, lw_secondary),
+            (green_boxes, color_primary, lw_primary),
         ]:
             for box in boxes:
                 x1 = int(box[0])
@@ -554,12 +554,12 @@ class FeatureViewerDialog(QDialog):
         scaled proportionally to the image size so it remains visible regardless
         of resolution.
         """
-        result  = img.copy()
+        result = img.copy()
         painter = QPainter(result)
         painter.setRenderHint(QPainter.Antialiasing, True)
 
         arm = max(8, img.width() // 60)
-        lw  = max(2, img.width() // 300)
+        lw = max(2, img.width() // 300)
 
         pen = QPen(QColor(255, 220, 0), lw, Qt.SolidLine)   # yellow
         pen.setCapStyle(Qt.RoundCap)

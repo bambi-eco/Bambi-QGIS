@@ -45,12 +45,15 @@ _PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 # Store downloaded/extracted dependencies outside the plugin installation
 # directory so that locked DLLs (e.g. DJI SDK) never block plugin
 # reinstallation.  The QGIS profile directory persists across plugin updates.
+
+
 def _get_bambi_deps_dir() -> str:
     try:
         from qgis.core import QgsApplication
         return os.path.join(QgsApplication.qgisSettingsDirPath(), 'bambi_deps')
     except Exception:
         return os.path.join(_PLUGIN_DIR, 'plugins')
+
 
 _PLUGINS_DIR = _get_bambi_deps_dir()
 

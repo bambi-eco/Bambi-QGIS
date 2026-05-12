@@ -37,7 +37,7 @@ from typing import Dict, List, Optional, Tuple
 from qgis.gui import QgsMapToolIdentify
 from qgis.core import (
     QgsVectorLayer, QgsProject, QgsMessageLog, Qgis,
-    QgsCoordinateTransform, QgsCoordinateReferenceSystem, QgsPointXY,
+    QgsCoordinateTransform, QgsPointXY,
 )
 from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtGui import QCursor
@@ -145,6 +145,7 @@ class BambiClickTool(QgsMapToolIdentify):
         # layer IDs from the tree (top → bottom) and pick the result whose
         # layer has the smallest index.
         layer_order = self._get_layer_tree_order()
+
         def _tree_rank(result):
             try:
                 return layer_order.index(result.mLayer.id())
@@ -158,13 +159,13 @@ class BambiClickTool(QgsMapToolIdentify):
 
         layer = chosen.mLayer
         feature = chosen.mFeature
-        layer_type        = layer.customProperty("bambi_layer_type", "")
-        target_folder     = layer.customProperty("bambi_target_folder", "")
-        dem_path          = layer.customProperty("bambi_dem_path", "")
-        correction_path   = layer.customProperty("bambi_correction_path", "")
+        layer_type = layer.customProperty("bambi_layer_type", "")
+        target_folder = layer.customProperty("bambi_target_folder", "")
+        dem_path = layer.customProperty("bambi_dem_path", "")
+        correction_path = layer.customProperty("bambi_correction_path", "")
         # "T" = thermal, "W" = RGB; determines which pixel space the boxes are in
-        detection_camera  = layer.customProperty("bambi_detection_camera", "T")
-        boxes_modality    = "t" if detection_camera == "T" else "w"
+        detection_camera = layer.customProperty("bambi_detection_camera", "T")
+        boxes_modality = "t" if detection_camera == "T" else "w"
 
         if not target_folder:
             return
@@ -194,11 +195,11 @@ class BambiClickTool(QgsMapToolIdentify):
                                 correction_path: str):
         """Show the frame for a clicked detection bounding box."""
         frame_idx = feature["frame"]
-        det_conf  = float(feature["confidence"])
+        det_conf = float(feature["confidence"])
         det_class = int(feature["class_id"])
 
-        det_file  = os.path.join(target_folder, "detections", "detections.txt")
-        all_dets  = self._load_pixel_detections(det_file)
+        det_file = os.path.join(target_folder, "detections", "detections.txt")
+        all_dets = self._load_pixel_detections(det_file)
 
         same_frame = [d for d in all_dets if d["frame"] == frame_idx]
 
@@ -249,7 +250,7 @@ class BambiClickTool(QgsMapToolIdentify):
         """
         frames = []
         for result in fov_results:
-            layer   = result.mLayer
+            layer = result.mLayer
             feature = result.mFeature
 
             try:
@@ -257,11 +258,11 @@ class BambiClickTool(QgsMapToolIdentify):
             except (TypeError, ValueError):
                 continue
 
-            target_folder    = layer.customProperty("bambi_target_folder", "")
-            dem_path         = layer.customProperty("bambi_dem_path", "")
-            correction_path  = layer.customProperty("bambi_correction_path", "")
+            target_folder = layer.customProperty("bambi_target_folder", "")
+            dem_path = layer.customProperty("bambi_dem_path", "")
+            correction_path = layer.customProperty("bambi_correction_path", "")
             detection_camera = layer.customProperty("bambi_detection_camera", "T")
-            boxes_modality   = "t" if detection_camera == "T" else "w"
+            boxes_modality = "t" if detection_camera == "T" else "w"
 
             if not target_folder:
                 continue
@@ -275,8 +276,8 @@ class BambiClickTool(QgsMapToolIdentify):
                     target_folder, dem_path, correction_path
                 )
 
-            det_file   = os.path.join(target_folder, "detections", "detections.txt")
-            all_dets   = self._load_pixel_detections(det_file)
+            det_file = os.path.join(target_folder, "detections", "detections.txt")
+            all_dets = self._load_pixel_detections(det_file)
             same_frame = [d for d in all_dets if d["frame"] == frame_idx]
 
             # All detections on this frame are shown in green — there is no
@@ -475,9 +476,9 @@ class BambiClickTool(QgsMapToolIdentify):
         """
         frames = []
         for gd in georef_dets:
-            fi        = gd["frame"]
-            conf      = gd["confidence"]
-            cls       = gd["class_id"]
+            fi = gd["frame"]
+            conf = gd["confidence"]
+            cls = gd["class_id"]
             is_interp = gd.get("interpolated", 0)
 
             same_frame = [d for d in all_pixel_dets if d["frame"] == fi]
@@ -556,7 +557,7 @@ class BambiClickTool(QgsMapToolIdentify):
             x2 = b1[2] + alpha * (b2[2] - b1[2])
             y2 = b1[3] + alpha * (b2[3] - b1[3])
             conf = float(b1[4]) if len(b1) > 4 else 0.0
-            cls  = int(b1[5])   if len(b1) > 5 else 0
+            cls = int(b1[5]) if len(b1) > 5 else 0
 
             frame["boxes_green"] = [(x1, y1, x2, y2, conf, cls, 1)]
 
@@ -794,7 +795,7 @@ class BambiClickTool(QgsMapToolIdentify):
         try:
             from qgis.core import QgsRasterLayer, QgsPointXY
 
-            dem_dir  = os.path.dirname(dem_json_path)
+            dem_dir = os.path.dirname(dem_json_path)
             dem_base = os.path.splitext(dem_json_path)[0]
 
             # Prefer same-name TIF; fall back to any TIF in the directory.
@@ -1006,7 +1007,7 @@ class BambiClickTool(QgsMapToolIdentify):
 
             tri_mesh = self._dem_mesh_cache[mesh_path]
 
-            ray_origins    = np.array([[local_xy[0], local_xy[1], 10_000.0]])
+            ray_origins = np.array([[local_xy[0], local_xy[1], 10_000.0]])
             ray_directions = np.array([[0.0, 0.0, -1.0]])
             locations, _, _ = tri_mesh.ray.intersects_location(
                 ray_origins, ray_directions

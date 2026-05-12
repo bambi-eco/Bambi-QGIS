@@ -16,7 +16,6 @@ import os
 import sys
 import subprocess
 import zipfile
-import shutil
 import importlib.metadata
 import threading
 import queue
@@ -488,7 +487,7 @@ class DependencyManagerDialog(QDialog):
             range_str = f'{min_ver or "any"} – {max_ver or "any"}'
             lbl.setText(
                 f'<span style="color:#e67e00;">{pre}⚠ v{ver}'
-                f'<br><small>not tested</small></span>'
+                '<br><small>not tested</small></span>'
             )
             lbl.setToolTip(f'Installed version is outside the tested range: {range_str}')
 
@@ -617,12 +616,14 @@ class DependencyManagerDialog(QDialog):
 
     def _install_pycolmap(self):
         self._log_line('─── pycolmap 4.0.3 ───')
+
         def _do(log_fn):
             _run_pip(['install', '--force-reinstall', 'pycolmap==4.0.3'], log_fn)
         self._start_worker('pycolmap', _do)
 
     def _install_boxmot(self):
         self._log_line('─── BoxMOT 17.0.0 ───')
+
         def _do(log_fn):
             _run_pip(['install', '--force-reinstall', 'boxmot==17.0.0'], log_fn)
         self._start_worker('boxmot', _do)
@@ -637,18 +638,21 @@ class DependencyManagerDialog(QDialog):
 
     def _install_fiona(self):
         self._log_line('─── Fiona 1.10.1 ───')
+
         def _do(log_fn):
             _run_pip(['install', '--force-reinstall', 'fiona==1.10.1'], log_fn)
         self._start_worker('fiona', _do)
 
     def _install_simplekml(self):
         self._log_line('─── simplekml 1.3.6 ───')
+
         def _do(log_fn):
             _run_pip(['install', '--force-reinstall', 'simplekml==1.3.6'], log_fn)
         self._start_worker('simplekml', _do)
 
     def _install_gpu(self):
         self._log_line('─── GPU Support (CUDA 12.1) ───')
+
         def _do(log_fn):
             log_fn('Removing existing CPU torch/torchvision …')
             _run_pip(['uninstall', 'torch', 'torchvision', '-y'], log_fn)
@@ -663,6 +667,7 @@ class DependencyManagerDialog(QDialog):
     def _download_dji_sdk(self):
         self._log_line('─── DJI Thermal SDK ───')
         plugins_dir = self._plugins_dir
+
         def _do(log_fn):
             import requests
             dest = os.path.join(plugins_dir, 'dji_thermal_sdk_v1.8_20250829.zip')

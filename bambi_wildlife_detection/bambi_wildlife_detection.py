@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 BAMBI Wildlife Detection - Main Plugin Class
 =============================================
@@ -9,8 +9,7 @@ This module contains the main plugin class that integrates with QGIS.
 import os
 from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication, Qt
 from qgis.PyQt.QtGui import QIcon
-from qgis.PyQt.QtWidgets import QAction, QDockWidget
-from qgis.core import QgsProject
+from qgis.PyQt.QtWidgets import QAction
 
 from .bambi_dock_widget import BambiDockWidget
 
@@ -20,7 +19,7 @@ class BambiWildlifeDetection:
 
     def __init__(self, iface):
         """Constructor.
-        
+
         :param iface: An interface instance that will be passed to this class
             which provides the hook by which you can manipulate the QGIS
             application at run time.
@@ -28,7 +27,7 @@ class BambiWildlifeDetection:
         """
         self.iface = iface
         self.plugin_dir = os.path.dirname(__file__)
-        
+
         # Initialize locale
         locale = QSettings().value('locale/userLocale')[0:2]
         locale_path = os.path.join(
@@ -66,10 +65,10 @@ class BambiWildlifeDetection:
 
     def tr(self, message):
         """Get the translation for a string using Qt translation API.
-        
+
         :param message: String for translation.
         :type message: str, QString
-        
+
         :returns: Translated version of message.
         :rtype: QString
         """
@@ -88,7 +87,7 @@ class BambiWildlifeDetection:
             parent=None,
             checkable=False):
         """Add a toolbar icon to the toolbar.
-        
+
         :param icon_path: Path to the icon for this action.
         :param text: Text that should be shown in menu items for this action.
         :param callback: Function to be called when the action is triggered.
@@ -99,7 +98,7 @@ class BambiWildlifeDetection:
         :param whats_this: Optional text to show in the status bar.
         :param parent: Parent widget for the new action.
         :param checkable: If True, the action will be checkable.
-        
+
         :returns: The action that was created.
         """
         icon = QIcon(icon_path)
@@ -229,10 +228,10 @@ class BambiWildlifeDetection:
         for action in self.actions:
             self.iface.removePluginMenu(self.tr('&Bambi - QGIS Integration'), action)
             self.iface.removeToolBarIcon(action)
-        
+
         # Remove the toolbar
         del self.toolbar
-        
+
         # Close thermal viewer if open
         if self._thermal_viewer_dlg is not None:
             self._thermal_viewer_dlg.close()
@@ -252,7 +251,7 @@ class BambiWildlifeDetection:
         if self.dock_widget:
             # Disconnect project signals to prevent issues
             self.dock_widget.disconnect_project_signals()
-            
+
             self.iface.removeDockWidget(self.dock_widget)
             self.dock_widget.deleteLater()
             self.dock_widget = None

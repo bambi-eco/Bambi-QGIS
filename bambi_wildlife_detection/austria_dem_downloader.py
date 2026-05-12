@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 Austria DEM Downloader for QGIS Plugin
 ======================================
@@ -40,7 +40,9 @@ WGS84_PROJ4 = "+proj=longlat +datum=WGS84 +no_defs"
 
 # EPSG:3035 - ETRS89-extended / LAEA Europe (BEV tiles use this)
 BEV_CRS = "EPSG:3035"
-BEV_CRS_PROJ4 = "+proj=laea +lat_0=52 +lon_0=10 +x_0=4321000 +y_0=3210000 +ellps=GRS80 +units=m +no_defs"
+BEV_CRS_PROJ4 = (
+    "+proj=laea +lat_0=52 +lon_0=10 +x_0=4321000 +y_0=3210000 +ellps=GRS80 +units=m +no_defs"
+)
 
 # Default output CRS - UTM zone 33N
 DEFAULT_OUTPUT_CRS = "EPSG:32633"
@@ -49,7 +51,10 @@ DEFAULT_OUTPUT_CRS_PROJ4 = "+proj=utm +zone=33 +datum=WGS84 +units=m +no_defs"
 # Map of common EPSG codes to their PROJ4 strings
 EPSG_TO_PROJ4 = {
     "EPSG:4326": WGS84_PROJ4,
-    "EPSG:3006": "+proj=tmerc +lat_0=0 +lon_0=15 +k=1 +x_0=500000 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs",
+    "EPSG:3006": (
+        "+proj=tmerc +lat_0=0 +lon_0=15 +k=1 +x_0=500000 +y_0=0"
+        " +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs"
+    ),
     "EPSG:3035": BEV_CRS_PROJ4,
     "EPSG:32632": "+proj=utm +zone=32 +datum=WGS84 +units=m +no_defs",
     "EPSG:32633": "+proj=utm +zone=33 +datum=WGS84 +units=m +no_defs",
@@ -703,7 +708,7 @@ class GLTFMeshGenerator:
                     try:
                         src_epsg = int(source_crs_override.upper().replace("EPSG:", "").strip())
                         self._log(f"Using source CRS override: EPSG:{src_epsg}")
-                    except:
+                    except Exception:
                         pass
 
                 # Method 1: Extract EPSG from rasterio CRS without DB lookup
@@ -712,7 +717,7 @@ class GLTFMeshGenerator:
                 if src_epsg is None and src.crs is not None:
                     try:
                         src_epsg = src.crs.to_epsg()
-                    except:
+                    except Exception:
                         pass
                 if src_epsg is None and src.crs is not None:
                     try:
@@ -720,7 +725,7 @@ class GLTFMeshGenerator:
                         matches = re.findall(r'ID\["EPSG",(\d+)\]', str(src.crs))
                         if matches:
                             src_epsg = int(matches[-1])
-                    except:
+                    except Exception:
                         pass
 
                 # Method 2: Parse EPSG from the CRS string if it is in "EPSG:XXXXX" form
@@ -728,14 +733,14 @@ class GLTFMeshGenerator:
                 if src_epsg is None and crs and crs.upper().startswith("EPSG:"):
                     try:
                         src_epsg = int(crs.upper().replace("EPSG:", "").strip())
-                    except:
+                    except Exception:
                         pass
 
                 # Method 3: Parse EPSG from the caller-provided source_crs parameter
                 if src_epsg is None and source_crs:
                     try:
                         src_epsg = int(source_crs.upper().replace("EPSG:", "").strip())
-                    except:
+                    except Exception:
                         pass
 
                 # Method 4: Default to UTM 33N if all else fails (common for Austria)
@@ -1189,7 +1194,7 @@ class GeoTIFFConversionWorker(QObject):
                     src_epsg = int(effective_source_crs.upper().replace("EPSG:", "").strip())
                     dst_epsg = int(self.output_crs.replace("EPSG:", "").strip())
                     needs_reprojection = src_epsg != dst_epsg
-                except:
+                except Exception:
                     needs_reprojection = effective_source_crs != self.output_crs
 
             self.progress.emit(20)

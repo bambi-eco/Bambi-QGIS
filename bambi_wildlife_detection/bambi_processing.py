@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 BAMBI Wildlife Detection - Processing Module
 =============================================
@@ -8,15 +8,12 @@ This module contains the processing logic for all pipeline steps.
 
 import os
 import json
-import shutil
-from pathlib import Path
 from typing import Dict, Any, Optional, List
-from collections import defaultdict
 
 from qgis.PyQt.QtCore import QObject, pyqtSignal
 
 from contextlib import contextmanager
-from typing import Callable, List, Optional
+from typing import Callable
 
 # Progress callback receives a single int: percentage 0-100
 ProgressCallback = Callable[[int], None]
@@ -59,7 +56,7 @@ def patch_frame_extraction_progress(
         # Check for cancellation
         if cancel_check is not None and cancel_check():
             raise CancelledException("Frame extraction cancelled")
-        
+
         # Call original
         result = original_call(self, idx, img)
 
@@ -147,7 +144,9 @@ class ProcessingWorker(QObject):
             elif self.step == "perpendicular":
                 self.processor.run_perpendicular(self.config, self.progress.emit, self.log.emit, self.is_cancelled)
             elif self.step == "track_perpendicular":
-                self.processor.run_track_perpendicular(self.config, self.progress.emit, self.log.emit, self.is_cancelled)
+                self.processor.run_track_perpendicular(
+                    self.config, self.progress.emit, self.log.emit, self.is_cancelled
+                )
             else:
                 raise ValueError(f"Unknown step: {self.step}")
 
@@ -308,7 +307,7 @@ class BambiProcessor:
             if os.path.exists(model_path):
                 try:
                     os.remove(model_path)
-                except:
+                except Exception:
                     pass
 
             error_msg = (
@@ -521,7 +520,7 @@ class BambiProcessor:
             thermal_frames = len(poses_t.get("images", []))
             if log_fn:
                 log_fn(f"Thermal extraction complete: {thermal_frames} frames")
-                log_fn(f"Frames saved to: frames_t/")
+                log_fn("Frames saved to: frames_t/")
 
     def extract_rgb_frames(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Extract frames from RGB drone videos or photos.
@@ -654,7 +653,7 @@ class BambiProcessor:
             rgb_frames = len(poses_w.get("images", []))
             if log_fn:
                 log_fn(f"RGB extraction complete: {rgb_frames} frames")
-                log_fn(f"Frames saved to: frames_w/")
+                log_fn("Frames saved to: frames_w/")
 
     def run_flight_route(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Generate flight route layers from AirData GPS and camera frame positions.
@@ -933,9 +932,9 @@ class BambiProcessor:
 
         corners_local = [
             (-half_w, -half_h),
-            ( half_w, -half_h),
-            ( half_w,  half_h),
-            (-half_w,  half_h),
+            (half_w, -half_h),
+            (half_w, half_h),
+            (-half_w, half_h),
         ]
 
         yaw_rad = math.radians(yaw_deg)
@@ -1669,7 +1668,7 @@ class BambiProcessor:
                     if log_fn:
                         log_fn("Detection cancelled by user")
                     raise CancelledException("Detection cancelled")
-                
+
                 image_info = images[idx]
                 imagefile = image_info.get("imagefile")
                 if not imagefile:
@@ -1717,14 +1716,12 @@ class BambiProcessor:
         :param log_fn: Logging callback function
         """
         import numpy as np
-        import math
 
-        from pyproj import CRS, Transformer
         from pyrr import Vector3, Quaternion
         from trimesh import Trimesh
 
         from alfspy.core.rendering import Resolution
-        from alfspy.render.render import read_gltf, process_render_data, make_mgl_context, release_all
+        from alfspy.render.render import read_gltf, process_render_data, release_all
         from bambi.util.projection_util import label_to_world_coordinates
 
         # Camera selection for dual-input mode
@@ -1734,7 +1731,6 @@ class BambiProcessor:
 
         target_folder = config["target_folder"]
         dem_path = config["dem_path"]
-        target_epsg = config.get("target_epsg", 32633)
 
         # Set frames folder based on camera selection
         frames_folder = os.path.join(target_folder, f"frames_{camera_suffix}")
@@ -1811,11 +1807,6 @@ class BambiProcessor:
         georef_folder = os.path.join(target_folder, "georeferenced")
         os.makedirs(georef_folder, exist_ok=True)
 
-        # Setup transformer
-        input_crs = CRS.from_epsg(4326)
-        target_crs = CRS.from_epsg(target_epsg)
-        rel_transformer = Transformer.from_crs(input_crs, target_crs)
-
         # Load DEM mesh
         if log_fn:
             log_fn("Loading DEM mesh...")
@@ -1842,7 +1833,7 @@ class BambiProcessor:
                     if log_fn:
                         log_fn("Geo-referencing cancelled by user")
                     raise CancelledException("Geo-referencing cancelled")
-                
+
                 frame_idx = det["frame"]
 
                 if frame_idx >= len(poses["images"]):
@@ -1941,13 +1932,11 @@ class BambiProcessor:
         import numpy as np
         import cv2
 
-        from pyproj import CRS, Transformer
         from pyrr import Vector3, Quaternion
         from trimesh import Trimesh
 
         from alfspy.core.rendering import Resolution
-        from alfspy.render.render import read_gltf, process_render_data, make_mgl_context, release_all
-        from bambi.util.projection_util import label_to_world_coordinates
+        from alfspy.render.render import read_gltf, process_render_data, release_all
 
         camera = config.get("fov_camera", "T")
         camera_suffix = "t" if camera == "T" else "w"
@@ -1955,7 +1944,6 @@ class BambiProcessor:
 
         target_folder = config["target_folder"]
         dem_path = config["dem_path"]
-        target_epsg = config.get("target_epsg", 32633)
 
         # FoV mask options
         use_fov_mask = config.get("use_fov_mask", False)
@@ -2091,7 +2079,7 @@ class BambiProcessor:
                         if log_fn:
                             log_fn("FoV calculation cancelled by user")
                         raise CancelledException("FoV calculation cancelled")
-                    
+
                     # Get frame-specific correction factors
                     correction = self.get_correction_for_frame(frame_idx, config)
                     translation = correction["translation"]
@@ -2257,7 +2245,7 @@ class BambiProcessor:
         :param progress_fn: Progress callback function
         :param log_fn: Logging callback function
         """
-        from .tracker_manager import get_tracker_manager, TrackerBackend, ReIDModel
+        from .tracker_manager import get_tracker_manager
 
         tracker_id = config.get("tracker_id", "builtin")
 
@@ -2286,10 +2274,8 @@ class BambiProcessor:
         from dataclasses import dataclass
         from enum import Enum
         from typing import List, Tuple
-        import math
 
         from scipy.optimize import linear_sum_assignment
-        import numpy as np
 
         # Import tracking classes from bambi or define locally
         @dataclass
@@ -2343,12 +2329,9 @@ class BambiProcessor:
         target_folder = config["target_folder"]
         iou_threshold = config.get("iou_threshold", 0.3)
         max_age = config.get("max_age", -1)
-        max_center_distance = config.get("max_center_distance", 0.2)
         tracker_mode_str = config.get("tracker_mode", "HUNGARIAN")
         class_aware = config.get("class_aware", True)
         interpolate = config.get("interpolate", True)
-
-        tracker_mode = TrackerMode[tracker_mode_str]
 
         if log_fn:
             log_fn(f"Running built-in tracking with mode: {tracker_mode_str}")
@@ -2863,12 +2846,11 @@ class BambiProcessor:
         """
         import numpy as np
 
-        from pyproj import CRS, Transformer
         from pyrr import Vector3, Quaternion
         from trimesh import Trimesh
 
         from alfspy.core.rendering import Resolution, Camera
-        from alfspy.render.render import read_gltf, process_render_data, make_mgl_context, release_all
+        from alfspy.render.render import read_gltf, process_render_data, release_all
         from bambi.util.projection_util import label_to_world_coordinates
 
         # Camera selection for dual-input mode
@@ -3028,7 +3010,7 @@ class BambiProcessor:
                         })
                     else:
                         failed_count += 1
-                except Exception as e:
+                except Exception:
                     failed_count += 1
                     continue
 
@@ -3122,13 +3104,6 @@ class BambiProcessor:
         :param progress_fn: Progress callback function
         :param log_fn: Logging callback function
         """
-        import math
-        import cv2
-        import numpy as np
-        from dataclasses import dataclass
-        from enum import Enum
-        from typing import Tuple, Union
-
         camera = config.get("ortho_camera", "T")
         camera_suffix = "t" if camera == "T" else "w"
         camera_name = "Thermal" if camera == "T" else "RGB"
@@ -3138,9 +3113,9 @@ class BambiProcessor:
 
         # Check for required dependencies
         try:
-            from moderngl import Context as MglContext
-            from pyrr import Quaternion, Vector3
-            from trimesh import Trimesh
+            from moderngl import Context as MglContext  # noqa: F401
+            from pyrr import Quaternion, Vector3  # noqa: F401
+            from trimesh import Trimesh  # noqa: F401
         except ImportError as e:
             raise ImportError(
                 f"Required dependency not found: {e}\n\n"
@@ -3151,13 +3126,13 @@ class BambiProcessor:
 
         # Check for alfspy (specialized rendering library)
         try:
-            from alfspy.core.geo.aabb import AABB
-            from alfspy.core.geo.transform import Transform
-            from alfspy.core.rendering import Resolution, Camera, CtxShot, RenderResultMode, TextureData
-            from alfspy.core.rendering.renderer import Renderer
-            from alfspy.core.util.geo import get_aabb
-            from alfspy.core.util.pyrrs import quaternion_from_eulers
-            from alfspy.render.render import (
+            from alfspy.core.geo.aabb import AABB  # noqa: F401
+            from alfspy.core.geo.transform import Transform  # noqa: F401
+            from alfspy.core.rendering import Resolution, Camera, CtxShot, RenderResultMode, TextureData  # noqa: F401
+            from alfspy.core.rendering.renderer import Renderer  # noqa: F401
+            from alfspy.core.util.geo import get_aabb  # noqa: F401
+            from alfspy.core.util.pyrrs import quaternion_from_eulers  # noqa: F401
+            from alfspy.render.render import (  # noqa: F401
                 make_mgl_context, read_gltf, process_render_data,
                 make_shot_loader, release_all
             )
@@ -3166,17 +3141,6 @@ class BambiProcessor:
             HAS_ALFSPY = False
             if log_fn:
                 log_fn("Warning: alfspy not available, using simplified orthomosaic generation")
-
-        # Check for rasterio (GeoTIFF support)
-        try:
-            import rasterio
-            from rasterio.transform import from_bounds
-            from rasterio.crs import CRS
-            HAS_RASTERIO = True
-        except ImportError:
-            HAS_RASTERIO = False
-            if log_fn:
-                log_fn("Warning: rasterio not installed, GeoTIFF output not available")
 
         # Get configuration parameters
         target_folder = config["target_folder"]
@@ -3406,7 +3370,8 @@ class BambiProcessor:
                     shot, RenderResultMode.ShotOnly, release_shots=False, mask=mask
                 ))
 
-                if not results: continue
+                if not results:
+                    continue
 
                 shot_result = results[0]
                 shot_has_data = shot_result[:, :, 3] > 0
@@ -3428,7 +3393,8 @@ class BambiProcessor:
                     # This calculation is heavy for Python, optimized version would be better
                     # But keeping it functional for now:
                     y_indices, x_indices = np.where(shot_has_data)
-                    if len(x_indices) == 0: continue
+                    if len(x_indices) == 0:
+                        continue
 
                     # Map pixels to world
                     px_world = min_x + x_indices * px_size_x
@@ -3486,8 +3452,7 @@ class BambiProcessor:
         from alfspy.core.util.geo import get_aabb
         from alfspy.core.util.pyrrs import quaternion_from_eulers
         from alfspy.render.render import (
-            make_mgl_context, read_gltf, process_render_data,
-            make_shot_loader, release_all
+            make_mgl_context, read_gltf, process_render_data
         )
 
         if log_fn:
@@ -3784,16 +3749,14 @@ class BambiProcessor:
 
         # Import alfspy components
         from alfspy.core.geo.transform import Transform
-        from alfspy.core.rendering import Resolution, Camera, CtxShot, RenderResultMode, TextureData
+        from alfspy.core.rendering import Resolution, Camera, CtxShot, TextureData
         from alfspy.core.rendering.renderer import Renderer
         from alfspy.core.util.geo import get_aabb
         from alfspy.core.util.pyrrs import quaternion_from_eulers
         from alfspy.render.render import (
             make_mgl_context, read_gltf, process_render_data,
-            make_shot_loader, release_all
+            release_all
         )
-
-        target_folder = config["target_folder"]
 
         if log_fn:
             log_fn("Loading DEM mesh...")
@@ -3826,7 +3789,7 @@ class BambiProcessor:
                 if log_fn:
                     log_fn("Orthomosaic generation cancelled by user")
                 raise CancelledException("Orthomosaic generation cancelled")
-            
+
             image_file = img_info.get("imagefile")
             image_path = os.path.join(frames_folder, image_file)
 
@@ -4055,8 +4018,6 @@ class BambiProcessor:
         import numpy as np
         import math
 
-        target_folder = config["target_folder"]
-
         if log_fn:
             log_fn("Using simplified orthomosaic generation...")
 
@@ -4139,7 +4100,7 @@ class BambiProcessor:
                 if log_fn:
                     log_fn("Orthomosaic generation cancelled by user")
                 raise CancelledException("Orthomosaic generation cancelled")
-            
+
             image_file = img_info.get("imagefile")
             image_path = os.path.join(frames_folder, image_file)
 
@@ -4361,7 +4322,6 @@ class BambiProcessor:
             create_overviews, log_fn
     ):
         """Save orthomosaic image with georeferencing."""
-        import cv2
         import numpy as np
 
         height, width = image.shape[:2]
@@ -4404,14 +4364,12 @@ class BambiProcessor:
             }
 
             # Try to set CRS using pyproj first (avoids PROJ database conflicts in QGIS)
-            crs_set = False
             try:
                 from pyproj import CRS as PyprojCRS
                 pyproj_crs = PyprojCRS.from_epsg(crs_epsg)
                 # Use WKT string which is more portable
                 from rasterio.crs import CRS as RasterioCRS
                 profile['crs'] = RasterioCRS.from_wkt(pyproj_crs.to_wkt())
-                crs_set = True
                 if log_fn:
                     log_fn(f"CRS set using pyproj: EPSG:{crs_epsg}")
             except Exception as e1:
@@ -4421,7 +4379,6 @@ class BambiProcessor:
                 try:
                     from rasterio.crs import CRS as RasterioCRS
                     profile['crs'] = RasterioCRS.from_epsg(crs_epsg)
-                    crs_set = True
                 except Exception as e2:
                     if log_fn:
                         log_fn(f"Warning: rasterio CRS also failed: {e2}")
@@ -4498,7 +4455,7 @@ class BambiProcessor:
         self._save_prj_file(output_file, crs_epsg, log_fn)
 
         if log_fn:
-            log_fn(f"Image saved with world file")
+            log_fn("Image saved with world file")
 
     def _save_world_file(self, output_file, bounds, width, height):
         """Save a world file (.tfw) for georeferencing."""
@@ -4866,7 +4823,7 @@ class BambiProcessor:
         if progress_fn:
             progress_fn(100)
 
-    def _save_frame_geotiff(self, image: 'np.ndarray', valid_mask: 'np.ndarray',
+    def _save_frame_geotiff(self, image: 'np.ndarray', valid_mask: 'np.ndarray',  # noqa: F821
                             bounds: tuple, output_path: str, crs_epsg: int):
         """Save a single frame as a georeferenced GeoTIFF.
 
@@ -4994,7 +4951,9 @@ class BambiProcessor:
 
         if log_fn:
             log_fn(
-                f"Starting SAM3 segmentation on {camera_name} frames (serverless) with {len(prompts)} prompts: {prompts}")
+                f"Starting SAM3 segmentation on {camera_name} frames (serverless)"
+                f" with {len(prompts)} prompts: {prompts}"
+            )
             log_fn(f"Confidence threshold: {confidence}")
             log_fn(f"Output format: {output_format}")
 
@@ -5018,7 +4977,8 @@ class BambiProcessor:
         os.makedirs(segmentation_folder, exist_ok=True)
 
         # Hosted SAM3 concept segmentation endpoint (serverless)
-        # Docs show: https://serverless.roboflow.com/sam3/concept_segment?api_key=... :contentReference[oaicite:3]{index=3}
+        # Docs show: https://serverless.roboflow.com/sam3/concept_segment?api_key=...
+        # :contentReference[oaicite:3]{index=3}
         endpoint = "https://serverless.roboflow.com/sam3/concept_segment"
 
         # Build list of frame indices to process (start/end frame, then step)
@@ -5049,12 +5009,14 @@ class BambiProcessor:
             progress_fn(10)
 
         def _encode_image_b64(path: str) -> str:
-            # Standard base64 (no data: prefix) is accepted in Roboflow Inference request image schema. :contentReference[oaicite:4]{index=4}
+            # Standard base64 (no data: prefix) is accepted in Roboflow Inference
+            # request image schema. :contentReference[oaicite:4]{index=4}
             with open(path, "rb") as fimg:
                 return base64.b64encode(fimg.read()).decode("utf-8")
 
         def _make_payload(image_b64: str) -> Dict[str, Any]:
-            # Matches the SAM3 concept_segment JSON structure from Roboflow docs. :contentReference[oaicite:5]{index=5}
+            # Matches the SAM3 concept_segment JSON structure from Roboflow docs.
+            # :contentReference[oaicite:5]{index=5}
             return {
                 "format": output_format,
                 "output_prob_thresh": confidence,
@@ -5078,7 +5040,7 @@ class BambiProcessor:
                 if log_fn:
                     log_fn("SAM3 segmentation cancelled by user")
                 raise CancelledException("SAM3 segmentation cancelled")
-            
+
             if frame_idx >= len(images):
                 continue
 
@@ -5097,7 +5059,8 @@ class BambiProcessor:
                 image_b64 = _encode_image_b64(image_path)
                 payload = _make_payload(image_b64)
 
-                # API key can be passed as query param (as shown in SAM3 serverless example). :contentReference[oaicite:7]{index=7}
+                # API key can be passed as query param (as shown in SAM3 serverless
+                # example). :contentReference[oaicite:7]{index=7}
                 resp = session.post(
                     endpoint,
                     params={"api_key": api_key},
@@ -5136,7 +5099,8 @@ class BambiProcessor:
 
                         masks = prediction.get("masks", None)
 
-                        # For "polygon" format, masks is typically a list of polygons (list[list[points]]). :contentReference[oaicite:8]{index=8}
+                        # For "polygon" format, masks is typically a list of polygons
+                        # (list[list[points]]). :contentReference[oaicite:8]{index=8}
                         if output_format == "polygon" and masks is not None:
                             pred_data["polygons"] = masks
                         else:
@@ -5193,12 +5157,11 @@ class BambiProcessor:
         """
         import numpy as np
 
-        from pyproj import CRS, Transformer
         from pyrr import Vector3, Quaternion
         from trimesh import Trimesh
 
         from alfspy.core.rendering import Resolution, Camera
-        from alfspy.render.render import read_gltf, process_render_data, make_mgl_context, release_all
+        from alfspy.render.render import read_gltf, process_render_data, release_all
         from bambi.util.projection_util import label_to_world_coordinates
 
         # Camera selection for dual-input mode
@@ -5290,7 +5253,7 @@ class BambiProcessor:
                     if log_fn:
                         log_fn("SAM3 geo-referencing cancelled by user")
                     raise CancelledException("SAM3 geo-referencing cancelled")
-                
+
                 frame_idx = frame_result['frame_idx']
 
                 if frame_idx >= len(poses["images"]):
@@ -5370,7 +5333,7 @@ class BambiProcessor:
                                         ])
                                     georef_pred['world_polygons'].append(world_polygon)
 
-                            except Exception as e:
+                            except Exception:
                                 failed_count += 1
                                 continue
 

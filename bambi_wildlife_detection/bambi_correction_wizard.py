@@ -43,7 +43,7 @@ except ImportError:
 
 from qgis.PyQt.QtCore import Qt, pyqtSignal, QThread, QPointF, QRect, QTimer
 from qgis.PyQt.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
+    QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
     QFormLayout, QGroupBox, QHBoxLayout, QLabel, QMessageBox,
     QProgressBar, QPushButton, QShortcut, QSizePolicy, QSpinBox, QSplitter,
     QStackedWidget, QVBoxLayout, QWidget,
@@ -103,11 +103,11 @@ class ClickableImageLabel(QLabel):
     All coordinates are in [0, 1] relative to the image (not the widget).
     """
 
-    pointSet     = pyqtSignal(float, float)   # mapping point placed/updated
+    pointSet = pyqtSignal(float, float)   # mapping point placed/updated
     refPointAdded = pyqtSignal(float, float)  # reference point added
 
     _MAG_RADIUS = 90
-    _MAG_ZOOM   = 3.0
+    _MAG_ZOOM = 3.0
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -228,7 +228,7 @@ class ClickableImageLabel(QLabel):
             painter.setBrush(Qt.NoBrush)
             for (rx, ry) in self._ref_points:
                 rpx = self._img_rect.left() + rx * self._img_rect.width()
-                rpy = self._img_rect.top()  + ry * self._img_rect.height()
+                rpy = self._img_rect.top() + ry * self._img_rect.height()
                 r = 6.0
                 painter.drawLine(int(rpx), int(rpy - r),
                                  int(rpx + r), int(rpy))
@@ -242,7 +242,7 @@ class ClickableImageLabel(QLabel):
         # Mapping point — red crosshair
         if self._point and self._img_rect:
             px = self._img_rect.left() + self._point[0] * self._img_rect.width()
-            py = self._img_rect.top()  + self._point[1] * self._img_rect.height()
+            py = self._img_rect.top() + self._point[1] * self._img_rect.height()
             pen = QPen(QColor(255, 60, 60), 2)
             painter.setPen(pen)
             arm = 14
@@ -262,7 +262,7 @@ class ClickableImageLabel(QLabel):
             if ir.contains(mx, my):
                 fp_w = self._src_pixmap.width()
                 fp_h = self._src_pixmap.height()
-                fp_cx = (mx - ir.x()) / ir.width()  * fp_w
+                fp_cx = (mx - ir.x()) / ir.width() * fp_w
                 fp_cy = (my - ir.y()) / ir.height() * fp_h
                 src_half = self._MAG_RADIUS / self._MAG_ZOOM
                 src_rect = QRect(
@@ -272,7 +272,7 @@ class ClickableImageLabel(QLabel):
                     int(src_half * 2),
                 ).intersected(QRect(0, 0, fp_w, fp_h))
                 if not src_rect.isEmpty():
-                    r  = self._MAG_RADIUS
+                    r = self._MAG_RADIUS
                     cx, cy = mx, my
                     painter.setRenderHint(QPainter.Antialiasing)
                     painter.setRenderHint(QPainter.SmoothPixmapTransform)
@@ -311,7 +311,7 @@ class MagnifierLabel(QLabel):
     """
 
     _MAG_RADIUS = 90    # radius of the loupe circle on screen (px)
-    _MAG_ZOOM   = 3.0   # zoom factor inside the loupe
+    _MAG_ZOOM = 3.0   # zoom factor inside the loupe
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -348,7 +348,7 @@ class MagnifierLabel(QLabel):
             self._img_rect = None
             return
         pw, ph = pm.width(), pm.height()
-        x = (self.width()  - pw) // 2
+        x = (self.width() - pw) // 2
         y = (self.height() - ph) // 2
         self._img_rect = QRect(x, y, pw, ph)
 
@@ -388,8 +388,8 @@ class MagnifierLabel(QLabel):
         # Map widget coords → full-pixmap coords
         rel_x = (mx - ir.x()) / ir.width()
         rel_y = (my - ir.y()) / ir.height()
-        fp_w  = self._full_pixmap.width()
-        fp_h  = self._full_pixmap.height()
+        fp_w = self._full_pixmap.width()
+        fp_h = self._full_pixmap.height()
         fp_cx = rel_x * fp_w
         fp_cy = rel_y * fp_h
 
@@ -407,7 +407,7 @@ class MagnifierLabel(QLabel):
         if src_rect.isEmpty():
             return
 
-        r  = self._MAG_RADIUS
+        r = self._MAG_RADIUS
         cx = mx
         cy = my
 
@@ -582,9 +582,9 @@ class CirclePlotWidget(QWidget):
         ex_w, ey_w = self._drag_cur_world
 
         start_r = math.sqrt((sx_w - cx) ** 2 + (sy_w - cy) ** 2)
-        end_r   = math.sqrt((ex_w - cx) ** 2 + (ey_w - cy) ** 2)
+        end_r = math.sqrt((ex_w - cx) ** 2 + (ey_w - cy) ** 2)
         start_a = math.atan2(sy_w - cy, sx_w - cx)
-        end_a   = math.atan2(ey_w - cy, ex_w - cx)
+        end_a = math.atan2(ey_w - cy, ex_w - cx)
 
         delta_tz = end_r - start_r
         delta_rz = _wrap_rad(end_a - start_a)
@@ -593,15 +593,15 @@ class CirclePlotWidget(QWidget):
         for side, (r_key, p_key, rp_key) in enumerate(
             (('r1', 'p1', 'rp1'), ('r2', 'p2', 'rp2'))
         ):
-            c  = d0['c1'] if side == 0 else d0['c2']
-            r  = d0[r_key]
-            p  = d0.get(p_key)
+            c = d0['c1'] if side == 0 else d0['c2']
+            r = d0[r_key]
+            p = d0.get(p_key)
             new_r = max(0.001, r + delta_tz)
             if p is not None:
                 orig_a = math.atan2(p[1] - c[1], p[0] - c[0])
-                new_a  = orig_a + delta_rz
-                new_p  = (c[0] + new_r * math.cos(new_a),
-                          c[1] + new_r * math.sin(new_a))
+                new_a = orig_a + delta_rz
+                new_p = (c[0] + new_r * math.cos(new_a),
+                         c[1] + new_r * math.sin(new_a))
             else:
                 new_p = None
             preview[r_key] = new_r
@@ -611,8 +611,8 @@ class CirclePlotWidget(QWidget):
             for rp in d0.get(rp_key, []):
                 rp_r = math.sqrt((rp[0] - c[0]) ** 2 + (rp[1] - c[1]) ** 2)
                 rp_a = math.atan2(rp[1] - c[1], rp[0] - c[0])
-                nr   = max(0.001, rp_r + delta_tz)
-                na   = rp_a + delta_rz
+                nr = max(0.001, rp_r + delta_tz)
+                na = rp_a + delta_rz
                 new_rps.append((c[0] + nr * math.cos(na), c[1] + nr * math.sin(na)))
             preview[rp_key] = new_rps
 
@@ -636,12 +636,12 @@ class CirclePlotWidget(QWidget):
         d = self._d
         p = d['p1'] if side == 0 else d['p2']
         c = d['c1'] if side == 0 else d['c2']
-        self._drag_side        = side
+        self._drag_side = side
         self._drag_start_world = (p[0], p[1])
         self._drag_center_world = (c[0], c[1])
-        self._drag_cur_world   = (p[0], p[1])
-        self._d_at_drag_start  = dict(self._d)   # snapshot for delta base
-        self._d_drag_preview   = None
+        self._drag_cur_world = (p[0], p[1])
+        self._d_at_drag_start = dict(self._d)   # snapshot for delta base
+        self._d_drag_preview = None
         # _tf is already set from the last paintEvent; lock it for the drag
         self.setCursor(Qt.CrossCursor)
         event.accept()
@@ -666,19 +666,19 @@ class CirclePlotWidget(QWidget):
         sx_w, sy_w = self._drag_start_world
         ex_w, ey_w = self._drag_cur_world
         start_r = math.sqrt((sx_w - cx) ** 2 + (sy_w - cy) ** 2)
-        end_r   = math.sqrt((ex_w - cx) ** 2 + (ey_w - cy) ** 2)
+        end_r = math.sqrt((ex_w - cx) ** 2 + (ey_w - cy) ** 2)
         start_a = math.atan2(sy_w - cy, sx_w - cx)
-        end_a   = math.atan2(ey_w - cy, ex_w - cx)
+        end_a = math.atan2(ey_w - cy, ex_w - cx)
         delta_tz = end_r - start_r
         delta_rz = _wrap_rad(end_a - start_a)
 
         # Clear drag state; paintEvent will show _d_drag_preview briefly until
         # the wizard calls set_data() after recomputing geo-references.
-        self._drag_side         = None
-        self._drag_start_world  = None
+        self._drag_side = None
+        self._drag_start_world = None
         self._drag_center_world = None
-        self._drag_cur_world    = None
-        self._d_at_drag_start   = None
+        self._drag_cur_world = None
+        self._d_at_drag_start = None
         self.unsetCursor()
         self.pointDragFinished.emit(delta_tz, delta_rz)
         event.accept()
@@ -751,7 +751,7 @@ class CirclePlotWidget(QWidget):
 
         d = d_draw
         circle_colors = [QColor(80, 140, 255), QColor(255, 140, 80)]
-        point_colors  = [QColor(80, 220, 80),  QColor(220, 220, 60)]
+        point_colors = [QColor(80, 220, 80), QColor(220, 220, 60)]
         intersects = d['intersects']
         line_style = Qt.SolidLine if intersects else Qt.DashLine
 
@@ -777,8 +777,8 @@ class CirclePlotWidget(QWidget):
             pxs, pys = sx(p[0]), sy(p[1])
             is_active = (self._d_drag_preview is not None
                          and self._drag_side == side)
-            draw_col  = col.lighter(160) if is_active else col
-            arm       = 9 if is_active else 7
+            draw_col = col.lighter(160) if is_active else col
+            arm = 9 if is_active else 7
             painter.setPen(QPen(draw_col, 2))
             painter.setBrush(Qt.NoBrush)
             painter.drawLine(int(pxs - arm), int(pys - arm),
@@ -789,8 +789,8 @@ class CirclePlotWidget(QWidget):
             ring_style = Qt.SolidLine if is_active else Qt.DotLine
             painter.setPen(QPen(draw_col, 1, ring_style))
             painter.drawEllipse(QPointF(pxs, pys),
-                                 float(self._HIT_RADIUS_PX),
-                                 float(self._HIT_RADIUS_PX))
+                                float(self._HIT_RADIUS_PX),
+                                float(self._HIT_RADIUS_PX))
 
         # Reference points — small diamond markers, one shade darker than the
         # associated circle-centre colour; no ring, no drag interaction.
@@ -882,23 +882,23 @@ class _ProbeWorker(QThread):
     max_steps   : int
     """
 
-    status   = pyqtSignal(str)   # live progress text for the UI label
+    status = pyqtSignal(str)   # live progress text for the UI label
     finished = pyqtSignal(dict)  # resulting correction dict
-    error    = pyqtSignal(str)
+    error = pyqtSignal(str)
 
     def __init__(self, tri_mesh, side_params, correction, max_steps, parent=None):
         super().__init__(parent)
-        self._tri_mesh   = tri_mesh
-        self._sides      = side_params
+        self._tri_mesh = tri_mesh
+        self._sides = side_params
         self._correction = correction
-        self._max_steps  = max_steps
+        self._max_steps = max_steps
 
     # ------------------------------------------------------------------
     def run(self):
         try:
             corr = {
                 'translation': dict(self._correction['translation']),
-                'rotation':    dict(self._correction['rotation']),
+                'rotation': dict(self._correction['rotation']),
             }
 
             self.status.emit("Step 1 / 2  —  Probing z-offset…")
@@ -930,10 +930,10 @@ class _ProbeWorker(QThread):
             return None
 
         s = self._sides[side_idx]
-        pt     = s['point']
+        pt = s['point']
         img_w, img_h = s['img_size']
-        poses  = s['poses']
-        fi     = s['frame_idx']
+        poses = s['poses']
+        fi = s['frame_idx']
 
         if poses is None:
             return None
@@ -942,8 +942,8 @@ class _ProbeWorker(QThread):
             return None
         pose = images[fi]
 
-        loc     = pose.get('location', [0.0, 0.0, 0.0])
-        rot     = pose.get('rotation', [0.0, 0.0, 0.0])
+        loc = pose.get('location', [0.0, 0.0, 0.0])
+        rot = pose.get('rotation', [0.0, 0.0, 0.0])
         fov_raw = pose.get('fovy', 50.0)
         if isinstance(fov_raw, (list, tuple)):
             fov_raw = fov_raw[0] if fov_raw else 50.0
@@ -953,12 +953,12 @@ class _ProbeWorker(QThread):
         r = correction['rotation']
         cor_t = Vector3([t['x'], t['y'], t['z']], dtype='f4')
         cor_r = Vector3([r['x'], r['y'], r['z']], dtype='f4')
-        position  = Vector3(loc, dtype='f4') + cor_t
+        position = Vector3(loc, dtype='f4') + cor_t
         cam_euler = Vector3([_m.radians(_wrap_deg(v)) for v in rot[:3]], dtype='f4')
         rot_euler = (cam_euler - cor_r) * -1.0
-        cam_quat  = Quaternion.from_eulers(rot_euler)
-        camera    = Camera(fovy=fovy, aspect_ratio=1.0,
-                           position=position, rotation=cam_quat)
+        cam_quat = Quaternion.from_eulers(rot_euler)
+        camera = Camera(fovy=fovy, aspect_ratio=1.0,
+                        position=position, rotation=cam_quat)
 
         px, py = pt[0] * img_w, pt[1] * img_h
         results = pixel_to_world_coord(
@@ -973,14 +973,14 @@ class _ProbeWorker(QThread):
     def _camera_xy(self, side_idx: int, correction: dict):
         s = self._sides[side_idx]
         poses = s['poses']
-        fi    = s['frame_idx']
+        fi = s['frame_idx']
         if poses is None:
             return None
         images = poses.get('images', [])
         if fi >= len(images):
             return None
         loc = images[fi].get('location', [0.0, 0.0, 0.0])
-        t   = correction['translation']
+        t = correction['translation']
         return (loc[0] + t['x'], loc[1] + t['y'])
 
     def _compute_circles(self, correction: dict):
@@ -1001,7 +1001,7 @@ class _ProbeWorker(QThread):
         def _ok(z: float) -> bool:
             c = {
                 'translation': {**correction['translation'], 'z': z},
-                'rotation':    dict(correction['rotation']),
+                'rotation': dict(correction['rotation']),
             }
             circles = self._compute_circles(c)
             if circles is None:
@@ -1031,9 +1031,9 @@ class _ProbeWorker(QThread):
         return tz
 
     def _find_best_rz(self, correction: dict) -> float:
-        best_rz   = correction['rotation']['z']
+        best_rz = correction['rotation']['z']
         best_dist = float('inf')
-        angles    = np.linspace(0.0, 2 * math.pi, 360)
+        angles = np.linspace(0.0, 2 * math.pi, 360)
 
         for i, rz in enumerate(angles):
             if i % 36 == 0:
@@ -1042,7 +1042,7 @@ class _ProbeWorker(QThread):
                 )
             c = {
                 'translation': dict(correction['translation']),
-                'rotation':    {**correction['rotation'], 'z': float(rz)},
+                'rotation': {**correction['rotation'], 'z': float(rz)},
             }
             p1 = self._geo_ref(0, c)
             p2 = self._geo_ref(1, c)
@@ -1051,7 +1051,7 @@ class _ProbeWorker(QThread):
             d = math.sqrt((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2)
             if d < best_dist:
                 best_dist = d
-                best_rz   = float(rz)
+                best_rz = float(rz)
 
         return _wrap_rad(best_rz)
 
@@ -1092,7 +1092,6 @@ class _LightFieldRenderWorker(QThread):
             self.error.emit(f"{exc}\n\n{traceback.format_exc()}")
 
     def _render(self):
-        import math as _m
         import numpy as _np
         from pyrr import Quaternion, Vector3
         from alfspy.render.render import (
@@ -1477,6 +1476,7 @@ class BambiCorrectionWizard(QDialog):
             "but do not affect the calibration.\n"
             "Shortcut: R"
         )
+
         def _toggle_ref_mode(checked: bool):
             mode = 'reference' if checked else 'mapping'
             for sw in self._side_widgets:
@@ -1963,7 +1963,6 @@ class BambiCorrectionWizard(QDialog):
         try:
             from pyrr import Quaternion, Vector3
             from alfspy.core.rendering import Camera
-            from alfspy.core.util.pyrrs import quaternion_from_eulers
         except ImportError as exc:
             raise RuntimeError(f"alfspy / pyrr not available: {exc}") from exc
 
@@ -2084,7 +2083,7 @@ class BambiCorrectionWizard(QDialog):
         self._probe_status.setText("Starting…")
 
         correction = self._read_corr_from_spins()
-        max_steps  = self._max_steps_spin.value()
+        max_steps = self._max_steps_spin.value()
 
         # Collect all data the worker needs *before* leaving the main thread
         # so the worker never accesses any QWidget.
@@ -2115,9 +2114,9 @@ class BambiCorrectionWizard(QDialog):
         circles = self._compute_circles(self._correction)
         if circles:
             (c1, r1, _), (c2, r2, _) = circles
-            ok      = _circles_intersect(c1, r1, c2, r2)
-            tz      = correction['translation']['z']
-            rz      = correction['rotation']['z']
+            ok = _circles_intersect(c1, r1, c2, r2)
+            tz = correction['translation']['z']
+            rz = correction['rotation']['z']
             verdict = "intersect ✓" if ok else "do NOT intersect"
             self._probe_status.setText(
                 f"Done.  tz = {tz:.3f},  rz = {rz:.5f} rad  →  circles {verdict}"
@@ -2355,8 +2354,8 @@ class BambiCorrectionWizard(QDialog):
         img_bgr = cv2.cvtColor(result['image'], cv2.COLOR_RGBA2BGR)
         self._render_base_pixmap = _bgr_to_qpixmap(img_bgr)
         self._render_cam_info = {
-            'cam_cx':    result['cam_cx'],
-            'cam_cy':    result['cam_cy'],
+            'cam_cx': result['cam_cx'],
+            'cam_cy': result['cam_cy'],
             'ortho_size': result['ortho_size'],
             'render_sz': result['render_sz'],
         }
@@ -2375,12 +2374,12 @@ class BambiCorrectionWizard(QDialog):
                 and self._render_geo_world_points
                 and self._render_cam_info):
             cam = self._render_cam_info
-            cx   = cam['cam_cx']
-            cy   = cam['cam_cy']
+            cx = cam['cam_cx']
+            cy = cam['cam_cy']
             half = cam['ortho_size'] / 2.0
-            sz   = cam['render_sz']
-            arm  = max(8, sz // 64)
-            lw   = max(2, sz // 256)
+            sz = cam['render_sz']
+            arm = max(8, sz // 64)
+            lw = max(2, sz // 256)
             ref_arm = max(5, sz // 96)  # slightly smaller diamonds for ref points
 
             painter = QPainter(px)

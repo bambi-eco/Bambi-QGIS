@@ -61,6 +61,7 @@ from qgis.core import (
     QgsWkbTypes,
 )
 
+
 def _fix_std_streams():
     # QGIS sets sys.stderr/stdout to None; numpy/geopandas crash when they
     # try to write deprecation or error messages through those streams.
@@ -396,8 +397,10 @@ class FlightPlannerDialog(QDialog):
         self._padding_east_spin = self._make_pad_spin()
         self._padding_south_spin = self._make_pad_spin()
         self._padding_west_spin = self._make_pad_spin()
-        for lbl, spin in [("N:", self._padding_north_spin), ("E:", self._padding_east_spin),
-                           ("S:", self._padding_south_spin), ("W:", self._padding_west_spin)]:
+        for lbl, spin in [
+            ("N:", self._padding_north_spin), ("E:", self._padding_east_spin),
+            ("S:", self._padding_south_spin), ("W:", self._padding_west_spin)
+        ]:
             pad_hl.addWidget(QLabel(lbl))
             pad_hl.addWidget(spin)
         fl.addRow("Grid Padding:", pad_w)
@@ -665,29 +668,29 @@ class FlightPlannerDialog(QDialog):
     def _save_settings(self):
         s = QSettings()
         values = {
-            "strategy":    "random" if self._random_radio.isChecked() else "loop",
-            "grid_size":   self._grid_size_spin.value(),
+            "strategy": "random" if self._random_radio.isChecked() else "loop",
+            "grid_size": self._grid_size_spin.value(),
             "max_start_and_stop_distance": self._max_start_dist_spin.value(),
-            "min_transects":               self._min_transects_spin.value(),
-            "max_transects_enabled":       not self._max_transects_none_chk.isChecked(),
-            "max_transects":               self._max_transects_spin.value(),
-            "max_distance":                self._max_distance_spin.value(),
-            "min_transect_overlap":        self._min_overlap_spin.value(),
-            "number_of_retries":           self._num_retries_spin.value(),
-            "target_crs_epsg":             self._epsg_spin.value(),
-            "min_transects_per_route":     self._min_per_route_spin.value(),
-            "x_offset":                    self._x_offset_spin.value(),
-            "y_offset":                    self._y_offset_spin.value(),
-            "padding_north":               self._padding_north_spin.value(),
-            "padding_east":                self._padding_east_spin.value(),
-            "padding_south":               self._padding_south_spin.value(),
-            "padding_west":                self._padding_west_spin.value(),
-            "seed":                        self._seed_edit.text().strip(),
+            "min_transects": self._min_transects_spin.value(),
+            "max_transects_enabled": not self._max_transects_none_chk.isChecked(),
+            "max_transects": self._max_transects_spin.value(),
+            "max_distance": self._max_distance_spin.value(),
+            "min_transect_overlap": self._min_overlap_spin.value(),
+            "number_of_retries": self._num_retries_spin.value(),
+            "target_crs_epsg": self._epsg_spin.value(),
+            "min_transects_per_route": self._min_per_route_spin.value(),
+            "x_offset": self._x_offset_spin.value(),
+            "y_offset": self._y_offset_spin.value(),
+            "padding_north": self._padding_north_spin.value(),
+            "padding_east": self._padding_east_spin.value(),
+            "padding_south": self._padding_south_spin.value(),
+            "padding_west": self._padding_west_spin.value(),
+            "seed": self._seed_edit.text().strip(),
             "max_number_of_overlapping_transects": self._max_overlapping_spin.value(),
-            "max_number_of_flights":       self._max_flights_spin.value(),
-            "random_search":               self._random_search_chk.isChecked(),
+            "max_number_of_flights": self._max_flights_spin.value(),
+            "random_search": self._random_search_chk.isChecked(),
             "number_of_retries_per_route": self._retries_per_route_spin.value(),
-            "target_folder":               self._target_edit.text().strip(),
+            "target_folder": self._target_edit.text().strip(),
         }
         for key, value in values.items():
             s.setValue(_SETTINGS_PREFIX + key, value)
