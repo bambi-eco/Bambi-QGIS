@@ -808,8 +808,8 @@ class BambiProcessor:
         if progress_fn:
             progress_fn(80)
 
-        # Create output folder
-        route_folder = os.path.join(target_folder, "flight_route")
+        # Create output folder (camera-specific)
+        route_folder = os.path.join(target_folder, f"flight_route_{camera_suffix}")
         os.makedirs(route_folder, exist_ok=True)
 
         crs_block = {
@@ -1088,7 +1088,7 @@ class BambiProcessor:
 
         For each georeferenced detection center, finds the nearest point on the
         AirData flight route (LineString) and records the perpendicular distance.
-        Results are saved to flight_route/perpendicular.json.
+        Results are saved to flight_route_{suffix}/perpendicular.json.
 
         :param config: Configuration dictionary
         :param progress_fn: Progress callback function
@@ -1097,6 +1097,10 @@ class BambiProcessor:
         """
         target_folder = config["target_folder"]
         target_epsg = config.get("target_epsg", 32633)
+        fr_camera = config.get("flight_route_camera", "T")
+        fr_suffix = "t" if fr_camera == "T" else "w"
+        det_camera = config.get("detection_camera", "T")
+        det_suffix = "t" if det_camera == "T" else "w"
 
         if log_fn:
             log_fn("Calculating perpendicular distances to flight route...")
@@ -1104,8 +1108,8 @@ class BambiProcessor:
         if progress_fn:
             progress_fn(5)
 
-        # Load flight route LineString
-        route_line_file = os.path.join(target_folder, "flight_route", "flight_route.geojson")
+        # Load flight route LineString (camera-specific folder)
+        route_line_file = os.path.join(target_folder, f"flight_route_{fr_suffix}", "flight_route.geojson")
         if not os.path.exists(route_line_file):
             raise FileNotFoundError(
                 "flight_route.geojson not found. Please run 'Generate Flight Route' first."
@@ -1175,8 +1179,8 @@ class BambiProcessor:
         if progress_fn:
             progress_fn(20)
 
-        # Load georeferenced detections
-        georef_file = os.path.join(target_folder, "georeferenced", "georeferenced.txt")
+        # Load georeferenced detections (camera-specific folder)
+        georef_file = os.path.join(target_folder, f"georeferenced_{det_suffix}", "georeferenced.txt")
         if not os.path.exists(georef_file):
             raise FileNotFoundError(
                 "georeferenced.txt not found. Please run 'Geo-Reference Detections' first."
@@ -1271,7 +1275,7 @@ class BambiProcessor:
         if progress_fn:
             progress_fn(95)
 
-        route_folder = os.path.join(target_folder, "flight_route")
+        route_folder = os.path.join(target_folder, f"flight_route_{fr_suffix}")
         os.makedirs(route_folder, exist_ok=True)
 
         # Save flat perpendicular.json (used by "Add Perpendicular Lines to QGIS")
@@ -1321,8 +1325,8 @@ class BambiProcessor:
         For each track, finds the last detection (highest frame number), computes its
         center, and finds the nearest point on the AirData flight route LineString.
         Results are saved to:
-          flight_route/perpendicular_tracks.json        (flat list, used by QGIS layer)
-          flight_route/perpendicular_tracks_by_track.json (keyed by track_id)
+          flight_route_{suffix}/perpendicular_tracks.json        (flat list, used by QGIS layer)
+          flight_route_{suffix}/perpendicular_tracks_by_track.json (keyed by track_id)
 
         :param config: Configuration dictionary
         :param progress_fn: Progress callback function
@@ -1331,6 +1335,10 @@ class BambiProcessor:
         """
         target_folder = config["target_folder"]
         target_epsg = config.get("target_epsg", 32633)
+        fr_camera = config.get("flight_route_camera", "T")
+        fr_suffix = "t" if fr_camera == "T" else "w"
+        trk_camera = config.get("tracking_camera", "T")
+        trk_suffix = "t" if trk_camera == "T" else "w"
 
         if log_fn:
             log_fn("Calculating perpendicular distances for tracks to flight route...")
@@ -1338,8 +1346,8 @@ class BambiProcessor:
         if progress_fn:
             progress_fn(5)
 
-        # Load flight route LineString
-        route_line_file = os.path.join(target_folder, "flight_route", "flight_route.geojson")
+        # Load flight route LineString (camera-specific folder)
+        route_line_file = os.path.join(target_folder, f"flight_route_{fr_suffix}", "flight_route.geojson")
         if not os.path.exists(route_line_file):
             raise FileNotFoundError(
                 "flight_route.geojson not found. Please run 'Generate Flight Route' first."
@@ -1404,11 +1412,11 @@ class BambiProcessor:
         if progress_fn:
             progress_fn(20)
 
-        # Load all georeferenced track CSV files from tracks/ folder
-        tracks_folder = os.path.join(target_folder, "tracks")
+        # Load all georeferenced track CSV files from tracks folder (camera-specific)
+        tracks_folder = os.path.join(target_folder, f"tracks_{trk_suffix}")
         if not os.path.exists(tracks_folder):
             raise FileNotFoundError(
-                "tracks/ folder not found. Please run 'Track Animals' first."
+                f"tracks_{trk_suffix}/ folder not found. Please run 'Track Animals' first."
             )
 
         # Collect all entries: {track_id: [rows...]}
@@ -1527,7 +1535,7 @@ class BambiProcessor:
         if progress_fn:
             progress_fn(97)
 
-        route_folder = os.path.join(target_folder, "flight_route")
+        route_folder = os.path.join(target_folder, f"flight_route_{fr_suffix}")
         os.makedirs(route_folder, exist_ok=True)
 
         # Flat list for QGIS layer
@@ -1639,8 +1647,8 @@ class BambiProcessor:
         if log_fn:
             log_fn(f"Processing {len(frame_indices)} frames after filtering")
 
-        # Create output folder
-        detections_folder = os.path.join(target_folder, "detections")
+        # Create output folder (camera-specific)
+        detections_folder = os.path.join(target_folder, f"detections_{camera_suffix}")
         os.makedirs(detections_folder, exist_ok=True)
 
         # Initialize detector
@@ -1772,8 +1780,8 @@ class BambiProcessor:
             if log_fn:
                 log_fn(f"Using configured resolution: {res_width}x{res_height}")
 
-        # Load detections
-        detections_file = os.path.join(target_folder, "detections", "detections.txt")
+        # Load detections (camera-specific folder)
+        detections_file = os.path.join(target_folder, f"detections_{camera_suffix}", "detections.txt")
         if not os.path.exists(detections_file):
             raise FileNotFoundError("Detections file not found")
 
@@ -1801,8 +1809,8 @@ class BambiProcessor:
         if progress_fn:
             progress_fn(10)
 
-        # Create output folder
-        georef_folder = os.path.join(target_folder, "georeferenced")
+        # Create output folder (camera-specific)
+        georef_folder = os.path.join(target_folder, f"georeferenced_{camera_suffix}")
         os.makedirs(georef_folder, exist_ok=True)
 
         # Load DEM mesh
@@ -1997,8 +2005,8 @@ class BambiProcessor:
         if progress_fn:
             progress_fn(10)
 
-        # Create output folder
-        fov_folder = os.path.join(target_folder, "fov")
+        # Create output folder (camera-specific)
+        fov_folder = os.path.join(target_folder, f"fov_{camera_suffix}")
         os.makedirs(fov_folder, exist_ok=True)
 
         # Load or create FoV mask polygon
@@ -2330,12 +2338,14 @@ class BambiProcessor:
         tracker_mode_str = config.get("tracker_mode", "HUNGARIAN")
         class_aware = config.get("class_aware", True)
         interpolate = config.get("interpolate", True)
+        camera = config.get("tracking_camera", "T")
+        camera_suffix = "t" if camera == "T" else "w"
 
         if log_fn:
             log_fn(f"Running built-in tracking with mode: {tracker_mode_str}")
 
-        # Load georeferenced detections
-        georef_folder = os.path.join(target_folder, "georeferenced")
+        # Load georeferenced detections (camera-specific folder)
+        georef_folder = os.path.join(target_folder, f"georeferenced_{camera_suffix}")
         georef_file = os.path.join(georef_folder, "georeferenced.txt")
 
         if not os.path.exists(georef_file):
@@ -2471,8 +2481,8 @@ class BambiProcessor:
         if progress_fn:
             progress_fn(90)
 
-        # Create output folder and write results
-        tracks_folder = os.path.join(target_folder, "tracks")
+        # Create output folder and write results (camera-specific)
+        tracks_folder = os.path.join(target_folder, f"tracks_{camera_suffix}")
         os.makedirs(tracks_folder, exist_ok=True)
 
         output_file = os.path.join(tracks_folder, "tracks.csv")
@@ -2584,8 +2594,8 @@ class BambiProcessor:
             if imagefile:
                 frame_to_path[frame_idx] = os.path.join(frames_folder, imagefile)
 
-        # Load pixel-space detections from detections.txt
-        detections_file = os.path.join(target_folder, "detections", "detections.txt")
+        # Load pixel-space detections from detections file (camera-specific folder)
+        detections_file = os.path.join(target_folder, f"detections_{camera_suffix}", "detections.txt")
         if not os.path.exists(detections_file):
             raise FileNotFoundError("Detections file not found - run detection first")
 
@@ -2620,8 +2630,8 @@ class BambiProcessor:
         frames_geo: Dict[int, List] = defaultdict(list)
 
         if is_geo_tracker:
-            # Load geo-referenced detections for GeoNative/GeoHybrid trackers
-            georef_folder = os.path.join(target_folder, "georeferenced")
+            # Load geo-referenced detections for GeoNative/GeoHybrid trackers (camera-specific folder)
+            georef_folder = os.path.join(target_folder, f"georeferenced_{camera_suffix}")
             georef_file = os.path.join(georef_folder, "georeferenced.txt")
 
             if os.path.exists(georef_file):
@@ -2750,8 +2760,8 @@ class BambiProcessor:
         if progress_fn:
             progress_fn(70)
 
-        # Create output folder and write pixel-space tracks
-        tracks_folder = os.path.join(target_folder, "tracks")
+        # Create output folder and write pixel-space tracks (camera-specific)
+        tracks_folder = os.path.join(target_folder, f"tracks_{camera_suffix}")
         os.makedirs(tracks_folder, exist_ok=True)
 
         pixel_output_file = os.path.join(tracks_folder, "tracks_pixel.csv")
@@ -2865,8 +2875,8 @@ class BambiProcessor:
         if log_fn:
             log_fn(f"Loading DEM and {camera_name} poses for track geo-referencing...")
 
-        # Load pixel tracks
-        tracks_folder = os.path.join(target_folder, "tracks")
+        # Load pixel tracks (camera-specific folder)
+        tracks_folder = os.path.join(target_folder, f"tracks_{camera_suffix}")
         pixel_tracks_file = os.path.join(tracks_folder, "tracks_pixel.csv")
 
         if not os.path.exists(pixel_tracks_file):
@@ -3271,7 +3281,7 @@ class BambiProcessor:
             ortho_folder = os.path.dirname(output_file)
             os.makedirs(ortho_folder, exist_ok=True)
         else:
-            ortho_folder = os.path.join(target_folder, "orthomosaic")
+            ortho_folder = os.path.join(target_folder, f"orthomosaic_{camera_suffix}")
             os.makedirs(ortho_folder, exist_ok=True)
             output_file = os.path.join(ortho_folder, "orthomosaic.tif")
 
@@ -4624,8 +4634,8 @@ class BambiProcessor:
             if log_fn:
                 log_fn("Using image corners as FoV polygon")
 
-        # Create output folder
-        geotiff_folder = os.path.join(target_folder, "geotiffs")
+        # Create output folder (camera-specific)
+        geotiff_folder = os.path.join(target_folder, f"geotiffs_{camera_suffix}")
         os.makedirs(geotiff_folder, exist_ok=True)
 
         if progress_fn:
@@ -4970,8 +4980,8 @@ class BambiProcessor:
         if not images:
             raise ValueError(f"No frames found in poses_{camera_suffix}.json")
 
-        # Create output folder
-        segmentation_folder = os.path.join(target_folder, "segmentation")
+        # Create output folder (camera-specific)
+        segmentation_folder = os.path.join(target_folder, f"segmentation_{camera_suffix}")
         os.makedirs(segmentation_folder, exist_ok=True)
 
         # Hosted SAM3 concept segmentation endpoint (serverless)
@@ -5171,8 +5181,8 @@ class BambiProcessor:
         if log_fn:
             log_fn(f"Starting SAM3 geo-referencing for {camera_name} frames...")
 
-        # Load pixel segmentation results
-        segmentation_folder = os.path.join(target_folder, "segmentation")
+        # Load pixel segmentation results (camera-specific folder)
+        segmentation_folder = os.path.join(target_folder, f"segmentation_{camera_suffix}")
         pixel_file = os.path.join(segmentation_folder, "segmentation_pixel.json")
 
         if not os.path.exists(pixel_file):

@@ -2529,6 +2529,8 @@ class BambiDockWidget(QDockWidget):
             # Camera selections for processing steps
             "flight_route_camera": "T" if self.flight_route_camera_combo.currentIndex() == 0 else "W",
             "detection_camera": "T" if self.detection_camera_combo.currentIndex() == 0 else "W",
+            "georeference_camera": "T" if self.detection_camera_combo.currentIndex() == 0 else "W",
+            "tracking_camera": "T" if self.detection_camera_combo.currentIndex() == 0 else "W",
             "fov_camera": "T" if self.fov_camera_combo.currentIndex() == 0 else "W",
             "ortho_camera": "T" if self.ortho_camera_combo.currentIndex() == 0 else "W",
             "geotiff_camera": "T" if self.geotiff_camera_combo.currentIndex() == 0 else "W",
@@ -4071,9 +4073,10 @@ class BambiDockWidget(QDockWidget):
             self.update_status("extract_rgb_frames", "🟢 Completed")
             completed_count += 1
 
-        # Define the mapping between subfolders and their corresponding status updates
-        # Format: (subfolder_name, status_step_key, additional_check_file)
-        # additional_check_file is optional - if specified, the file must also exist
+        # Define the mapping between subfolder base names and their corresponding status updates.
+        # Each base name is checked with both _t and _w suffixes — whichever exists and has
+        # content marks the step as completed.
+        # Format: (subfolder_base, status_step_key, additional_check_file)
         folder_status_mapping = [
             ("flight_route", "flight_route", None),
             ("detections", "detection", None),
@@ -4086,24 +4089,27 @@ class BambiDockWidget(QDockWidget):
             ("segmentation", "sam3_georeference", "segmentation_georef.json"),
         ]
 
-        for subfolder, status_key, check_file in folder_status_mapping:
-            subfolder_path = os.path.join(target_folder, subfolder)
+        for subfolder_base, status_key, check_file in folder_status_mapping:
+            found = False
+            for suffix in ("_t", "_w"):
+                subfolder_path = os.path.join(target_folder, subfolder_base + suffix)
 
-            # Check if subfolder exists
-            if os.path.isdir(subfolder_path):
-                # If there's an additional file to check, verify it exists
+                if not os.path.isdir(subfolder_path):
+                    continue
+
                 if check_file:
-                    # Check file can be in subfolder or in target folder
                     check_path_subfolder = os.path.join(subfolder_path, check_file)
                     check_path_target = os.path.join(target_folder, check_file)
-
                     if not os.path.isfile(check_path_subfolder) and not os.path.isfile(check_path_target):
                         continue
 
-                # Check if subfolder has any content (not empty)
                 if os.listdir(subfolder_path):
-                    self.update_status(status_key, "🟢 Completed")
-                    completed_count += 1
+                    found = True
+                    break
+
+            if found:
+                self.update_status(status_key, "🟢 Completed")
+                completed_count += 1
 
         if completed_count > 0:
             self.log(f"Detected {completed_count} completed processing step(s) in target folder")
@@ -4137,27 +4143,27 @@ class BambiDockWidget(QDockWidget):
         for layer in QgsProject.instance().mapLayers().values():
             existing_layers.add(layer.name())
 
-        # Define mapping: (check_type, check_name, status_key)
-        # check_type: "group" to check layer groups, "layer" to check layer names
+        # Define mapping: (check_type, name_prefix, status_key)
+        # Matches any group/layer whose name starts with name_prefix (handles camera suffixes).
         layer_status_mapping = [
             ("group", "BAMBI Flight Route", "add_flight_route"),
             ("group", "BAMBI Frame Detections", "add_frame_detections"),
             ("group", "BAMBI Wildlife Tracks", "add_layers"),
             ("group", "BAMBI FoV Polygons", "add_fov"),
-            ("layer", "BAMBI FoV Coverage (Merged)", "add_merged_fov"),
+            ("layer", "BAMBI FoV Coverage", "add_merged_fov"),
             ("layer", "BAMBI Orthomosaic", "add_ortho"),
             ("group", "BAMBI Frame GeoTIFFs", "add_geotiffs"),
         ]
 
         added_count = 0
 
-        for check_type, check_name, status_key in layer_status_mapping:
+        for check_type, name_prefix, status_key in layer_status_mapping:
             if check_type == "group":
-                if check_name in existing_groups:
+                if any(g.startswith(name_prefix) for g in existing_groups):
                     self.update_status(status_key, "🟢 Added")
                     added_count += 1
             elif check_type == "layer":
-                if check_name in existing_layers:
+                if any(la.startswith(name_prefix) for la in existing_layers):
                     self.update_status(status_key, "🟢 Added")
                     added_count += 1
 
@@ -4543,15 +4549,18 @@ class BambiDockWidget(QDockWidget):
     def run_georeference(self):
         """Run geo-referencing step."""
         config = self.get_config()
+        det_camera = config.get("detection_camera", "T")
+        det_suffix = "t" if det_camera == "T" else "w"
 
-        # Check if detections exist
-        detections_folder = os.path.join(config["target_folder"], "detections")
+        # Check if detections exist (camera-specific folder)
+        detections_folder = os.path.join(config["target_folder"], f"detections_{det_suffix}")
 
         if not os.path.exists(detections_folder):
+            camera_name = "Thermal" if det_camera == "T" else "RGB"
             QMessageBox.warning(
                 self,
                 "Missing Prerequisites",
-                "Detection has not been completed.\nPlease run Step 2 first."
+                f"{camera_name} detection has not been completed.\nPlease run Step 2 first."
             )
             return
 
@@ -4588,15 +4597,18 @@ class BambiDockWidget(QDockWidget):
     def run_tracking(self):
         """Run tracking step."""
         config = self.get_config()
+        det_camera = config.get("detection_camera", "T")
+        det_suffix = "t" if det_camera == "T" else "w"
 
-        # Check if georeferenced detections exist
-        georef_folder = os.path.join(config["target_folder"], "georeferenced")
+        # Check if georeferenced detections exist (camera-specific folder)
+        georef_folder = os.path.join(config["target_folder"], f"georeferenced_{det_suffix}")
 
         if not os.path.exists(georef_folder):
+            camera_name = "Thermal" if det_camera == "T" else "RGB"
             QMessageBox.warning(
                 self,
                 "Missing Prerequisites",
-                "Geo-referencing has not been completed.\nPlease run Step 3 first."
+                f"{camera_name} geo-referencing has not been completed.\nPlease run Step 3 first."
             )
             return
 
@@ -4697,9 +4709,12 @@ class BambiDockWidget(QDockWidget):
     def run_sam3_georeference(self):
         """Run SAM3 geo-referencing step."""
         config = self.get_config()
+        sam3_suffix = "t" if config.get("sam3_camera", "T") == "T" else "w"
 
-        # Check if pixel segmentation exists
-        segmentation_file = os.path.join(config["target_folder"], "segmentation", "segmentation_pixel.json")
+        # Check if pixel segmentation exists (camera-specific folder)
+        segmentation_file = os.path.join(
+            config["target_folder"], f"segmentation_{sam3_suffix}", "segmentation_pixel.json"
+        )
 
         if not os.path.exists(segmentation_file):
             QMessageBox.warning(
@@ -4722,19 +4737,22 @@ class BambiDockWidget(QDockWidget):
         This allows enabling/disabling individual frames.
         """
         config = self.get_config()
-        segmentation_folder = os.path.join(config["target_folder"], "segmentation")
+        sam3_camera = config.get("sam3_camera", "T")
+        sam3_suffix = "t" if sam3_camera == "T" else "w"
+        camera_label = "Thermal" if sam3_camera == "T" else "RGB"
+        segmentation_folder = os.path.join(config["target_folder"], f"segmentation_{sam3_suffix}")
         georef_file = os.path.join(segmentation_folder, "segmentation_georef.json")
 
         if not os.path.exists(georef_file):
             QMessageBox.warning(
                 self,
                 "Missing Prerequisites",
-                "SAM3 geo-referencing has not been completed.\nPlease run Step 10 first."
+                f"{camera_label} SAM3 geo-referencing has not been completed.\nPlease run Step 10 first."
             )
             return
 
         try:
-            self.log("Adding SAM3 segmentation to QGIS...")
+            self.log(f"Adding {camera_label} SAM3 segmentation to QGIS...")
             self.update_status("add_sam3", "🟡 Loading...")
 
             # Load geo-referenced results
@@ -4786,7 +4804,7 @@ class BambiDockWidget(QDockWidget):
                     return
 
             # Create main group at top of layer tree
-            main_group = self._create_layer_group("SAM3 Segmentation")
+            main_group = self._create_layer_group(f"SAM3 Segmentation ({camera_label})")
 
             total_polygons = 0
             total_frames_added = 0
@@ -5082,9 +5100,11 @@ class BambiDockWidget(QDockWidget):
         """Run perpendicular distance calculation step."""
         config = self.get_config()
         target_folder = config["target_folder"]
+        fr_suffix = "t" if config.get("flight_route_camera", "T") == "T" else "w"
+        det_suffix = "t" if config.get("detection_camera", "T") == "T" else "w"
 
-        route_file = os.path.join(target_folder, "flight_route", "flight_route.geojson")
-        georef_file = os.path.join(target_folder, "georeferenced", "georeferenced.txt")
+        route_file = os.path.join(target_folder, f"flight_route_{fr_suffix}", "flight_route.geojson")
+        georef_file = os.path.join(target_folder, f"georeferenced_{det_suffix}", "georeferenced.txt")
 
         missing = []
         if not os.path.exists(route_file):
@@ -5104,7 +5124,10 @@ class BambiDockWidget(QDockWidget):
     def add_perpendicular_to_qgis(self):
         """Add perpendicular lines (detection → nearest flight route point) to QGIS."""
         config = self.get_config()
-        perp_file = os.path.join(config["target_folder"], "flight_route", "perpendicular.json")
+        fr_camera = config.get("flight_route_camera", "T")
+        fr_suffix = "t" if fr_camera == "T" else "w"
+        camera_label = "Thermal" if fr_camera == "T" else "RGB"
+        perp_file = os.path.join(config["target_folder"], f"flight_route_{fr_suffix}", "perpendicular.json")
 
         if not os.path.exists(perp_file):
             QMessageBox.warning(
@@ -5115,7 +5138,7 @@ class BambiDockWidget(QDockWidget):
             return
 
         try:
-            self.log("Adding perpendicular lines to QGIS...")
+            self.log(f"Adding {camera_label} perpendicular lines to QGIS...")
             self.update_status("add_perpendicular", "🟡 Loading...")
 
             with open(perp_file, 'r', encoding='utf-8') as f:
@@ -5184,11 +5207,11 @@ class BambiDockWidget(QDockWidget):
             })
             layer.renderer().setSymbol(symbol)
 
-            group = self._create_layer_group("BAMBI Perpendicular")
+            group = self._create_layer_group(f"BAMBI Perpendicular ({camera_label})")
             QgsProject.instance().addMapLayer(layer, False)
             group.addLayer(layer)
 
-            self.log(f"Added {len(features)} perpendicular lines to QGIS")
+            self.log(f"Added {len(features)} {camera_label} perpendicular lines to QGIS")
             self.update_status("add_perpendicular", "🟢 Completed")
             self.iface.mapCanvas().refresh()
 
@@ -5201,9 +5224,11 @@ class BambiDockWidget(QDockWidget):
         """Run track perpendicular distance calculation step."""
         config = self.get_config()
         target_folder = config["target_folder"]
+        fr_suffix = "t" if config.get("flight_route_camera", "T") == "T" else "w"
+        trk_suffix = "t" if config.get("tracking_camera", "T") == "T" else "w"
 
-        route_file = os.path.join(target_folder, "flight_route", "flight_route.geojson")
-        tracks_folder = os.path.join(target_folder, "tracks")
+        route_file = os.path.join(target_folder, f"flight_route_{fr_suffix}", "flight_route.geojson")
+        tracks_folder = os.path.join(target_folder, f"tracks_{trk_suffix}")
 
         missing = []
         if not os.path.exists(route_file):
@@ -5223,7 +5248,10 @@ class BambiDockWidget(QDockWidget):
     def add_track_perpendicular_to_qgis(self):
         """Add track perpendicular lines (last detection → nearest flight route point) to QGIS."""
         config = self.get_config()
-        perp_file = os.path.join(config["target_folder"], "flight_route", "perpendicular_tracks.json")
+        fr_camera = config.get("flight_route_camera", "T")
+        fr_suffix = "t" if fr_camera == "T" else "w"
+        camera_label = "Thermal" if fr_camera == "T" else "RGB"
+        perp_file = os.path.join(config["target_folder"], f"flight_route_{fr_suffix}", "perpendicular_tracks.json")
 
         if not os.path.exists(perp_file):
             QMessageBox.warning(
@@ -5303,11 +5331,11 @@ class BambiDockWidget(QDockWidget):
             })
             layer.renderer().setSymbol(symbol)
 
-            group = self._create_layer_group("BAMBI Track Perpendicular")
+            group = self._create_layer_group(f"BAMBI Track Perpendicular ({camera_label})")
             QgsProject.instance().addMapLayer(layer, False)
             group.addLayer(layer)
 
-            self.log(f"Added {len(features)} track perpendicular lines to QGIS")
+            self.log(f"Added {len(features)} {camera_label} track perpendicular lines to QGIS")
             self.update_status("add_track_perpendicular", "🟢 Completed")
             self.iface.mapCanvas().refresh()
 
@@ -5326,18 +5354,21 @@ class BambiDockWidget(QDockWidget):
         This allows users to show/hide individual animals.
         """
         config = self.get_config()
-        tracks_folder = os.path.join(config["target_folder"], "tracks")
+        trk_camera = config.get("tracking_camera", "T")
+        trk_suffix = "t" if trk_camera == "T" else "w"
+        camera_label = "Thermal" if trk_camera == "T" else "RGB"
+        tracks_folder = os.path.join(config["target_folder"], f"tracks_{trk_suffix}")
 
         if not os.path.exists(tracks_folder):
             QMessageBox.warning(
                 self,
                 "Missing Prerequisites",
-                "Tracking has not been completed.\nPlease run Step 4 first."
+                f"{camera_label} tracking has not been completed.\nPlease run Step 4 first."
             )
             return
 
         try:
-            self.log("Adding tracks to QGIS...")
+            self.log(f"Adding {camera_label} tracks to QGIS...")
             self.update_status("add_layers", "🟡 Loading...")
 
             # Get target CRS
@@ -5388,7 +5419,7 @@ class BambiDockWidget(QDockWidget):
                     return
 
             # Create main group for all tracks at top of layer tree
-            main_group = self._create_layer_group("BAMBI Wildlife Tracks")
+            main_group = self._create_layer_group(f"BAMBI Wildlife Tracks ({camera_label})")
 
             # Generate colors for tracks (cycle through a palette)
             colors = [
@@ -5670,19 +5701,22 @@ class BambiDockWidget(QDockWidget):
     def add_fov_to_qgis(self):
         """Add Field of View polygons as QGIS layers."""
         config = self.get_config()
-        fov_folder = os.path.join(config["target_folder"], "fov")
+        fov_camera = config.get("fov_camera", "T")
+        fov_suffix = "t" if fov_camera == "T" else "w"
+        camera_label = "Thermal" if fov_camera == "T" else "RGB"
+        fov_folder = os.path.join(config["target_folder"], f"fov_{fov_suffix}")
         fov_file = os.path.join(fov_folder, "fov_polygons.txt")
 
         if not os.path.exists(fov_file):
             QMessageBox.warning(
                 self,
                 "Missing FoV Data",
-                "FoV calculation has not been completed.\nPlease run Step 6 first."
+                f"{camera_label} FoV calculation has not been completed.\nPlease run Step 6 first."
             )
             return
 
         try:
-            self.log("Adding FoV layers to QGIS...")
+            self.log(f"Adding {camera_label} FoV layers to QGIS...")
             self.update_status("add_fov", "🟡 Loading...")
 
             # Get target CRS
@@ -5716,12 +5750,12 @@ class BambiDockWidget(QDockWidget):
                 elif reply == QMessageBox.Yes:
                     # Limit to 100 frames as separate layers
                     fov_polygons = dict(list(fov_polygons.items())[:100])
-                    self._add_fov_separate_layers(fov_polygons, target_crs)
+                    self._add_fov_separate_layers(fov_polygons, target_crs, camera_label)
                 else:
                     # Combined layer
-                    self._add_fov_combined_layer(fov_polygons, target_crs)
+                    self._add_fov_combined_layer(fov_polygons, target_crs, camera_label)
             else:
-                self._add_fov_separate_layers(fov_polygons, target_crs)
+                self._add_fov_separate_layers(fov_polygons, target_crs, camera_label)
 
             self.log("Added FoV layers to QGIS")
             self.update_status("add_fov", "🟢 Completed")
@@ -5732,10 +5766,11 @@ class BambiDockWidget(QDockWidget):
             self.update_status("add_fov", "🔴 Error")
             QMessageBox.critical(self, "Error", f"Failed to add FoV layers: {str(e)}")
 
-    def _add_fov_separate_layers(self, fov_polygons: Dict[int, list], target_crs):
+    def _add_fov_separate_layers(self, fov_polygons: Dict[int, list], target_crs,
+                                 camera_label: str = "Thermal"):
         """Add FoV polygons as separate layers for each frame."""
         # Create a group for the layers at top of layer tree
-        group = self._create_layer_group("BAMBI FoV Polygons")
+        group = self._create_layer_group(f"BAMBI FoV Polygons ({camera_label})")
 
         for frame_idx, points in fov_polygons.items():
             if len(points) < 3:
@@ -5786,10 +5821,11 @@ class BambiDockWidget(QDockWidget):
         # Collapse the group
         group.setExpanded(False)
 
-    def _add_fov_combined_layer(self, fov_polygons: Dict[int, list], target_crs):
+    def _add_fov_combined_layer(self, fov_polygons: Dict[int, list], target_crs,
+                                camera_label: str = "Thermal"):
         """Add all FoV polygons as a single combined layer."""
         # Create a single layer with all polygons
-        layer_name = "BAMBI FoV Polygons (Combined)"
+        layer_name = f"BAMBI FoV Polygons - Combined ({camera_label})"
         layer = QgsVectorLayer("Polygon?crs=" + target_crs.authid(), layer_name, "memory")
 
         provider = layer.dataProvider()
@@ -5841,19 +5877,22 @@ class BambiDockWidget(QDockWidget):
         individual FoV polygons, useful for calculating total surveyed area.
         """
         config = self.get_config()
-        fov_folder = os.path.join(config["target_folder"], "fov")
+        fov_camera = config.get("fov_camera", "T")
+        fov_suffix = "t" if fov_camera == "T" else "w"
+        camera_label = "Thermal" if fov_camera == "T" else "RGB"
+        fov_folder = os.path.join(config["target_folder"], f"fov_{fov_suffix}")
         fov_file = os.path.join(fov_folder, "fov_polygons.txt")
 
         if not os.path.exists(fov_file):
             QMessageBox.warning(
                 self,
                 "Missing FoV Data",
-                "FoV calculation has not been completed.\nPlease run Step 6 first."
+                f"{camera_label} FoV calculation has not been completed.\nPlease run Step 6 first."
             )
             return
 
         try:
-            self.log("Creating merged FoV layer...")
+            self.log(f"Creating merged {camera_label} FoV layer...")
             self.update_status("add_merged_fov", "🟡 Processing...")
 
             # Get target CRS
@@ -5903,7 +5942,7 @@ class BambiDockWidget(QDockWidget):
                 return
 
             # Create layer for merged polygon
-            layer_name = "BAMBI FoV Coverage (Merged)"
+            layer_name = f"BAMBI FoV Coverage ({camera_label})"
             layer = QgsVectorLayer("Polygon?crs=" + target_crs.authid(), layer_name, "memory")
 
             provider = layer.dataProvider()
@@ -6014,19 +6053,22 @@ class BambiDockWidget(QDockWidget):
     def add_frame_detections_to_qgis(self):
         """Add geo-referenced detections as QGIS layers (one layer per frame)."""
         config = self.get_config()
-        georef_folder = os.path.join(config["target_folder"], "georeferenced")
+        det_camera = config.get("detection_camera", "T")
+        det_suffix = "t" if det_camera == "T" else "w"
+        camera_label = "Thermal" if det_camera == "T" else "RGB"
+        georef_folder = os.path.join(config["target_folder"], f"georeferenced_{det_suffix}")
         georef_file = os.path.join(georef_folder, "georeferenced.txt")
 
         if not os.path.exists(georef_file):
             QMessageBox.warning(
                 self,
                 "Missing Data",
-                "Geo-referencing has not been completed.\nPlease run Step 3 first."
+                f"{camera_label} geo-referencing has not been completed.\nPlease run Step 3 first."
             )
             return
 
         try:
-            self.log("Adding per-frame detection layers to QGIS...")
+            self.log(f"Adding per-frame {camera_label} detection layers to QGIS...")
             self.update_status("add_frame_detections", "🟡 Loading...")
 
             # Get target CRS
@@ -6060,11 +6102,11 @@ class BambiDockWidget(QDockWidget):
                     return
                 elif reply == QMessageBox.Yes:
                     frame_detections = dict(list(frame_detections.items())[:100])
-                    self._add_detections_separate_layers(frame_detections, target_crs)
+                    self._add_detections_separate_layers(frame_detections, target_crs, camera_label)
                 else:
-                    self._add_detections_combined_layer(frame_detections, target_crs)
+                    self._add_detections_combined_layer(frame_detections, target_crs, camera_label)
             else:
-                self._add_detections_separate_layers(frame_detections, target_crs)
+                self._add_detections_separate_layers(frame_detections, target_crs, camera_label)
 
             self.log("Added detection layers to QGIS")
             self.update_status("add_frame_detections", "🟢 Completed")
@@ -6075,10 +6117,11 @@ class BambiDockWidget(QDockWidget):
             self.update_status("add_frame_detections", "🔴 Error")
             QMessageBox.critical(self, "Error", f"Failed to add detection layers: {str(e)}")
 
-    def _add_detections_separate_layers(self, frame_detections: Dict[int, list], target_crs):
+    def _add_detections_separate_layers(self, frame_detections: Dict[int, list], target_crs,
+                                        camera_label: str = "Thermal"):
         """Add detections as separate layers for each frame."""
         # Create a group for the layers at top of layer tree
-        group = self._create_layer_group("BAMBI Frame Detections")
+        group = self._create_layer_group(f"BAMBI Frame Detections ({camera_label})")
 
         for frame_idx, detections in frame_detections.items():
             if not detections:
@@ -6143,9 +6186,10 @@ class BambiDockWidget(QDockWidget):
         # Collapse the group
         group.setExpanded(False)
 
-    def _add_detections_combined_layer(self, frame_detections: Dict[int, list], target_crs):
+    def _add_detections_combined_layer(self, frame_detections: Dict[int, list], target_crs,
+                                       camera_label: str = "Thermal"):
         """Add all detections in a single combined layer."""
-        layer_name = "BAMBI Detections (All Frames)"
+        layer_name = f"BAMBI Detections - All Frames ({camera_label})"
         layer = QgsVectorLayer("Polygon?crs=" + target_crs.authid(), layer_name, "memory")
 
         provider = layer.dataProvider()
@@ -6253,18 +6297,21 @@ class BambiDockWidget(QDockWidget):
     def add_orthomosaic_to_qgis(self):
         """Add all GeoTIFFs in the orthomosaic folder to QGIS as raster layers."""
         config = self.get_config()
-        ortho_folder = os.path.join(config["target_folder"], "orthomosaic")
+        ortho_camera = config.get("ortho_camera", "T")
+        ortho_suffix = "t" if ortho_camera == "T" else "w"
+        camera_label = "Thermal" if ortho_camera == "T" else "RGB"
+        ortho_folder = os.path.join(config["target_folder"], f"orthomosaic_{ortho_suffix}")
 
         if not os.path.exists(ortho_folder):
             QMessageBox.warning(
                 self,
                 "Missing Orthomosaic",
-                "Orthomosaic has not been generated.\nPlease run Step 6 first."
+                f"{camera_label} orthomosaic has not been generated.\nPlease run Step 6 first."
             )
             return
 
         try:
-            self.log("Adding orthomosaic to QGIS...")
+            self.log(f"Adding {camera_label} orthomosaic to QGIS...")
             self.update_status("add_ortho", "🟡 Loading...")
 
             tif_files = sorted([
@@ -6283,14 +6330,14 @@ class BambiDockWidget(QDockWidget):
                 return
 
             if len(tif_files) == 1:
-                layer_name = os.path.splitext(os.path.basename(tif_files[0]))[0]
+                layer_name = f"BAMBI Orthomosaic ({camera_label})"
                 layer = QgsRasterLayer(tif_files[0], layer_name)
                 if not layer.isValid():
                     raise RuntimeError(f"Failed to load raster: {tif_files[0]}")
                 QgsProject.instance().addMapLayer(layer)
-                self.log("Added orthomosaic layer to QGIS")
+                self.log(f"Added {camera_label} orthomosaic layer to QGIS")
             else:
-                group = self._create_layer_group("BAMBI Orthomosaic")
+                group = self._create_layer_group(f"BAMBI Orthomosaic ({camera_label})")
                 loaded_count = 0
                 for tif_path in tif_files:
                     layer_name = os.path.splitext(os.path.basename(tif_path))[0]
@@ -6314,18 +6361,21 @@ class BambiDockWidget(QDockWidget):
     def add_geotiffs_to_qgis(self):
         """Add exported frame GeoTIFFs to QGIS as raster layers in a group."""
         config = self.get_config()
-        geotiff_folder = os.path.join(config["target_folder"], "geotiffs")
+        gt_camera = config.get("geotiff_camera", "T")
+        gt_suffix = "t" if gt_camera == "T" else "w"
+        camera_label = "Thermal" if gt_camera == "T" else "RGB"
+        geotiff_folder = os.path.join(config["target_folder"], f"geotiffs_{gt_suffix}")
 
         if not os.path.exists(geotiff_folder):
             QMessageBox.warning(
                 self,
                 "Missing GeoTIFFs",
-                "Frame GeoTIFFs have not been exported.\nPlease run Step 7 first."
+                f"{camera_label} frame GeoTIFFs have not been exported.\nPlease run Step 7 first."
             )
             return
 
         try:
-            self.log("Adding frame GeoTIFFs to QGIS...")
+            self.log(f"Adding {camera_label} frame GeoTIFFs to QGIS...")
             self.update_status("add_geotiffs", "🟡 Loading...")
 
             # Find all GeoTIFF files
@@ -6360,7 +6410,7 @@ class BambiDockWidget(QDockWidget):
                     geotiff_files = geotiff_files[:max_layers]
 
             # Create a group for the layers at top of layer tree
-            group = self._create_layer_group("BAMBI Frame GeoTIFFs")
+            group = self._create_layer_group(f"BAMBI Frame GeoTIFFs ({camera_label})")
 
             loaded_count = 0
 
@@ -6394,22 +6444,25 @@ class BambiDockWidget(QDockWidget):
     def add_flight_route_to_qgis(self):
         """Add flight route layers (polyline, points, and frame markers) to QGIS."""
         config = self.get_config()
-        route_folder = os.path.join(config["target_folder"], "flight_route")
+        fr_camera = config.get("flight_route_camera", "T")
+        fr_suffix = "t" if fr_camera == "T" else "w"
+        camera_label = "Thermal" if fr_camera == "T" else "RGB"
+        route_folder = os.path.join(config["target_folder"], f"flight_route_{fr_suffix}")
 
         if not os.path.exists(route_folder):
             QMessageBox.warning(
                 self,
                 "Missing Flight Route",
-                "Flight route has not been generated.\nPlease run Step 9 first."
+                f"{camera_label} flight route has not been generated.\nPlease run Step 9 first."
             )
             return
 
         try:
-            self.log("Adding flight route to QGIS...")
+            self.log(f"Adding {camera_label} flight route to QGIS...")
             self.update_status("add_flight_route", "🟡 Loading...")
 
             # Create a group for the layers at top of layer tree
-            group = self._create_layer_group("BAMBI Flight Route")
+            group = self._create_layer_group(f"BAMBI Flight Route ({camera_label})")
 
             loaded_count = 0
 

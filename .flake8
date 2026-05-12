@@ -5,6 +5,19 @@ extend-ignore =
     E402,
     # Whitespace before ':' — false positives with slice notation
     E203,
+extend-select =
+    # Multiple spaces after ',' or ':' (off by default)
+    E241,
+    # Missing whitespace around arithmetic operator (off by default)
+    E226,
+    # Line break before binary operator (off by default; QGIS linter enforces it)
+    W503,
+    # Line break after binary operator (QGIS linter enforces both W503 and W504)
+    W504,
+    # Missing whitespace after ',' (off by default in some configs)
+    E231,
+    # Continuation line over-indented for hanging indent (off by default)
+    E126,
 per-file-ignores =
     # __init__.py re-exports via import without direct use
     __init__.py: F401

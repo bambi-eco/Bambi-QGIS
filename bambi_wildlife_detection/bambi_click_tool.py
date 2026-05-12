@@ -198,7 +198,7 @@ class BambiClickTool(QgsMapToolIdentify):
         det_conf = float(feature["confidence"])
         det_class = int(feature["class_id"])
 
-        det_file = os.path.join(target_folder, "detections", "detections.txt")
+        det_file = os.path.join(target_folder, f"detections_{boxes_modality}", "detections.txt")
         all_dets = self._load_pixel_detections(det_file)
 
         same_frame = [d for d in all_dets if d["frame"] == frame_idx]
@@ -276,7 +276,7 @@ class BambiClickTool(QgsMapToolIdentify):
                     target_folder, dem_path, correction_path
                 )
 
-            det_file = os.path.join(target_folder, "detections", "detections.txt")
+            det_file = os.path.join(target_folder, f"detections_{boxes_modality}", "detections.txt")
             all_dets = self._load_pixel_detections(det_file)
             same_frame = [d for d in all_dets if d["frame"] == frame_idx]
 
@@ -372,11 +372,11 @@ class BambiClickTool(QgsMapToolIdentify):
                 pass
 
         # Load all pixel-space detections once — needed by both paths below.
-        det_file = os.path.join(target_folder, "detections", "detections.txt")
+        det_file = os.path.join(target_folder, f"detections_{boxes_modality}", "detections.txt")
         all_pixel_dets = self._load_pixel_detections(det_file)
 
         # --- Primary path: tracks_pixel.csv (built-in / BoxMOT trackers) ---
-        tracks_file = os.path.join(target_folder, "tracks", "tracks_pixel.csv")
+        tracks_file = os.path.join(target_folder, f"tracks_{boxes_modality}", "tracks_pixel.csv")
         track_dets_pixel = []
         if os.path.isfile(tracks_file):
             all_tracks = self._load_pixel_tracks(tracks_file)
@@ -392,7 +392,7 @@ class BambiClickTool(QgsMapToolIdentify):
             # --- Fallback: geo-referenced CSVs + detections.txt ---
             # Used when pixel tracks don't exist (geo-referenced native tracker)
             # or when the track_id is absent from tracks_pixel.csv.
-            georef_dets = self._load_georef_track_dets(target_folder, track_id)
+            georef_dets = self._load_georef_track_dets(target_folder, track_id, boxes_modality)
             if not georef_dets:
                 QMessageBox.warning(
                     None,
@@ -725,7 +725,7 @@ class BambiClickTool(QgsMapToolIdentify):
             # ---- Debug: find nearest georef entry for comparison ---------
             georef_info = ""
             try:
-                georef_path = os.path.join(target_folder, "georeferenced", "georeferenced.txt")
+                georef_path = os.path.join(target_folder, f"georeferenced_{boxes_modality}", "georeferenced.txt")
                 if os.path.isfile(georef_path):
                     with open(georef_path, "r", encoding="utf-8") as gf:
                         best_dist = float("inf")
@@ -827,13 +827,15 @@ class BambiClickTool(QgsMapToolIdentify):
     # Data loaders
     # ------------------------------------------------------------------
 
-    def _load_georef_track_dets(self, target_folder: str, track_id: int) -> List[dict]:
+    def _load_georef_track_dets(self, target_folder: str, track_id: int,
+                                camera_suffix: str = "t") -> List[dict]:
         """Return frame/confidence/class_id entries for *track_id* from the
-        geo-referenced track CSVs (``tracks/*.csv``, excluding ``_pixel.csv``).
+        geo-referenced track CSVs (``tracks_t/*.csv`` or ``tracks_w/*.csv``,
+        excluding ``_pixel.csv``).
 
         Format: ``frame,track_id,x1,y1,z1,x2,y2,z2,confidence,class_id[,interpolated]``
         """
-        tracks_folder = os.path.join(target_folder, "tracks")
+        tracks_folder = os.path.join(target_folder, f"tracks_{camera_suffix}")
         if not os.path.isdir(tracks_folder):
             return []
 

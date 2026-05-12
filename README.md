@@ -342,7 +342,7 @@ Builds two complementary vector layers from the mission data:
 
 **Outputs:**
 ```
-flight_route/
+flight_route_t/    # or flight_route_w/ depending on camera selection
 ├── flight_route.geojson       # GPS-based flight path (LineString)
 └── camera_positions.geojson   # Per-frame camera positions (Points)
 ```
@@ -359,7 +359,7 @@ Runs YOLO-based detection on all extracted frames. The default thermal wildlife 
 
 **Outputs:**
 ```
-detections/
+detections_t/    # or detections_w/ depending on camera selection
 └── detections.txt    # Bounding box detections (frame, x1, y1, x2, y2, confidence, class)
 ```
 
@@ -371,7 +371,7 @@ Projects pixel-space bounding boxes to real-world UTM coordinates by ray-casting
 
 **Outputs:**
 ```
-georeferenced/
+georeferenced_t/    # or georeferenced_w/ — follows the detection camera selection
 └── georeferenced.txt    # Detections with UTM bounding box coordinates
 ```
 
@@ -393,7 +393,7 @@ This is particularly useful for **transect-based wildlife surveys**, where the p
 
 **Outputs:**
 ```
-flight_route/
+flight_route_t/    # or flight_route_w/ — uses the flight route camera selection
 ├── perpendicular.json             # Flat list (used by QGIS layer)
 └── perpendicular_by_image.json    # Per-image keyed results
 ```
@@ -426,7 +426,7 @@ Associates detections across frames into continuous tracks using the selected tr
 
 **Outputs:**
 ```
-tracks/
+tracks_t/    # or tracks_w/ — follows the detection camera selection
 ├── tracks_pixel.csv    # Tracks in pixel coordinates
 └── tracks.csv          # Geo-referenced tracks (UTM)
 ```
@@ -443,7 +443,7 @@ For each track, takes the **last bounding box** (the animal's final recorded pos
 
 **Outputs:**
 ```
-flight_route/
+flight_route_t/    # or flight_route_w/ — uses the flight route camera selection
 ├── perpendicular_tracks.json             # Flat list (used by QGIS layer)
 └── perpendicular_tracks_by_track.json    # Per-track keyed results
 ```
@@ -473,7 +473,7 @@ Computes the camera footprint polygon on the ground for each frame (or a subset)
 
 **Outputs:**
 ```
-fov/
+fov_t/    # or fov_w/ depending on camera selection
 ├── fov_polygons.txt      # Per-frame FoV polygon coordinates
 └── merged_fov.geojson    # Union of all footprints (coverage area)
 ```
@@ -490,7 +490,7 @@ Creates a georeferenced orthomosaic by projecting all (or a subset of) frames on
 
 **Outputs:**
 ```
-orthomosaic/
+orthomosaic_t/    # or orthomosaic_w/ depending on camera selection
 └── orthomosaic.tif    # Georeferenced mosaic (COG GeoTIFF)
 ```
 
@@ -504,7 +504,7 @@ Exports individual frames as georeferenced GeoTIFFs, suitable for import into GI
 
 **Outputs:**
 ```
-geotiffs/
+geotiffs_t/    # or geotiffs_w/ depending on camera selection
 ├── frame_000000.tiff
 └── ...
 ```
@@ -519,7 +519,7 @@ Segments individual detected objects from aerial images using Roboflow's SAM3 AP
 
 **Outputs:**
 ```
-segmentation/
+segmentation_t/    # or segmentation_w/ depending on camera selection
 └── segmentation_pixel.json    # Pixel-space segmentation masks
 ```
 
@@ -531,7 +531,7 @@ Projects SAM3 pixel-space segmentation masks to world coordinates using the DEM.
 
 **Outputs:**
 ```
-segmentation/
+segmentation_t/    # or segmentation_w/ depending on camera selection
 └── segmentation_georef.json    # UTM-coordinate segmentation polygons
 ```
 
@@ -881,47 +881,67 @@ Each route is imported as a sub-group containing:
 
 A complete run produces the following folder structure:
 
+Each stage writes to a camera-specific subfolder (`_t` for thermal, `_w` for RGB), so thermal and RGB results coexist without overwriting each other.
+
 ```
 target_folder/
-├── frames_t/                                  # Extracted/undistorted thermal frames
+├── frames_t/                                       # Extracted/undistorted thermal frames
 │   ├── frame_000000.jpg
 │   └── ...
-├── frames_w/                                  # Extracted/undistorted RGB frames
+├── frames_w/                                       # Extracted/undistorted RGB frames
 │   ├── frame_000000.jpg
 │   └── ...
-├── poses_t.json                               # Camera pose per thermal frame
-├── poses_w.json                               # Camera pose per RGB frame
-├── mask_T.png                                 # Thermal undistortion mask
-├── mask_W.png                                 # RGB undistortion mask
-├── flight_route/
-│   ├── flight_route.geojson                   # AirData GPS flight path (LineString)
-│   ├── camera_positions.geojson               # Per-frame camera positions (Points)
-│   ├── perpendicular.json                     # Detection perpendicular distances (flat)
-│   ├── perpendicular_by_image.json            # Detection perpendicular distances (by image)
-│   ├── perpendicular_tracks.json              # Track perpendicular distances (flat)
-│   └── perpendicular_tracks_by_track.json     # Track perpendicular distances (by track)
-├── detections/
-│   └── detections.txt                         # Raw YOLO detections
-├── georeferenced/
-│   └── georeferenced.txt                      # Geo-referenced detections (UTM)
-├── tracks/
-│   ├── tracks_pixel.csv                       # Tracks in pixel coordinates
-│   └── tracks.csv                             # Geo-referenced tracks (UTM)
-├── fov/
-│   ├── fov_polygons.txt                       # Per-frame FoV polygon coordinates
-│   └── merged_fov.geojson                     # Combined coverage area
-├── orthomosaic/
-│   └── orthomosaic.tif                        # Georeferenced mosaic (COG GeoTIFF)
-├── geotiffs/
+├── poses_t.json                                    # Camera pose per thermal frame
+├── poses_w.json                                    # Camera pose per RGB frame
+├── mask_T.png                                      # Thermal undistortion mask
+├── mask_W.png                                      # RGB undistortion mask
+├── flight_route_t/                                 # Flight route (thermal camera poses)
+│   ├── flight_route.geojson                        # AirData GPS flight path (LineString)
+│   ├── camera_positions.geojson                    # Per-frame camera positions (Points)
+│   ├── perpendicular.json                          # Detection perpendicular distances (flat)
+│   ├── perpendicular_by_image.json                 # Detection perpendicular distances (by image)
+│   ├── perpendicular_tracks.json                   # Track perpendicular distances (flat)
+│   └── perpendicular_tracks_by_track.json          # Track perpendicular distances (by track)
+├── flight_route_w/                                 # Flight route (RGB camera poses)
+│   └── ...
+├── detections_t/                                   # Detections on thermal frames
+│   └── detections.txt                              # Raw YOLO detections
+├── detections_w/                                   # Detections on RGB frames
+│   └── detections.txt
+├── georeferenced_t/                                # Geo-referenced thermal detections
+│   └── georeferenced.txt                           # Detections with UTM bounding box coordinates
+├── georeferenced_w/                                # Geo-referenced RGB detections
+│   └── georeferenced.txt
+├── tracks_t/                                       # Tracks from thermal detections
+│   ├── tracks_pixel.csv                            # Tracks in pixel coordinates
+│   └── tracks.csv                                  # Geo-referenced tracks (UTM)
+├── tracks_w/                                       # Tracks from RGB detections
+│   └── ...
+├── fov_t/                                          # Field of View (thermal camera)
+│   ├── fov_polygons.txt                            # Per-frame FoV polygon coordinates
+│   └── merged_fov.geojson                          # Combined coverage area
+├── fov_w/                                          # Field of View (RGB camera)
+│   └── ...
+├── orthomosaic_t/                                  # Orthomosaic from thermal frames
+│   └── orthomosaic.tif                             # Georeferenced mosaic (COG GeoTIFF)
+├── orthomosaic_w/                                  # Orthomosaic from RGB frames
+│   └── orthomosaic.tif
+├── geotiffs_t/                                     # GeoTIFFs from thermal frames
 │   ├── frame_000000.tiff
 │   └── ...
-├── segmentation/
-│   ├── segmentation_pixel.json                # Pixel-space segmentation masks
-│   └── segmentation_georef.json               # Geo-referenced segmentation polygons
+├── geotiffs_w/                                     # GeoTIFFs from RGB frames
+│   └── ...
+├── segmentation_t/                                 # SAM3 segmentation on thermal frames
+│   ├── segmentation_pixel.json                     # Pixel-space segmentation masks
+│   └── segmentation_georef.json                    # Geo-referenced segmentation polygons
+├── segmentation_w/                                 # SAM3 segmentation on RGB frames
+│   └── ...
 └── models/
-    ├── osnet_x0_5_bambi_thermal_omni.pt       # BAMBI Re-ID model
-    └── osnet_x0_25_msmt17.pt                  # BoxMOT default Re-ID model
+    ├── osnet_x0_5_bambi_thermal_omni.pt            # BAMBI Re-ID model
+    └── osnet_x0_25_msmt17.pt                       # BoxMOT default Re-ID model
 ```
+
+> **Note:** Only the subfolders for camera/stage combinations you actually run will be created. Running a stage for only one camera leaves the other subfolder absent.
 
 ---
 
