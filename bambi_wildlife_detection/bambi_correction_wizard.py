@@ -252,10 +252,10 @@ class ClickableImageLabel(QLabel):
             painter.drawEllipse(QPointF(px, py), 6.0, 6.0)
 
         # Magnifier loupe
-        if (self._magnifier_enabled
-                and self._mag_mouse_pos is not None
-                and self._src_pixmap is not None
-                and self._img_rect is not None):
+        if (self._magnifier_enabled and  # noqa: W503, W504
+                self._mag_mouse_pos is not None and  # noqa: W503, W504
+                self._src_pixmap is not None and  # noqa: W503, W504
+                self._img_rect is not None):
             mx = self._mag_mouse_pos.x()
             my = self._mag_mouse_pos.y()
             ir = self._img_rect
@@ -371,11 +371,11 @@ class MagnifierLabel(QLabel):
     def paintEvent(self, event):
         super().paintEvent(event)
 
-        if (not self._magnifier_enabled
-                or self._mouse_pos is None
-                or self._full_pixmap is None
-                or self._full_pixmap.isNull()
-                or self._img_rect is None):
+        if (not self._magnifier_enabled or  # noqa: W503, W504
+                self._mouse_pos is None or  # noqa: W503, W504
+                self._full_pixmap is None or  # noqa: W503, W504
+                self._full_pixmap.isNull() or  # noqa: W503, W504
+                self._img_rect is None):
             return
 
         mx = self._mouse_pos.x()
@@ -775,8 +775,7 @@ class CirclePlotWidget(QWidget):
             if p is None:
                 continue
             pxs, pys = sx(p[0]), sy(p[1])
-            is_active = (self._d_drag_preview is not None
-                         and self._drag_side == side)
+            is_active = (self._d_drag_preview is not None and self._drag_side == side)
             draw_col = col.lighter(160) if is_active else col
             arm = 9 if is_active else 7
             painter.setPen(QPen(draw_col, 2))
@@ -801,14 +800,14 @@ class CirclePlotWidget(QWidget):
             for rp in rps:
                 rpxs, rpys = sx(rp[0]), sy(rp[1])
                 r = 5.0
-                painter.drawLine(int(rpxs),     int(rpys - r),
+                painter.drawLine(int(rpxs), int(rpys - r),
                                  int(rpxs + r), int(rpys))
                 painter.drawLine(int(rpxs + r), int(rpys),
-                                 int(rpxs),     int(rpys + r))
-                painter.drawLine(int(rpxs),     int(rpys + r),
+                                 int(rpxs), int(rpys + r))
+                painter.drawLine(int(rpxs), int(rpys + r),
                                  int(rpxs - r), int(rpys))
                 painter.drawLine(int(rpxs - r), int(rpys),
-                                 int(rpxs),     int(rpys - r))
+                                 int(rpxs), int(rpys - r))
 
         # Status text
         status_color = QColor(80, 220, 80) if intersects else QColor(220, 80, 80)
@@ -1903,10 +1902,7 @@ class BambiCorrectionWizard(QDialog):
         img_lbl.set_image(img)
 
     def _check_page1_ready(self) -> None:
-        ready = (
-            self._tri_mesh is not None
-            and all(sw['img_lbl'].get_point() is not None for sw in self._side_widgets)
-        )
+        ready = (self._tri_mesh is not None and all(sw['img_lbl'].get_point() is not None for sw in self._side_widgets))
         self._p1_next_btn.setEnabled(ready)
 
     # ------------------------------------------------------------------
@@ -2089,11 +2085,11 @@ class BambiCorrectionWizard(QDialog):
         # so the worker never accesses any QWidget.
         side_params = [
             {
-                'point':      self._side_widgets[s]['img_lbl'].get_point(),
+                'point': self._side_widgets[s]['img_lbl'].get_point(),
                 'frame_type': self._frame_type[s],
-                'frame_idx':  self._frame_idx[s],
-                'img_size':   self._img_size[s],
-                'poses':      self._poses.get(self._frame_type[s]),
+                'frame_idx': self._frame_idx[s],
+                'img_size': self._img_size[s],
+                'poses': self._poses.get(self._frame_type[s]),
             }
             for s in range(2)
         ]
@@ -2370,9 +2366,7 @@ class BambiCorrectionWizard(QDialog):
 
         px = QPixmap(self._render_base_pixmap)
 
-        if (self._show_geopoint_chk.isChecked()
-                and self._render_geo_world_points
-                and self._render_cam_info):
+        if (self._show_geopoint_chk.isChecked() and self._render_geo_world_points and self._render_cam_info):
             cam = self._render_cam_info
             cx = cam['cam_cx']
             cy = cam['cam_cy']

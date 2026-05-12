@@ -289,15 +289,15 @@ class BambiClickTool(QgsMapToolIdentify):
             image_path_t, image_path_w = self._resolve_image_paths(target_folder, frame_idx)
 
             frame_dict = {
-                "frame_idx":      frame_idx,
-                "image_path_t":   image_path_t,
-                "image_path_w":   image_path_w,
+                "frame_idx": frame_idx,
+                "image_path_t": image_path_t,
+                "image_path_w": image_path_w,
                 "boxes_modality": boxes_modality,
-                "boxes_green":    green_boxes,
-                "boxes_blue":     [],
+                "boxes_green": green_boxes,
+                "boxes_blue": [],
                 # Per-frame projection context (may differ across layers).
-                "target_folder":  target_folder,
-                "dem_path":       dem_path,
+                "target_folder": target_folder,
+                "dem_path": dem_path,
                 "correction_path": correction_path,
             }
 
@@ -451,9 +451,9 @@ class BambiClickTool(QgsMapToolIdentify):
             ]
             path_t, path_w = self._resolve_image_paths(target_folder, fi)
             frames.append({
-                "frame_idx":      fi,
-                "image_path_t":   path_t,
-                "image_path_w":   path_w,
+                "frame_idx": fi,
+                "image_path_t": path_t,
+                "image_path_w": path_w,
                 "boxes_modality": boxes_modality,
                 "boxes_green": [
                     (det["x1"], det["y1"], det["x2"], det["y2"],
@@ -492,9 +492,9 @@ class BambiClickTool(QgsMapToolIdentify):
 
             path_t, path_w = self._resolve_image_paths(target_folder, fi)
             frames.append({
-                "frame_idx":      fi,
-                "image_path_t":   path_t,
-                "image_path_w":   path_w,
+                "frame_idx": fi,
+                "image_path_t": path_t,
+                "image_path_w": path_w,
                 "boxes_modality": boxes_modality,
                 "boxes_green": [
                     (d["x1"], d["y1"], d["x2"], d["y2"],
@@ -629,7 +629,7 @@ class BambiClickTool(QgsMapToolIdentify):
                 dem_json_path = (
                     dem_path
                     .replace(".gltf", ".json")
-                    .replace(".glb",  ".json")
+                    .replace(".glb", ".json")
                 )
                 o = _try_load_origin(dem_json_path)
                 if o:
@@ -751,7 +751,7 @@ class BambiClickTool(QgsMapToolIdentify):
                 f"[FoV click | {modality}]  frame={frame_idx}\n"
                 f"  Click map      : x={xy[0]:.3f}  y={xy[1]:.3f}\n"
                 f"  Origin         : x={origin[0]:.3f}  y={origin[1]:.3f}  z={origin[2]:.3f}\n"
-                f"  Local point    : x={point[0,0]:.3f}  y={point[0,1]:.3f}  z={local_z:.3f} ({elev_src})\n"
+                f"  Local point    : x={point[0, 0]:.3f}  y={point[0, 1]:.3f}  z={local_z:.3f} ({elev_src})\n"
                 f"  Cam location   : {list(meta['location'])}\n"
                 f"  Cam rotation   : {list(rot_vals)}\n"
                 f"  fovy={fovy}  img={img_width}x{img_height}\n"
@@ -851,9 +851,9 @@ class BambiClickTool(QgsMapToolIdentify):
                         parts = line.split(",")
                         if len(parts) >= 10 and int(parts[1]) == track_id:
                             result.append({
-                                "frame":        int(parts[0]),
-                                "confidence":   float(parts[8]),
-                                "class_id":     int(parts[9]),
+                                "frame": int(parts[0]),
+                                "confidence": float(parts[8]),
+                                "class_id": int(parts[9]),
                                 "interpolated": int(parts[10]) if len(parts) > 10 else 0,
                             })
                 if result:
@@ -881,13 +881,13 @@ class BambiClickTool(QgsMapToolIdentify):
                     parts = line.split()
                     if len(parts) >= 6:
                         result.append({
-                            "frame":      int(parts[0]),
-                            "x1":         float(parts[1]),
-                            "y1":         float(parts[2]),
-                            "x2":         float(parts[3]),
-                            "y2":         float(parts[4]),
+                            "frame": int(parts[0]),
+                            "x1": float(parts[1]),
+                            "y1": float(parts[2]),
+                            "x2": float(parts[3]),
+                            "y2": float(parts[4]),
                             "confidence": float(parts[5]),
-                            "class_id":   int(parts[6]) if len(parts) > 6 else 0,
+                            "class_id": int(parts[6]) if len(parts) > 6 else 0,
                         })
         except Exception:
             pass
@@ -913,12 +913,12 @@ class BambiClickTool(QgsMapToolIdentify):
                         tid = int(parts[1])
                         entry = {
                             "frame": int(parts[0]),
-                            "x1":    float(parts[2]),
-                            "y1":    float(parts[3]),
-                            "x2":    float(parts[4]),
-                            "y2":    float(parts[5]),
-                            "conf":  float(parts[6]),
-                            "cls":   int(parts[7]),
+                            "x1": float(parts[2]),
+                            "y1": float(parts[3]),
+                            "x2": float(parts[4]),
+                            "y2": float(parts[5]),
+                            "conf": float(parts[6]),
+                            "cls": int(parts[7]),
                         }
                         result.setdefault(tid, []).append(entry)
         except Exception:

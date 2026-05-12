@@ -571,11 +571,7 @@ class RandomStrategy(EvaluationFlightStrategy):
 
                 length_stop = False
                 last_direction = None
-                while (
-                    current_distance <= self.__max_distance
-                    and not dead_end
-                    and not length_stop
-                ):
+                while (current_distance <= self.__max_distance and not dead_end and not length_stop):
                     # get the last route position ...
                     last_point = route[-1]
                     # ... and its position on the grid
@@ -596,12 +592,7 @@ class RandomStrategy(EvaluationFlightStrategy):
                         max_x = max(last_point_x, new_x)
                         max_y = max(last_point_y, new_y)
                         # check if the new position is valid at all for our grid
-                        if (
-                            new_x >= 0
-                            and new_y >= 0
-                            and new_x < width
-                            and new_y < height
-                        ):
+                        if (new_x >= 0 and new_y >= 0 and new_x < width and new_y < height):
                             transect_key = f"{min_x}_{min_y}_{max_x}_{max_y}"
                             transect = transects_copy[transect_key]
                             if transect[0] and not transect[1]:
@@ -618,10 +609,7 @@ class RandomStrategy(EvaluationFlightStrategy):
                             0, len(possible_directions) - 1
                         )
                         tmp_direction_idx = possible_directions[random_index]
-                        if (
-                            last_direction is not None
-                            and tmp_direction_idx == inverse_direction[last_direction]
-                        ):
+                        if (last_direction is not None and tmp_direction_idx == inverse_direction[last_direction]):
                             continue
                         next_direction_idx = tmp_direction_idx
 
@@ -652,10 +640,7 @@ class RandomStrategy(EvaluationFlightStrategy):
 
                     # now update our distances
                     # update the current flight length based on the distance from the last to the new point
-                    distance = math.sqrt(
-                        (last_point[1] - next_point[1]) ** 2
-                        + (last_point[0] - next_point[0]) ** 2
-                    )
+                    distance = math.sqrt((last_point[1] - next_point[1]) ** 2 + (last_point[0] - next_point[0]) ** 2)
 
                     # if we are exceeding the max distance lets check the next direction
                     if current_distance + distance > self.__max_distance:
@@ -708,14 +693,10 @@ class RandomStrategy(EvaluationFlightStrategy):
                 smallest_distance = None
                 smallest_start_idx = None
                 for start_point_idx, start_point in enumerate(start_points):
-                    distance = math.sqrt(
-                        (start_point[2] - first_point[1]) ** 2
-                        + (start_point[1] - first_point[0]) ** 2
-                    )
-                    back_distance = math.sqrt(
-                        (start_point[2] - last_point[1]) ** 2
-                        + (start_point[1] - last_point[0]) ** 2
-                    )
+                    d_sq = (start_point[2] - first_point[1]) ** 2 + (start_point[1] - first_point[0]) ** 2
+                    distance = math.sqrt(d_sq)
+                    bd_sq = (start_point[2] - last_point[1]) ** 2 + (start_point[1] - last_point[0]) ** 2
+                    back_distance = math.sqrt(bd_sq)
                     if back_distance + distance > self.__max_start_and_stop_distance:
                         logfile.write(
                             f"-- Start point {start_point[0]} is invalid because of to long distance "
@@ -763,10 +744,7 @@ class RandomStrategy(EvaluationFlightStrategy):
                         if touching_invalid_area:
                             continue
 
-                    if (
-                        smallest_distance is None
-                        or distance + back_distance < smallest_distance
-                    ):
+                    if (smallest_distance is None or distance + back_distance < smallest_distance):
                         # we have a valid start point
                         logfile.write(
                             f"-- Found suitable new minimal start point {start_point_idx} for route {route_idx}\n"
@@ -826,10 +804,7 @@ class RandomStrategy(EvaluationFlightStrategy):
                 )
             logfile.write("-----------------------------------\n")
 
-            while (
-                len(current_selected_transects) < self.__min_transects
-                and current_try < self.__number_of_retries
-            ):
+            while (len(current_selected_transects) < self.__min_transects and current_try < self.__number_of_retries):
                 logfile.write("-----------------------------------\n")
                 logfile.write(
                     f"Trying to create flight plan out of plans ouf of "
@@ -863,10 +838,7 @@ class RandomStrategy(EvaluationFlightStrategy):
                     #     break  # out of for loop ("for flight_idx, flight in ...")
 
                     # early stopping when max_transects is set and count is already in [min, max]
-                    if (
-                        self.__max_transects is not None
-                        and len(current_selected_transects) >= self.__min_transects
-                    ):
+                    if (self.__max_transects is not None and len(current_selected_transects) >= self.__min_transects):
                         logfile.write(
                             f"Early stopping: transect count {len(current_selected_transects)} "
                             f"reached [{self.__min_transects}, {self.__max_transects}] window\n"
@@ -886,14 +858,11 @@ class RandomStrategy(EvaluationFlightStrategy):
                 current_try += 1
 
             res = []
-            exceeds_max = (
-                self.__max_transects is not None
-                and len(current_selected_transects) > self.__max_transects
-            )
+            exceeds_max = (self.__max_transects is not None and len(current_selected_transects) > self.__max_transects)
             if (
-                len(current_selected_transects) < self.__min_transects
-                or exceeds_max
-                or current_try >= self.__number_of_retries
+                len(current_selected_transects) < self.__min_transects or  # noqa: W503, W504
+                exceeds_max or  # noqa: W503, W504
+                current_try >= self.__number_of_retries
             ):
                 logfile.write("-----------------------------------\n")
                 logfile.write("Could not create a valid plan! \n")
@@ -1112,7 +1081,7 @@ class RandomLoopStrategy(EvaluationFlightStrategy):
             logfile.write(f"-- invalid areas: {invalid_areas_name}\n")
             logfile.write(f"-- grid_size: {self.__grid_size}\n")
             logfile.write(
-                f"-- max_start_and_stop_distance : {self.__max_start_and_stop_distance }\n"
+                f"-- max_start_and_stop_distance : {self.__max_start_and_stop_distance}\n"
             )
             logfile.write(f"-- max_distance: {self.__max_distance}\n")
             logfile.write(
@@ -1135,10 +1104,7 @@ class RandomLoopStrategy(EvaluationFlightStrategy):
             valid_routes = 0
             # try to create a plan with routes until you reach the moment of a valid plan
             # (min. number of transects reached) or you touched the max. number of retries
-            while (
-                transect_count < self.__min_transects
-                and planning_retries < self.__number_of_retries
-            ):
+            while (transect_count < self.__min_transects and planning_retries < self.__number_of_retries):
                 logfile.write("--------------------------\n")
                 logfile.write(f"Plan creation try {planning_retries} \n")
                 logfile.write("--------------------------\n")
@@ -1187,11 +1153,7 @@ class RandomLoopStrategy(EvaluationFlightStrategy):
                     # continue finding positions for the route
                     dead_end_stop = False
                     length_stop = False
-                    while (
-                        current_distance <= self.__max_distance
-                        and not dead_end_stop
-                        and not length_stop
-                    ):
+                    while (current_distance <= self.__max_distance and not dead_end_stop and not length_stop):
                         # get the last route position ...
                         last_point = route[-1]
                         # ... and its position on the grid
@@ -1233,12 +1195,7 @@ class RandomLoopStrategy(EvaluationFlightStrategy):
                             transect_key = f"{min_x}_{min_y}_{max_x}_{max_y}"
 
                             # check if the new position is valid at all for our grid
-                            if (
-                                new_x < 0
-                                or new_y < 0
-                                or new_x >= width
-                                or new_y >= height
-                            ):
+                            if (new_x < 0 or new_y < 0 or new_x >= width or new_y >= height):
                                 logfile.write(
                                     f"-- Next transect ({direction_name}) between grid positions "
                                     f"{min_x}/{min_y} and {max_x}/{max_y} is invalid\n"
@@ -1271,8 +1228,8 @@ class RandomLoopStrategy(EvaluationFlightStrategy):
                             # now update our distances
                             # update the current flight length based on the distance from the last to the new point
                             distance = math.sqrt(
-                                (last_point[1] - next_point[1]) ** 2
-                                + (last_point[0] - next_point[0]) ** 2
+                                (last_point[1] - next_point[1]) ** 2 +  # noqa: W503, W504
+                                (last_point[0] - next_point[0]) ** 2
                             )
 
                             # if we are exceeding the max distance lets check the next direction
@@ -1344,17 +1301,14 @@ class RandomLoopStrategy(EvaluationFlightStrategy):
                     smallest_start_idx = None
                     for start_point in start_points:
                         distance = math.sqrt(
-                            (start_point[2] - first_point[1]) ** 2
-                            + (start_point[1] - first_point[0]) ** 2
+                            (start_point[2] - first_point[1]) ** 2 +  # noqa: W503, W504
+                            (start_point[1] - first_point[0]) ** 2
                         )
                         back_distance = math.sqrt(
-                            (start_point[2] - last_point[1]) ** 2
-                            + (start_point[1] - last_point[0]) ** 2
+                            (start_point[2] - last_point[1]) ** 2 +  # noqa: W503, W504
+                            (start_point[1] - last_point[0]) ** 2
                         )
-                        if (
-                            back_distance + distance
-                            > self.__max_start_and_stop_distance
-                        ):
+                        if (back_distance + distance > self.__max_start_and_stop_distance):
                             logfile.write(
                                 f"-- Start point {start_point[0]} too far away for start/end of "
                                 f"route {route_idx} with distance {back_distance + distance}m "
@@ -1402,10 +1356,7 @@ class RandomLoopStrategy(EvaluationFlightStrategy):
                                 continue
 
                         average_distance = (distance + back_distance) / 2
-                        if (
-                            smallest_distance is None
-                            or average_distance < smallest_distance
-                        ):
+                        if (smallest_distance is None or average_distance < smallest_distance):
                             smallest_start_idx = start_point[0]
                             smallest_distance = average_distance
 
@@ -1423,10 +1374,7 @@ class RandomLoopStrategy(EvaluationFlightStrategy):
                         closest_start_point = start_points[smallest_start_idx]
                         transect_count += len(route) - 1
                         # early stopping when max_transects is set and count is in [min, max]
-                        if (
-                            self.__max_transects is not None
-                            and transect_count >= self.__min_transects
-                        ):
+                        if (self.__max_transects is not None and transect_count >= self.__min_transects):
                             logfile.write(
                                 f"Early stopping: transect count {transect_count} "
                                 f"reached [{self.__min_transects}, {self.__max_transects}] window\n"

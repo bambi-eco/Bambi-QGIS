@@ -70,8 +70,7 @@ def _find_sdk_dir() -> Optional[str]:
     candidates = sorted(
         (
             entry for entry in os.listdir(_PLUGINS_DIR)
-            if entry.startswith('dji_thermal_sdk_')
-            and os.path.isdir(os.path.join(_PLUGINS_DIR, entry))
+            if entry.startswith('dji_thermal_sdk_') and os.path.isdir(os.path.join(_PLUGINS_DIR, entry))
         ),
         reverse=True,
     )

@@ -46,15 +46,15 @@ def _fix_package_priority():
 
 _fix_package_priority()
 
-from qgis.PyQt.QtCore import QSettings, QThread, QObject, pyqtSignal
-from qgis.PyQt.QtGui import QColor, QFont
-from qgis.PyQt.QtWidgets import (
+from qgis.PyQt.QtCore import QSettings, QThread, QObject, pyqtSignal  # noqa: E402
+from qgis.PyQt.QtGui import QColor, QFont  # noqa: E402
+from qgis.PyQt.QtWidgets import (  # noqa: E402
     QButtonGroup, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
     QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
     QLineEdit, QMessageBox, QProgressBar, QPushButton, QRadioButton,
     QScrollArea, QSizePolicy, QSpinBox, QTextEdit, QVBoxLayout, QWidget,
 )
-from qgis.core import (
+from qgis.core import (  # noqa: E402
     QgsFillSymbol, QgsLineSymbol, QgsMarkerSymbol, QgsPalLayerSettings,
     QgsProject, QgsSingleSymbolRenderer, QgsTextBufferSettings, QgsTextFormat,
     QgsVectorFileWriter, QgsVectorLayer, QgsVectorLayerSimpleLabeling,
@@ -154,29 +154,29 @@ _ROUTE_COLORS = [
 _SETTINGS_PREFIX = "bambi/flight_planner/"
 
 _DEFAULTS = {
-    "strategy":                          "random",
-    "grid_size":                         400.0,
-    "max_start_and_stop_distance":       3000.0,
-    "min_transects":                     40,
-    "max_transects_enabled":             False,
-    "max_transects":                     100,
-    "max_distance":                      2000.0,
-    "min_transect_overlap":              0.75,
-    "number_of_retries":                 100,
-    "target_crs_epsg":                   32633,
-    "min_transects_per_route":           3,
-    "x_offset":                          0.0,
-    "y_offset":                          0.0,
-    "padding_north":                     0,
-    "padding_east":                      0,
-    "padding_south":                     0,
-    "padding_west":                      0,
-    "seed":                              "",
+    "strategy": "random",
+    "grid_size": 400.0,
+    "max_start_and_stop_distance": 3000.0,
+    "min_transects": 40,
+    "max_transects_enabled": False,
+    "max_transects": 100,
+    "max_distance": 2000.0,
+    "min_transect_overlap": 0.75,
+    "number_of_retries": 100,
+    "target_crs_epsg": 32633,
+    "min_transects_per_route": 3,
+    "x_offset": 0.0,
+    "y_offset": 0.0,
+    "padding_north": 0,
+    "padding_east": 0,
+    "padding_south": 0,
+    "padding_west": 0,
+    "seed": "",
     "max_number_of_overlapping_transects": 0,
-    "max_number_of_flights":             100,
-    "random_search":                     True,
-    "number_of_retries_per_route":       50,
-    "target_folder":                     "",
+    "max_number_of_flights": 100,
+    "random_search": True,
+    "number_of_retries_per_route": 50,
+    "target_folder": "",
 }
 
 

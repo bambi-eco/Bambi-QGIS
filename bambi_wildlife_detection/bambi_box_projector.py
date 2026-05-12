@@ -304,7 +304,7 @@ class BoxProjectionWorker(QThread):
             dem_json_path = (
                 self._dem_path
                 .replace(".gltf", ".json")
-                .replace(".glb",  ".json")
+                .replace(".glb", ".json")
             )
             o = _try_load_origin(dem_json_path)
             if o:

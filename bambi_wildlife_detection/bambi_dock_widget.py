@@ -2591,8 +2591,7 @@ class BambiDockWidget(QDockWidget):
                     self.log(f"Auto-detected {len(existing_srts)} thermal SRT file(s)")
 
             # Auto-detect T_calib.json (only when using custom file mode)
-            if (self.thermal_calib_preset_combo.currentIndex() == 0
-                    and not self.thermal_calibration_path_edit.text()):
+            if (self.thermal_calib_preset_combo.currentIndex() == 0 and not self.thermal_calibration_path_edit.text()):
                 t_calib_path = os.path.join(video_folder, "T_calib.json")
                 if os.path.exists(t_calib_path):
                     self.thermal_calibration_path_edit.setText(t_calib_path)
@@ -2626,8 +2625,7 @@ class BambiDockWidget(QDockWidget):
                     self.log(f"Auto-detected {len(existing_srts)} RGB SRT file(s)")
 
             # Auto-detect W_calib.json (only when using custom file mode)
-            if (self.rgb_calib_preset_combo.currentIndex() == 0
-                    and not self.rgb_calibration_path_edit.text()):
+            if (self.rgb_calib_preset_combo.currentIndex() == 0 and not self.rgb_calibration_path_edit.text()):
                 w_calib_path = os.path.join(video_folder, "W_calib.json")
                 if os.path.exists(w_calib_path):
                     self.rgb_calibration_path_edit.setText(w_calib_path)
@@ -2681,16 +2679,14 @@ class BambiDockWidget(QDockWidget):
                             break
 
         # Auto-detect thermal calibration if not set (only in custom file mode)
-        if (self.thermal_calib_preset_combo.currentIndex() == 0
-                and not self.thermal_calibration_path_edit.text()):
+        if (self.thermal_calib_preset_combo.currentIndex() == 0 and not self.thermal_calibration_path_edit.text()):
             t_calib_path = os.path.join(video_folder, "T_calib.json")
             if os.path.exists(t_calib_path):
                 self.thermal_calibration_path_edit.setText(t_calib_path)
                 self.log("Auto-detected thermal calibration: T_calib.json")
 
         # Auto-detect RGB calibration if not set (only in custom file mode)
-        if (self.rgb_calib_preset_combo.currentIndex() == 0
-                and not self.rgb_calibration_path_edit.text()):
+        if (self.rgb_calib_preset_combo.currentIndex() == 0 and not self.rgb_calibration_path_edit.text()):
             w_calib_path = os.path.join(video_folder, "W_calib.json")
             if os.path.exists(w_calib_path):
                 self.rgb_calibration_path_edit.setText(w_calib_path)
@@ -2853,8 +2849,7 @@ class BambiDockWidget(QDockWidget):
         from datetime import datetime
 
         # ── Collect photo timestamps (EXIF) ──────────────────────────────
-        photo_dir = (self.thermal_photo_dir_edit.text().strip()
-                     or self.rgb_photo_dir_edit.text().strip())
+        photo_dir = (self.thermal_photo_dir_edit.text().strip() or self.rgb_photo_dir_edit.text().strip())
         if not photo_dir or not os.path.isdir(photo_dir):
             return None
 
@@ -4187,9 +4182,9 @@ class BambiDockWidget(QDockWidget):
         """Re-check DJI Thermal SDK availability and update the Thermal Visualisation group."""
         plugins_dir = self._thermal_plugins_dir
         available = (
-            os.path.isdir(plugins_dir) and
+            os.path.isdir(plugins_dir) and  # noqa: W503, W504
             any(
-                e.startswith("dji_thermal_sdk_v") and
+                e.startswith("dji_thermal_sdk_v") and  # noqa: W503, W504
                 os.path.isdir(os.path.join(plugins_dir, e))
                 for e in os.listdir(plugins_dir)
             )
@@ -4444,8 +4439,8 @@ class BambiDockWidget(QDockWidget):
         if config["input_mode"] == "photo":
             # Photo mode validation
             thermal_calib_ok = (
-                config.get("thermal_photo_calibration_data") is not None
-                or config.get("thermal_photo_calibration_path")
+                config.get("thermal_photo_calibration_data") is not None or  # noqa: W503, W504
+                config.get("thermal_photo_calibration_path")
             )
             if not config.get("thermal_photo_dir") or not thermal_calib_ok:
                 QMessageBox.warning(
@@ -4459,8 +4454,8 @@ class BambiDockWidget(QDockWidget):
         else:
             # Video mode validation
             thermal_calib_ok = (
-                config.get("thermal_calibration_data") is not None
-                or config.get("thermal_calibration_path")
+                config.get("thermal_calibration_data") is not None or  # noqa: W503, W504
+                config.get("thermal_calibration_path")
             )
             srt_ok = self.embedded_srt_check.isChecked() or bool(config.get("thermal_srt_paths"))
             if not (config.get("thermal_video_paths") and srt_ok and thermal_calib_ok):
@@ -4468,9 +4463,9 @@ class BambiDockWidget(QDockWidget):
                     self,
                     "Missing Thermal Inputs",
                     "Please provide thermal video inputs:\n\n"
-                    "• Thermal video files\n"
-                    + ("" if self.embedded_srt_check.isChecked() else "• Thermal SRT files\n")
-                    + "• Thermal calibration (preset or custom file)"
+                    "• Thermal video files\n" +  # noqa: W503, W504
+                    ("" if self.embedded_srt_check.isChecked() else "• Thermal SRT files\n") +  # noqa: W503, W504
+                    "• Thermal calibration (preset or custom file)"
                 )
                 return
 
@@ -4487,8 +4482,8 @@ class BambiDockWidget(QDockWidget):
         if config["input_mode"] == "photo":
             # Photo mode validation
             rgb_calib_ok = (
-                config.get("rgb_photo_calibration_data") is not None
-                or config.get("rgb_photo_calibration_path")
+                config.get("rgb_photo_calibration_data") is not None or  # noqa: W503, W504
+                config.get("rgb_photo_calibration_path")
             )
             if not config.get("rgb_photo_dir") or not rgb_calib_ok:
                 QMessageBox.warning(
@@ -4502,8 +4497,8 @@ class BambiDockWidget(QDockWidget):
         else:
             # Video mode validation
             rgb_calib_ok = (
-                config.get("rgb_calibration_data") is not None
-                or config.get("rgb_calibration_path")
+                config.get("rgb_calibration_data") is not None or  # noqa: W503, W504
+                config.get("rgb_calibration_path")
             )
             srt_ok = self.embedded_srt_check.isChecked() or bool(config.get("rgb_srt_paths"))
             if not (config.get("rgb_video_paths") and srt_ok and rgb_calib_ok):
@@ -4511,9 +4506,9 @@ class BambiDockWidget(QDockWidget):
                     self,
                     "Missing RGB Inputs",
                     "Please provide RGB video inputs:\n\n"
-                    "• RGB video files\n"
-                    + ("" if self.embedded_srt_check.isChecked() else "• RGB SRT files\n")
-                    + "• RGB calibration (preset or custom file)"
+                    "• RGB video files\n" +  # noqa: W503, W504
+                    ("" if self.embedded_srt_check.isChecked() else "• RGB SRT files\n") +  # noqa: W503, W504
+                    "• RGB calibration (preset or custom file)"
                 )
                 return
 
@@ -6884,7 +6879,7 @@ class BambiDockWidget(QDockWidget):
                     return None
                 for fmt in (
                     "%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ",
-                    "%Y-%m-%dT%H:%M:%S",     "%Y-%m-%d %H:%M:%S",
+                    "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S",
                     "%Y-%m-%d %H:%M:%S.%f",
                 ):
                     try:
@@ -7819,8 +7814,8 @@ class BambiDockWidget(QDockWidget):
                 norm_path = os.path.normcase(os.path.abspath(gpkg_path))
                 layers_to_remove = [
                     lid for lid, lyr in QgsProject.instance().mapLayers().items()
-                    if isinstance(lyr, QgsVectorLayer)
-                    and os.path.normcase(os.path.abspath(lyr.source().split("|")[0])) == norm_path
+                    if isinstance(lyr, QgsVectorLayer) and  # noqa: W503, W504
+                    os.path.normcase(os.path.abspath(lyr.source().split("|")[0])) == norm_path
                 ]
                 if layers_to_remove:
                     QgsProject.instance().removeMapLayers(layers_to_remove)

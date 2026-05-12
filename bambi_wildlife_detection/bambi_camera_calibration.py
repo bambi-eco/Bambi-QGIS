@@ -492,7 +492,7 @@ class _CalibWorker(QObject):
                     reader_opts.camera_params = f"{f},{f},{w / 2.0},{h / 2.0},0,0,0,0"
                     self.log.emit(
                         f"FoV prior: {fov_diag}° diagonal → f ≈ {f:.1f} px "
-                        f"(vert. FoV ≈ {math.degrees(2*math.atan(h/(2 * f))):.1f}°)"
+                        f"(vert. FoV ≈ {math.degrees(2 * math.atan(h / (2 * f))):.1f}°)"
                     )
 
             pycolmap.extract_features(
@@ -630,8 +630,8 @@ class _CalibWorker(QObject):
 
         # Parse initial calibration
         rgb_data = (
-            initial_calib.get("Wide") or initial_calib.get("RGB")
-            or initial_calib.get("wide") or initial_calib.get("rgb")
+            initial_calib.get("Wide") or initial_calib.get("RGB") or  # noqa: W503, W504
+            initial_calib.get("wide") or initial_calib.get("rgb")
         )
         th_data = initial_calib.get("Thermal") or initial_calib.get("thermal")
         if rgb_data is None or th_data is None:
@@ -1705,9 +1705,9 @@ class CameraCalibrationWizard(QDialog):
 
         # Warn if files are already selected
         has_files = bool(
-            self._single_paths or self._single_video_paths
-            or self._rgb_paths or self._th_paths
-            or self._rgb_video_paths or self._th_video_paths
+            self._single_paths or self._single_video_paths or  # noqa: W503, W504
+            self._rgb_paths or self._th_paths or  # noqa: W503, W504
+            self._rgb_video_paths or self._th_video_paths
         )
         if has_files:
             ans = QMessageBox.question(
@@ -1863,8 +1863,8 @@ class CameraCalibrationWizard(QDialog):
                 # Legacy merged format: extract the relevant section
                 if side == "rgb":
                     section = (
-                        data.get("Wide") or data.get("RGB")
-                        or data.get("wide") or data.get("rgb")
+                        data.get("Wide") or data.get("RGB") or  # noqa: W503, W504
+                        data.get("wide") or data.get("rgb")
                     )
                 else:
                     section = data.get("Thermal") or data.get("thermal")
@@ -2102,9 +2102,9 @@ class CameraCalibrationWizard(QDialog):
             "pairs": [
                 {
                     "rgb_file": os.path.basename(self._rgb_paths[i]),
-                    "th_file":  os.path.basename(self._th_paths[i]),
+                    "th_file": os.path.basename(self._th_paths[i]),
                     "rgb_points": [list(pt) for pt in pa["rgb_pts"]],
-                    "th_points":  [list(pt) for pt in pa["th_pts"]],
+                    "th_points": [list(pt) for pt in pa["th_pts"]],
                 }
                 for i, pa in enumerate(self._pairs_annot)
             ],
@@ -2158,8 +2158,8 @@ class CameraCalibrationWizard(QDialog):
         mismatches = []
         for i in range(min(n_file, n_annot)):
             fp = file_pairs[i]
-            if (fp.get("rgb_file") != os.path.basename(self._rgb_paths[i])
-                    or fp.get("th_file") != os.path.basename(self._th_paths[i])):
+            if (fp.get("rgb_file") != os.path.basename(self._rgb_paths[i]) or  # noqa: W503, W504
+                    fp.get("th_file") != os.path.basename(self._th_paths[i])):
                 mismatches.append(i + 1)
         if mismatches:
             ans = QMessageBox.question(
@@ -2444,8 +2444,8 @@ class CameraCalibrationWizard(QDialog):
                 f"Distortion coefficients:\n"
                 f"  k1={dist[0]:.6f}  k2={dist[1]:.6f}\n"
                 f"  p1={dist[2]:.6f}  p2={dist[3]:.6f}  k3={dist[4]:.6f}\n\n"
-                f"JSON preview:\n"
-                + json.dumps(
+                f"JSON preview:\n" +  # noqa: W503, W504
+                json.dumps(
                     {'ret': result.get('ret'), 'mtx': mtx, 'dist': dist,
                      'name': result.get('camera_name', 'Camera')},
                     indent=2,
@@ -2483,11 +2483,11 @@ class CameraCalibrationWizard(QDialog):
                 )
 
             txt = (
-                _fmt_cam("Thermal (optimised)", th)
-                + "\n"
-                + _fmt_cam("Wide / RGB (reference — unchanged)", wi)
-                + "\nJSON preview:\n"
-                + json.dumps({"Thermal": th, "Wide": wi}, indent=2)
+                _fmt_cam("Thermal (optimised)", th) +  # noqa: W503, W504
+                "\n" +  # noqa: W503, W504
+                _fmt_cam("Wide / RGB (reference — unchanged)", wi) +  # noqa: W503, W504
+                "\nJSON preview:\n" +  # noqa: W503, W504
+                json.dumps({"Thermal": th, "Wide": wi}, indent=2)
             )
             self._result_text.setText(txt)
             self._save_single_widget.setVisible(False)

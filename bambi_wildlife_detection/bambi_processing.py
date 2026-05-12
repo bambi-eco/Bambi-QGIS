@@ -970,14 +970,12 @@ class BambiProcessor:
         d2 = cross(cx, cy, dx, dy, bx, by)
         d3 = cross(ax, ay, bx, by, cx, cy)
         d4 = cross(ax, ay, bx, by, dx, dy)
-        return (((d1 > 0 and d2 < 0) or (d1 < 0 and d2 > 0)) and
-                ((d3 > 0 and d4 < 0) or (d3 < 0 and d4 > 0)))
+        return (((d1 > 0 and d2 < 0) or (d1 < 0 and d2 > 0)) and ((d3 > 0 and d4 < 0) or (d3 < 0 and d4 > 0)))
 
     @staticmethod
     def _segment_intersects_polygon(ax, ay, bx, by, poly: list) -> bool:
         """Return True if segment AB has any part inside or crossing *poly*."""
-        if (BambiProcessor._point_in_polygon(ax, ay, poly) or
-                BambiProcessor._point_in_polygon(bx, by, poly)):
+        if (BambiProcessor._point_in_polygon(ax, ay, poly) or BambiProcessor._point_in_polygon(bx, by, poly)):
             return True
         n = len(poly)
         for i in range(n):
@@ -1312,7 +1310,7 @@ class BambiProcessor:
             distances = [r['distance_m'] for r in results]
             log_fn(f"Distance stats: min={min(distances):.1f}m, "
                    f"max={max(distances):.1f}m, "
-                   f"mean={sum(distances)/len(distances):.1f}m")
+                   f"mean={sum(distances) / len(distances):.1f}m")
 
         if progress_fn:
             progress_fn(100)
@@ -1553,7 +1551,7 @@ class BambiProcessor:
             distances = [r['distance_m'] for r in results]
             log_fn(f"Distance stats: min={min(distances):.1f}m, "
                    f"max={max(distances):.1f}m, "
-                   f"mean={sum(distances)/len(distances):.1f}m")
+                   f"mean={sum(distances) / len(distances):.1f}m")
 
         if progress_fn:
             progress_fn(100)
@@ -3361,7 +3359,7 @@ class BambiProcessor:
             # We will process normally but check distance
             center_x = (min_x + max_x) / 2
             center_y = (min_y + max_y) / 2
-            shots = sorted(shots, key=lambda s: (s.camera.transform.position.x - center_x) ** 2 +
+            shots = sorted(shots, key=lambda s: (s.camera.transform.position.x - center_x) ** 2 +  # noqa: W503, W504
                                                 (s.camera.transform.position.y - center_y) ** 2, reverse=True)
 
         for shot in shots:
@@ -3498,9 +3496,9 @@ class BambiProcessor:
             # Select images within the neighboring range
             sample_images = [
                 img for img in all_images
-                if central_frame - sampling_range
-                <= img["_original_frame_idx"]
-                <= central_frame + sampling_range
+                if central_frame - sampling_range <=  # noqa: W503, W504
+                img["_original_frame_idx"] <=  # noqa: W503, W504
+                central_frame + sampling_range
             ]
 
             if not sample_images:
@@ -4176,8 +4174,8 @@ class BambiProcessor:
                         current_count = count_map[y1:y2, x1:x2]
                         for c in range(4):
                             canvas[y1:y2, x1:x2, c] = (
-                                                              canvas[y1:y2, x1:x2, c] * current_count + region[:, :, c]
-                                                      ) / (current_count + 1)
+                                canvas[y1:y2, x1:x2, c] * current_count + region[:, :, c]
+                            ) / (current_count + 1)
                         count_map[y1:y2, x1:x2] += 1
                     elif blend_mode == "first":
                         # Only write where empty
@@ -5080,12 +5078,7 @@ class BambiProcessor:
 
                 for prompt_result in resp_json.get("prompt_results", []):
                     echo = prompt_result.get("echo", {}) or {}
-                    prompt_text = (
-                            echo.get("text")
-                            or prompt_result.get("prompt")
-                            or prompt_result.get("text")
-                            or ""
-                    )
+                    prompt_text = (echo.get("text") or prompt_result.get("prompt") or prompt_result.get("text") or "")
 
                     prompt_data = {
                         "prompt": prompt_text,

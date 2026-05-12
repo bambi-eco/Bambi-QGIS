@@ -37,16 +37,16 @@ _DJI_SDK_URL = (
 # Tested version ranges per pip distribution name (or special key for non-pip packages).
 # None means no bound (any version is accepted).
 _VERSION_RANGES = {
-    'bambi-detection':  ("0.1.0",  "0.1.0"),
-    'AlfsPy':           ("0.0.0",  "0.0.0"),
-    'pycolmap':         ('4.0.3', '4.0.3'),
-    'boxmot':           ('17.0.0', '18.0.0'),
-    'georef-tracker':   ("0.1.0",  "0.1.0"),
-    'torch':            ("2.5.1",  "2.11.0"),
-    'torchvision':      ("0.20.1", "0.26.0"),
-    'dji-thermal-sdk':  ('1.7', '1.8'),
-    'fiona':            ('1.10.1', '1.10.1'),
-    'simplekml':        ('1.3.6',  '1.3.6'),
+    'bambi-detection': ("0.1.0", "0.1.0"),
+    'AlfsPy': ("0.0.0", "0.0.0"),
+    'pycolmap': ('4.0.3', '4.0.3'),
+    'boxmot': ('17.0.0', '18.0.0'),
+    'georef-tracker': ("0.1.0", "0.1.0"),
+    'torch': ("2.5.1", "2.11.0"),
+    'torchvision': ("0.20.1", "0.26.0"),
+    'dji-thermal-sdk': ('1.7', '1.8'),
+    'fiona': ('1.10.1', '1.10.1'),
+    'simplekml': ('1.3.6', '1.3.6'),
 }
 
 
