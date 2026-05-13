@@ -20,7 +20,8 @@ from qgis.PyQt.QtWidgets import (
     QFileDialog, QLabel, QProgressBar, QTextEdit, QComboBox,
     QCheckBox, QTabWidget, QMessageBox, QScrollArea,
     QFrame, QListWidget, QListWidgetItem, QDialog,
-    QDialogButtonBox, QGridLayout, QToolButton
+    QDialogButtonBox, QGridLayout, QToolButton,
+    QRadioButton, QButtonGroup
 )
 from qgis.PyQt.QtGui import QFont, QColor
 from qgis.core import (
@@ -286,6 +287,73 @@ class CorrectionRangeDialog(QDialog):
                 "z": rot_z
             }
         }
+
+
+class FrameRangeDialog(QDialog):
+    """Dialog for selecting a frame index range before importing per-frame QGIS layers."""
+
+    def __init__(self, parent, min_idx: int, max_idx: int, total: int,
+                 item_label: str = "frames"):
+        super().__init__(parent)
+        self.setWindowTitle("Select Frame Range")
+        self.setMinimumWidth(350)
+
+        self._min_idx = min_idx
+        self._max_idx = max_idx
+
+        layout = QVBoxLayout(self)
+
+        info = QLabel(f"Available: {item_label} {min_idx}–{max_idx}  ({total} total)")
+        info.setAlignment(Qt.AlignCenter)
+        layout.addWidget(info)
+
+        self._all_radio = QRadioButton("All frames")
+        self._all_radio.setChecked(True)
+        self._range_radio = QRadioButton("Frame range:")
+
+        self._btn_group = QButtonGroup(self)
+        self._btn_group.addButton(self._all_radio)
+        self._btn_group.addButton(self._range_radio)
+
+        layout.addWidget(self._all_radio)
+
+        range_row = QHBoxLayout()
+        range_row.addWidget(self._range_radio)
+        self._start_spin = QSpinBox()
+        self._start_spin.setRange(min_idx, max_idx)
+        self._start_spin.setValue(min_idx)
+        self._start_spin.setEnabled(False)
+        self._end_spin = QSpinBox()
+        self._end_spin.setRange(min_idx, max_idx)
+        self._end_spin.setValue(max_idx)
+        self._end_spin.setEnabled(False)
+        range_row.addWidget(QLabel("from"))
+        range_row.addWidget(self._start_spin)
+        range_row.addWidget(QLabel("to"))
+        range_row.addWidget(self._end_spin)
+        layout.addLayout(range_row)
+
+        self._all_radio.toggled.connect(
+            lambda checked: (
+                self._start_spin.setEnabled(not checked),
+                self._end_spin.setEnabled(not checked),
+            )
+        )
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def selected_range(self):
+        """Return ``(start, end)`` — clamped and always start <= end."""
+        if self._all_radio.isChecked():
+            return self._min_idx, self._max_idx
+        start = self._start_spin.value()
+        end = self._end_spin.value()
+        if start > end:
+            start, end = end, start
+        return start, end
 
 
 class BambiDockWidget(QDockWidget):
@@ -4755,7 +4823,6 @@ class BambiDockWidget(QDockWidget):
             self.log(f"Adding {camera_label} SAM3 segmentation to QGIS...")
             self.update_status("add_sam3", "🟡 Loading...")
 
-            # Load geo-referenced results
             with open(georef_file, 'r', encoding='utf-8') as f:
                 georef_results = json.load(f)
 
@@ -4764,38 +4831,52 @@ class BambiDockWidget(QDockWidget):
                 self.update_status("add_sam3", "🔴 No data")
                 return
 
-            # Get target CRS
+            frame_indices = sorted(
+                r.get('frame_idx', 0) for r in georef_results
+            )
+            dlg = FrameRangeDialog(
+                self, frame_indices[0], frame_indices[-1], len(frame_indices), "frames"
+            )
+            if dlg.exec_() != QDialog.Accepted:
+                self.update_status("add_sam3", "⚪ Cancelled")
+                return
+
+            start, end = dlg.selected_range()
+            georef_results = [r for r in georef_results if start <= r.get('frame_idx', 0) <= end]
+
+            if not georef_results:
+                QMessageBox.warning(self, "No Results", "No segmentation in selected range.")
+                self.update_status("add_sam3", "🔴 No data")
+                return
+
             target_crs = QgsCoordinateReferenceSystem(f"EPSG:{config['target_epsg']}")
 
-            # Collect all unique prompts for consistent coloring
             all_prompts = set()
             for frame_result in georef_results:
                 for prompt_data in frame_result.get('prompts', []):
                     all_prompts.add(prompt_data.get('prompt', 'unknown'))
 
-            # Generate colors for prompts
             prompt_colors = {}
             colors = [
-                (255, 0, 0),  # Red
-                (0, 150, 0),  # Green
-                (0, 100, 255),  # Blue
-                (255, 165, 0),  # Orange
-                (128, 0, 128),  # Purple
-                (0, 200, 200),  # Cyan
-                (255, 105, 180),  # Pink
-                (139, 69, 19),  # Brown
+                (255, 0, 0),
+                (0, 150, 0),
+                (0, 100, 255),
+                (255, 165, 0),
+                (128, 0, 128),
+                (0, 200, 200),
+                (255, 105, 180),
+                (139, 69, 19),
             ]
             for idx, prompt in enumerate(sorted(all_prompts)):
                 prompt_colors[prompt] = colors[idx % len(colors)]
 
-            # Check if there are many frames - warn user
-            num_frames = len(georef_results)
-            if num_frames > 50:
+            if len(georef_results) > 50:
                 reply = QMessageBox.question(
                     self,
                     "Many Frames",
-                    f"Found {num_frames} frames with segmentation. Creating individual layer groups "
-                    "for each may slow down QGIS.\n\nContinue with individual frame groups?",
+                    f"Selected range contains {len(georef_results)} frames with segmentation.\n"
+                    "Creating individual layer groups for each may slow down QGIS.\n\n"
+                    "Continue with individual frame groups?",
                     QMessageBox.Yes | QMessageBox.No,
                     QMessageBox.Yes
                 )
@@ -4803,7 +4884,6 @@ class BambiDockWidget(QDockWidget):
                     self.update_status("add_sam3", "⚪ Cancelled")
                     return
 
-            # Create main group at top of layer tree
             main_group = self._create_layer_group(f"SAM3 Segmentation ({camera_label})")
 
             total_polygons = 0
@@ -5150,6 +5230,34 @@ class BambiDockWidget(QDockWidget):
                 self.update_status("add_perpendicular", "🔴 No data")
                 return
 
+            frame_vals = sorted(e["frame"] for e in perpendiculas)
+            dlg = FrameRangeDialog(
+                self, frame_vals[0], frame_vals[-1], len(set(frame_vals)), "frames"
+            )
+            if dlg.exec_() != QDialog.Accepted:
+                self.update_status("add_perpendicular", "⚪ Cancelled")
+                return
+
+            start, end = dlg.selected_range()
+            perpendiculas = [e for e in perpendiculas if start <= e["frame"] <= end]
+
+            if not perpendiculas:
+                QMessageBox.warning(self, "No Data", "No perpendicular results in selected range.")
+                self.update_status("add_perpendicular", "🔴 No data")
+                return
+
+            if len(perpendiculas) > 100:
+                reply = QMessageBox.question(
+                    self,
+                    "Many Lines",
+                    f"Selected range contains {len(perpendiculas)} perpendicular lines.\n"
+                    "Loading all may slow down QGIS.\n\nContinue?",
+                    QMessageBox.Yes | QMessageBox.Cancel
+                )
+                if reply != QMessageBox.Yes:
+                    self.update_status("add_perpendicular", "⚪ Cancelled")
+                    return
+
             target_crs = QgsCoordinateReferenceSystem(f"EPSG:{config['target_epsg']}")
 
             # Create a line layer: one line per detection (foot point → detection center)
@@ -5273,6 +5381,34 @@ class BambiDockWidget(QDockWidget):
                 QMessageBox.warning(self, "No Data", "No track perpendicular results found.")
                 self.update_status("add_track_perpendicular", "🔴 No data")
                 return
+
+            frame_vals = sorted(e["last_frame"] for e in track_entries)
+            dlg = FrameRangeDialog(
+                self, frame_vals[0], frame_vals[-1], len(set(frame_vals)), "frames"
+            )
+            if dlg.exec_() != QDialog.Accepted:
+                self.update_status("add_track_perpendicular", "⚪ Cancelled")
+                return
+
+            start, end = dlg.selected_range()
+            track_entries = [e for e in track_entries if start <= e["last_frame"] <= end]
+
+            if not track_entries:
+                QMessageBox.warning(self, "No Data", "No track perpendicular results in selected range.")
+                self.update_status("add_track_perpendicular", "🔴 No data")
+                return
+
+            if len(track_entries) > 100:
+                reply = QMessageBox.question(
+                    self,
+                    "Many Lines",
+                    f"Selected range contains {len(track_entries)} track perpendicular lines.\n"
+                    "Loading all may slow down QGIS.\n\nContinue?",
+                    QMessageBox.Yes | QMessageBox.Cancel
+                )
+                if reply != QMessageBox.Yes:
+                    self.update_status("add_track_perpendicular", "⚪ Cancelled")
+                    return
 
             target_crs = QgsCoordinateReferenceSystem(f"EPSG:{config['target_epsg']}")
 
@@ -5719,10 +5855,7 @@ class BambiDockWidget(QDockWidget):
             self.log(f"Adding {camera_label} FoV layers to QGIS...")
             self.update_status("add_fov", "🟡 Loading...")
 
-            # Get target CRS
             target_crs = QgsCoordinateReferenceSystem(f"EPSG:{config['target_epsg']}")
-
-            # Load FoV polygons
             fov_polygons = self.load_fov_polygons(fov_file)
 
             if not fov_polygons:
@@ -5730,29 +5863,38 @@ class BambiDockWidget(QDockWidget):
                 self.update_status("add_fov", "🔴 No data")
                 return
 
-            # Ask user how to add layers
+            frame_keys = sorted(fov_polygons.keys())
+            dlg = FrameRangeDialog(
+                self, frame_keys[0], frame_keys[-1], len(frame_keys), "frames"
+            )
+            if dlg.exec_() != QDialog.Accepted:
+                self.update_status("add_fov", "⚪ Cancelled")
+                return
+
+            start, end = dlg.selected_range()
+            fov_polygons = {k: v for k, v in fov_polygons.items() if start <= k <= end}
+
+            if not fov_polygons:
+                QMessageBox.warning(self, "No FoV Data", "No FoV polygons in selected range.")
+                self.update_status("add_fov", "🔴 No data")
+                return
+
             num_frames = len(fov_polygons)
             if num_frames > 100:
                 reply = QMessageBox.question(
                     self,
-                    "Many Frames",
-                    f"Found {num_frames} FoV polygons.\n"
-                    "Loading all as separate layers may slow down QGIS.\n\n"
-                    "Options:\n"
-                    "- Yes: Load first 100 frames as separate layers\n"
-                    "- No: Load all frames in a single combined layer\n"
-                    "- Cancel: Cancel operation",
+                    "Layer Mode",
+                    f"Selected range contains {num_frames} frames.\n\n"
+                    "- Yes: one layer per frame (separate)\n"
+                    "- No: all polygons in a single combined layer",
                     QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel
                 )
                 if reply == QMessageBox.Cancel:
                     self.update_status("add_fov", "⚪ Cancelled")
                     return
                 elif reply == QMessageBox.Yes:
-                    # Limit to 100 frames as separate layers
-                    fov_polygons = dict(list(fov_polygons.items())[:100])
                     self._add_fov_separate_layers(fov_polygons, target_crs, camera_label)
                 else:
-                    # Combined layer
                     self._add_fov_combined_layer(fov_polygons, target_crs, camera_label)
             else:
                 self._add_fov_separate_layers(fov_polygons, target_crs, camera_label)
@@ -6071,10 +6213,7 @@ class BambiDockWidget(QDockWidget):
             self.log(f"Adding per-frame {camera_label} detection layers to QGIS...")
             self.update_status("add_frame_detections", "🟡 Loading...")
 
-            # Get target CRS
             target_crs = QgsCoordinateReferenceSystem(f"EPSG:{config['target_epsg']}")
-
-            # Load detections grouped by frame
             frame_detections = self.load_detections_by_frame(georef_file)
 
             if not frame_detections:
@@ -6082,26 +6221,36 @@ class BambiDockWidget(QDockWidget):
                 self.update_status("add_frame_detections", "🔴 No data")
                 return
 
-            num_frames = len(frame_detections)
-            total_dets = sum(len(dets) for dets in frame_detections.values())
+            frame_keys = sorted(frame_detections.keys())
+            dlg = FrameRangeDialog(
+                self, frame_keys[0], frame_keys[-1], len(frame_keys), "frames"
+            )
+            if dlg.exec_() != QDialog.Accepted:
+                self.update_status("add_frame_detections", "⚪ Cancelled")
+                return
 
+            start, end = dlg.selected_range()
+            frame_detections = {k: v for k, v in frame_detections.items() if start <= k <= end}
+
+            if not frame_detections:
+                QMessageBox.warning(self, "No Detections", "No detections in selected range.")
+                self.update_status("add_frame_detections", "🔴 No data")
+                return
+
+            num_frames = len(frame_detections)
             if num_frames > 100:
                 reply = QMessageBox.question(
                     self,
-                    "Many Frames",
-                    f"Found {total_dets} detections in {num_frames} frames.\n"
-                    "Loading all as separate layers may slow down QGIS.\n\n"
-                    "Options:\n"
-                    "- Yes: Load first 100 frames as separate layers\n"
-                    "- No: Load all in a single combined layer\n"
-                    "- Cancel: Cancel operation",
+                    "Layer Mode",
+                    f"Selected range contains {num_frames} frames.\n\n"
+                    "- Yes: one layer per frame (separate)\n"
+                    "- No: all detections in a single combined layer",
                     QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel
                 )
                 if reply == QMessageBox.Cancel:
                     self.update_status("add_frame_detections", "⚪ Cancelled")
                     return
                 elif reply == QMessageBox.Yes:
-                    frame_detections = dict(list(frame_detections.items())[:100])
                     self._add_detections_separate_layers(frame_detections, target_crs, camera_label)
                 else:
                     self._add_detections_combined_layer(frame_detections, target_crs, camera_label)
@@ -6378,62 +6527,68 @@ class BambiDockWidget(QDockWidget):
             self.log(f"Adding {camera_label} frame GeoTIFFs to QGIS...")
             self.update_status("add_geotiffs", "🟡 Loading...")
 
-            # Find all GeoTIFF files
+            # Collect files and parse frame indices from filenames ({idx:08d}.tiff)
             geotiff_files = []
-            for f in os.listdir(geotiff_folder):
-                if f.lower().endswith(('.tif', '.tiff')):
-                    geotiff_files.append(os.path.join(geotiff_folder, f))
+            for f in sorted(os.listdir(geotiff_folder)):
+                if not f.lower().endswith(('.tif', '.tiff')):
+                    continue
+                stem = os.path.splitext(f)[0]
+                try:
+                    frame_idx = int(stem)
+                except ValueError:
+                    continue
+                geotiff_files.append((frame_idx, os.path.join(geotiff_folder, f)))
 
             if not geotiff_files:
                 QMessageBox.warning(self, "No GeoTIFFs", "No GeoTIFF files found.")
                 self.update_status("add_geotiffs", "🔴 No files")
                 return
 
-            # Sort files by name (which is frame index)
-            geotiff_files.sort()
+            min_idx = geotiff_files[0][0]
+            max_idx = geotiff_files[-1][0]
+            dlg = FrameRangeDialog(
+                self, min_idx, max_idx, len(geotiff_files), "frames"
+            )
+            if dlg.exec_() != QDialog.Accepted:
+                self.update_status("add_geotiffs", "⚪ Cancelled")
+                return
 
-            # Limit number of layers to avoid performance issues
-            max_layers = 100
-            if len(geotiff_files) > max_layers:
+            start, end = dlg.selected_range()
+            geotiff_files = [(idx, p) for idx, p in geotiff_files if start <= idx <= end]
+
+            if not geotiff_files:
+                QMessageBox.warning(self, "No GeoTIFFs", "No GeoTIFF files in selected range.")
+                self.update_status("add_geotiffs", "🔴 No files")
+                return
+
+            if len(geotiff_files) > 100:
                 reply = QMessageBox.question(
                     self,
                     "Many Files",
-                    f"Found {len(geotiff_files)} GeoTIFF files.\n"
-                    "Loading all may slow down QGIS.\n\n"
-                    f"Load only first {max_layers} files?",
-                    QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel
+                    f"Selected range contains {len(geotiff_files)} GeoTIFF files.\n"
+                    "Loading all may slow down QGIS.\n\nContinue?",
+                    QMessageBox.Yes | QMessageBox.Cancel
                 )
-                if reply == QMessageBox.Cancel:
+                if reply != QMessageBox.Yes:
                     self.update_status("add_geotiffs", "⚪ Cancelled")
                     return
-                elif reply == QMessageBox.Yes:
-                    geotiff_files = geotiff_files[:max_layers]
 
-            # Create a group for the layers at top of layer tree
             group = self._create_layer_group(f"BAMBI Frame GeoTIFFs ({camera_label})")
-
             loaded_count = 0
 
-            for geotiff_path in geotiff_files:
-                filename = os.path.basename(geotiff_path)
-                layer_name = f"Frame {os.path.splitext(filename)[0]}"
-
+            for frame_idx, geotiff_path in geotiff_files:
+                layer_name = f"Frame {frame_idx:08d}"
                 layer = QgsRasterLayer(geotiff_path, layer_name)
-
                 if layer.isValid():
                     QgsProject.instance().addMapLayer(layer, False)
                     group.addLayer(layer)
                     loaded_count += 1
                 else:
-                    self.log(f"Warning: Could not load {filename}")
+                    self.log(f"Warning: Could not load {os.path.basename(geotiff_path)}")
 
             self.log(f"Added {loaded_count} GeoTIFF layers to QGIS")
             self.update_status("add_geotiffs", "🟢 Added")
-
-            # Collapse the group by default to improve performance
             group.setExpanded(False)
-
-            # Refresh canvas
             self.iface.mapCanvas().refresh()
 
         except Exception as e:
