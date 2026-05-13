@@ -725,7 +725,7 @@ class BambiClickTool(QgsMapToolIdentify):
             # ---- Debug: find nearest georef entry for comparison ---------
             georef_info = ""
             try:
-                georef_path = os.path.join(target_folder, f"georeferenced_{boxes_modality}", "georeferenced.txt")
+                georef_path = os.path.join(target_folder, f"georeferenced_{modality}", "georeferenced.txt")
                 if os.path.isfile(georef_path):
                     with open(georef_path, "r", encoding="utf-8") as gf:
                         best_dist = float("inf")

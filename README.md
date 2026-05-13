@@ -936,9 +936,15 @@ target_folder/
 │   └── segmentation_georef.json                    # Geo-referenced segmentation polygons
 ├── segmentation_w/                                 # SAM3 segmentation on RGB frames
 │   └── ...
-└── models/
-    ├── osnet_x0_5_bambi_thermal_omni.pt            # BAMBI Re-ID model
-    └── osnet_x0_25_msmt17.pt                       # BoxMOT default Re-ID model
+```
+
+Detection and Re-ID models are stored globally in the QGIS profile directory and shared across all projects:
+
+```
+%APPDATA%\QGIS\QGIS3\profiles\default\bambi_deps\models\
+├── thermal_animal_detector.pt                      # YOLO detection model
+├── osnet_x0_5_bambi_thermal_omni.pt                # BAMBI Re-ID model
+└── osnet_x0_25_msmt17.pt                           # BoxMOT default Re-ID model
 ```
 
 > **Note:** Only the subfolders for camera/stage combinations you actually run will be created. Running a stage for only one camera leaves the other subfolder absent.

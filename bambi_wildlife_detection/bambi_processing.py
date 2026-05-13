@@ -2258,10 +2258,9 @@ class BambiProcessor:
         if log_fn:
             log_fn(f"Starting tracking with backend: {tracker_id}")
 
-        # Initialize tracker manager
-        target_folder = config["target_folder"]
-        models_folder = os.path.join(target_folder, "models")
-        tracker_manager = get_tracker_manager(models_folder)
+        # Use the shared global model dir so Re-ID weights are downloaded once
+        # and reused across projects.
+        tracker_manager = get_tracker_manager(self._get_default_model_dir())
 
         # Check which backend to use
         if tracker_id == "builtin":
