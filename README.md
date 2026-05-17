@@ -1,5 +1,5 @@
 # BAMBI QGIS Plugin
-
+[![QGIS Plugin](https://img.shields.io/badge/QGIS-Plugin-589632?logo=qgis&logoColor=white)](https://plugins.qgis.org/plugins/bambi_wildlife_detection/)
 [![QGIS](https://img.shields.io/badge/QGIS-3.22+-green.svg)](https://qgis.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/license/mit)
 [![Python 3.9+](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
