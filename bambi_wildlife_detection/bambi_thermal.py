@@ -32,9 +32,20 @@ from bambi.thermal.thermal_parser import (  # noqa: F401 – re-exported
     Thermal as _BaseThermal,
     parse_dji_rjpeg,
     apply_colormap,
+    _read_dji_xmp_params as _read_meta,
 )
 
-__all__ = ['Thermal', 'parse_dji_rjpeg', 'apply_colormap']
+__all__ = ['Thermal', 'parse_dji_rjpeg', 'apply_colormap', 'read_thermal_meta']
+
+
+def read_thermal_meta(filepath: str) -> dict:
+    """Return DJI thermal measurement parameters for *filepath*.
+
+    Keys present when available: ``reflected_apparent_temperature``,
+    ``object_distance``, ``emissivity``, ``relative_humidity``,
+    ``image_width``, ``image_height``.  Returns an empty dict on failure.
+    """
+    return _read_meta(filepath)
 
 # ---------------------------------------------------------------------------
 # Plugin-local path discovery

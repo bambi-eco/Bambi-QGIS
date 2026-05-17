@@ -143,6 +143,7 @@ class ThermalViewerDialog(QDialog):
         self._thermal = None    # Thermal instance, kept alive to hold DLL refs
         self._image_list = []   # paths when a folder is open
         self._image_index = -1  # -1 = single-file mode
+        self._thermal_meta = {}  # last-loaded measurement parameters
 
         self._build_ui()
 
@@ -243,6 +244,10 @@ class ThermalViewerDialog(QDialog):
         status_row.addWidget(self._cursor_label)
         root.addLayout(status_row)
 
+        # Metadata row: measurement parameters from EXIF/XMP
+        self._meta_label = QLabel("")
+        root.addWidget(self._meta_label)
+
     # ------------------------------------------------------------------
     # File loading
     # ------------------------------------------------------------------
@@ -340,6 +345,14 @@ class ThermalViewerDialog(QDialog):
             f"{arr.shape[1]} × {arr.shape[0]} px  |  "
             f"range: {t_min:.1f} – {t_max:.1f} °C"
         )
+
+        try:
+            from .bambi_thermal import read_thermal_meta
+            self._thermal_meta = read_thermal_meta(path)
+        except Exception:
+            self._thermal_meta = {}
+        self._meta_label.setText(self._format_meta(self._thermal_meta))
+
         self._refresh_display()
 
     # ------------------------------------------------------------------
@@ -414,6 +427,25 @@ class ThermalViewerDialog(QDialog):
             self._img_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
         )
         self._img_label.setPixmap(scaled)
+
+    # ------------------------------------------------------------------
+    # Metadata formatting
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _format_meta(meta: dict) -> str:
+        if not meta:
+            return ""
+        parts = []
+        if 'reflected_apparent_temperature' in meta:
+            parts.append(f"Reflected: {meta['reflected_apparent_temperature']:.1f} °C")
+        if 'object_distance' in meta:
+            parts.append(f"Distance: {meta['object_distance']:.1f} m")
+        if 'emissivity' in meta:
+            parts.append(f"Emissivity: {meta['emissivity']:.2f}")
+        if 'relative_humidity' in meta:
+            parts.append(f"Humidity: {meta['relative_humidity']:.1f} %")
+        return "  |  ".join(parts)
 
     # ------------------------------------------------------------------
     # Hover callback
