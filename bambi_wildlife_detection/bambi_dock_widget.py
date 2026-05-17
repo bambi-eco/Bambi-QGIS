@@ -785,6 +785,23 @@ class BambiDockWidget(QDockWidget):
         airdata_label.setStyleSheet("color: blue; font-size: 10px;")
         common_layout.addWidget(airdata_label)
 
+        self._airdata_exif_info_label = QLabel(
+            "If no AirData CSV is provided, the plugin will attempt to reconstruct "
+            "the flight log row by row from the GPS position, altitude and gimbal "
+            "orientation stored in each image's EXIF / XMP data. "
+            "An error is raised if neither source is available."
+        )
+        self._airdata_exif_info_label.setWordWrap(True)
+        self._airdata_exif_info_label.setStyleSheet(
+            "font-size: 10px;"
+            "color: #31708f;"
+            "background-color: #d9edf7;"
+            "border: 1px solid #bce8f1;"
+            "padding: 0px;"
+        )
+        self._airdata_exif_info_label.setVisible(False)
+        common_layout.addWidget(self._airdata_exif_info_label)
+
         self.correction_path_edit = QLineEdit()
         self.correction_path_edit.setPlaceholderText("Path to correction.json (auto-detected)")
         correction_browse_btn = QPushButton("Browse...")
@@ -3025,6 +3042,7 @@ class BambiDockWidget(QDockWidget):
         self.video_inputs_widget.setVisible(video_mode)
         self.photo_inputs_widget.setVisible(not video_mode)
         self.embedded_srt_check.setVisible(video_mode)
+        self._airdata_exif_info_label.setVisible(not video_mode)
         if not video_mode:
             self.embedded_srt_check.setChecked(False)
         self.extract_sampling_rate_check.setEnabled(video_mode)
@@ -4543,8 +4561,11 @@ class BambiDockWidget(QDockWidget):
                 )
                 return
 
-        # Validate common inputs
-        if not self.validate_inputs(["airdata_path", "target_folder"]):
+        # Validate common inputs (airdata optional in photo mode — EXIF fallback)
+        required = ["target_folder"]
+        if config["input_mode"] != "photo":
+            required.append("airdata_path")
+        if not self.validate_inputs(required):
             return
 
         self.start_worker("extract_thermal_frames")
@@ -4586,8 +4607,11 @@ class BambiDockWidget(QDockWidget):
                 )
                 return
 
-        # Validate common inputs
-        if not self.validate_inputs(["airdata_path", "target_folder"]):
+        # Validate common inputs (airdata optional in photo mode — EXIF fallback)
+        required = ["target_folder"]
+        if config["input_mode"] != "photo":
+            required.append("airdata_path")
+        if not self.validate_inputs(required):
             return
 
         self.start_worker("extract_rgb_frames")
@@ -5094,6 +5118,16 @@ class BambiDockWidget(QDockWidget):
                             )
                     except Exception:
                         pass
+
+                    # If the airdata field was empty, fill it with the
+                    # EXIF-reconstructed CSV so the user can see it and reuse it.
+                    if not self.airdata_path_edit.text().strip():
+                        synthetic_csv = os.path.join(
+                            config.get("target_folder", ""),
+                            f"airdata_from_exif_{suffix}.csv",
+                        )
+                        if os.path.exists(synthetic_csv):
+                            self.airdata_path_edit.setText(synthetic_csv)
         else:
             # Check if it was cancelled (worker would have logged it)
             self.update_status(step, "🔴 Cancelled/Failed")

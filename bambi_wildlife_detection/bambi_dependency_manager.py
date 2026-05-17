@@ -374,7 +374,7 @@ class DependencyManagerDialog(QDialog):
 
         # ---- Restart notice ----
         restart_label = QLabel(
-            '<b>After pressing any install button, you must restart QGIS '
+            '<b>After pressing any install button, we recommend to restart QGIS '
             'to activate the newly installed packages.</b>'
         )
         restart_label.setWordWrap(True)

@@ -372,7 +372,7 @@ class BambiProcessor:
             raise CancelledException("Cancelled before starting")
 
         target_folder, rel_transformer, ad_origin = self._get_extraction_prerequisites(config)
-        airdata_path = config["airdata_path"]
+        airdata_path = config.get("airdata_path", "")
 
         frames_folder_t = os.path.join(target_folder, "frames_t")
         os.makedirs(frames_folder_t, exist_ok=True)
@@ -417,12 +417,55 @@ class BambiProcessor:
                         f"during frame extraction."
                     )
 
-            try:
-                extractor = UniqueMatchPhotoPoseExtractor(
-                    rel_transformer=rel_transformer,
-                    calibration_res=calibration_res,
-                    thermal_colorizer=thermal_colorizer,
+            # Build extension patterns once (shared by EXIF fallback + extractor)
+            _ext_suffixes = (".JPG", ".jpg", ".jpeg", ".JPEG", ".tiff", ".TIFF", ".png", ".PNG")
+            if config.get("thermal_photo_filter"):
+                photo_extensions_t = tuple(
+                    f"{p}{e}" for p in ("*_T_*", "*_T") for e in _ext_suffixes
                 )
+                if log_fn:
+                    log_fn("Thermal filter active: only images with _T_ or _T in filename")
+            else:
+                photo_extensions_t = ("*.JPG", "*.jpg", "*.jpeg", "*.JPEG",
+                                      "*.tiff", "*.TIFF", "*.png", "*.PNG")
+
+            # EXIF fallback: reconstruct AirData CSV when no flight log is available
+            _use_ordered_t = False
+            if not airdata_path or not os.path.exists(airdata_path):
+                if log_fn:
+                    log_fn("No AirData file – reconstructing flight log from image EXIF…")
+                import glob as _glob
+                from bambi.airdata.air_data_from_exif_parser import write_airdata_csv_from_exif
+                _img_paths = sorted(set(
+                    p for ext in photo_extensions_t
+                    for p in _glob.glob(os.path.join(config["thermal_photo_dir"], ext))
+                ))
+                _synthetic_csv = os.path.join(target_folder, "airdata_from_exif_t.csv")
+                try:
+                    _n = write_airdata_csv_from_exif(_img_paths, _synthetic_csv)
+                except Exception as _exc:
+                    raise RuntimeError(
+                        f"No AirData file and EXIF fallback failed: {_exc}"
+                    ) from _exc
+                airdata_path = _synthetic_csv
+                _use_ordered_t = True
+                if log_fn:
+                    log_fn(f"Reconstructed {_n} AirData row(s) from EXIF.")
+
+            try:
+                if _use_ordered_t:
+                    from bambi.webgl.photo_pose_extractor import OrderedPhotoPoseExtractor
+                    extractor = OrderedPhotoPoseExtractor(
+                        rel_transformer=rel_transformer,
+                        calibration_res=calibration_res,
+                        thermal_colorizer=thermal_colorizer,
+                    )
+                else:
+                    extractor = UniqueMatchPhotoPoseExtractor(
+                        rel_transformer=rel_transformer,
+                        calibration_res=calibration_res,
+                        thermal_colorizer=thermal_colorizer,
+                    )
                 if log_fn:
                     log_fn(f"Photo mode: processing images in {config['thermal_photo_dir']}")
                     # Monkey-patch per-image progress logging onto this instance
@@ -437,7 +480,7 @@ class BambiProcessor:
 
                     extractor._undistort_and_save = _logged_undistort
 
-                extract_kwargs = dict(
+                extractor.extract(
                     photo_dir=config["thermal_photo_dir"],
                     airdata_csv=airdata_path,
                     output_path=target_poses_t,
@@ -446,17 +489,8 @@ class BambiProcessor:
                     origin=ad_origin,
                     skip=config.get("extract_skip", 0),
                     limit=config.get("extract_limit"),
+                    extensions=photo_extensions_t,
                 )
-                if config.get("thermal_photo_filter"):
-                    _exts = (".JPG", ".jpg", ".jpeg", ".JPEG", ".tiff", ".TIFF", ".png", ".PNG")
-                    extract_kwargs["extensions"] = tuple(
-                        f"*_T_*{e}" for e in _exts
-                    ) + tuple(
-                        f"*_T{e}" for e in _exts
-                    )
-                    if log_fn:
-                        log_fn("Thermal filter active: only images with _T_ or _T in filename")
-                extractor.extract(**extract_kwargs)
             finally:
                 if thermal_instance is not None:
                     thermal_instance.close()
@@ -540,7 +574,7 @@ class BambiProcessor:
             raise CancelledException("Cancelled before starting")
 
         target_folder, rel_transformer, ad_origin = self._get_extraction_prerequisites(config)
-        airdata_path = config["airdata_path"]
+        airdata_path = config.get("airdata_path", "")
 
         frames_folder_w = os.path.join(target_folder, "frames_w")
         os.makedirs(frames_folder_w, exist_ok=True)
@@ -562,14 +596,56 @@ class BambiProcessor:
             if calibration_res is None:
                 raise ValueError("RGB photo calibration data is None. Check the calibration file or preset.")
 
-            extractor = UniqueMatchPhotoPoseExtractor(
-                rel_transformer=rel_transformer,
-                calibration_res=calibration_res,
-            )
+            # Build extension patterns once (shared by EXIF fallback + extractor)
+            _ext_suffixes = (".JPG", ".jpg", ".jpeg", ".JPEG", ".tiff", ".TIFF", ".png", ".PNG")
+            if config.get("rgb_photo_filter"):
+                photo_extensions_w = tuple(
+                    f"{p}{e}" for p in ("*_W_*", "*_W", "*_V_*", "*_V") for e in _ext_suffixes
+                )
+                if log_fn:
+                    log_fn("RGB filter active: only images with _W_, _W, _V_ or _V in filename")
+            else:
+                photo_extensions_w = ("*.JPG", "*.jpg", "*.jpeg", "*.JPEG",
+                                      "*.tiff", "*.TIFF", "*.png", "*.PNG")
+
+            # EXIF fallback: reconstruct AirData CSV when no flight log is available
+            _use_ordered_w = False
+            if not airdata_path or not os.path.exists(airdata_path):
+                if log_fn:
+                    log_fn("No AirData file – reconstructing flight log from image EXIF…")
+                import glob as _glob
+                from bambi.airdata.air_data_from_exif_parser import write_airdata_csv_from_exif
+                _img_paths = sorted(set(
+                    p for ext in photo_extensions_w
+                    for p in _glob.glob(os.path.join(config["rgb_photo_dir"], ext))
+                ))
+                _synthetic_csv = os.path.join(target_folder, "airdata_from_exif_w.csv")
+                try:
+                    _n = write_airdata_csv_from_exif(_img_paths, _synthetic_csv)
+                except Exception as _exc:
+                    raise RuntimeError(
+                        f"No AirData file and EXIF fallback failed: {_exc}"
+                    ) from _exc
+                airdata_path = _synthetic_csv
+                _use_ordered_w = True
+                if log_fn:
+                    log_fn(f"Reconstructed {_n} AirData row(s) from EXIF.")
+
+            if _use_ordered_w:
+                from bambi.webgl.photo_pose_extractor import OrderedPhotoPoseExtractor
+                extractor = OrderedPhotoPoseExtractor(
+                    rel_transformer=rel_transformer,
+                    calibration_res=calibration_res,
+                )
+            else:
+                extractor = UniqueMatchPhotoPoseExtractor(
+                    rel_transformer=rel_transformer,
+                    calibration_res=calibration_res,
+                )
             if log_fn:
                 log_fn(f"Photo mode: processing images in {config['rgb_photo_dir']}")
 
-            extract_kwargs = dict(
+            extractor.extract(
                 photo_dir=config["rgb_photo_dir"],
                 airdata_csv=airdata_path,
                 output_path=target_poses_w,
@@ -578,21 +654,8 @@ class BambiProcessor:
                 origin=ad_origin,
                 skip=config.get("extract_skip", 0),
                 limit=config.get("extract_limit"),
+                extensions=photo_extensions_w,
             )
-            if config.get("rgb_photo_filter"):
-                _exts = (".JPG", ".jpg", ".jpeg", ".JPEG", ".tiff", ".TIFF", ".png", ".PNG")
-                extract_kwargs["extensions"] = tuple(
-                    f"*_W_*{e}" for e in _exts
-                ) + tuple(
-                    f"*_W{e}" for e in _exts
-                ) + tuple(
-                    f"*_V_*{e}" for e in _exts
-                ) + tuple(
-                    f"*_V{e}" for e in _exts
-                )
-                if log_fn:
-                    log_fn("RGB filter active: only images with _W_, _W, _V_ or _V in filename")
-            extractor.extract(**extract_kwargs)
         else:
             from bambi.video.calibrated_video_frame_accessor import CalibratedVideoFrameAccessor
             from bambi.webgl.timed_pose_extractor import TimedPoseExtractor
