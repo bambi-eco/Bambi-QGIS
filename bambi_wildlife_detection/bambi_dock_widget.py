@@ -773,17 +773,13 @@ class BambiDockWidget(QDockWidget):
         self.airdata_path_edit.setPlaceholderText("Path to AirData CSV file")
         airdata_browse_btn = QPushButton("Browse...")
         airdata_browse_btn.clicked.connect(self.browse_airdata)
-        airdata_row = QHBoxLayout()
-        airdata_row.addWidget(self.airdata_path_edit)
-        airdata_row.addWidget(airdata_browse_btn)
-        common_layout.addRow("AirData CSV:", airdata_row)
+
         airdata_label = QLabel(
             '<a href="https://www.airdata.com">https://www.airdata.com</a>'
         )
         airdata_label.setOpenExternalLinks(True)
         airdata_label.setWordWrap(True)
         airdata_label.setStyleSheet("color: blue; font-size: 10px;")
-        common_layout.addWidget(airdata_label)
 
         self._airdata_exif_info_label = QLabel(
             "If no AirData CSV is provided, the plugin will attempt to reconstruct "
@@ -792,15 +788,21 @@ class BambiDockWidget(QDockWidget):
             "An error is raised if neither source is available."
         )
         self._airdata_exif_info_label.setWordWrap(True)
-        self._airdata_exif_info_label.setStyleSheet(
-            "font-size: 10px;"
-            "color: #31708f;"
-            "background-color: #d9edf7;"
-            "border: 1px solid #bce8f1;"
-            "padding: 0px;"
-        )
+        self._airdata_exif_info_label.setStyleSheet("color: gray; font-size: 10px;")
         self._airdata_exif_info_label.setVisible(False)
-        common_layout.addWidget(self._airdata_exif_info_label)
+
+        airdata_field = QWidget()
+        airdata_field_layout = QVBoxLayout(airdata_field)
+        airdata_field_layout.setContentsMargins(0, 0, 0, 0)
+        airdata_field_layout.setSpacing(0)
+        airdata_row = QHBoxLayout()
+        airdata_row.setContentsMargins(0, 0, 0, 0)
+        airdata_row.addWidget(self.airdata_path_edit)
+        airdata_row.addWidget(airdata_browse_btn)
+        airdata_field_layout.addLayout(airdata_row)
+        airdata_field_layout.addWidget(airdata_label)
+        airdata_field_layout.addWidget(self._airdata_exif_info_label)
+        common_layout.addRow("AirData CSV:", airdata_field)
 
         self.correction_path_edit = QLineEdit()
         self.correction_path_edit.setPlaceholderText("Path to correction.json (auto-detected)")
