@@ -691,75 +691,6 @@ class BambiDockWidget(QDockWidget):
         rgb_photo_layout.addRow("Calibration:", rgb_photo_calib_container)
         photo_inputs_layout.addWidget(rgb_photo_group)
 
-        # Photo settings
-        photo_settings_group = QGroupBox("Photo Settings")
-        photo_settings_layout = QFormLayout(photo_settings_group)
-
-        # Auto-detect checkbox
-        self.photo_tz_auto_check = QCheckBox("Auto")
-        self.photo_tz_auto_check.setChecked(True)
-        self.photo_tz_auto_check.setToolTip(
-            "Automatically determine the UTC offset by comparing average photo "
-            "timestamps (EXIF) with average AirData isPhoto timestamps.")
-        self.photo_tz_auto_check.stateChanged.connect(self._on_photo_tz_auto_changed)
-
-        # Auto-offset result label (shown when Auto is checked)
-        self.photo_tz_auto_result_label = QLabel()
-        self.photo_tz_auto_result_label.setStyleSheet("color: grey; font-size: 10px;")
-        self.photo_tz_auto_result_label.setVisible(True)
-
-        auto_row = QHBoxLayout()
-        auto_row.addWidget(self.photo_tz_auto_check)
-        auto_row.addWidget(self.photo_tz_auto_result_label)
-        photo_settings_layout.addRow("Offset:", auto_row)
-
-        # Manual timezone widgets
-        self.photo_timezone_combo = QComboBox()
-        self.photo_timezone_combo.setEditable(True)
-        self.photo_timezone_combo.setToolTip(
-            "Timezone of the camera clock. The current UTC offset is shown on the right.")
-        try:
-            from zoneinfo import available_timezones
-            tz_names = sorted(available_timezones())
-        except ImportError:
-            tz_names = [
-                "UTC", "Europe/London", "Europe/Paris", "Europe/Berlin",
-                "Europe/Vienna", "Europe/Rome", "Europe/Madrid",
-                "Europe/Warsaw", "Europe/Helsinki", "Europe/Athens",
-                "America/New_York", "America/Chicago", "America/Denver",
-                "America/Los_Angeles", "America/Anchorage", "Pacific/Honolulu",
-                "America/Sao_Paulo", "America/Buenos_Aires",
-                "Asia/Dubai", "Asia/Kolkata", "Asia/Bangkok",
-                "Asia/Shanghai", "Asia/Tokyo", "Australia/Sydney",
-            ]
-        self.photo_timezone_combo.addItems(tz_names)
-        default_tz = "Europe/Vienna"
-        default_idx = self.photo_timezone_combo.findText(default_tz)
-        if default_idx >= 0:
-            self.photo_timezone_combo.setCurrentIndex(default_idx)
-
-        self.photo_timezone_offset_label = QLabel()
-        self.photo_timezone_offset_label.setStyleSheet("color: grey; font-size: 10px;")
-        self._update_timezone_offset_label()
-
-        self.photo_tz_manual_widget = QWidget()
-        self.photo_tz_manual_widget.setVisible(False)
-        tz_row = QHBoxLayout(self.photo_tz_manual_widget)
-        tz_row.setContentsMargins(0, 0, 0, 0)
-        tz_row.addWidget(self.photo_timezone_combo)
-        tz_row.addWidget(self.photo_timezone_offset_label)
-        photo_settings_layout.addRow("Timezone:", self.photo_tz_manual_widget)
-
-        self.photo_timezone_combo.currentTextChanged.connect(self._update_timezone_offset_label)
-        photo_inputs_layout.addWidget(photo_settings_group)
-
-        self.photo_tz_manual_hint = QLabel(
-            'Timezone of camera, when photos were created not current timezone (consider daylight saving time)!'
-        )
-        self.photo_tz_manual_hint.setWordWrap(True)
-        self.photo_tz_manual_hint.setVisible(False)
-        photo_settings_layout.addWidget(self.photo_tz_manual_hint)
-
         input_layout.addWidget(self.photo_inputs_widget)
 
         self.video_mode_check.stateChanged.connect(self._on_input_mode_changed)
@@ -1052,6 +983,74 @@ class BambiDockWidget(QDockWidget):
         frame_ext_layout.addRow("Sampling rate (video only):", sampling_row)
 
         extraction_tab_layout.addWidget(frame_ext_group)
+
+        # Timezone (shared by video and photo modes)
+        tz_group = QGroupBox("Timezone")
+        tz_group_layout = QFormLayout(tz_group)
+
+        self.tz_auto_check = QCheckBox("Auto-detect")
+        self.tz_auto_check.setChecked(True)
+        self.tz_auto_check.setToolTip(
+            "Auto-detect the drone/camera clock timezone by comparing SRT timestamps "
+            "(video mode) or photo EXIF timestamps (photo mode) with AirData UTC timestamps.")
+        self.tz_auto_check.stateChanged.connect(self._on_tz_auto_changed)
+
+        self.tz_auto_result_label = QLabel()
+        self.tz_auto_result_label.setStyleSheet("color: grey; font-size: 10px;")
+        self.tz_auto_result_label.setVisible(True)
+
+        _tz_auto_row = QHBoxLayout()
+        _tz_auto_row.addWidget(self.tz_auto_check)
+        _tz_auto_row.addWidget(self.tz_auto_result_label)
+        tz_group_layout.addRow("Offset:", _tz_auto_row)
+
+        self.timezone_combo = QComboBox()
+        self.timezone_combo.setEditable(True)
+        self.timezone_combo.setToolTip(
+            "Timezone of the drone/camera clock. The current UTC offset is shown on the right.")
+        try:
+            from zoneinfo import available_timezones
+            _tz_names = sorted(available_timezones())
+        except ImportError:
+            _tz_names = [
+                "UTC", "Europe/London", "Europe/Paris", "Europe/Berlin",
+                "Europe/Vienna", "Europe/Rome", "Europe/Madrid",
+                "Europe/Warsaw", "Europe/Helsinki", "Europe/Athens",
+                "America/New_York", "America/Chicago", "America/Denver",
+                "America/Los_Angeles", "America/Anchorage", "Pacific/Honolulu",
+                "America/Sao_Paulo", "America/Buenos_Aires",
+                "Asia/Dubai", "Asia/Kolkata", "Asia/Bangkok",
+                "Asia/Colombo", "Asia/Male",
+                "Asia/Shanghai", "Asia/Tokyo", "Australia/Sydney",
+            ]
+        self.timezone_combo.addItems(_tz_names)
+        _tz_default_idx = self.timezone_combo.findText("Europe/Vienna")
+        if _tz_default_idx >= 0:
+            self.timezone_combo.setCurrentIndex(_tz_default_idx)
+
+        self.timezone_offset_label = QLabel()
+        self.timezone_offset_label.setStyleSheet("color: grey; font-size: 10px;")
+        self._update_timezone_offset_label()
+
+        self.tz_manual_widget = QWidget()
+        self.tz_manual_widget.setVisible(False)
+        _tz_manual_row = QHBoxLayout(self.tz_manual_widget)
+        _tz_manual_row.setContentsMargins(0, 0, 0, 0)
+        _tz_manual_row.addWidget(self.timezone_combo)
+        _tz_manual_row.addWidget(self.timezone_offset_label)
+        tz_group_layout.addRow("Timezone:", self.tz_manual_widget)
+
+        self.timezone_combo.currentTextChanged.connect(self._update_timezone_offset_label)
+
+        self.tz_manual_hint = QLabel(
+            'Timezone of camera/drone clock when recordings were made '
+            '(consider daylight saving time)!'
+        )
+        self.tz_manual_hint.setWordWrap(True)
+        self.tz_manual_hint.setVisible(False)
+        tz_group_layout.addWidget(self.tz_manual_hint)
+
+        extraction_tab_layout.addWidget(tz_group)
 
         # Thermal visualisation
         self.thermal_vis_group = QGroupBox("Thermal Visualisation (Photo Mode only)")
@@ -2452,7 +2451,6 @@ class BambiDockWidget(QDockWidget):
                 RGB_CALIBRATIONS.get(self.rgb_calib_preset_combo.currentText())
                 if self.rgb_calib_preset_combo.currentIndex() > 0 else None
             ),
-
             # Photo inputs
             "thermal_photo_dir": self.thermal_photo_dir_edit.text(),
             "thermal_photo_filter": self.thermal_photo_filter_check.isChecked(),
@@ -2474,7 +2472,7 @@ class BambiDockWidget(QDockWidget):
                 RGB_CALIBRATIONS.get(self.rgb_photo_calib_preset_combo.currentText())
                 if self.rgb_photo_calib_preset_combo.currentIndex() > 0 else None
             ),
-            "photo_timezone_offset": self._get_photo_timezone_offset(),
+            "timezone_offset_hours": self._get_timezone_offset(),
 
             # Frame extraction
             "extract_skip": self.extract_skip_spin.value(),
@@ -2885,21 +2883,21 @@ class BambiDockWidget(QDockWidget):
                 return None
 
     def _update_timezone_offset_label(self):
-        """Update the UTC offset label next to the timezone combo."""
-        tz_name = self.photo_timezone_combo.currentText().strip()
+        """Update the UTC offset label next to the manual timezone combo."""
+        tz_name = self.timezone_combo.currentText().strip()
         offset = self._compute_timezone_offset(tz_name)
         if offset is None:
-            self.photo_timezone_offset_label.setText("(unknown timezone)")
+            self.timezone_offset_label.setText("(unknown timezone)")
         else:
             sign = "+" if offset >= 0 else ""
-            self.photo_timezone_offset_label.setText(f"UTC{sign}{offset:g}h")
+            self.timezone_offset_label.setText(f"UTC{sign}{offset:g}h")
 
-    def _on_photo_tz_auto_changed(self, state: int):
-        """Toggle between auto-detected and manual timezone offset."""
+    def _on_tz_auto_changed(self, state: int):
+        """Toggle between auto-detected and manual timezone."""
         auto = bool(state)
-        self.photo_tz_manual_widget.setVisible(not auto)
-        self.photo_tz_manual_hint.setVisible(not auto)
-        self.photo_tz_auto_result_label.setVisible(auto)
+        self.tz_manual_widget.setVisible(not auto)
+        self.tz_manual_hint.setVisible(not auto)
+        self.tz_auto_result_label.setVisible(auto)
         if auto:
             self._refresh_auto_timezone_offset()
 
@@ -2908,44 +2906,83 @@ class BambiDockWidget(QDockWidget):
         offset = self._compute_auto_timezone_offset()
         if offset is not None:
             sign = "+" if offset >= 0 else ""
-            self.photo_tz_auto_result_label.setText(
-                f"Detected offset: UTC{sign}{offset:g}h")
+            self.tz_auto_result_label.setText(f"Detected offset: UTC{sign}{offset:g}h")
         else:
-            self.photo_tz_auto_result_label.setText(
-                "(could not detect — check photo dir & AirData)")
+            self.tz_auto_result_label.setText(
+                "(could not detect — check SRT/photo dir & AirData)")
 
-    def _get_photo_timezone_offset(self) -> float:
+    def _get_timezone_offset(self) -> float:
         """Return the timezone offset in hours, auto-detected or manual."""
-        if self.photo_tz_auto_check.isChecked():
+        if self.tz_auto_check.isChecked():
             offset = self._compute_auto_timezone_offset()
             if offset is not None:
                 return offset
             self.log("Warning: Auto timezone detection failed, falling back to manual timezone")
-        return self._compute_timezone_offset(
-            self.photo_timezone_combo.currentText().strip()) or 0.0
+        return self._compute_timezone_offset(self.timezone_combo.currentText().strip()) or 0.0
 
     def _compute_auto_timezone_offset(self) -> Optional[float]:
-        """Determine the UTC offset by comparing photo EXIF hours with AirData isPhoto hours.
+        """Auto-detect timezone offset.
 
-        Reads all EXIF ``DateTimeOriginal`` timestamps from the thermal (or RGB)
-        photo directory and all ``datetime(utc)`` values from AirData rows where
-        ``isPhoto`` is truthy.  The offset is ``mean(photo hours) - mean(airdata hours)``
-        rounded to the nearest integer.
+        In video mode: compares SRT frame timestamps with AirData isVideo UTC timestamps.
+        In photo mode (or as fallback): compares photo EXIF timestamps with AirData isPhoto UTC timestamps.
+        Returns the offset in whole hours or None if detection fails.
         """
+        if self.video_mode_check.isChecked():
+            offset = self._compute_auto_tz_from_srt()
+            if offset is not None:
+                return offset
+        return self._compute_auto_tz_from_exif()
+
+    def _compute_auto_tz_from_srt(self) -> Optional[float]:
+        """Match SRT local timestamps against AirData isVideo UTC timestamps."""
         import csv
+        import re
+        from datetime import datetime
+
+        # Collect SRT timestamps (local time, no tz)
+        srt_text = self.rgb_srt_paths_edit.text().strip()
+        if not srt_text:
+            return None
+        srt_paths = [p.strip() for p in srt_text.split(",") if p.strip()]
+        if not srt_paths:
+            return None
+
+        srt_hours: list = []
+        _dt_re = re.compile(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})')
+        for srt_path in srt_paths:
+            try:
+                with open(srt_path, "r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        m = _dt_re.search(line)
+                        if m:
+                            dt = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")
+                            srt_hours.append(dt.hour + dt.minute / 60.0 + dt.second / 3600.0)
+            except Exception:
+                continue
+        if not srt_hours:
+            return None
+
+        # Collect AirData isVideo UTC timestamps
+        airdata_hours = self._collect_airdata_hours("isvideo")
+        if not airdata_hours:
+            return None
+
+        offset = round(sum(srt_hours) / len(srt_hours) - sum(airdata_hours) / len(airdata_hours))
+        return float(offset)
+
+    def _compute_auto_tz_from_exif(self) -> Optional[float]:
+        """Match photo EXIF timestamps against AirData isPhoto UTC timestamps."""
         import glob as glob_mod
         from datetime import datetime
 
-        # ── Collect photo timestamps (EXIF) ──────────────────────────────
-        photo_dir = (self.thermal_photo_dir_edit.text().strip() or self.rgb_photo_dir_edit.text().strip())
+        photo_dir = (self.thermal_photo_dir_edit.text().strip()
+                     or self.rgb_photo_dir_edit.text().strip())
         if not photo_dir or not os.path.isdir(photo_dir):
             return None
 
-        photo_hours: list = []
-        _IMG_EXTS = ("*.jpg", "*.jpeg", "*.tiff", "*.tif", "*.png",
-                     "*.JPG", "*.JPEG", "*.TIFF", "*.TIF", "*.PNG")
         image_paths: list = []
-        for ext in _IMG_EXTS:
+        for ext in ("*.jpg", "*.jpeg", "*.tiff", "*.tif", "*.png",
+                    "*.JPG", "*.JPEG", "*.TIFF", "*.TIF", "*.PNG"):
             image_paths.extend(glob_mod.glob(os.path.join(photo_dir, ext)))
         if not image_paths:
             return None
@@ -2955,87 +2992,75 @@ class BambiDockWidget(QDockWidget):
         except ImportError:
             return None
 
+        photo_hours: list = []
         for p in image_paths:
             try:
                 with Image.open(p) as img:
                     exif = img._getexif()
                     if exif is None:
                         continue
-                    # Tag 36867 = DateTimeOriginal
-                    dt_str = exif.get(36867)
+                    dt_str = exif.get(36867)  # DateTimeOriginal
                     if not dt_str:
                         continue
                     dt = datetime.strptime(dt_str, "%Y:%m:%d %H:%M:%S")
                     photo_hours.append(dt.hour + dt.minute / 60.0 + dt.second / 3600.0)
             except Exception:
                 continue
-
         if not photo_hours:
             return None
 
-        # ── Collect AirData isPhoto timestamps (UTC) ─────────────────────
+        airdata_hours = self._collect_airdata_hours("isphoto")
+        if not airdata_hours:
+            return None
+
+        offset = round(sum(photo_hours) / len(photo_hours)
+                       - sum(airdata_hours) / len(airdata_hours))
+        return float(offset)
+
+    def _collect_airdata_hours(self, flag_column_lower: str) -> Optional[list]:
+        """Read UTC hours from AirData rows where the given flag column (lowercased) is truthy."""
+        import csv
+        from datetime import datetime
+
         airdata_path = self.airdata_path_edit.text().strip()
         if not airdata_path or not os.path.exists(airdata_path):
             return None
 
-        airdata_hours: list = []
+        hours: list = []
         try:
             with open(airdata_path, "r", encoding="utf-8-sig") as f:
                 reader = csv.DictReader(f)
                 headers = reader.fieldnames or []
 
-                # Find isPhoto column (case-insensitive)
-                is_photo_col = None
-                for h in headers:
-                    if h.strip().lower() == "isphoto":
-                        is_photo_col = h
-                        break
-                if is_photo_col is None:
-                    return None
-
-                # Find datetime(utc) column
-                datetime_col = None
-                for h in headers:
-                    hl = h.lower().strip()
-                    if "datetime" in hl and "utc" in hl:
-                        datetime_col = h
-                        break
+                flag_col = next(
+                    (h for h in headers if h.strip().lower() == flag_column_lower), None)
+                datetime_col = next(
+                    (h for h in headers if "datetime" in h.lower() and "utc" in h.lower()),
+                    None)
                 if datetime_col is None:
-                    # Fall back to any datetime column
-                    for h in headers:
-                        if "datetime" in h.lower().strip():
-                            datetime_col = h
-                            break
-                if datetime_col is None:
+                    datetime_col = next(
+                        (h for h in headers if "datetime" in h.lower()), None)
+                if not flag_col or not datetime_col:
                     return None
 
                 for row in reader:
-                    val = row.get(is_photo_col, "").strip()
+                    val = row.get(flag_col, "").strip()
                     if not val or val == "0" or val.lower() == "false":
                         continue
                     dt_str = row.get(datetime_col, "").strip()
-                    if not dt_str:
-                        continue
                     for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ",
                                 "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S",
                                 "%Y-%m-%d %H:%M:%S.%f"):
                         try:
                             dt = datetime.strptime(dt_str, fmt)
-                            airdata_hours.append(
-                                dt.hour + dt.minute / 60.0 + dt.second / 3600.0)
+                            hours.append(dt.hour + dt.minute / 60.0 + dt.second / 3600.0)
                             break
                         except ValueError:
                             continue
         except Exception:
             return None
 
-        if not airdata_hours:
-            return None
-
-        avg_photo = sum(photo_hours) / len(photo_hours)
-        avg_airdata = sum(airdata_hours) / len(airdata_hours)
-        offset = round(avg_photo - avg_airdata)
-        return float(offset)
+        return hours if hours else None
 
     def _on_input_mode_changed(self, state: int):
         """Toggle between video and photo input panels."""
@@ -7565,6 +7590,10 @@ class BambiDockWidget(QDockWidget):
                            self.rgb_calibration_path_edit.text())
         project.writeEntry(PLUGIN_SCOPE, "Input/RgbCalibrationPreset",
                            self.rgb_calib_preset_combo.currentText())
+        project.writeEntry(PLUGIN_SCOPE, "Config/Timezone",
+                           self.timezone_combo.currentText())
+        project.writeEntry(PLUGIN_SCOPE, "Config/TimezoneAuto",
+                           "1" if self.tz_auto_check.isChecked() else "0")
 
         # ===== Photo Input Paths =====
         project.writeEntry(PLUGIN_SCOPE, "Input/ThermalPhotoDir",
@@ -7583,10 +7612,6 @@ class BambiDockWidget(QDockWidget):
                            "1" if self.thermal_photo_filter_check.isChecked() else "0")
         project.writeEntry(PLUGIN_SCOPE, "Input/RgbPhotoFilter",
                            "1" if self.rgb_photo_filter_check.isChecked() else "0")
-        project.writeEntry(PLUGIN_SCOPE, "Input/PhotoTimezone",
-                           self.photo_timezone_combo.currentText())
-        project.writeEntry(PLUGIN_SCOPE, "Input/PhotoTimezoneAuto",
-                           "1" if self.photo_tz_auto_check.isChecked() else "0")
         project.writeEntry(PLUGIN_SCOPE, "Input/ThermalVisColormap",
                            self.thermal_vis_cmap_combo.currentText())
         project.writeEntry(PLUGIN_SCOPE, "Input/ThermalVisLoEnable",
@@ -7826,7 +7851,6 @@ class BambiDockWidget(QDockWidget):
         r_idx = self.rgb_calib_preset_combo.findText(rgb_preset)
         if r_idx >= 0:
             self.rgb_calib_preset_combo.setCurrentIndex(r_idx)
-
         # ===== Photo Input Paths =====
         self.thermal_photo_dir_edit.setText(read_str("Input/ThermalPhotoDir"))
         self.thermal_photo_calibration_path_edit.setText(
@@ -7846,15 +7870,14 @@ class BambiDockWidget(QDockWidget):
             read_str("Input/ThermalPhotoFilter") == "1")
         self.rgb_photo_filter_check.setChecked(
             read_str("Input/RgbPhotoFilter") == "1")
-        saved_tz = read_str("Input/PhotoTimezone")
+        saved_tz = read_str("Config/Timezone")
         if saved_tz:
-            tz_idx = self.photo_timezone_combo.findText(saved_tz)
+            tz_idx = self.timezone_combo.findText(saved_tz)
             if tz_idx >= 0:
-                self.photo_timezone_combo.setCurrentIndex(tz_idx)
+                self.timezone_combo.setCurrentIndex(tz_idx)
             else:
-                self.photo_timezone_combo.setCurrentText(saved_tz)
-        self.photo_tz_auto_check.setChecked(
-            read_str("Input/PhotoTimezoneAuto") != "0")
+                self.timezone_combo.setCurrentText(saved_tz)
+        self.tz_auto_check.setChecked(read_str("Config/TimezoneAuto") != "0")
         saved_cmap = read_str("Input/ThermalVisColormap")
         cmap_idx = self.thermal_vis_cmap_combo.findText(saved_cmap)
         if cmap_idx >= 0:

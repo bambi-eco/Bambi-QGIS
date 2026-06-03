@@ -485,7 +485,7 @@ class BambiProcessor:
                     airdata_csv=airdata_path,
                     output_path=target_poses_t,
                     output_image_dir=frames_folder_t,
-                    photo_timezone_offset_hours=config.get("photo_timezone_offset", 1.0),
+                    photo_timezone_offset_hours=config.get("timezone_offset_hours", 1.0),
                     origin=ad_origin,
                     skip=config.get("extract_skip", 0),
                     limit=config.get("extract_limit"),
@@ -650,7 +650,7 @@ class BambiProcessor:
                 airdata_csv=airdata_path,
                 output_path=target_poses_w,
                 output_image_dir=frames_folder_w,
-                photo_timezone_offset_hours=config.get("photo_timezone_offset", 1.0),
+                photo_timezone_offset_hours=config.get("timezone_offset_hours", 1.0),
                 origin=ad_origin,
                 skip=config.get("extract_skip", 0),
                 limit=config.get("extract_limit"),
@@ -660,9 +660,13 @@ class BambiProcessor:
             from bambi.video.calibrated_video_frame_accessor import CalibratedVideoFrameAccessor
             from bambi.webgl.timed_pose_extractor import TimedPoseExtractor
             from bambi.domain.camera import Camera
+            from dateutil import tz as _dateutil_tz
 
             rgb_video_paths = config["rgb_video_paths"]
             rgb_srt_paths = config["rgb_srt_paths"]
+
+            _tz_offset_hours = config.get("timezone_offset_hours", 1.0)
+            _video_tz = _dateutil_tz.tzoffset(None, int(_tz_offset_hours * 3600))
 
             calibration_res = config.get("rgb_calibration_data")
             if calibration_res is None:
@@ -687,6 +691,7 @@ class BambiProcessor:
                     skip=config.get("extract_skip", 0),
                     limit=config.get("extract_limit"),
                     sampling_rate=config.get("extract_sampling_rate") or 0,
+                    timezone=_video_tz,
                 )
 
         # Move poses.json written into frames_folder to target folder with suffix
