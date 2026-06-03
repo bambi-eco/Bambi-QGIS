@@ -380,7 +380,7 @@ class BambiProcessor:
 
         if config.get("input_mode") == "photo":
             from bambi.webgl.photo_pose_extractor import UniqueMatchPhotoPoseExtractor
-            from bambi.webgl.thermal_colorizer import ThermalColorizer
+            from bambi.thermal.thermal_colorizer import ThermalColorizer
 
             calibration_res = config.get("thermal_photo_calibration_data")
             if calibration_res is None:
