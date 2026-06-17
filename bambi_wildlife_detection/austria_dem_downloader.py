@@ -748,6 +748,95 @@ class GLTFMeshGenerator:
                     self._log("Warning: Could not determine source CRS, assuming EPSG:32633")
                     src_epsg = 32633
 
+                # Sanity check: some drone software (e.g. DJI Terra) exports DEMs in WGS84
+                # geographic coordinates (lat/lon degrees) but incorrectly tags the CRS
+                # metadata as a projected UTM system.  Detect this by checking whether the
+                # coordinate bounds are in degree range while the declared CRS claims UTM.
+                _is_utm = (32601 <= src_epsg <= 32660 or 32701 <= src_epsg <= 32760)
+                if _is_utm and abs(bounds.left) <= 180 and abs(bounds.bottom) <= 90:
+                    self._log(
+                        f"Warning: CRS metadata says EPSG:{src_epsg} (UTM) but coordinate "
+                        f"bounds are in geographic degree range (left={bounds.left:.5f}, "
+                        f"bottom={bounds.bottom:.5f}). The file's CRS is likely mislabeled. "
+                        f"Treating source data as WGS84 geographic (EPSG:4326)."
+                    )
+                    src_epsg = 4326
+
+                # If the source data is in WGS84 geographic (degree) coordinates but the
+                # target CRS is a projected system, reproject the elevation raster in-memory
+                # so that mesh vertices are expressed in metres rather than degrees.
+                # This makes the mesh compatible with camera poses, which are always stored
+                # in the target projected CRS (UTM).
+                if src_epsg == 4326 and source_crs:
+                    _target_epsg_reproject = None
+                    try:
+                        _target_epsg_reproject = int(source_crs.upper().replace("EPSG:", "").strip())
+                    except Exception:
+                        pass
+                    if _target_epsg_reproject and _target_epsg_reproject != 4326:
+                        try:
+                            from rasterio.warp import reproject as _rasterio_reproject
+                            from rasterio.warp import Resampling, calculate_default_transform
+                            from rasterio.crs import CRS as _RasterioCRS
+                            self._log(
+                                f"Reprojecting WGS84 geographic DEM to EPSG:{_target_epsg_reproject} "
+                                f"for mesh generation (this keeps camera poses and DEM mesh "
+                                f"in the same coordinate system)..."
+                            )
+                            # Use proj4 strings instead of from_epsg() to avoid PROJ database
+                            # version conflicts (QGIS bundles an older proj.db).
+                            _src_proj4 = WGS84_PROJ4
+                            if 32601 <= _target_epsg_reproject <= 32660:
+                                _dst_zone = _target_epsg_reproject - 32600
+                                _dst_proj4 = f"+proj=utm +zone={_dst_zone} +datum=WGS84 +units=m +no_defs"
+                            elif 32701 <= _target_epsg_reproject <= 32760:
+                                _dst_zone = _target_epsg_reproject - 32700
+                                _dst_proj4 = f"+proj=utm +zone={_dst_zone} +south +datum=WGS84 +units=m +no_defs"
+                            else:
+                                _dst_proj4 = get_proj4_for_crs(f"EPSG:{_target_epsg_reproject}")
+                            _src_rcrs = _RasterioCRS.from_proj4(_src_proj4)
+                            _dst_rcrs = _RasterioCRS.from_proj4(_dst_proj4)
+                            _dst_transform, _dst_width, _dst_height = calculate_default_transform(
+                                _src_rcrs, _dst_rcrs, width, height, *bounds
+                            )
+                            _dst_elev = np.full((_dst_height, _dst_width), np.nan, dtype=np.float32)
+                            _rasterio_reproject(
+                                source=elevation.astype(np.float32),
+                                destination=_dst_elev,
+                                src_transform=transform,
+                                src_crs=_src_rcrs,
+                                dst_transform=_dst_transform,
+                                dst_crs=_dst_rcrs,
+                                resampling=Resampling.bilinear,
+                            )
+                            # Switch all geometry variables to the reprojected data
+                            elevation = _dst_elev
+                            transform = _dst_transform
+                            width = _dst_width
+                            height = _dst_height
+                            # Recompute origin from the new projected transform
+                            origin_x = _dst_transform.c                              # west edge (easting)
+                            origin_y = _dst_transform.f + _dst_height * _dst_transform.e  # south edge (northing)
+                            # Recompute min elevation (border NaNs may shift slightly)
+                            _valid_repr = _dst_elev[~np.isnan(_dst_elev)]
+                            if len(_valid_repr) > 0:
+                                origin_z = float(np.min(_valid_repr))
+                            src_epsg = _target_epsg_reproject
+                            self._log(
+                                f"Reprojection complete: origin=({origin_x:.2f}, {origin_y:.2f}) m, "
+                                f"pixel size=({abs(_dst_transform.a):.4f} x {abs(_dst_transform.e):.4f}) m"
+                            )
+                        except Exception as _reproj_err:
+                            self._log(
+                                f"Warning: Could not reproject WGS84 DEM to "
+                                f"EPSG:{_target_epsg_reproject}: {_reproj_err}"
+                            )
+                            self._log(
+                                "Proceeding with WGS84 geographic coordinates. "
+                                "Mesh vertices will be in degree units — georeferencing may fail. "
+                                "Consider reprojecting the DEM GeoTIFF manually before use."
+                            )
+
                 # Build transformer using PROJ4 strings to avoid PROJ database version
                 # conflicts (QGIS bundles an older proj.db that pyproj may find first).
                 src_proj4 = get_proj4_for_crs(f"EPSG:{src_epsg}")

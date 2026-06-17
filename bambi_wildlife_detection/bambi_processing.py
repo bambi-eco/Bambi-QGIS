@@ -345,12 +345,27 @@ class BambiProcessor:
         with open(path_to_dem_json, "r") as f:
             dem_json = json.load(f)
 
-        origin = dem_json["origin_wgs84"]
+        origin_wgs84 = dem_json.get("origin_wgs84", {})
+        origin_list = dem_json.get("origin", [0, 0, 0])
+
+        origin_lat = float(origin_wgs84.get("latitude", 0.0))
+        origin_lon = float(origin_wgs84.get("longitude", 0.0))
+        origin_alt = float(origin_wgs84.get("altitude", origin_list[2] if len(origin_list) > 2 else 0.0))
+
+        # Sanity check: if the stored origin_wgs84 latitude is essentially zero but the
+        # DEM origin field contains a non-equatorial latitude, the origin_wgs84 was
+        # likely computed incorrectly (e.g. WGS84 degree values were fed into a UTM→WGS84
+        # transformer).  Fall back to interpreting the origin field as [longitude, latitude,
+        # altitude] in WGS84, which is how the DEM downloader stores the raw bounds corner.
+        if abs(origin_lat) < 0.01 and len(origin_list) >= 2 and abs(float(origin_list[1])) > 0.01:
+            origin_lon = float(origin_list[0])
+            origin_lat = float(origin_list[1])
+            origin_alt = float(origin_list[2]) if len(origin_list) > 2 else 0.0
 
         ad_origin = AirDataFrame()
-        ad_origin.latitude = origin["latitude"]
-        ad_origin.longitude = origin["longitude"]
-        ad_origin.altitude = origin["altitude"]
+        ad_origin.latitude = origin_lat
+        ad_origin.longitude = origin_lon
+        ad_origin.altitude = origin_alt
 
         return target_folder, rel_transformer, ad_origin
 
@@ -794,8 +809,22 @@ class BambiProcessor:
                 except Exception:
                     pass
 
-        if log_fn and (coord_offset_x != 0 or coord_offset_y != 0):
-            log_fn(f"Using coordinate offset: X={coord_offset_x:.2f}, Y={coord_offset_y:.2f}")
+        if coord_offset_x != 0 or coord_offset_y != 0:
+            if abs(coord_offset_x) <= 180 and abs(coord_offset_y) <= 90:
+                # DEM origin looks like WGS84 degrees — applying it as a UTM offset
+                # would place camera positions in the wrong location.  Reset to zero so
+                # poses are shown as-is (they are already in the target projected CRS).
+                if log_fn:
+                    log_fn(
+                        f"Warning: DEM origin ({coord_offset_x:.5f}, {coord_offset_y:.5f}) "
+                        "appears to be in WGS84 geographic coordinates, not UTM metres. "
+                        "Ignoring offset to avoid misplaced camera positions. "
+                        "Re-generate the DEM mesh to fix this."
+                    )
+                coord_offset_x = 0.0
+                coord_offset_y = 0.0
+            elif log_fn:
+                log_fn(f"Using coordinate offset: X={coord_offset_x:.2f}, Y={coord_offset_y:.2f}")
 
         if progress_fn:
             progress_fn(30)
@@ -1821,6 +1850,27 @@ class BambiProcessor:
         y_offset = dem_json["origin"][1]
         z_offset = dem_json["origin"][2]
 
+        # Detect a common DJI DEM export issue: geographic (degree) coordinates mislabeled
+        # as a UTM projected CRS.  When the mesh was built from such a file the origin is
+        # in degrees (< 180) instead of UTM metres (> 1000), and mesh vertices are also in
+        # degree units — ray casting from UTM camera positions will never intersect the mesh.
+        if abs(x_offset) <= 180 and abs(y_offset) <= 90:
+            raise RuntimeError(
+                "DEM metadata 'origin' appears to be in WGS84 geographic coordinates "
+                f"(origin=[{x_offset:.5f}, {y_offset:.5f}, {z_offset:.3f}]) rather than "
+                "projected UTM metres.\n\n"
+                "This typically means the DEM GeoTIFF was exported by DJI drone software "
+                "with geographic (degree) coordinates but incorrectly tagged as a UTM CRS.\n\n"
+                "To fix:\n"
+                "  1. Delete the existing DEM mesh files (.glb / .json) in the project folder.\n"
+                "  2. Set the correct target EPSG in the plugin Parameters tab.\n"
+                "  3. Re-run 'Load/Generate DEM' — the plugin now auto-detects WGS84 source "
+                "DEMs and reprojects them to UTM before building the mesh.\n"
+                "  4. Re-run 'Extract RGB/Thermal Frames' so camera positions are re-computed "
+                "relative to the corrected DEM origin.\n"
+                "  5. Re-run 'Generate Flight Route' and 'Geo-Reference Detections'."
+            )
+
         # Load poses for selected camera
         poses_file = os.path.join(target_folder, f"poses_{camera_suffix}.json")
         with open(poses_file, 'r') as f:
@@ -1892,6 +1942,15 @@ class BambiProcessor:
         try:
             mesh_data, texture_data = read_gltf(dem_path)
             tri_mesh = Trimesh(vertices=mesh_data.vertices, faces=mesh_data.indices)
+            n_faces = len(tri_mesh.faces)
+            if n_faces > 20_000_000:
+                if log_fn:
+                    log_fn(
+                        f"Warning: DEM mesh has {n_faces:,} triangles. "
+                        f"Ray casting may fail with an out-of-memory error. "
+                        f"Delete the .glb/.json and regenerate the DEM with a higher "
+                        f"simplification factor (recommended: 4 or more) to reduce mesh size."
+                    )
             mesh_data, texture_data = process_render_data(mesh_data, texture_data)
 
             if progress_fn:
