@@ -37,7 +37,7 @@ _DJI_SDK_URL = (
 # Tested version ranges per pip distribution name (or special key for non-pip packages).
 # None means no bound (any version is accepted).
 _VERSION_RANGES = {
-    'bambi-detection': ("0.2.0", "0.2.0"),
+    'bambi-detection': ("0.4.0", "0.4.0"),
     'AlfsPy': ("0.0.0", "0.0.0"),
     'pycolmap': ('4.0.3', '4.0.3'),
     'boxmot': ('17.0.0', '18.0.0'),

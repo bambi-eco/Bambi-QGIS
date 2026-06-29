@@ -200,6 +200,138 @@ class BambiProcessor:
         pass
 
     @staticmethod
+    def generate_flat_surface_mesh(
+        lat: float,
+        lon: float,
+        flat_surface_msl: float,
+        extent_m: float,
+        output_glb_path: str,
+        output_json_path: str,
+        epsg: int = 0,
+    ):
+        """Generate a flat horizontal GLB mesh for use as a DEM.
+
+        The mesh is centred at (lat, lon), spans ±extent_m in local X and Y, and sits
+        at local z = 0 (the origin altitude equals flat_surface_msl, so cameras at GPS
+        altitude H m MSL have local z = H − flat_surface_msl).
+
+        epsg should match the plugin's target CRS (target_epsg in config) so the JSON
+        origin is in the same projected CRS as the poses file.  When 0, the UTM zone is
+        auto-detected from the centroid longitude.
+
+        The companion JSON uses the same format as a regular DEM JSON so the file can
+        be loaded without any special handling.
+
+        Returns (output_glb_path, output_json_path).
+        """
+        import gltflib as gl
+        from pyproj import Transformer
+        import numpy as np
+
+        # Use caller-supplied EPSG (must match target_epsg in plugin config so that
+        # the JSON origin is in the same CRS as poses_*.json).  Fall back to
+        # auto-detecting the UTM zone only when no EPSG is given.
+        if not epsg:
+            utm_zone = int((lon + 180) / 6) + 1
+            epsg = 32600 + utm_zone if lat >= 0 else 32700 + utm_zone
+        x_utm, y_utm = Transformer.from_crs(
+            "EPSG:4326", f"EPSG:{epsg}", always_xy=True
+        ).transform(lon, lat)
+
+        # Flat quad at local z = 0, spanning ±extent_m in X and Y
+        e = float(extent_m)
+        vertices = np.array([
+            [-e, -e, 0.0],
+            [ e, -e, 0.0],
+            [ e,  e, 0.0],
+            [-e,  e, 0.0],
+        ], dtype=np.float32)
+        uvs = np.array([[0, 0], [1, 0], [1, 1], [0, 1]], dtype=np.float32)
+        indices = np.array([[0, 1, 2], [0, 2, 3]], dtype=np.uint32)
+
+        vb = vertices.tobytes()
+        ub = uvs.tobytes()
+        ib = indices.flatten().tobytes()
+
+        def _align4(n): return (4 - n % 4) % 4
+        u_off  = len(vb) + _align4(len(vb))
+        i_off  = u_off  + len(ub) + _align4(len(ub))
+        total  = i_off  + len(ib) + _align4(len(ib))
+        buf = bytearray(total)
+        buf[0:len(vb)]              = vb
+        buf[u_off:u_off + len(ub)] = ub
+        buf[i_off:i_off + len(ib)] = ib
+
+        model = gl.GLTFModel(
+            asset=gl.Asset(version='2.0'), scene=0,
+            scenes=[gl.Scene(nodes=[0])],
+            nodes=[gl.Node(mesh=0)],
+            meshes=[gl.Mesh(primitives=[gl.Primitive(
+                attributes=gl.Attributes(POSITION=0, TEXCOORD_0=1), indices=2,
+            )])],
+            bufferViews=[
+                gl.BufferView(buffer=0, byteOffset=0,     byteLength=len(vb)),
+                gl.BufferView(buffer=0, byteOffset=u_off, byteLength=len(ub)),
+                gl.BufferView(buffer=0, byteOffset=i_off, byteLength=len(ib)),
+            ],
+            accessors=[
+                gl.Accessor(bufferView=0,
+                            componentType=gl.ComponentType.FLOAT.value, count=4,
+                            type=gl.AccessorType.VEC3.value,
+                            min=vertices.min(axis=0).tolist(),
+                            max=vertices.max(axis=0).tolist()),
+                gl.Accessor(bufferView=1,
+                            componentType=gl.ComponentType.FLOAT.value, count=4,
+                            type=gl.AccessorType.VEC2.value),
+                gl.Accessor(bufferView=2,
+                            componentType=gl.ComponentType.UNSIGNED_INT.value, count=6,
+                            type=gl.AccessorType.SCALAR.value),
+            ],
+            buffers=[gl.Buffer(byteLength=total)],
+        )
+        gl.GLTF(model=model, resources=[gl.GLBResource(data=bytes(buf))]).export_glb(output_glb_path)
+
+        dem_meta = {
+            "origin": [x_utm, y_utm, float(flat_surface_msl)],
+            "origin_wgs84": {
+                "latitude": lat,
+                "longitude": lon,
+                "altitude": float(flat_surface_msl),
+            },
+            "crs": f"EPSG:{epsg}",
+        }
+        with open(output_json_path, 'w') as _f:
+            json.dump(dem_meta, _f, indent=2)
+
+        # GeoJSON polygon covering the mesh extent (for debugging in QGIS / any GIS tool)
+        inv = Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
+        corners_utm = [
+            (x_utm - e, y_utm - e),
+            (x_utm + e, y_utm - e),
+            (x_utm + e, y_utm + e),
+            (x_utm - e, y_utm + e),
+        ]
+        ring = [[round(lo, 8), round(la, 8)]
+                for lo, la in (inv.transform(cx, cy) for cx, cy in corners_utm)]
+        ring.append(ring[0])  # close the ring
+        geojson_path = output_json_path.replace(".json", ".geojson")
+        with open(geojson_path, 'w') as _f:
+            json.dump({
+                "type": "FeatureCollection",
+                "features": [{
+                    "type": "Feature",
+                    "geometry": {"type": "Polygon", "coordinates": [ring]},
+                    "properties": {
+                        "flat_surface_msl": float(flat_surface_msl),
+                        "extent_m": float(extent_m),
+                        "crs": f"EPSG:{epsg}",
+                    },
+                }],
+            }, _f, indent=2)
+
+        return output_glb_path, output_json_path
+
+    @staticmethod
     def get_correction_for_frame(frame_idx: int, config: Dict[str, Any]) -> Dict[str, Any]:
         """Get the appropriate correction factors for a given frame index.
 
@@ -474,12 +606,14 @@ class BambiProcessor:
                         rel_transformer=rel_transformer,
                         calibration_res=calibration_res,
                         thermal_colorizer=thermal_colorizer,
+                        use_gimbal_heading=config.get("use_gimbal_heading", False),
                     )
                 else:
                     extractor = UniqueMatchPhotoPoseExtractor(
                         rel_transformer=rel_transformer,
                         calibration_res=calibration_res,
                         thermal_colorizer=thermal_colorizer,
+                        use_gimbal_heading=config.get("use_gimbal_heading", False),
                     )
                 if log_fn:
                     log_fn(f"Photo mode: processing images in {config['thermal_photo_dir']}")
@@ -522,11 +656,12 @@ class BambiProcessor:
                 with open(config["thermal_calibration_path"]) as f:
                     calibration_res = json.load(f)
 
-            accessor = CalibratedVideoFrameAccessor(calibration_res)
+            accessor = CalibratedVideoFrameAccessor(calibration_res, preserve_aspect_ratio=config.get("preserve_aspect_ratio", False))
             extractor = TimedPoseExtractor(
                 accessor,
                 rel_transformer=rel_transformer,
-                camera_name=Camera.from_string("T")
+                camera_name=Camera.from_string("T"),
+                use_gimbal_heading=config.get("use_gimbal_heading", False),
             )
 
             total_frames = count_srt_frames(thermal_srt_paths)
@@ -651,11 +786,13 @@ class BambiProcessor:
                 extractor = OrderedPhotoPoseExtractor(
                     rel_transformer=rel_transformer,
                     calibration_res=calibration_res,
+                    use_gimbal_heading=config.get("use_gimbal_heading", False),
                 )
             else:
                 extractor = UniqueMatchPhotoPoseExtractor(
                     rel_transformer=rel_transformer,
                     calibration_res=calibration_res,
+                    use_gimbal_heading=config.get("use_gimbal_heading", False),
                 )
             if log_fn:
                 log_fn(f"Photo mode: processing images in {config['rgb_photo_dir']}")
@@ -688,11 +825,12 @@ class BambiProcessor:
                 with open(config["rgb_calibration_path"]) as f:
                     calibration_res = json.load(f)
 
-            accessor = CalibratedVideoFrameAccessor(calibration_res)
+            accessor = CalibratedVideoFrameAccessor(calibration_res, preserve_aspect_ratio=config.get("preserve_aspect_ratio", False))
             extractor = TimedPoseExtractor(
                 accessor,
                 rel_transformer=rel_transformer,
-                camera_name=Camera.from_string("W")
+                camera_name=Camera.from_string("W"),
+                use_gimbal_heading=config.get("use_gimbal_heading", False),
             )
 
             total_frames = count_srt_frames(rgb_srt_paths)
@@ -1907,7 +2045,22 @@ class BambiProcessor:
         with open(detections_file, 'r', encoding='utf-8') as f:
             for line in f:
                 line = line.strip()
-                if not line or line.startswith('#'):
+                if not line:
+                    continue
+                if line.startswith('#'):
+                    # Parse optional metadata headers embedded as comments
+                    if line.startswith('# video_size'):
+                        parts = line.split()
+                        if len(parts) >= 4:
+                            try:
+                                det_w, det_h = int(parts[2]), int(parts[3])
+                                input_resolution = Resolution(det_w, det_h)
+                                if log_fn:
+                                    log_fn(
+                                        f"Detection frame size from detections.txt: {det_w}x{det_h}"
+                                    )
+                            except ValueError:
+                                pass
                     continue
                 parts = line.split()
                 if len(parts) >= 6:
@@ -1939,6 +2092,7 @@ class BambiProcessor:
         mesh_data = None
         texture_data = None
         tri_mesh = None
+
         try:
             mesh_data, texture_data = read_gltf(dem_path)
             tri_mesh = Trimesh(vertices=mesh_data.vertices, faces=mesh_data.indices)
@@ -1994,7 +2148,8 @@ class BambiProcessor:
 
                 # Create camera-like object for projection
                 from alfspy.core.rendering import Camera
-                camera = Camera(fovy=fovy, aspect_ratio=1.0, position=position, rotation=rotation_quat)
+                aspect_ratio = input_resolution.width / input_resolution.height
+                camera = Camera(fovy=fovy, aspect_ratio=aspect_ratio, position=position, rotation=rotation_quat)
 
                 # Project bounding box corners
                 x1, y1, x2, y2 = det["x1"], det["y1"], det["x2"], det["y2"]
@@ -2125,6 +2280,7 @@ class BambiProcessor:
             res_width = config.get("input_resolution_width", 640)
             res_height = config.get("input_resolution_height", 512)
             input_resolution = Resolution(res_width, res_height)
+        aspect_ratio = input_resolution.width / input_resolution.height
 
         if log_fn:
             log_fn(f"Input resolution: {input_resolution.width}x{input_resolution.height}")
@@ -2234,7 +2390,7 @@ class BambiProcessor:
 
                     # Create camera for projection
                     from alfspy.core.rendering import Camera
-                    camera = Camera(fovy=fovy, aspect_ratio=1.0, position=position, rotation=rotation_quat)
+                    camera = Camera(fovy=fovy, aspect_ratio=aspect_ratio, position=position, rotation=rotation_quat)
 
                     # Georeference the mask polygon points
                     georef_points = self._georeference_polygon(
@@ -3071,6 +3227,7 @@ class BambiProcessor:
             input_resolution = Resolution(res_width, res_height)
             if log_fn:
                 log_fn(f"Using configured resolution: {res_width}x{res_height}")
+        aspect_ratio = input_resolution.width / input_resolution.height
 
         if progress_fn:
             progress_fn(start_progress + 5)
@@ -3117,7 +3274,7 @@ class BambiProcessor:
                 position += cor_translation
                 rotation_quat = Quaternion.from_eulers(rotation_eulers)
 
-                camera = Camera(fovy=fovy, aspect_ratio=1.0, position=position, rotation=rotation_quat)
+                camera = Camera(fovy=fovy, aspect_ratio=aspect_ratio, position=position, rotation=rotation_quat)
 
                 # Project bounding box corners to world coordinates
                 x1, y1, x2, y2 = pt['x1'], pt['y1'], pt['x2'], pt['y2']
@@ -3604,6 +3761,18 @@ class BambiProcessor:
             if mask_img is not None:
                 mask = TextureData(CtxShot._cvt_img(mask_img))
 
+        # Derive aspect ratio from the first available frame
+        frame_aspect_ratio = 1.0
+        for img_probe in all_images:
+            probe_path = os.path.join(frames_folder, img_probe.get("imagefile", ""))
+            if os.path.exists(probe_path):
+                probe_img = cv2.imread(probe_path)
+                if probe_img is not None:
+                    frame_aspect_ratio = probe_img.shape[1] / probe_img.shape[0]
+                    break
+        if log_fn:
+            log_fn(f"Frame aspect ratio: {frame_aspect_ratio:.4f}")
+
         # Determine central frames from the available frame indices
         all_frame_indices = sorted(img["_original_frame_idx"] for img in all_images)
         if not all_frame_indices:
@@ -3682,8 +3851,7 @@ class BambiProcessor:
 
                 camera_position = Vector3(location, dtype='f4')
                 if len(rotation) == 3:
-                    eulers = [np.deg2rad(val % 360.0) for val in rotation]
-                    camera_rotation = quaternion_from_eulers(eulers, 'zyx')
+                    camera_rotation = Quaternion.from_eulers([-np.deg2rad(val % 360.0) for val in rotation])
                 elif len(rotation) == 4:
                     camera_rotation = Quaternion(rotation)
                 else:
@@ -3692,7 +3860,7 @@ class BambiProcessor:
                 try:
                     shot = CtxShot(
                         ctx, image_path, camera_position, camera_rotation,
-                        fov_value, 1, correction, lazy=True
+                        fov_value, frame_aspect_ratio, correction, lazy=True
                     )
                     shots.append(shot)
                 except Exception as e:
@@ -3910,6 +4078,18 @@ class BambiProcessor:
             if mask_img is not None:
                 mask = TextureData(CtxShot._cvt_img(mask_img))
 
+        # Derive aspect ratio from the first available frame
+        frame_aspect_ratio = 1.0
+        for img_probe in images:
+            probe_path = os.path.join(frames_folder, img_probe.get("imagefile", ""))
+            if os.path.exists(probe_path):
+                probe_img = cv2.imread(probe_path)
+                if probe_img is not None:
+                    frame_aspect_ratio = probe_img.shape[1] / probe_img.shape[0]
+                    break
+        if log_fn:
+            log_fn(f"Frame aspect ratio: {frame_aspect_ratio:.4f}")
+
         # 3. Load Shots with per-frame corrections
         if log_fn:
             log_fn(f"Loading {len(images)} shots...")
@@ -3958,8 +4138,7 @@ class BambiProcessor:
 
             # Convert rotation
             if len(rotation) == 3:
-                eulers = [np.deg2rad(val % 360.0) for val in rotation]
-                camera_rotation = quaternion_from_eulers(eulers, 'zyx')
+                camera_rotation = Quaternion.from_eulers([-np.deg2rad(val % 360.0) for val in rotation])
             elif len(rotation) == 4:
                 camera_rotation = Quaternion(rotation)
             else:
@@ -3970,7 +4149,7 @@ class BambiProcessor:
             try:
                 shot = CtxShot(
                     ctx, image_path, camera_position, camera_rotation,
-                    fov_value, 1, correction, lazy=True
+                    fov_value, frame_aspect_ratio, correction, lazy=True
                 )
                 shots.append(shot)
             except Exception as e:
@@ -4738,6 +4917,7 @@ class BambiProcessor:
                     break
         if input_resolution is None:
             input_resolution = Resolution(1024, 1024)
+        aspect_ratio = input_resolution.width / input_resolution.height
         if log_fn:
             log_fn(f"Input resolution: {input_resolution.width}x{input_resolution.height}")
 
@@ -4769,6 +4949,7 @@ class BambiProcessor:
 
         ctx = None
         try:
+            # --- DEM mesh mode ---
             # Load DEM mesh
             if log_fn:
                 log_fn(f"Loading DEM mesh from: {dem_path}")
@@ -4837,13 +5018,17 @@ class BambiProcessor:
                         [cor_r.get('x', 0), cor_r.get('y', 0), cor_r.get('z', 0)], dtype='f4'
                     )
 
-                    # Projection camera: manually corrected pose, same pattern as run_calculate_fov
+                    # Projection camera: 2× correction matches CtxShot's effective rotation.
+                    # alfspy CtxShot doubles correction_transform.rotation in its shader;
+                    # multiplying by 2 here keeps geographic bounds consistent with the
+                    # rendered content and with TRexConnector (which uses the full correction
+                    # value directly, i.e. 2× the QGIS calibration value).
                     proj_position = Vector3(location, dtype='f4') + cor_translation_v
                     proj_eulers = (
-                        Vector3([np.deg2rad(val % 360.0) for val in rotation]) - cor_rotation_v
+                        Vector3([np.deg2rad(val % 360.0) for val in rotation]) - cor_rotation_v * 2.0
                     ) * -1
                     proj_camera = Camera(
-                        fovy=fovy, aspect_ratio=1.0,
+                        fovy=fovy, aspect_ratio=aspect_ratio,
                         position=proj_position,
                         rotation=Quaternion.from_eulers(proj_eulers)
                     )
@@ -4876,15 +5061,15 @@ class BambiProcessor:
                         out_w = int(out_w * scale)
                         out_h = int(out_h * scale)
 
-                    # CtxShot: raw pose + correction Transform, same as _run_orthomosaic_alfspy
-                    raw_eulers = [np.deg2rad(val % 360.0) for val in rotation]
-                    raw_rotation = quaternion_from_eulers(raw_eulers, 'zyx')
+                    # Negate Euler angles so compass heading (CW from North) maps to R_z(-θ).
+                    raw_eulers = (Vector3([np.deg2rad(val % 360.0) for val in rotation])) * -1
+                    raw_rotation = Quaternion.from_eulers(raw_eulers)
                     cor_quat = Quaternion.from_eulers(cor_rotation_v)
                     correction_transform = Transform(cor_translation_v, cor_quat)
                     shot = CtxShot(
                         ctx, image_path,
                         Vector3(location, dtype='f4'), raw_rotation,
-                        fovy, 1, correction_transform, lazy=False
+                        fovy, aspect_ratio, correction_transform, lazy=False
                     )
 
                     # Orthographic camera covering this frame's footprint (local DEM coords)
@@ -5357,6 +5542,7 @@ class BambiProcessor:
             input_resolution = Resolution(res_width, res_height)
             if log_fn:
                 log_fn(f"Using configured resolution: {res_width}x{res_height}")
+        aspect_ratio = input_resolution.width / input_resolution.height
 
         if progress_fn:
             progress_fn(10)
@@ -5409,7 +5595,7 @@ class BambiProcessor:
                 position += cor_translation
                 rotation_quat = Quaternion.from_eulers(rotation_eulers)
 
-                camera = Camera(fovy=fovy, aspect_ratio=1.0, position=position, rotation=rotation_quat)
+                camera = Camera(fovy=fovy, aspect_ratio=aspect_ratio, position=position, rotation=rotation_quat)
 
                 # Process each prompt's predictions
                 georef_frame = {

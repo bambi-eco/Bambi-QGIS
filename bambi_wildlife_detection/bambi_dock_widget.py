@@ -876,6 +876,48 @@ class BambiDockWidget(QDockWidget):
 
         self.geo_input_tabs.addTab(auto_download_tab, "Auto-Download")
 
+        # ----- Tab 4: Flat Surface -----
+        flat_surface_tab = QWidget()
+        flat_surface_layout = QFormLayout(flat_surface_tab)
+
+        flat_surf_info = QLabel(
+            "Generates a flat GLB mesh and its companion JSON for aquatic/marine surveys "
+            "(e.g. sharks near the water surface).\n\n"
+            "Origin and extent are derived automatically from the AirData CSV or SRT files "
+            "selected in the input section. The generated files are written to the Target "
+            "Folder and set as the Mesh Input paths, so they are used like any other DEM."
+        )
+        flat_surf_info.setWordWrap(True)
+        flat_surface_layout.addRow(flat_surf_info)
+
+        flat_surf_elev_row = QHBoxLayout()
+        self.flat_surface_spin = QDoubleSpinBox()
+        self.flat_surface_spin.setRange(-20000.0, 20000.0)
+        self.flat_surface_spin.setSingleStep(1.0)
+        self.flat_surface_spin.setDecimals(1)
+        self.flat_surface_spin.setValue(0.0)
+        self.flat_surface_spin.setSuffix(" m MSL")
+        self.flat_surface_spin.setToolTip(
+            "Elevation of the flat projection surface in metres above mean sea level.\n"
+            "Use 0.0 for sea-surface surveys (sharks, manta rays, etc.)."
+        )
+        flat_surf_elev_row.addWidget(self.flat_surface_spin)
+        flat_surf_elev_row.addStretch()
+        flat_surface_layout.addRow("Elevation (MSL):", flat_surf_elev_row)
+
+        flat_surf_gen_row = QHBoxLayout()
+        flat_surface_generate_btn = QPushButton("Generate Flat Surface Mesh")
+        flat_surface_generate_btn.setToolTip(
+            "Reads GPS from the AirData CSV or SRT files, generates a flat GLB mesh\n"
+            "centred on the flight area, and sets the result as the DEM input."
+        )
+        flat_surface_generate_btn.clicked.connect(self._generate_flat_surface_mesh)
+        flat_surf_gen_row.addWidget(flat_surface_generate_btn)
+        flat_surf_gen_row.addStretch()
+        flat_surface_layout.addRow("", flat_surf_gen_row)
+
+        self.geo_input_tabs.addTab(flat_surface_tab, "Flat Surface")
+
         input_layout.addWidget(geo_group)
 
         # Output configuration
@@ -981,6 +1023,18 @@ class BambiDockWidget(QDockWidget):
         sampling_row.addWidget(self.extract_sampling_rate_spin)
         sampling_row.addStretch()
         frame_ext_layout.addRow("Sampling rate (video only):", sampling_row)
+
+        self.preserve_aspect_ratio_check = QCheckBox("Preserve original aspect ratio (otherwise square 1:1 format)")
+        self.preserve_aspect_ratio_check.setChecked(False)
+        self.preserve_aspect_ratio_check.setToolTip(
+            "When enabled, extracted frames keep the original width/height ratio instead of being cropped to a square.")
+        frame_ext_layout.addRow("Frame format:", self.preserve_aspect_ratio_check)
+
+        self.use_gimbal_heading_check = QCheckBox("Use gimbal heading (instead of compass heading)")
+        self.use_gimbal_heading_check.setChecked(False)
+        self.use_gimbal_heading_check.setToolTip(
+            "When enabled, uses the gimbal heading instead of the compass heading for the yaw rotation.")
+        frame_ext_layout.addRow("Heading source:", self.use_gimbal_heading_check)
 
         extraction_tab_layout.addWidget(frame_ext_group)
 
@@ -2484,6 +2538,8 @@ class BambiDockWidget(QDockWidget):
                 self.extract_sampling_rate_spin.value()
                 if self.extract_sampling_rate_check.isChecked() else None
             ),
+            "preserve_aspect_ratio": self.preserve_aspect_ratio_check.isChecked(),
+            "use_gimbal_heading": self.use_gimbal_heading_check.isChecked(),
 
             # Thermal visualisation
             "thermal_photo_colormap": (
@@ -3248,6 +3304,91 @@ class BambiDockWidget(QDockWidget):
             self.airdata_path_edit.setText(file)
             # Try to auto-detect CRS from GPS coordinates (only if no DEM metadata)
             self._try_auto_detect_crs_silent()
+
+    def _generate_flat_surface_mesh(self):
+        """Generate flat_surface_dem.glb + .json from AirData/SRT GPS and set as DEM input."""
+        config = self.get_config()
+        target_folder = config.get("target_folder", "")
+        if not target_folder:
+            QMessageBox.warning(self, "Missing Target Folder", "Please set the target folder first.")
+            return
+
+        flat_msl = self.flat_surface_spin.value()
+        lats, lons = [], []
+
+        # Primary: AirData CSV (video rows only)
+        airdata_path = config.get("airdata_path", "")
+        if airdata_path and os.path.exists(airdata_path):
+            try:
+                import csv as _csv
+                with open(airdata_path, 'r', encoding='utf-8-sig') as f:
+                    reader = _csv.DictReader(f)
+                    stripped = {k.strip(): k for k in (reader.fieldnames or [])}
+                    lat_key = next((stripped[k] for k in stripped if 'latitude'  in k.lower()), None)
+                    lon_key = next((stripped[k] for k in stripped if 'longitude' in k.lower()), None)
+                    vid_key = next((stripped[k] for k in stripped if k.strip().lower() == 'isvideo'), None)
+                    for row in reader:
+                        if vid_key and row.get(vid_key, '').strip() != '1':
+                            continue
+                        try:
+                            la, lo = float(row[lat_key]), float(row[lon_key])
+                            if -90 <= la <= 90 and -180 <= lo <= 180 and la != 0 and lo != 0:
+                                lats.append(la); lons.append(lo)
+                        except (ValueError, TypeError, KeyError):
+                            continue
+            except Exception as e:
+                self.log(f"Warning: could not read AirData GPS: {e}")
+
+        # Fallback: SRT files (thermal first, then RGB)
+        if not lats:
+            srt_paths = config.get("thermal_srt_paths", []) or config.get("rgb_srt_paths", [])
+            if srt_paths:
+                try:
+                    from bambi.srt.srt_parser import SrtParser
+                    parser = SrtParser()
+                    for p in srt_paths:
+                        if os.path.exists(p):
+                            for frame in parser.parse(p):
+                                if frame.latitude and frame.longitude:
+                                    lats.append(frame.latitude); lons.append(frame.longitude)
+                except Exception as e:
+                    self.log(f"Warning: could not read SRT GPS: {e}")
+
+        if not lats:
+            QMessageBox.warning(self, "Missing GPS Data",
+                                "Could not determine the coordinate origin.\n\n"
+                                "Please select an AirData CSV or SRT files in the input section.")
+            return
+
+        import math as _math
+        lat = (min(lats) + max(lats)) / 2
+        lon = (min(lons) + max(lons)) / 2
+        delta_y = (max(lats) - min(lats)) * 111320.0
+        delta_x = (max(lons) - min(lons)) * 111320.0 * _math.cos(_math.radians(lat))
+        # half-diagonal of the GPS bounding box + 50 m margin for camera footprint
+        half_diag = _math.sqrt((delta_x / 2) ** 2 + (delta_y / 2) ** 2)
+        extent_m = max(half_diag + 50.0, 50.0)
+
+        output_glb  = os.path.join(target_folder, "flat_surface_dem.glb")
+        output_json = os.path.join(target_folder, "flat_surface_dem.json")
+
+        target_epsg = config.get("target_epsg", 0)
+
+        try:
+            self.log(f"Generating flat surface mesh: {flat_msl:.1f} m MSL, "
+                     f"extent ±{extent_m:.0f} m, origin ({lat:.5f}, {lon:.5f}), "
+                     f"CRS EPSG:{target_epsg or 'auto'} …")
+            from .bambi_processing import BambiProcessor
+            BambiProcessor.generate_flat_surface_mesh(
+                lat, lon, flat_msl, extent_m, output_glb, output_json, epsg=target_epsg
+            )
+            self.dem_path_edit.setText(output_glb)
+            self.dem_metadata_path_edit.setText(output_json)
+            self.geo_input_tabs.setCurrentIndex(0)
+            self.log(f"Flat surface mesh ready: {output_glb}")
+        except Exception as e:
+            self.log(f"Error generating flat surface mesh: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to generate flat surface mesh:\n{e}")
 
     def browse_dem(self):
         file, _ = QFileDialog.getOpenFileName(
@@ -7632,6 +7773,10 @@ class BambiDockWidget(QDockWidget):
                            "1" if self.extract_sampling_rate_check.isChecked() else "0")
         project.writeEntry(PLUGIN_SCOPE, "Extraction/SamplingRate",
                            str(self.extract_sampling_rate_spin.value()))
+        project.writeEntry(PLUGIN_SCOPE, "Extraction/PreserveAspectRatio",
+                           "1" if self.preserve_aspect_ratio_check.isChecked() else "0")
+        project.writeEntry(PLUGIN_SCOPE, "Extraction/UseGimbalHeading",
+                           "1" if self.use_gimbal_heading_check.isChecked() else "0")
         project.writeEntry(PLUGIN_SCOPE, "Input/AirdataPath",
                            self.airdata_path_edit.text())
         project.writeEntry(PLUGIN_SCOPE, "Input/DemPath",
@@ -7898,6 +8043,10 @@ class BambiDockWidget(QDockWidget):
             read_str("Extraction/SamplingRateEnable") == "1")
         self.extract_sampling_rate_spin.setValue(
             read_int("Extraction/SamplingRate", 5))
+        self.preserve_aspect_ratio_check.setChecked(
+            read_str("Extraction/PreserveAspectRatio") == "1")
+        self.use_gimbal_heading_check.setChecked(
+            read_str("Extraction/UseGimbalHeading") == "1")
         self.airdata_path_edit.setText(read_str("Input/AirdataPath"))
         self.dem_path_edit.setText(read_str("Input/DemPath"))
         self.dem_metadata_path_edit.setText(read_str("Input/DemMetadataPath"))
