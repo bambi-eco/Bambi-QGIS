@@ -1378,14 +1378,6 @@ class BambiDockWidget(QDockWidget):
         trex_group = QGroupBox("TRex Tracklet Import")
         trex_layout = QFormLayout(trex_group)
 
-        trex_info_label = QLabel(
-            "⚠ Frame extraction (Step 1) must be completed before importing TRex "
-            "tracklets — the poses file is required for geo-referencing."
-        )
-        trex_info_label.setWordWrap(True)
-        trex_info_label.setStyleSheet("color: gray; font-size: 10px;")
-        trex_layout.addRow(trex_info_label)
-
         self.trex_npz_dir_edit = QLineEdit()
         self.trex_npz_dir_edit.setPlaceholderText("Folder containing TRex *.npz tracklet files")
         trex_npz_browse_btn = QPushButton("Browse...")
@@ -1394,11 +1386,6 @@ class BambiDockWidget(QDockWidget):
         trex_npz_row.addWidget(self.trex_npz_dir_edit)
         trex_npz_row.addWidget(trex_npz_browse_btn)
         trex_layout.addRow("NPZ Folder:", trex_npz_row)
-
-        self.trex_camera_combo = QComboBox()
-        self.trex_camera_combo.addItems(["T - Thermal", "W - RGB"])
-        self.trex_camera_combo.setToolTip("Camera the TRex labels correspond to")
-        trex_layout.addRow("Camera:", self.trex_camera_combo)
 
         self.trex_undistorted_check = QCheckBox("Labels already in undistorted frame space")
         self.trex_undistorted_check.setChecked(False)
@@ -2718,7 +2705,6 @@ class BambiDockWidget(QDockWidget):
 
             # TRex import
             "trex_npz_dir": self.trex_npz_dir_edit.text() if hasattr(self, 'trex_npz_dir_edit') else "",
-            "trex_camera": "T" if (not hasattr(self, 'trex_camera_combo') or self.trex_camera_combo.currentIndex() == 0) else "W",
             "trex_already_undistorted": self.trex_undistorted_check.isChecked() if hasattr(self, 'trex_undistorted_check') else False,
 
             # Camera selections for processing steps
@@ -4352,7 +4338,7 @@ class BambiDockWidget(QDockWidget):
     def run_trex_import(self):
         """Import TRex tracklets and geo-reference them against the DEM."""
         config = self.get_config()
-        camera = config.get("trex_camera", "T")
+        camera = config.get("detection_camera", "T")
         target_folder = config.get("target_folder", "")
         npz_dir = config.get("trex_npz_dir", "")
 
@@ -7907,8 +7893,6 @@ class BambiDockWidget(QDockWidget):
         # ===== TRex Settings =====
         project.writeEntry(PLUGIN_SCOPE, "TRex/NpzDir",
                            self.trex_npz_dir_edit.text())
-        project.writeEntryDouble(PLUGIN_SCOPE, "TRex/CameraIndex",
-                                 self.trex_camera_combo.currentIndex())
         project.writeEntryBool(PLUGIN_SCOPE, "TRex/AlreadyUndistorted",
                                self.trex_undistorted_check.isChecked())
 
@@ -8174,9 +8158,6 @@ class BambiDockWidget(QDockWidget):
 
         # ===== TRex Settings =====
         self.trex_npz_dir_edit.setText(read_str("TRex/NpzDir"))
-        trex_cam_idx = read_int("TRex/CameraIndex", 0)
-        if 0 <= trex_cam_idx < self.trex_camera_combo.count():
-            self.trex_camera_combo.setCurrentIndex(trex_cam_idx)
         self.trex_undistorted_check.setChecked(read_bool("TRex/AlreadyUndistorted", False))
 
         # ===== Correction Settings =====

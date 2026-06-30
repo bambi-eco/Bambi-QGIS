@@ -2229,7 +2229,7 @@ class BambiProcessor:
         from alfspy.render.render import read_gltf, process_render_data, release_all
         from bambi.util.projection_util import label_to_world_coordinates
 
-        camera = config.get("trex_camera", "T")
+        camera = config.get("detection_camera", "T")
         camera_suffix = "t" if camera == "T" else "w"
         camera_name = "Thermal" if camera == "T" else "RGB"
         already_undistorted = config.get("trex_already_undistorted", False)
