@@ -147,6 +147,8 @@ class ProcessingWorker(QObject):
                 self.processor.run_track_perpendicular(
                     self.config, self.progress.emit, self.log.emit, self.is_cancelled
                 )
+            elif self.step == "trex_import":
+                self.processor.run_trex_import(self.config, self.progress.emit, self.log.emit, self.is_cancelled)
             else:
                 raise ValueError(f"Unknown step: {self.step}")
 
@@ -2203,6 +2205,371 @@ class BambiProcessor:
 
         if log_fn:
             log_fn(f"Geo-referencing complete: {len(georeferenced)} detections")
+
+        if progress_fn:
+            progress_fn(100)
+
+    def run_trex_import(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
+        """Import TRex .npz tracklets and geo-reference them against the DEM.
+
+        Reads TRex tracklet files, optionally undistorts bounding-box coordinates from
+        raw video pixel space to undistorted square-frame space, then geo-references
+        each detection against the DEM mesh using the per-frame poses.  Outputs are
+        written into the same folder structure as the regular detection pipeline so that
+        all downstream steps (Add Tracks to QGIS, perpendicular distance, etc.) work
+        without modification.
+        """
+        import glob as _glob
+        import cv2
+        import numpy as np
+        from pathlib import Path
+        from pyrr import Vector3, Quaternion
+        from trimesh import Trimesh
+        from alfspy.core.rendering import Camera, Resolution
+        from alfspy.render.render import read_gltf, process_render_data, release_all
+        from bambi.util.projection_util import label_to_world_coordinates
+
+        camera = config.get("trex_camera", "T")
+        camera_suffix = "t" if camera == "T" else "w"
+        camera_name = "Thermal" if camera == "T" else "RGB"
+        already_undistorted = config.get("trex_already_undistorted", False)
+        npz_dir = config.get("trex_npz_dir", "")
+        target_folder = config["target_folder"]
+        dem_path = config["dem_path"]
+
+        # ---- Step 1: read .npz tracklets ----------------------------------------
+        if log_fn:
+            log_fn(f"Reading TRex tracklets from: {npz_dir}")
+
+        npz_files = sorted(_glob.glob(os.path.join(npz_dir, "*.npz")))
+        if not npz_files:
+            raise FileNotFoundError(f"No .npz files found in: {npz_dir}")
+
+        detections = []
+        raw_size = None
+
+        for npz_path in npz_files:
+            data = np.load(npz_path, allow_pickle=True)
+
+            if "video_size" in data and raw_size is None:
+                vs = data["video_size"]
+                raw_size = (int(vs[0]), int(vs[1]))
+
+            if "id" in data and len(data["id"]):
+                track_id = int(np.asarray(data["id"]).ravel()[0])
+            else:
+                stem = Path(npz_path).stem
+                track_id = int(stem.split("id")[-1]) if "id" in stem else len(detections)
+
+            frames = np.asarray(data["frame"]).astype(int)
+            conf = np.nan_to_num(np.asarray(data["detection_p"], dtype=float), nan=0.0)
+            cls = np.nan_to_num(np.asarray(data["detection_class"], dtype=float), nan=0.0).astype(int)
+
+            pose_keys = []
+            for key in data.keys():
+                if key.startswith("poseX"):
+                    suffix = key[len("poseX"):]
+                    if suffix.isdigit() and f"poseY{suffix}" in data:
+                        pose_keys.append(int(suffix))
+            pose_keys = sorted(pose_keys)
+
+            if not pose_keys:
+                if log_fn:
+                    log_fn(f"  WARNING: {Path(npz_path).name} has no pose points, skipped")
+                continue
+
+            pose_x = np.stack([np.asarray(data[f"poseX{i}"], dtype=float) for i in pose_keys], axis=1)
+            pose_y = np.stack([np.asarray(data[f"poseY{i}"], dtype=float) for i in pose_keys], axis=1)
+
+            kept = 0
+            for i in range(len(frames)):
+                xs = pose_x[i]
+                ys = pose_y[i]
+                mask = np.isfinite(xs) & np.isfinite(ys)
+                if not mask.any():
+                    continue
+                xs, ys = xs[mask], ys[mask]
+                detections.append({
+                    "frame": int(frames[i]),
+                    "track_id": track_id,
+                    "x1": float(xs.min()), "y1": float(ys.min()),
+                    "x2": float(xs.max()), "y2": float(ys.max()),
+                    "confidence": float(conf[i]) if i < len(conf) else 1.0,
+                    "class_id": int(cls[i]) if i < len(cls) else 0,
+                })
+                kept += 1
+            if log_fn:
+                log_fn(f"  {Path(npz_path).name}: track {track_id}, {kept} detections")
+
+        detections.sort(key=lambda d: (d["frame"], d["track_id"]))
+        if log_fn:
+            log_fn(f"Total: {len(detections)} detections, raw video size: {raw_size}")
+
+        if progress_fn:
+            progress_fn(10)
+
+        # ---- Step 2: write detections.txt ----------------------------------------
+        det_folder = os.path.join(target_folder, f"detections_{camera_suffix}")
+        os.makedirs(det_folder, exist_ok=True)
+        det_file = os.path.join(det_folder, "detections.txt")
+        with open(det_file, "w", encoding="utf-8") as f:
+            f.write("# frame x1 y1 x2 y2 confidence class_id\n")
+            for d in detections:
+                f.write(f"{d['frame']} {d['x1']:.2f} {d['y1']:.2f} {d['x2']:.2f} {d['y2']:.2f} "
+                        f"{d['confidence']:.4f} {d['class_id']}\n")
+        if log_fn:
+            log_fn(f"Wrote detections.txt ({len(detections)} rows)")
+
+        # ---- Step 3: build undistorter (if labels are in raw pixel space) ---------
+        undistorter = None
+        input_resolution = None
+
+        if not already_undistorted:
+            if raw_size is None or raw_size == (0, 0):
+                raise ValueError(
+                    "Raw video size unknown — cannot undistort.  "
+                    "Ensure the .npz files contain a 'video_size' field, or enable "
+                    "'Labels already in undistorted frame space'."
+                )
+
+            calib_data = None
+            input_mode = config.get("input_mode", "video")
+            if camera == "T":
+                calib_data = config.get("thermal_calibration_data") or config.get("thermal_photo_calibration_data")
+                calib_path = config.get("thermal_calibration_path") or config.get("thermal_photo_calibration_path", "")
+            else:
+                calib_data = config.get("rgb_calibration_data") or config.get("rgb_photo_calibration_data")
+                calib_path = config.get("rgb_calibration_path") or config.get("rgb_photo_calibration_path", "")
+
+            if calib_data is None:
+                if not calib_path or not os.path.isfile(calib_path):
+                    raise ValueError(
+                        f"No {camera_name} calibration provided.  "
+                        "Select a preset or specify a calibration file path in the Input tab."
+                    )
+                with open(calib_path, "r", encoding="utf-8") as f:
+                    calib_data = json.load(f)
+
+            mtx = np.asarray(calib_data["mtx"], dtype=float)
+            dist = np.asarray(calib_data["dist"], dtype=float)
+            w, h = raw_size
+            wh = min(w, h)
+            new_size = (wh, wh)
+            ncm, _ = cv2.getOptimalNewCameraMatrix(mtx, dist, (w, h), 0.5, new_size,
+                                                   centerPrincipalPoint=True)
+            fxy = max(ncm[0, 0], ncm[1, 1])
+            ncm[0, 0] = ncm[1, 1] = fxy
+
+            class _Undistorter:
+                def __init__(self, _mtx, _dist, _ncm, _new_size):
+                    self._mtx = _mtx
+                    self._dist = _dist
+                    self._ncm = _ncm
+                    self.new_size = _new_size
+
+                def points(self, pts_xy):
+                    pts = np.asarray(pts_xy, dtype=np.float32).reshape(-1, 1, 2)
+                    out = cv2.undistortPoints(pts, self._mtx, self._dist, P=self._ncm)
+                    return out.reshape(-1, 2)
+
+            undistorter = _Undistorter(mtx, dist, ncm, new_size)
+            input_resolution = Resolution(new_size[0], new_size[1])
+            if log_fn:
+                log_fn(f"Undistorter ready: {raw_size} → {new_size}")
+        else:
+            # Labels already in undistorted space: read resolution from first extracted frame
+            poses_file = os.path.join(target_folder, f"poses_{camera_suffix}.json")
+            with open(poses_file, "r", encoding="utf-8") as f:
+                poses_data = json.load(f)
+            frames_folder = os.path.join(target_folder, f"frames_{camera_suffix}")
+            first_img = poses_data["images"][0].get("imagefile", "")
+            if first_img:
+                img_path = os.path.join(frames_folder, first_img)
+                if os.path.isfile(img_path):
+                    img = cv2.imread(img_path)
+                    if img is not None:
+                        input_resolution = Resolution(img.shape[1], img.shape[0])
+            if input_resolution is None:
+                raise ValueError(
+                    "Could not determine input resolution from extracted frames.  "
+                    "Ensure frame extraction has been completed."
+                )
+            if log_fn:
+                log_fn(f"Input resolution from extracted frames: {input_resolution.width}x{input_resolution.height}")
+
+        if progress_fn:
+            progress_fn(20)
+
+        # ---- Step 4: write pixel-space tracks ------------------------------------
+        tracks_pixel_folder = os.path.join(target_folder, f"tracks_pixel_{camera_suffix}")
+        os.makedirs(tracks_pixel_folder, exist_ok=True)
+        pixel_tracks_file = os.path.join(tracks_pixel_folder, "tracks_pixel.csv")
+        with open(pixel_tracks_file, "w", encoding="utf-8") as f:
+            for d in detections:
+                f.write(f"{d['frame']:08d},{d['track_id']},{d['x1']:.6f},{d['y1']:.6f},"
+                        f"{d['x2']:.6f},{d['y2']:.6f},{d['confidence']:.6f},{d['class_id']},0\n")
+        if log_fn:
+            log_fn(f"Wrote pixel-space tracks: {pixel_tracks_file}")
+
+        if undistorter is not None:
+            pixel_und_file = os.path.join(tracks_pixel_folder, "tracks_pixel_undistorted.csv")
+            with open(pixel_und_file, "w", encoding="utf-8") as f:
+                for d in detections:
+                    corners = np.array(
+                        [[d["x1"], d["y1"]], [d["x2"], d["y1"]],
+                         [d["x2"], d["y2"]], [d["x1"], d["y2"]]], dtype=np.float32
+                    )
+                    und = undistorter.points(corners)
+                    f.write(f"{d['frame']:08d},{d['track_id']},"
+                            f"{und[:,0].min():.6f},{und[:,1].min():.6f},"
+                            f"{und[:,0].max():.6f},{und[:,1].max():.6f},"
+                            f"{d['confidence']:.6f},{d['class_id']},0\n")
+            if log_fn:
+                log_fn(f"Wrote undistorted pixel-space tracks: {pixel_und_file}")
+
+        # ---- Step 5: load DEM + poses -------------------------------------------
+        if log_fn:
+            log_fn("Loading DEM and poses...")
+
+        dem_json_path = dem_path.replace(".gltf", ".json").replace(".glb", ".json")
+        with open(dem_json_path, "r", encoding="utf-8") as f:
+            dem_meta = json.load(f)
+
+        x_off = float(dem_meta["origin"][0])
+        y_off = float(dem_meta["origin"][1])
+        z_off = float(dem_meta["origin"][2])
+
+        if abs(x_off) <= 180 and abs(y_off) <= 90:
+            raise RuntimeError(
+                "DEM metadata 'origin' appears to be in WGS84 geographic coordinates "
+                f"(origin=[{x_off:.5f}, {y_off:.5f}, {z_off:.3f}]) rather than projected UTM metres.\n\n"
+                "Delete the existing DEM .glb/.json files, set the correct EPSG, and re-run 'Load/Generate DEM'."
+            )
+
+        poses_file = os.path.join(target_folder, f"poses_{camera_suffix}.json")
+        with open(poses_file, "r", encoding="utf-8") as f:
+            poses = json.load(f)
+
+        n_frames = len(poses["images"])
+        if log_fn:
+            log_fn(f"DEM origin: ({x_off:.2f}, {y_off:.2f}, {z_off:.2f})  poses: {n_frames} frames")
+
+        if progress_fn:
+            progress_fn(30)
+
+        # ---- Step 6: geo-reference -----------------------------------------------
+        georef_folder = os.path.join(target_folder, f"georeferenced_{camera_suffix}")
+        tracks_folder = os.path.join(target_folder, f"tracks_{camera_suffix}")
+        os.makedirs(georef_folder, exist_ok=True)
+        os.makedirs(tracks_folder, exist_ok=True)
+        georef_file = os.path.join(georef_folder, "georeferenced.txt")
+        tracks_file = os.path.join(tracks_folder, "tracks.csv")
+
+        mesh_data = None
+        texture_data = None
+        tri_mesh = None
+
+        try:
+            mesh_data, texture_data = read_gltf(dem_path)
+            tri_mesh = Trimesh(vertices=mesh_data.vertices, faces=mesh_data.indices)
+            mesh_data, texture_data = process_render_data(mesh_data, texture_data)
+
+            camera_cache: Dict[int, Camera] = {}
+            n_ok = 0
+            n_fail = 0
+            total = len(detections)
+
+            with open(georef_file, "w", encoding="utf-8") as gf, \
+                    open(tracks_file, "w", encoding="utf-8") as tf:
+                gf.write("# idx frame min_x min_y min_z max_x max_y max_z confidence class_id\n")
+
+                for idx, d in enumerate(detections):
+                    if cancel_check and cancel_check():
+                        if log_fn:
+                            log_fn("TRex import cancelled")
+                        raise CancelledException("TRex import cancelled")
+
+                    frame_idx = d["frame"]
+                    if frame_idx >= n_frames:
+                        gf.write(f"{idx} {frame_idx} -1 -1 -1 -1 -1 -1 "
+                                 f"{d['confidence']:.4f} {d['class_id']}\n")
+                        n_fail += 1
+                        continue
+
+                    corners = np.array(
+                        [[d["x1"], d["y1"]], [d["x2"], d["y1"]],
+                         [d["x2"], d["y2"]], [d["x1"], d["y2"]]], dtype=np.float32
+                    )
+                    if undistorter is not None:
+                        corners = undistorter.points(corners)
+
+                    if frame_idx not in camera_cache:
+                        correction = self.get_correction_for_frame(frame_idx, config)
+                        trans = correction["translation"]
+                        rot = correction["rotation"]
+                        cor_rot = Vector3([rot["x"], rot["y"], rot["z"]], dtype="f4")
+                        cor_trans = Vector3([trans["x"], trans["y"], trans["z"]], dtype="f4")
+
+                        img_data = poses["images"][frame_idx]
+                        fovy = img_data.get("fovy", [50])
+                        if isinstance(fovy, list):
+                            fovy = fovy[0]
+                        position = Vector3(img_data["location"]) + cor_trans
+                        rotation_eulers = (
+                            Vector3([np.deg2rad(v % 360.0) for v in img_data["rotation"]]) - cor_rot
+                        ) * -1
+                        rotation_q = Quaternion.from_eulers(rotation_eulers)
+                        aspect = input_resolution.width / input_resolution.height
+                        camera_cache[frame_idx] = Camera(
+                            fovy=fovy, aspect_ratio=aspect,
+                            position=position, rotation=rotation_q
+                        )
+
+                    cam = camera_cache[frame_idx]
+                    poly = corners.reshape(-1).tolist()
+
+                    try:
+                        world = label_to_world_coordinates(poly, input_resolution, tri_mesh, cam)
+                    except Exception:
+                        world = None
+
+                    if world is None or len(world) == 0:
+                        gf.write(f"{idx} {frame_idx} -1 -1 -1 -1 -1 -1 "
+                                 f"{d['confidence']:.4f} {d['class_id']}\n")
+                        n_fail += 1
+                        continue
+
+                    xx = world[:, 0] + x_off
+                    yy = world[:, 1] + y_off
+                    zz = world[:, 2] + z_off
+                    min_x, max_x = float(xx.min()), float(xx.max())
+                    min_y, max_y = float(yy.min()), float(yy.max())
+                    min_z, max_z = float(zz.min()), float(zz.max())
+
+                    gf.write(f"{idx} {frame_idx} {min_x:.6f} {min_y:.6f} {min_z:.6f} "
+                             f"{max_x:.6f} {max_y:.6f} {max_z:.6f} "
+                             f"{d['confidence']:.4f} {d['class_id']}\n")
+                    tf.write(f"{frame_idx:08d},{d['track_id']},"
+                             f"{min_x:.6f},{min_y:.6f},{min_z:.6f},"
+                             f"{max_x:.6f},{max_y:.6f},{max_z:.6f},"
+                             f"{d['confidence']:.6f},{d['class_id']},0\n")
+                    n_ok += 1
+
+                    if progress_fn and idx % 100 == 0:
+                        progress_fn(30 + int((idx / total) * 65))
+
+        finally:
+            if mesh_data is not None:
+                del mesh_data
+            if texture_data is not None:
+                del texture_data
+            if tri_mesh is not None:
+                del tri_mesh
+
+        if log_fn:
+            log_fn(f"Geo-referenced {n_ok} detections ({n_fail} could not be projected).")
+            log_fn(f"  → {georef_file}")
+            log_fn(f"  → {tracks_file}")
 
         if progress_fn:
             progress_fn(100)

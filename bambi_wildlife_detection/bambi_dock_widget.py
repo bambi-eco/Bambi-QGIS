@@ -1373,6 +1373,42 @@ class BambiDockWidget(QDockWidget):
         detection_layout.addRow("Sample Rate:", self.detect_sample_rate_spin)
 
         detect_tab_layout.addWidget(detection_group)
+
+        # ----- TRex Tracklet Import -----
+        trex_group = QGroupBox("TRex Tracklet Import")
+        trex_layout = QFormLayout(trex_group)
+
+        trex_info_label = QLabel(
+            "⚠ Frame extraction (Step 1) must be completed before importing TRex "
+            "tracklets — the poses file is required for geo-referencing."
+        )
+        trex_info_label.setWordWrap(True)
+        trex_info_label.setStyleSheet("color: gray; font-size: 10px;")
+        trex_layout.addRow(trex_info_label)
+
+        self.trex_npz_dir_edit = QLineEdit()
+        self.trex_npz_dir_edit.setPlaceholderText("Folder containing TRex *.npz tracklet files")
+        trex_npz_browse_btn = QPushButton("Browse...")
+        trex_npz_browse_btn.clicked.connect(self.browse_trex_npz_dir)
+        trex_npz_row = QHBoxLayout()
+        trex_npz_row.addWidget(self.trex_npz_dir_edit)
+        trex_npz_row.addWidget(trex_npz_browse_btn)
+        trex_layout.addRow("NPZ Folder:", trex_npz_row)
+
+        self.trex_camera_combo = QComboBox()
+        self.trex_camera_combo.addItems(["T - Thermal", "W - RGB"])
+        self.trex_camera_combo.setToolTip("Camera the TRex labels correspond to")
+        trex_layout.addRow("Camera:", self.trex_camera_combo)
+
+        self.trex_undistorted_check = QCheckBox("Labels already in undistorted frame space")
+        self.trex_undistorted_check.setChecked(False)
+        self.trex_undistorted_check.setToolTip(
+            "Check if TRex was run on already-undistorted BAMBI frames.\n"
+            "Leave unchecked (default) if TRex was run on the original raw video."
+        )
+        trex_layout.addRow("", self.trex_undistorted_check)
+
+        detect_tab_layout.addWidget(trex_group)
         detect_tab_layout.addStretch()
 
         # ----- Sub-Tab 2: Position Correction -----
@@ -2067,6 +2103,20 @@ class BambiDockWidget(QDockWidget):
         step3_row.addWidget(self.detect_status)
         steps_btn_layout.addLayout(step3_row)
 
+        # ----- Step 3b: Import TRex Tracklets -----
+        trex_import_row = QHBoxLayout()
+        self.trex_import_btn = QPushButton("3b. Import TRex Tracklets")
+        self.trex_import_btn.clicked.connect(self.run_trex_import)
+        self.trex_import_btn.setToolTip(
+            "Import TRex .npz tracklets and geo-reference them against the DEM.\n"
+            "Replaces steps 3–5 when tracking was done with TRex.\n"
+            "Requires: frame extraction (Step 1) + DEM."
+        )
+        self.trex_import_status = QLabel("⚪ Not started")
+        trex_import_row.addWidget(self.trex_import_btn)
+        trex_import_row.addWidget(self.trex_import_status)
+        steps_btn_layout.addLayout(trex_import_row)
+
         # ----- Step 4: Geo-Reference Detections -----
         step4_row = QHBoxLayout()
         self.georef_btn = QPushButton("4. Geo-Reference Detections")
@@ -2665,6 +2715,11 @@ class BambiDockWidget(QDockWidget):
             "filter_gps_origin": (
                 self.filter_gps_origin_check.isChecked()
                 if hasattr(self, 'filter_gps_origin_check') else True),
+
+            # TRex import
+            "trex_npz_dir": self.trex_npz_dir_edit.text() if hasattr(self, 'trex_npz_dir_edit') else "",
+            "trex_camera": "T" if (not hasattr(self, 'trex_camera_combo') or self.trex_camera_combo.currentIndex() == 0) else "W",
+            "trex_already_undistorted": self.trex_undistorted_check.isChecked() if hasattr(self, 'trex_undistorted_check') else False,
 
             # Camera selections for processing steps
             "flight_route_camera": "T" if self.flight_route_camera_combo.currentIndex() == 0 else "W",
@@ -4289,6 +4344,42 @@ class BambiDockWidget(QDockWidget):
             self.target_folder_edit.setText(folder)
             self._check_existing_outputs(folder)
 
+    def browse_trex_npz_dir(self):
+        folder = QFileDialog.getExistingDirectory(self, "Select TRex NPZ Folder")
+        if folder:
+            self.trex_npz_dir_edit.setText(folder)
+
+    def run_trex_import(self):
+        """Import TRex tracklets and geo-reference them against the DEM."""
+        config = self.get_config()
+        camera = config.get("trex_camera", "T")
+        target_folder = config.get("target_folder", "")
+        npz_dir = config.get("trex_npz_dir", "")
+
+        if not npz_dir or not os.path.isdir(npz_dir):
+            QMessageBox.warning(
+                self, "Missing Input",
+                "Please specify a valid NPZ folder in the Detection config tab."
+            )
+            return
+
+        poses_suffix = "t" if camera == "T" else "w"
+        poses_file = os.path.join(target_folder, f"poses_{poses_suffix}.json")
+        if not os.path.isfile(poses_file):
+            camera_name = "Thermal" if camera == "T" else "RGB"
+            QMessageBox.warning(
+                self,
+                "Missing Prerequisites",
+                f"{camera_name} frame extraction has not been completed.\n"
+                f"Please run Step 1{'a' if camera == 'T' else 'b'} first."
+            )
+            return
+
+        if not self.validate_inputs(["dem_path"]):
+            return
+
+        self.start_worker("trex_import")
+
     def _check_existing_outputs(self, target_folder: str):
         """Check for existing output subfolders and update status labels accordingly.
 
@@ -4305,7 +4396,7 @@ class BambiDockWidget(QDockWidget):
         for step in ("extract_thermal_frames", "extract_rgb_frames", "detection",
                      "georeference", "tracking", "calculate_fov", "flight_route",
                      "orthomosaic", "export_geotiffs", "sam3_segmentation",
-                     "sam3_georeference"):
+                     "sam3_georeference", "trex_import"):
             self.update_status(step, "⚪ Not started")
 
         completed_count = 0
@@ -4340,6 +4431,7 @@ class BambiDockWidget(QDockWidget):
             ("geotiffs", "export_geotiffs", None),
             ("segmentation", "sam3_segmentation", "segmentation_pixel.json"),
             ("segmentation", "sam3_georeference", "segmentation_georef.json"),
+            ("tracks_pixel", "trex_import", None),
         ]
 
         for subfolder_base, status_key, check_file in folder_status_mapping:
@@ -5345,7 +5437,8 @@ class BambiDockWidget(QDockWidget):
             "add_track_perpendicular": self.add_track_perpendicular_status,
             "sam3_segmentation": self.sam3_segment_status,
             "sam3_georeference": self.sam3_georef_status,
-            "add_sam3": self.add_sam3_status
+            "add_sam3": self.add_sam3_status,
+            "trex_import": self.trex_import_status,
         }
         if step in status_map:
             status_map[step].setText(status)
@@ -5376,6 +5469,7 @@ class BambiDockWidget(QDockWidget):
         self.sam3_segment_btn.setEnabled(enabled)
         self.sam3_georef_btn.setEnabled(enabled)
         self.add_sam3_btn.setEnabled(enabled)
+        self.trex_import_btn.setEnabled(enabled)
 
     def run_perpendicular(self):
         """Run perpendicular distance calculation step."""
@@ -7810,6 +7904,14 @@ class BambiDockWidget(QDockWidget):
         project.writeEntryDouble(PLUGIN_SCOPE, "Detection/SampleRate",
                                  self.detect_sample_rate_spin.value())
 
+        # ===== TRex Settings =====
+        project.writeEntry(PLUGIN_SCOPE, "TRex/NpzDir",
+                           self.trex_npz_dir_edit.text())
+        project.writeEntryDouble(PLUGIN_SCOPE, "TRex/CameraIndex",
+                                 self.trex_camera_combo.currentIndex())
+        project.writeEntryBool(PLUGIN_SCOPE, "TRex/AlreadyUndistorted",
+                               self.trex_undistorted_check.isChecked())
+
         # ===== Correction Settings =====
         project.writeEntryDouble(PLUGIN_SCOPE, "Correction/RotationUnit",
                                  self.rotation_unit_combo.currentIndex())
@@ -8069,6 +8171,13 @@ class BambiDockWidget(QDockWidget):
         self.detect_start_frame_spin.setValue(read_int("Detection/StartFrame", 0))
         self.detect_end_frame_spin.setValue(read_int("Detection/EndFrame", 999999))
         self.detect_sample_rate_spin.setValue(read_int("Detection/SampleRate", 1))
+
+        # ===== TRex Settings =====
+        self.trex_npz_dir_edit.setText(read_str("TRex/NpzDir"))
+        trex_cam_idx = read_int("TRex/CameraIndex", 0)
+        if 0 <= trex_cam_idx < self.trex_camera_combo.count():
+            self.trex_camera_combo.setCurrentIndex(trex_cam_idx)
+        self.trex_undistorted_check.setChecked(read_bool("TRex/AlreadyUndistorted", False))
 
         # ===== Correction Settings =====
         rot_unit_idx = read_int("Correction/RotationUnit", 0)
