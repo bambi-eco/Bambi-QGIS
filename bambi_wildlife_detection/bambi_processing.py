@@ -2708,7 +2708,27 @@ class BambiProcessor:
                 if log_fn:
                     log_fn(f"Loaded mask with {len(mask_polygon)} polygon points")
 
-        # If no mask, use image corners
+        # Fall back to the same mask the orthomosaic / GeoTIFF export use so the
+        # FoV footprint matches the rendered products.  Those pipelines always
+        # constrain the frame to mask_<CAM>.png (or the poses "mask"); projecting
+        # the full frame corners here instead made the FoV polygons overhang the
+        # rendered content (the mask trims the invalid border of undistorted
+        # frames).  Set use_fov_mask + fov_mask_path to override with a custom mask.
+        if not mask_polygon:
+            camera_specific_mask = os.path.join(target_folder, f"mask_{camera}.png")
+            mask_filename = poses.get("mask")
+            poses_mask = os.path.join(target_folder, mask_filename) if mask_filename else None
+            default_mask = None
+            if os.path.exists(camera_specific_mask):
+                default_mask = camera_specific_mask
+            elif poses_mask and os.path.exists(poses_mask):
+                default_mask = poses_mask
+            if default_mask:
+                if log_fn:
+                    log_fn(f"Using render mask for FoV footprint: {os.path.basename(default_mask)}")
+                mask_polygon = self._extract_mask_polygon(default_mask, mask_simplify_epsilon, log_fn)
+
+        # If still no mask, use image corners
         if not mask_polygon:
             if log_fn:
                 log_fn("Using image corners as FoV polygon...")
@@ -2789,6 +2809,9 @@ class BambiProcessor:
                         fovy = fovy[0]
                     position = Vector3(image_metadata["location"])
                     rot = image_metadata["rotation"]
+                    # Apply the rotation correction at 1× — the same amount alfspy's
+                    # renderer applies via CtxShot.get_correction() — so the FoV
+                    # footprint matches the rendered orthomosaic and GeoTIFF content.
                     rotation_eulers = (Vector3(
                         [np.deg2rad(val % 360.0) for val in rot]) - cor_rotation_eulers) * -1
                     position += cor_translation
@@ -4637,6 +4660,41 @@ class BambiProcessor:
         if log_fn:
             log_fn(f"Processing {len(tiles)} tile(s) ({n_rows}x{n_cols} grid)...")
 
+        # Bounded LRU of shots whose CPU-side image (tex_data, a float32 RGBA
+        # array — ~33 MB at 1080p, ~130 MB at 4K) is kept resident.  Previously
+        # tex_data was retained for every shot ever touched, so RAM grew without
+        # bound as tiles were processed and eventually OOM'd on large flights.
+        # We now keep only the most-recently-used shots cached; overlapping
+        # neighbour tiles still hit the cache, while distant shots are evicted
+        # and re-read from disk on demand.
+        from collections import OrderedDict
+        cpu_cache_size = int(config.get("ortho_cpu_cache_size", 32))
+        cpu_cache = OrderedDict()  # id(shot) -> shot, ordered oldest-first
+        if log_fn:
+            log_fn(f"CPU image cache: up to {cpu_cache_size} shots resident (ortho_cpu_cache_size)")
+
+        def _reclaim_cpu(used_shots):
+            """Release GPU textures for the tile's shots, then trim the CPU cache.
+
+            GPU textures are always freed (VRAM is scarce).  Each shot with
+            resident CPU data is marked most-recently-used; shots beyond
+            cpu_cache_size are evicted and their tex_data freed.
+            """
+            for shot in used_shots:
+                if shot.tex is not None:
+                    shot.tex.release()
+                    shot.tex = None
+                if shot.tex_data is not None:
+                    key = id(shot)
+                    cpu_cache.pop(key, None)
+                    cpu_cache[key] = shot  # re-insert as newest
+            while len(cpu_cache) > cpu_cache_size:
+                _, old = cpu_cache.popitem(last=False)
+                # shot.release() permanently disables the shot, so free the
+                # CPU-side buffers directly instead.
+                old.tex_data = None
+                old._tex_gen_input = None
+
         try:
             for i, (row, col, tx, ty, tw, th) in enumerate(tiles):
                 if cancel_check and cancel_check():
@@ -4699,10 +4757,7 @@ class BambiProcessor:
                     if log_fn:
                         log_fn(f"Skipping empty tile ({row}, {col})")
                     del tile_img
-                    for shot in tile_shots:
-                        if shot.tex is not None:
-                            shot.tex.release()
-                            shot.tex = None
+                    _reclaim_cpu(tile_shots)
                     continue
 
                 tile_path = os.path.join(output_dir, f"tile_{row:02d}_{col:02d}.tif")
@@ -4718,14 +4773,8 @@ class BambiProcessor:
 
                 # Free GPU textures for the shots used in this tile so VRAM is
                 # released before the next Renderer (FBO + mesh re-upload) is
-                # allocated.  CPU-side tex_data is kept so re-upload on the next
-                # tile reads from RAM, not from disk.
-                # Note: shot.release() sets _released=True which permanently
-                # disables the shot, so we only null out shot.tex directly.
-                for shot in tile_shots:
-                    if shot.tex is not None:
-                        shot.tex.release()
-                        shot.tex = None
+                # allocated, and trim the bounded CPU cache so RAM stays capped.
+                _reclaim_cpu(tile_shots)
         finally:
             release_all(ctx, shots)
 
