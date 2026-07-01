@@ -1373,29 +1373,6 @@ class BambiDockWidget(QDockWidget):
         detection_layout.addRow("Sample Rate:", self.detect_sample_rate_spin)
 
         detect_tab_layout.addWidget(detection_group)
-
-        # ----- TRex Tracklet Import -----
-        trex_group = QGroupBox("TRex Tracklet Import")
-        trex_layout = QFormLayout(trex_group)
-
-        self.trex_npz_dir_edit = QLineEdit()
-        self.trex_npz_dir_edit.setPlaceholderText("Folder containing TRex *.npz tracklet files")
-        trex_npz_browse_btn = QPushButton("Browse...")
-        trex_npz_browse_btn.clicked.connect(self.browse_trex_npz_dir)
-        trex_npz_row = QHBoxLayout()
-        trex_npz_row.addWidget(self.trex_npz_dir_edit)
-        trex_npz_row.addWidget(trex_npz_browse_btn)
-        trex_layout.addRow("NPZ Folder:", trex_npz_row)
-
-        self.trex_undistorted_check = QCheckBox("Labels already in undistorted frame space")
-        self.trex_undistorted_check.setChecked(False)
-        self.trex_undistorted_check.setToolTip(
-            "Check if TRex was run on already-undistorted BAMBI frames.\n"
-            "Leave unchecked (default) if TRex was run on the original raw video."
-        )
-        trex_layout.addRow("", self.trex_undistorted_check)
-
-        detect_tab_layout.addWidget(trex_group)
         detect_tab_layout.addStretch()
 
         # ----- Sub-Tab 2: Position Correction -----
@@ -1691,6 +1668,31 @@ class BambiDockWidget(QDockWidget):
 
         # Initialize tracker UI state
         self._on_tracker_changed(0)
+
+        # ----- TRex Tracklet Import -----
+        # When an NPZ folder is specified here, the "Track Animals Or Import" step
+        # imports the pre-computed TRex tracklets instead of running the tracker.
+        trex_group = QGroupBox("TRex Tracklet Import")
+        trex_layout = QFormLayout(trex_group)
+
+        self.trex_npz_dir_edit = QLineEdit()
+        self.trex_npz_dir_edit.setPlaceholderText("Folder containing TRex *.npz tracklet files")
+        trex_npz_browse_btn = QPushButton("Browse...")
+        trex_npz_browse_btn.clicked.connect(self.browse_trex_npz_dir)
+        trex_npz_row = QHBoxLayout()
+        trex_npz_row.addWidget(self.trex_npz_dir_edit)
+        trex_npz_row.addWidget(trex_npz_browse_btn)
+        trex_layout.addRow("NPZ Folder:", trex_npz_row)
+
+        self.trex_undistorted_check = QCheckBox("Labels already in undistorted frame space")
+        self.trex_undistorted_check.setChecked(False)
+        self.trex_undistorted_check.setToolTip(
+            "Check if TRex was run on already-undistorted BAMBI frames.\n"
+            "Leave unchecked (default) if TRex was run on the original raw video."
+        )
+        trex_layout.addRow("", self.trex_undistorted_check)
+
+        tracking_tab_layout.addWidget(trex_group)
 
         tracking_tab_layout.addStretch()
 
@@ -2090,20 +2092,6 @@ class BambiDockWidget(QDockWidget):
         step3_row.addWidget(self.detect_status)
         steps_btn_layout.addLayout(step3_row)
 
-        # ----- Step 3b: Import TRex Tracklets -----
-        trex_import_row = QHBoxLayout()
-        self.trex_import_btn = QPushButton("3b. Import TRex Tracklets")
-        self.trex_import_btn.clicked.connect(self.run_trex_import)
-        self.trex_import_btn.setToolTip(
-            "Import TRex .npz tracklets and geo-reference them against the DEM.\n"
-            "Replaces steps 3–5 when tracking was done with TRex.\n"
-            "Requires: frame extraction (Step 1) + DEM."
-        )
-        self.trex_import_status = QLabel("⚪ Not started")
-        trex_import_row.addWidget(self.trex_import_btn)
-        trex_import_row.addWidget(self.trex_import_status)
-        steps_btn_layout.addLayout(trex_import_row)
-
         # ----- Step 4: Geo-Reference Detections -----
         step4_row = QHBoxLayout()
         self.georef_btn = QPushButton("4. Geo-Reference Detections")
@@ -2149,9 +2137,14 @@ class BambiDockWidget(QDockWidget):
         perp_add_row.addWidget(self.add_perpendicular_status)
         steps_btn_layout.addLayout(perp_add_row)
 
-        # ----- Step 5: Track Animals -----
+        # ----- Step 5: Track Animals Or Import -----
         step5_row = QHBoxLayout()
-        self.track_btn = QPushButton("5. Track Animals")
+        self.track_btn = QPushButton("5. Track Animals Or Import")
+        self.track_btn.setToolTip(
+            "Track geo-referenced detections.\n"
+            "If a TRex NPZ folder is set (Config → Tracking tab), the pre-computed\n"
+            "TRex tracklets are imported and geo-referenced instead."
+        )
         self.track_btn.clicked.connect(self.run_tracking)
         self.track_status = QLabel("⚪ Not started")
         step5_row.addWidget(self.track_btn)
@@ -4345,7 +4338,7 @@ class BambiDockWidget(QDockWidget):
         if not npz_dir or not os.path.isdir(npz_dir):
             QMessageBox.warning(
                 self, "Missing Input",
-                "Please specify a valid NPZ folder in the Detection config tab."
+                "Please specify a valid NPZ folder in the Tracking config tab."
             )
             return
 
@@ -4932,8 +4925,15 @@ class BambiDockWidget(QDockWidget):
         self.start_worker("calculate_fov")
 
     def run_tracking(self):
-        """Run tracking step."""
+        """Run tracking step, or import TRex tracklets if a tracklet folder is set."""
         config = self.get_config()
+
+        # If a TRex NPZ folder is configured, import the pre-computed tracklets
+        # instead of running the classic tracker.
+        if config.get("trex_npz_dir", "").strip():
+            self.run_trex_import()
+            return
+
         det_camera = config.get("detection_camera", "T")
         det_suffix = "t" if det_camera == "T" else "w"
 
@@ -5424,7 +5424,9 @@ class BambiDockWidget(QDockWidget):
             "sam3_segmentation": self.sam3_segment_status,
             "sam3_georeference": self.sam3_georef_status,
             "add_sam3": self.add_sam3_status,
-            "trex_import": self.trex_import_status,
+            # TRex import runs under the "Track Animals Or Import" step, so its
+            # progress is reported on the tracking status label.
+            "trex_import": self.track_status,
         }
         if step in status_map:
             status_map[step].setText(status)
@@ -5455,7 +5457,6 @@ class BambiDockWidget(QDockWidget):
         self.sam3_segment_btn.setEnabled(enabled)
         self.sam3_georef_btn.setEnabled(enabled)
         self.add_sam3_btn.setEnabled(enabled)
-        self.trex_import_btn.setEnabled(enabled)
 
     def run_perpendicular(self):
         """Run perpendicular distance calculation step."""
