@@ -2321,8 +2321,46 @@ class BambiProcessor:
             log_fn(f"Wrote detections.txt ({len(detections)} rows)")
 
         # ---- Step 3: build undistorter (if labels are in raw pixel space) ---------
+        # The TRex detections live in raw video pixel space, while the poses/cameras
+        # were built for the *extracted* frames.  BAMBI's frame extraction either keeps
+        # the full aspect ratio (preserve_aspect_ratio=True, e.g. 5120x2700) or forces a
+        # square frame (min(w,h)).  We must map detections into that exact pixel space and
+        # project with that exact resolution, otherwise the geo-referenced boxes are
+        # offset/compressed relative to the GeoTIFFs and orthomosaic.
         undistorter = None
         input_resolution = None
+
+        # Determine the extracted-frame resolution that the poses correspond to.
+        # Prefer an actual extracted frame; fall back to the mask (same dimensions as
+        # the extracted frames); finally fall back to the preserve_aspect_ratio config.
+        frames_folder = os.path.join(target_folder, f"frames_{camera_suffix}")
+        extraction_size = None  # (width, height)
+        if os.path.isdir(frames_folder):
+            for fn in sorted(os.listdir(frames_folder)):
+                if fn.lower().endswith((".jpg", ".jpeg", ".png", ".tif", ".tiff")):
+                    probe = cv2.imread(os.path.join(frames_folder, fn))
+                    if probe is not None:
+                        extraction_size = (probe.shape[1], probe.shape[0])
+                        break
+        if extraction_size is None:
+            mask_candidates = []
+            try:
+                with open(os.path.join(target_folder, f"poses_{camera_suffix}.json"), "r", encoding="utf-8") as f:
+                    mask_candidates.append(json.load(f).get("mask"))
+            except Exception:
+                pass
+            mask_candidates += [f"mask_{'T' if camera == 'T' else 'W'}.png", "mask.png"]
+            for mc in mask_candidates:
+                if not mc:
+                    continue
+                mpath = mc if os.path.isabs(mc) else os.path.join(target_folder, mc)
+                if os.path.isfile(mpath):
+                    mimg = cv2.imread(mpath, cv2.IMREAD_UNCHANGED)
+                    if mimg is not None:
+                        extraction_size = (mimg.shape[1], mimg.shape[0])
+                        break
+        if extraction_size is not None and log_fn:
+            log_fn(f"Extracted-frame resolution: {extraction_size[0]}x{extraction_size[1]}")
 
         if not already_undistorted:
             if raw_size is None or raw_size == (0, 0):
@@ -2333,7 +2371,6 @@ class BambiProcessor:
                 )
 
             calib_data = None
-            input_mode = config.get("input_mode", "video")
             if camera == "T":
                 calib_data = config.get("thermal_calibration_data") or config.get("thermal_photo_calibration_data")
                 calib_path = config.get("thermal_calibration_path") or config.get("thermal_photo_calibration_path", "")
@@ -2353,12 +2390,23 @@ class BambiProcessor:
             mtx = np.asarray(calib_data["mtx"], dtype=float)
             dist = np.asarray(calib_data["dist"], dtype=float)
             w, h = raw_size
-            wh = min(w, h)
-            new_size = (wh, wh)
+
+            # Undistortion target size = extracted-frame size, replicating BAMBI's
+            # CalibratedVideoFrameAccessor.prepare_undistort (alpha=0.5, centred principal
+            # point, square FOV forced only when the frame is square).
+            if extraction_size is not None:
+                new_size = extraction_size
+            elif config.get("preserve_aspect_ratio", False):
+                new_size = (w, h)
+            else:
+                wh = min(w, h)
+                new_size = (wh, wh)
+
             ncm, _ = cv2.getOptimalNewCameraMatrix(mtx, dist, (w, h), 0.5, new_size,
                                                    centerPrincipalPoint=True)
-            fxy = max(ncm[0, 0], ncm[1, 1])
-            ncm[0, 0] = ncm[1, 1] = fxy
+            if new_size[0] == new_size[1]:
+                fxy = max(ncm[0, 0], ncm[1, 1])
+                ncm[0, 0] = ncm[1, 1] = fxy
 
             class _Undistorter:
                 def __init__(self, _mtx, _dist, _ncm, _new_size):
@@ -2377,22 +2425,13 @@ class BambiProcessor:
             if log_fn:
                 log_fn(f"Undistorter ready: {raw_size} → {new_size}")
         else:
-            # Labels already in undistorted space: read resolution from first extracted frame
-            poses_file = os.path.join(target_folder, f"poses_{camera_suffix}.json")
-            with open(poses_file, "r", encoding="utf-8") as f:
-                poses_data = json.load(f)
-            frames_folder = os.path.join(target_folder, f"frames_{camera_suffix}")
-            first_img = poses_data["images"][0].get("imagefile", "")
-            if first_img:
-                img_path = os.path.join(frames_folder, first_img)
-                if os.path.isfile(img_path):
-                    img = cv2.imread(img_path)
-                    if img is not None:
-                        input_resolution = Resolution(img.shape[1], img.shape[0])
+            # Labels already in extracted-frame space: project with that resolution directly.
+            if extraction_size is not None:
+                input_resolution = Resolution(extraction_size[0], extraction_size[1])
             if input_resolution is None:
                 raise ValueError(
-                    "Could not determine input resolution from extracted frames.  "
-                    "Ensure frame extraction has been completed."
+                    "Could not determine the extracted-frame resolution from frames or mask.  "
+                    "Ensure frame extraction has been completed (frames_{suffix}/ or mask present)."
                 )
             if log_fn:
                 log_fn(f"Input resolution from extracted frames: {input_resolution.width}x{input_resolution.height}")
@@ -4218,7 +4257,11 @@ class BambiProcessor:
 
                 camera_position = Vector3(location, dtype='f4')
                 if len(rotation) == 3:
-                    camera_rotation = Quaternion.from_eulers([-np.deg2rad(val % 360.0) for val in rotation])
+                    # Canonical create_shot / CtxShot convention: no negation, 'zyx' order.
+                    # A negated rotation renders the texture rotated ~2*heading off.
+                    camera_rotation = quaternion_from_eulers(
+                        [np.deg2rad(val % 360.0) for val in rotation], 'zyx'
+                    )
                 elif len(rotation) == 4:
                     camera_rotation = Quaternion(rotation)
                 else:
@@ -4505,7 +4548,11 @@ class BambiProcessor:
 
             # Convert rotation
             if len(rotation) == 3:
-                camera_rotation = Quaternion.from_eulers([-np.deg2rad(val % 360.0) for val in rotation])
+                # Canonical create_shot / CtxShot convention: no negation, 'zyx' order.
+                # A negated rotation renders the texture rotated ~2*heading off.
+                camera_rotation = quaternion_from_eulers(
+                    [np.deg2rad(val % 360.0) for val in rotation], 'zyx'
+                )
             elif len(rotation) == 4:
                 camera_rotation = Quaternion(rotation)
             else:
@@ -5428,9 +5475,13 @@ class BambiProcessor:
                         out_w = int(out_w * scale)
                         out_h = int(out_h * scale)
 
-                    # Negate Euler angles so compass heading (CW from North) maps to R_z(-θ).
-                    raw_eulers = (Vector3([np.deg2rad(val % 360.0) for val in rotation])) * -1
-                    raw_rotation = Quaternion.from_eulers(raw_eulers)
+                    # Build the shot rotation exactly like bambi's canonical create_shot
+                    # (alfspy CtxShot rendering convention): no negation, 'zyx' Euler order.
+                    # A negated rotation here renders the texture rotated by ~2*heading
+                    # relative to the (correct) georeferencing/footprint.
+                    raw_rotation = quaternion_from_eulers(
+                        [np.deg2rad(val % 360.0) for val in rotation], 'zyx'
+                    )
                     cor_quat = Quaternion.from_eulers(cor_rotation_v)
                     correction_transform = Transform(cor_translation_v, cor_quat)
                     shot = CtxShot(
