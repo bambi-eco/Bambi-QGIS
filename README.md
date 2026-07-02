@@ -47,6 +47,7 @@ A comprehensive QGIS plugin for detecting and tracking wildlife in aerial drone 
 - **Field of View Calculation**: Calculate camera footprints for each frame with optional custom mask support
 - **Airborne Light Field Sampling (ALFS)**: Create a georeferenced light-field sampling by projecting all frames onto the DEM
 - **GeoTIFF Export**: Export individual frames as georeferenced GeoTIFFs for detailed analysis
+- **Orthomosaic**: Merge the exported frame GeoTIFFs into a single true orthomosaic, per camera, using all frames or a selected range and a configurable overlap merge mode
 - **DEM Import**: Automatically download DEMs (currently limited to Austria), or convert any GeoTIFF DEM to the required GLB format — including source CRS override for files with incorrect embedded CRS metadata
 - **Full QGIS Integration**: All outputs are automatically added as styled layers to the QGIS layer panel
 - **Interactive Selection Tools**: Click directly on the QGIS map canvas to inspect detection/track bounding boxes or individual field-of-view polygons; the tools warn when the required layers are not loaded
@@ -513,6 +514,25 @@ geotiffs_t/    # or geotiffs_w/ depending on camera selection
 
 ---
 
+### Step 8b: Generate Orthomosaic
+
+Builds a **true orthomosaic** by mosaicking the individually orthorectified frame GeoTIFFs from Step 8 into a single georeferenced raster. Unlike the ALFS product (an integral light-field image), this merges the exported GeoTIFFs with `rasterio`, so Step 8 must be run first for the selected camera.
+
+Like the other steps you can use **all** exported GeoTIFFs or restrict to a **frame-index range**, choose the **camera** (Thermal / RGB), and pick the **merge mode** that resolves overlapping pixels:
+
+- **First** — the first frame covering a pixel wins (default)
+- **Last** — the last frame covering a pixel wins
+- **Min** — the darkest overlapping value wins
+- **Max** — the brightest overlapping value wins
+
+**Outputs:**
+```
+orthomosaic_t/    # or orthomosaic_w/ depending on camera selection
+└── orthomosaic.tif    # Merged georeferenced orthomosaic (LZW GeoTIFF with overviews)
+```
+
+---
+
 ### Step 9: Object Segmentation
 
 Segments individual detected objects from aerial images using Roboflow's SAM3 API. Recommended for RGB imagery.
@@ -931,6 +951,10 @@ target_folder/
 │   └── ...
 ├── geotiffs_w/                                     # GeoTIFFs from RGB frames
 │   └── ...
+├── orthomosaic_t/                                  # Orthomosaic merged from thermal GeoTIFFs
+│   └── orthomosaic.tif
+├── orthomosaic_w/                                  # Orthomosaic merged from RGB GeoTIFFs
+│   └── orthomosaic.tif
 ├── segmentation_t/                                 # SAM3 segmentation on thermal frames
 │   ├── segmentation_pixel.json                     # Pixel-space segmentation masks
 │   └── segmentation_georef.json                    # Geo-referenced segmentation polygons

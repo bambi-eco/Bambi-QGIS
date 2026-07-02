@@ -1889,7 +1889,70 @@ class BambiDockWidget(QDockWidget):
         alfs_tab_layout.addWidget(alfs_group)
         alfs_tab_layout.addStretch()
 
-        # ----- Sub-Tab 6: SAM3 Segmentation -----
+        # ----- Sub-Tab 6: Orthomosaic (merge exported frame GeoTIFFs) -----
+        ortho_tab = QWidget()
+        ortho_tab_layout = QVBoxLayout(ortho_tab)
+        config_sub_tabs.addTab(ortho_tab, "Orthomosaic")
+
+        ortho_group = QGroupBox("Orthomosaic Generation")
+        ortho_layout = QFormLayout(ortho_group)
+
+        ortho_info = QLabel(
+            "Merges the per-frame GeoTIFFs produced by 'Export Frames as GeoTIFF' "
+            "into a single georeferenced orthomosaic. Export the frame GeoTIFFs for "
+            "the selected camera first."
+        )
+        ortho_info.setWordWrap(True)
+        ortho_layout.addRow(ortho_info)
+
+        # Overlap resolution method ("mode")
+        self.ortho_method_combo = QComboBox()
+        self.ortho_method_combo.addItems([
+            "FIRST - First frame wins",
+            "LAST - Last frame wins",
+            "MIN - Darkest pixel wins",
+            "MAX - Brightest pixel wins",
+        ])
+        self.ortho_method_combo.setCurrentIndex(0)
+        self.ortho_method_combo.setToolTip(
+            "How overlapping pixels from different frames are resolved"
+        )
+        ortho_layout.addRow("Merge Mode:", self.ortho_method_combo)
+
+        # Frame range
+        ortho_frame_range_label = QLabel("Frame Range:")
+        ortho_layout.addRow(ortho_frame_range_label)
+
+        self.ortho_all_frames_check = QCheckBox("Use all GeoTIFFs")
+        self.ortho_all_frames_check.setChecked(True)
+        self.ortho_all_frames_check.stateChanged.connect(self.toggle_ortho_frame_range)
+        ortho_layout.addRow("", self.ortho_all_frames_check)
+
+        self.ortho_frame_range_widget = QWidget()
+        ortho_frame_range_layout = QHBoxLayout(self.ortho_frame_range_widget)
+        ortho_frame_range_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.ortho_start_frame_spin = QSpinBox()
+        self.ortho_start_frame_spin.setRange(0, 999999)
+        self.ortho_start_frame_spin.setValue(0)
+        self.ortho_start_frame_spin.setToolTip("First frame index to include (inclusive)")
+        ortho_frame_range_layout.addWidget(QLabel("Start:"))
+        ortho_frame_range_layout.addWidget(self.ortho_start_frame_spin)
+
+        self.ortho_end_frame_spin = QSpinBox()
+        self.ortho_end_frame_spin.setRange(0, 999999)
+        self.ortho_end_frame_spin.setValue(999999)
+        self.ortho_end_frame_spin.setToolTip("Last frame index to include (inclusive)")
+        ortho_frame_range_layout.addWidget(QLabel("End:"))
+        ortho_frame_range_layout.addWidget(self.ortho_end_frame_spin)
+
+        self.ortho_frame_range_widget.setEnabled(False)
+        ortho_layout.addRow("", self.ortho_frame_range_widget)
+
+        ortho_tab_layout.addWidget(ortho_group)
+        ortho_tab_layout.addStretch()
+
+        # ----- Sub-Tab 7: SAM3 Segmentation -----
         sam3_tab = QWidget()
         sam3_tab_layout = QVBoxLayout(sam3_tab)
         config_sub_tabs.addTab(sam3_tab, "SAM3 Segmentation")
@@ -2256,6 +2319,33 @@ class BambiDockWidget(QDockWidget):
         add_geotiffs_row.addWidget(self.add_geotiffs_btn)
         add_geotiffs_row.addWidget(self.add_geotiffs_status)
         steps_btn_layout.addLayout(add_geotiffs_row)
+
+        # ----- Step 8b: Generate Orthomosaic (merge exported GeoTIFFs) -----
+        ortho_step_row = QHBoxLayout()
+        self.orthomosaic_btn = QPushButton("8b. Generate Orthomosaic")
+        self.orthomosaic_btn.setToolTip(
+            "Merge the exported frame GeoTIFFs (Step 8) into a single orthomosaic"
+        )
+        self.orthomosaic_btn.clicked.connect(self.run_orthomosaic)
+        self.ortho_camera_combo = QComboBox()
+        self.ortho_camera_combo.addItems(["T - Thermal", "W - RGB"])
+        self.ortho_camera_combo.setFixedWidth(100)
+        self.ortho_camera_combo.setToolTip("Select camera source (GeoTIFFs) for the orthomosaic")
+        self.orthomosaic_status = QLabel("⚪ Not started")
+        ortho_step_row.addWidget(self.orthomosaic_btn)
+        ortho_step_row.addWidget(self.ortho_camera_combo)
+        ortho_step_row.addWidget(self.orthomosaic_status)
+        steps_btn_layout.addLayout(ortho_step_row)
+
+        # -> Add Orthomosaic to QGIS
+        add_ortho_row = QHBoxLayout()
+        self.add_orthomosaic_btn = QPushButton("   → Add Orthomosaic to QGIS")
+        self.add_orthomosaic_btn.clicked.connect(self.add_orthomosaic_to_qgis)
+        self.add_orthomosaic_status = QLabel("⚪")
+        add_ortho_row.addWidget(self.add_orthomosaic_btn)
+        add_ortho_row.addWidget(self.add_orthomosaic_status)
+        steps_btn_layout.addLayout(add_ortho_row)
+
         # ----- Step 9: Run SAM3 Segmentation -----
         step9_row = QHBoxLayout()
         self.sam3_segment_btn = QPushButton("9. Run SAM3 Segmentation")
@@ -2697,6 +2787,16 @@ class BambiDockWidget(QDockWidget):
             "alfs_camera": "T" if self.alfs_camera_combo.currentIndex() == 0 else "W",
             "geotiff_camera": "T" if self.geotiff_camera_combo.currentIndex() == 0 else "W",
             "sam3_camera": "T" if self.sam3_camera_combo.currentIndex() == 0 else "W",
+            # Orthomosaic (merge of exported frame GeoTIFFs)
+            "ortho_camera": "T" if self.ortho_camera_combo.currentIndex() == 0 else "W",
+            "ortho_method": self.ortho_method_combo.currentText().split(" - ")[0].lower(),
+            "ortho_use_all_frames": self.ortho_all_frames_check.isChecked(),
+            "ortho_start_frame": (
+                self.ortho_start_frame_spin.value()
+                if not self.ortho_all_frames_check.isChecked() else None),
+            "ortho_end_frame": (
+                self.ortho_end_frame_spin.value()
+                if not self.ortho_all_frames_check.isChecked() else None),
         }
 
     def validate_inputs(self, required_fields: list) -> bool:
@@ -3247,6 +3347,10 @@ class BambiDockWidget(QDockWidget):
             "georeferenced GeoTIFF mosaic.<br><br>"
             "<b>8 — Export Frames as GeoTIFF</b><br>"
             "Exports individual frames as separate georeferenced GeoTIFFs.<br><br>"
+            "<b>8b — Generate Orthomosaic</b><br>"
+            "Merges the exported frame GeoTIFFs (Step 8) into a single true "
+            "orthomosaic, using all frames or a selected range and a configurable "
+            "overlap merge mode.<br><br>"
             "<b>9 / 10 — Object Segmentation</b><br>"
             "Segments detected objects using Roboflow SAM3 and projects masks to "
             "world coordinates.<br><br>"
@@ -4362,7 +4466,7 @@ class BambiDockWidget(QDockWidget):
         # outputs are correctly reflected as "Not started" after a refresh.
         for step in ("extract_thermal_frames", "extract_rgb_frames", "detection",
                      "georeference", "tracking", "calculate_fov", "flight_route",
-                     "alfs", "export_geotiffs", "sam3_segmentation",
+                     "alfs", "export_geotiffs", "orthomosaic", "sam3_segmentation",
                      "sam3_georeference", "trex_import"):
             self.update_status(step, "⚪ Not started")
 
@@ -4396,6 +4500,7 @@ class BambiDockWidget(QDockWidget):
             ("fov", "calculate_fov", None),
             ("alfs", "alfs", None),
             ("geotiffs", "export_geotiffs", None),
+            ("orthomosaic", "orthomosaic", None),
             ("segmentation", "sam3_segmentation", "segmentation_pixel.json"),
             ("segmentation", "sam3_georeference", "segmentation_georef.json"),
             ("tracks_pixel", "trex_import", None),
@@ -4439,7 +4544,7 @@ class BambiDockWidget(QDockWidget):
         # Reset all QGIS-layer statuses before re-checking.
         for step in ("add_flight_route", "add_frame_detections", "add_layers",
                      "add_fov", "add_merged_fov", "add_alfs", "add_geotiffs",
-                     "add_sam3"):
+                     "add_orthomosaic", "add_sam3"):
             self.update_status(step, "⚪")
 
         root = QgsProject.instance().layerTreeRoot()
@@ -4465,6 +4570,7 @@ class BambiDockWidget(QDockWidget):
             ("layer", "BAMBI FoV Coverage", "add_merged_fov"),
             ("layer", "BAMBI ALFS", "add_alfs"),
             ("group", "BAMBI Frame GeoTIFFs", "add_geotiffs"),
+            ("layer", "BAMBI Orthomosaic", "add_orthomosaic"),
         ]
 
         added_count = 0
@@ -4647,6 +4753,10 @@ class BambiDockWidget(QDockWidget):
     def toggle_alfs_frame_range(self, state):
         """Toggle the frame range controls based on checkbox state."""
         self.alfs_frame_range_widget.setEnabled(not state)
+
+    def toggle_ortho_frame_range(self, state):
+        """Toggle the orthomosaic frame range controls based on checkbox state."""
+        self.ortho_frame_range_widget.setEnabled(not state)
 
     def toggle_alfs_sampling(self, state):
         """Toggle sampling mode controls."""
@@ -4990,6 +5100,65 @@ class BambiDockWidget(QDockWidget):
             return
 
         self.start_worker("export_geotiffs")
+
+    def run_orthomosaic(self):
+        """Merge exported frame GeoTIFFs into a single orthomosaic."""
+        config = self.get_config()
+        camera = config.get("ortho_camera", "T")
+        suffix = "t" if camera == "T" else "w"
+        camera_name = "Thermal" if camera == "T" else "RGB"
+
+        geotiff_folder = os.path.join(config["target_folder"], f"geotiffs_{suffix}")
+        has_geotiffs = os.path.isdir(geotiff_folder) and any(
+            f.lower().endswith((".tif", ".tiff")) for f in os.listdir(geotiff_folder)
+        )
+        if not has_geotiffs:
+            QMessageBox.warning(
+                self,
+                "Missing GeoTIFFs",
+                f"{camera_name} frame GeoTIFFs have not been exported.\n"
+                f"Please run Step 8 (Export Frames as GeoTIFF) first."
+            )
+            return
+
+        self.start_worker("orthomosaic")
+
+    def add_orthomosaic_to_qgis(self):
+        """Add the generated orthomosaic to QGIS as a raster layer."""
+        config = self.get_config()
+        camera = config.get("ortho_camera", "T")
+        suffix = "t" if camera == "T" else "w"
+        camera_label = "Thermal" if camera == "T" else "RGB"
+        ortho_file = os.path.join(
+            config["target_folder"], f"orthomosaic_{suffix}", "orthomosaic.tif"
+        )
+
+        if not os.path.exists(ortho_file):
+            QMessageBox.warning(
+                self,
+                "Missing Orthomosaic",
+                f"{camera_label} orthomosaic has not been generated.\n"
+                f"Please run 'Generate Orthomosaic' first."
+            )
+            return
+
+        try:
+            self.log(f"Adding {camera_label} orthomosaic to QGIS...")
+            self.update_status("add_orthomosaic", "🟡 Loading...")
+
+            layer = QgsRasterLayer(ortho_file, f"BAMBI Orthomosaic ({camera_label})")
+            if not layer.isValid():
+                raise RuntimeError(f"Failed to load raster: {ortho_file}")
+            QgsProject.instance().addMapLayer(layer)
+
+            self.update_status("add_orthomosaic", "🟢 Added")
+            self.iface.mapCanvas().refresh()
+            self.log(f"Added {camera_label} orthomosaic layer to QGIS")
+
+        except Exception as e:
+            self.log(f"Error adding orthomosaic: {str(e)}")
+            self.update_status("add_orthomosaic", "🔴 Error")
+            QMessageBox.critical(self, "Error", f"Failed to add orthomosaic: {str(e)}")
 
     def run_sam3_segmentation(self):
         """Run SAM3 segmentation step."""
@@ -5401,9 +5570,11 @@ class BambiDockWidget(QDockWidget):
             "add_merged_fov": self.add_merged_fov_status,
             "alfs": self.alfs_status,
             "export_geotiffs": self.export_geotiffs_status,
+            "orthomosaic": self.orthomosaic_status,
             "flight_route": self.flight_route_status,
             "add_alfs": self.add_alfs_status,
             "add_geotiffs": self.add_geotiffs_status,
+            "add_orthomosaic": self.add_orthomosaic_status,
             "add_flight_route": self.add_flight_route_status,
             "perpendicular": self.perpendicular_status,
             "add_perpendicular": self.add_perpendicular_status,
@@ -5433,9 +5604,11 @@ class BambiDockWidget(QDockWidget):
         self.add_merged_fov_btn.setEnabled(enabled)
         self.alfs_btn.setEnabled(enabled)
         self.export_geotiffs_btn.setEnabled(enabled)
+        self.orthomosaic_btn.setEnabled(enabled)
         self.flight_route_btn.setEnabled(enabled)
         self.add_alfs_btn.setEnabled(enabled)
         self.add_geotiffs_btn.setEnabled(enabled)
+        self.add_orthomosaic_btn.setEnabled(enabled)
         self.add_flight_route_btn.setEnabled(enabled)
         self.perpendicular_btn.setEnabled(enabled)
         self.add_perpendicular_btn.setEnabled(enabled)
@@ -7973,6 +8146,16 @@ class BambiDockWidget(QDockWidget):
         project.writeEntryDouble(PLUGIN_SCOPE, "ALFS/SamplingRange",
                                  self.alfs_sampling_range_spin.value())
 
+        # ===== Orthomosaic Settings =====
+        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/Method",
+                                 self.ortho_method_combo.currentIndex())
+        project.writeEntryBool(PLUGIN_SCOPE, "Ortho/AllFrames",
+                               self.ortho_all_frames_check.isChecked())
+        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/StartFrame",
+                                 self.ortho_start_frame_spin.value())
+        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/EndFrame",
+                                 self.ortho_end_frame_spin.value())
+
         # ===== SAM3 Settings =====
         # Note: API key is intentionally NOT saved for security
         project.writeEntry(PLUGIN_SCOPE, "SAM3/Prompts",
@@ -8213,6 +8396,14 @@ class BambiDockWidget(QDockWidget):
         self.alfs_sampling_check.setChecked(read_bool("ALFS/SamplingMode", False))
         self.alfs_sampling_rate_spin.setValue(read_int("ALFS/SamplingRate", 10))
         self.alfs_sampling_range_spin.setValue(read_int("ALFS/SamplingRange", 5))
+
+        # ===== Orthomosaic Settings =====
+        ortho_method_idx = read_int("Ortho/Method", 0)
+        if 0 <= ortho_method_idx < self.ortho_method_combo.count():
+            self.ortho_method_combo.setCurrentIndex(ortho_method_idx)
+        self.ortho_all_frames_check.setChecked(read_bool("Ortho/AllFrames", True))
+        self.ortho_start_frame_spin.setValue(read_int("Ortho/StartFrame", 0))
+        self.ortho_end_frame_spin.setValue(read_int("Ortho/EndFrame", 999999))
 
         # ===== SAM3 Settings =====
         self.sam3_prompts_edit.setPlainText(read_str("SAM3/Prompts"))

@@ -137,6 +137,8 @@ class ProcessingWorker(QObject):
                 self.processor.run_alfs(self.config, self.progress.emit, self.log.emit, self.is_cancelled)
             elif self.step == "export_geotiffs":
                 self.processor.run_export_geotiffs(self.config, self.progress.emit, self.log.emit, self.is_cancelled)
+            elif self.step == "orthomosaic":
+                self.processor.run_orthomosaic(self.config, self.progress.emit, self.log.emit, self.is_cancelled)
             elif self.step == "sam3_segmentation":
                 self.processor.run_sam3_segmentation(self.config, self.progress.emit, self.log.emit, self.is_cancelled)
             elif self.step == "sam3_georeference":
@@ -5126,6 +5128,143 @@ class BambiProcessor:
         except Exception as e:
             if log_fn:
                 log_fn(f"Warning: Could not save PRJ file: {e}")
+
+    def run_orthomosaic(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
+        """Merge exported per-frame GeoTIFFs into a single true orthomosaic.
+
+        Unlike the ALFS product (which renders an integral light-field image),
+        this mosaics the individually orthorectified frame GeoTIFFs produced by
+        :meth:`run_export_geotiffs`.  Overlapping pixels are resolved with the
+        configured merge method (first/last/min/max).  Frames are selected by
+        camera (thermal/RGB) and optionally restricted to a frame-index range.
+
+        :param config: Configuration dictionary
+        :param progress_fn: Progress callback function
+        :param log_fn: Logging callback function
+        :param cancel_check: Callable returning True if the run was cancelled
+        """
+        try:
+            import rasterio
+            from rasterio.merge import merge as rio_merge
+        except ImportError as exc:
+            raise ImportError(
+                f"rasterio is required for orthomosaic generation.\n"
+                f"Original error: {exc}"
+            )
+
+        camera_sel = config.get("ortho_camera", "T")
+        camera_suffix = "t" if camera_sel == "T" else "w"
+        camera_name = "Thermal" if camera_sel == "T" else "RGB"
+        method = config.get("ortho_method", "first")
+        use_all_frames = config.get("ortho_use_all_frames", True)
+        start_frame = config.get("ortho_start_frame")
+        end_frame = config.get("ortho_end_frame")
+        nodata = config.get("ortho_nodata", 0)
+
+        target_folder = config["target_folder"]
+        geotiff_folder = os.path.join(target_folder, f"geotiffs_{camera_suffix}")
+
+        if log_fn:
+            log_fn(f"Building orthomosaic from {camera_name} frame GeoTIFFs...")
+            log_fn(f"Merge mode: {method}")
+
+        if not os.path.isdir(geotiff_folder):
+            raise FileNotFoundError(
+                f"GeoTIFF folder not found: {geotiff_folder}\n"
+                f"Run 'Export Frames as GeoTIFF' for the {camera_name} camera first."
+            )
+
+        # Collect exported frame GeoTIFFs ({idx:08d}.tiff) and filter by range.
+        # Non-frame rasters (e.g. a previous orthomosaic) are skipped.
+        candidates = []
+        for f in sorted(os.listdir(geotiff_folder)):
+            if not f.lower().endswith((".tif", ".tiff")):
+                continue
+            try:
+                frame_idx = int(os.path.splitext(f)[0])
+            except ValueError:
+                continue
+            if not use_all_frames:
+                if start_frame is not None and frame_idx < start_frame:
+                    continue
+                if end_frame is not None and frame_idx > end_frame:
+                    continue
+            candidates.append(os.path.join(geotiff_folder, f))
+
+        if not candidates:
+            raise RuntimeError(
+                "No frame GeoTIFFs found for the selected range in "
+                f"{geotiff_folder}."
+            )
+
+        if log_fn:
+            log_fn(f"Merging {len(candidates)} GeoTIFF(s)...")
+        if progress_fn:
+            progress_fn(10)
+
+        # Open all datasets. The exports already share the target CRS, so no
+        # reprojection is needed — we only warn on any mismatch.
+        datasets = []
+        first_crs = None
+        try:
+            for path in candidates:
+                if cancel_check and cancel_check():
+                    raise CancelledException("Orthomosaic generation cancelled")
+                ds = rasterio.open(path)
+                if first_crs is None:
+                    first_crs = ds.crs
+                elif ds.crs != first_crs and log_fn:
+                    log_fn(f"Warning: {os.path.basename(path)} has a different CRS ({ds.crs})")
+                datasets.append(ds)
+
+            if progress_fn:
+                progress_fn(40)
+
+            mosaic, out_transform = rio_merge(datasets, method=method, nodata=nodata)
+        finally:
+            for d in datasets:
+                d.close()
+
+        if progress_fn:
+            progress_fn(80)
+
+        out_folder = os.path.join(target_folder, f"orthomosaic_{camera_suffix}")
+        os.makedirs(out_folder, exist_ok=True)
+        output_file = os.path.join(out_folder, "orthomosaic.tif")
+
+        out_meta = {
+            "driver": "GTiff",
+            "height": mosaic.shape[1],
+            "width": mosaic.shape[2],
+            "count": mosaic.shape[0],
+            "dtype": mosaic.dtype,
+            "crs": first_crs,
+            "transform": out_transform,
+            "compress": "LZW",
+            "tiled": True,
+            "BIGTIFF": "IF_SAFER",
+            "nodata": nodata,
+        }
+        with rasterio.open(output_file, "w", **out_meta) as dst:
+            dst.write(mosaic)
+
+        # Build overview pyramids for fast GIS rendering (non-fatal on failure).
+        try:
+            from rasterio.enums import Resampling as RioResampling
+            with rasterio.open(output_file, "r+") as dst:
+                dst.build_overviews([2, 4, 8, 16], RioResampling.average)
+                dst.update_tags(ns="rio_overview", resampling="average")
+        except Exception as exc:
+            if log_fn:
+                log_fn(f"Note: could not build overviews ({exc})")
+
+        if log_fn:
+            log_fn(
+                f"Orthomosaic written to: {output_file} "
+                f"({mosaic.shape[2]} x {mosaic.shape[1]} px, {mosaic.shape[0]} band(s))"
+            )
+        if progress_fn:
+            progress_fn(100)
 
     def run_export_geotiffs(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Export each frame as an individual GeoTIFF.
