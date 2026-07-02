@@ -133,8 +133,8 @@ class ProcessingWorker(QObject):
                 self.processor.run_calculate_fov(self.config, self.progress.emit, self.log.emit, self.is_cancelled)
             elif self.step == "tracking":
                 self.processor.run_tracking(self.config, self.progress.emit, self.log.emit, self.is_cancelled)
-            elif self.step == "orthomosaic":
-                self.processor.run_orthomosaic(self.config, self.progress.emit, self.log.emit, self.is_cancelled)
+            elif self.step == "alfs":
+                self.processor.run_alfs(self.config, self.progress.emit, self.log.emit, self.is_cancelled)
             elif self.step == "export_geotiffs":
                 self.processor.run_export_geotiffs(self.config, self.progress.emit, self.log.emit, self.is_cancelled)
             elif self.step == "sam3_segmentation":
@@ -466,7 +466,7 @@ class BambiProcessor:
 
         target_folder = config["target_folder"]
         target_epsg = config.get("target_epsg", 32633)
-        path_to_dem_json = config.get("ortho_dem_metadata_path")
+        path_to_dem_json = config.get("alfs_dem_metadata_path")
 
         # Create target folder
         os.makedirs(target_folder, exist_ok=True)
@@ -925,7 +925,7 @@ class BambiProcessor:
         coord_offset_x = 0.0
         coord_offset_y = 0.0
 
-        dem_metadata_path = config.get("ortho_dem_metadata_path")
+        dem_metadata_path = config.get("alfs_dem_metadata_path")
         dem_path = config.get("dem_path")
 
         if dem_metadata_path and os.path.exists(dem_metadata_path):
@@ -1379,7 +1379,7 @@ class BambiProcessor:
         x_offset, y_offset = 0.0, 0.0
         dem_path = config.get("dem_path", "")
         if dem_path:
-            dem_meta_path = config.get("ortho_dem_metadata_path") or \
+            dem_meta_path = config.get("alfs_dem_metadata_path") or \
                 dem_path.replace(".gltf", ".json").replace(".glb", ".json")
             if os.path.exists(dem_meta_path):
                 try:
@@ -1616,7 +1616,7 @@ class BambiProcessor:
         x_offset, y_offset = 0.0, 0.0
         dem_path = config.get("dem_path", "")
         if dem_path:
-            dem_meta_path = config.get("ortho_dem_metadata_path") or \
+            dem_meta_path = config.get("alfs_dem_metadata_path") or \
                 dem_path.replace(".gltf", ".json").replace(".glb", ".json")
             if os.path.exists(dem_meta_path):
                 try:
@@ -1821,7 +1821,7 @@ class BambiProcessor:
         model_path = config.get("model_path")
         min_confidence = config.get("min_confidence", 0.5)
 
-        # Frame filter options (use start/end frame like orthomosaic)
+        # Frame filter options (use start/end frame like alfs)
         use_all_frames = config.get("detect_use_all_frames", True)
         start_frame = config.get("detect_start_frame", 0)
         end_frame = config.get("detect_end_frame", 999999)
@@ -2326,7 +2326,7 @@ class BambiProcessor:
         # the full aspect ratio (preserve_aspect_ratio=True, e.g. 5120x2700) or forces a
         # square frame (min(w,h)).  We must map detections into that exact pixel space and
         # project with that exact resolution, otherwise the geo-referenced boxes are
-        # offset/compressed relative to the GeoTIFFs and orthomosaic.
+        # offset/compressed relative to the GeoTIFFs and alfs.
         undistorter = None
         input_resolution = None
 
@@ -2644,7 +2644,7 @@ class BambiProcessor:
         mask_path = config.get("fov_mask_path", "")
         mask_simplify_epsilon = config.get("mask_simplify_epsilon", 2.0)
 
-        # Frame filter options (use start/end frame like orthomosaic)
+        # Frame filter options (use start/end frame like alfs)
         use_all_frames = config.get("fov_use_all_frames", True)
         start_frame = config.get("fov_start_frame", 0)
         end_frame = config.get("fov_end_frame", 999999)
@@ -2708,7 +2708,7 @@ class BambiProcessor:
                 if log_fn:
                     log_fn(f"Loaded mask with {len(mask_polygon)} polygon points")
 
-        # Fall back to the same mask the orthomosaic / GeoTIFF export use so the
+        # Fall back to the same mask the alfs / GeoTIFF export use so the
         # FoV footprint matches the rendered products.  Those pipelines always
         # constrain the frame to mask_<CAM>.png (or the poses "mask"); projecting
         # the full frame corners here instead made the FoV polygons overhang the
@@ -2811,7 +2811,7 @@ class BambiProcessor:
                     rot = image_metadata["rotation"]
                     # Apply the rotation correction at 1× — the same amount alfspy's
                     # renderer applies via CtxShot.get_correction() — so the FoV
-                    # footprint matches the rendered orthomosaic and GeoTIFF content.
+                    # footprint matches the rendered alfs and GeoTIFF content.
                     rotation_eulers = (Vector3(
                         [np.deg2rad(val % 360.0) for val in rot]) - cor_rotation_eulers) * -1
                     position += cor_translation
@@ -3817,19 +3817,19 @@ class BambiProcessor:
         new_results.sort(key=lambda r: (r[0], r[1]))
         return new_results
 
-    def run_orthomosaic(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
-        """Generate an orthomosaic from extracted frames and DEM.
+    def run_alfs(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
+        """Generate an alfs from extracted frames and DEM.
 
         :param config: Configuration dictionary
         :param progress_fn: Progress callback function
         :param log_fn: Logging callback function
         """
-        camera = config.get("ortho_camera", "T")
+        camera = config.get("alfs_camera", "T")
         camera_suffix = "t" if camera == "T" else "w"
         camera_name = "Thermal" if camera == "T" else "RGB"
 
         if log_fn:
-            log_fn(f"Initializing orthomosaic generation for {camera_name} frames...")
+            log_fn(f"Initializing alfs generation for {camera_name} frames...")
 
         # Check for required dependencies
         try:
@@ -3841,7 +3841,7 @@ class BambiProcessor:
                 f"Required dependency not found: {e}\n\n"
                 "Please install the following packages:\n"
                 "  pip install moderngl pyrr trimesh\n\n"
-                "Note: Orthomosaic generation requires OpenGL support."
+                "Note: ALFS generation requires OpenGL support."
             )
 
         # Check for alfspy (specialized rendering library)
@@ -3860,7 +3860,7 @@ class BambiProcessor:
         except ImportError:
             HAS_ALFSPY = False
             if log_fn:
-                log_fn("Warning: alfspy not available, using simplified orthomosaic generation")
+                log_fn("Warning: alfspy not available, using simplified alfs generation")
 
         # Get configuration parameters
         target_folder = config["target_folder"]
@@ -3870,21 +3870,19 @@ class BambiProcessor:
         # Set frames folder based on camera selection
         frames_folder = os.path.join(target_folder, f"frames_{camera_suffix}")
 
-        # Orthomosaic specific settings
-        ground_resolution = config.get("ortho_ground_resolution", 0.05)
-        dem_metadata_path = config.get("ortho_dem_metadata_path")
-        blend_mode = config.get("ortho_blend_mode", "integral")
-        use_all_frames = config.get("ortho_use_all_frames", True)
-        start_frame = config.get("ortho_start_frame")
-        end_frame = config.get("ortho_end_frame")
-        crop_to_content = config.get("ortho_crop_to_content", True)
-        create_overviews = config.get("ortho_create_overviews", True)
-        max_tile_size = config.get("ortho_max_tile_size", 8192)
-        frame_step = config.get("ortho_frame_step", 1)
+        # ALFS specific settings
+        ground_resolution = config.get("alfs_ground_resolution", 0.05)
+        dem_metadata_path = config.get("alfs_dem_metadata_path")
+        use_all_frames = config.get("alfs_use_all_frames", True)
+        start_frame = config.get("alfs_start_frame")
+        end_frame = config.get("alfs_end_frame")
+        crop_to_content = config.get("alfs_crop_to_content", True)
+        create_overviews = config.get("alfs_create_overviews", True)
+        max_tile_size = config.get("alfs_max_tile_size", 8192)
+        frame_step = config.get("alfs_frame_step", 1)
 
         if log_fn:
             log_fn(f"Ground resolution: {ground_resolution} m/px")
-            log_fn(f"Blend mode: {blend_mode}")
             if use_all_frames:
                 log_fn("Frame range: All frames")
             else:
@@ -3988,23 +3986,23 @@ class BambiProcessor:
 
         # Create output folder and determine output file
         # Check if a specific output file is requested (used by geotiff export)
-        if config.get("ortho_output_file"):
-            output_file = config["ortho_output_file"]
-            ortho_folder = os.path.dirname(output_file)
-            os.makedirs(ortho_folder, exist_ok=True)
+        if config.get("alfs_output_file"):
+            output_file = config["alfs_output_file"]
+            alfs_folder = os.path.dirname(output_file)
+            os.makedirs(alfs_folder, exist_ok=True)
         else:
-            ortho_folder = os.path.join(target_folder, f"orthomosaic_{camera_suffix}")
-            os.makedirs(ortho_folder, exist_ok=True)
-            output_file = os.path.join(ortho_folder, "orthomosaic.tif")
+            alfs_folder = os.path.join(target_folder, f"alfs_{camera_suffix}")
+            os.makedirs(alfs_folder, exist_ok=True)
+            output_file = os.path.join(alfs_folder, "alfs.tif")
 
-        sampling_mode = config.get("ortho_sampling_mode", False)
-        sampling_rate = config.get("ortho_sampling_rate", 10)
-        sampling_range = config.get("ortho_sampling_range", 5)
+        sampling_mode = config.get("alfs_sampling_mode", False)
+        sampling_rate = config.get("alfs_sampling_rate", 10)
+        sampling_range = config.get("alfs_sampling_range", 5)
 
         if HAS_ALFSPY and sampling_mode:
-            self._run_orthomosaic_sampling(
+            self._run_alfs_sampling(
                 config, images, dem_path, mask_path,
-                ortho_folder, ground_resolution, blend_mode,
+                alfs_folder, ground_resolution,
                 coord_offset_x, coord_offset_y, target_epsg,
                 crop_to_content, create_overviews, max_tile_size,
                 frames_folder, sampling_rate, sampling_range,
@@ -4012,25 +4010,25 @@ class BambiProcessor:
             )
         elif HAS_ALFSPY:
             # Use full alfspy-based rendering pipeline
-            self._run_orthomosaic_alfspy(
+            self._run_alfs_alfspy(
                 config, images, poses, dem_path, mask_path,
-                output_file, ground_resolution, blend_mode,
+                output_file, ground_resolution,
                 coord_offset_x, coord_offset_y, target_epsg,
                 crop_to_content, create_overviews, max_tile_size,
                 frames_folder, progress_fn, log_fn, cancel_check
             )
         else:
-            # Use simplified orthomosaic generation (projection without rendering)
-            self._run_orthomosaic_simple(
+            # Use simplified alfs generation (projection without rendering)
+            self._run_alfs_simple(
                 config, images, poses, dem_path, mask_path,
-                output_file, ground_resolution, blend_mode,
+                output_file, ground_resolution,
                 coord_offset_x, coord_offset_y, target_epsg,
                 crop_to_content, create_overviews,
                 frames_folder, progress_fn, log_fn, cancel_check
             )
 
         if log_fn:
-            log_fn(f"Orthomosaic tiles saved to: {os.path.dirname(output_file)}")
+            log_fn(f"ALFS tiles saved to: {os.path.dirname(output_file)}")
 
         if progress_fn:
             progress_fn(100)
@@ -4065,101 +4063,21 @@ class BambiProcessor:
             far=global_camera.far
         )
 
-    def _render_sequential_alfspy(self, renderer, shots, mask, resolution, blend_mode, bounds):
-        """Robust sequential rendering ported from orthomosaic.py"""
-        import numpy as np
-        from alfspy.core.rendering import RenderResultMode
 
-        output = np.zeros((resolution.height, resolution.width, 4), dtype=np.uint8)
-
-        # Initialize distance map for center blending
-        if blend_mode == "center":
-            distance_map = np.full((resolution.height, resolution.width), np.inf, dtype=np.float32)
-            min_x, min_y, max_x, max_y = bounds
-
-            # Pre-sort shots? In orthomosaic.py they sort farthest first.
-            # We will process normally but check distance
-            center_x = (min_x + max_x) / 2
-            center_y = (min_y + max_y) / 2
-            shots = sorted(shots, key=lambda s: (s.camera.transform.position.x - center_x) ** 2 +  # noqa: W503, W504
-                                                (s.camera.transform.position.y - center_y) ** 2, reverse=True)
-
-        for shot in shots:
-            try:
-                results = list(renderer.project_shots_iter(
-                    shot, RenderResultMode.ShotOnly, release_shots=False, mask=mask
-                ))
-
-                if not results:
-                    continue
-
-                shot_result = results[0]
-                shot_has_data = shot_result[:, :, 3] > 0
-
-                if blend_mode == "first":
-                    write_mask = shot_has_data & (output[:, :, 3] == 0)
-                elif blend_mode == "last":
-                    write_mask = shot_has_data
-                elif blend_mode == "center":
-                    # Simple center priority logic:
-                    # Calculate per-pixel distance to this camera (simplified to camera center)
-                    cam_pos = shot.camera.transform.position
-
-                    # Create coordinate grids
-                    h, w = resolution.height, resolution.width
-                    px_size_x = (max_x - min_x) / w
-                    px_size_y = (max_y - min_y) / h
-
-                    # This calculation is heavy for Python, optimized version would be better
-                    # But keeping it functional for now:
-                    y_indices, x_indices = np.where(shot_has_data)
-                    if len(x_indices) == 0:
-                        continue
-
-                    # Map pixels to world
-                    px_world = min_x + x_indices * px_size_x
-                    py_world = max_y - y_indices * px_size_y
-
-                    # Dist sq
-                    dists = (px_world - cam_pos.x) ** 2 + (py_world - cam_pos.y) ** 2
-
-                    # Compare with existing
-                    current_dists = distance_map[y_indices, x_indices]
-                    better = dists < current_dists
-
-                    # Filter indices
-                    valid_y = y_indices[better]
-                    valid_x = x_indices[better]
-
-                    # Write
-                    output[valid_y, valid_x] = shot_result[valid_y, valid_x]
-                    distance_map[valid_y, valid_x] = dists[better]
-                    write_mask = None  # Handled manually above
-                else:
-                    write_mask = shot_has_data
-
-                if write_mask is not None:
-                    output[write_mask] = shot_result[write_mask]
-
-            except Exception:
-                continue
-
-        return output
-
-    def _run_orthomosaic_sampling(
+    def _run_alfs_sampling(
             self, config, all_images, dem_path, mask_path,
-            ortho_folder, ground_resolution, blend_mode,
+            alfs_folder, ground_resolution,
             coord_offset_x, coord_offset_y, target_epsg,
             crop_to_content, create_overviews, max_tile_size,
             frames_folder, sampling_rate, sampling_range,
             progress_fn, log_fn, cancel_check=None
     ):
-        """Sampling-mode orthomosaic: render one small integral image per central frame.
+        """Sampling-mode alfs: render one small integral image per central frame.
 
         Central frames are picked every `sampling_rate` frames across the filtered image
-        list.  Each central frame's orthomosaic blends the frames within
+        list.  Each central frame's alfs blends the frames within
         [central - sampling_range, central + sampling_range].  Results are saved as
-        orthomosaic/sample_XXXXXX/tile_RR_CC.tif.
+        alfs/sample_XXXXXX/tile_RR_CC.tif.
         """
         import math
         import cv2
@@ -4368,15 +4286,10 @@ class BambiProcessor:
                 renderer = Renderer(tile_res, ctx, tile_camera, mesh_data, texture_data)
 
                 try:
-                    if blend_mode == "integral":
-                        tile_img = renderer.render_integral(
-                            tile_shots, mask=mask, save=False, release_shots=False,
-                            auto_contrast=True, alpha_threshold=0.5
-                        )
-                    else:
-                        tile_img = self._render_sequential_alfspy(
-                            renderer, tile_shots, mask, tile_res, blend_mode, tile_geo_bounds
-                        )
+                    tile_img = renderer.render_integral(
+                        tile_shots, mask=mask, save=False, release_shots=False,
+                        auto_contrast=True, alpha_threshold=0.5
+                    )
                 finally:
                     renderer.release()
 
@@ -4403,8 +4316,8 @@ class BambiProcessor:
                             shot.tex = None
                     continue
 
-                tile_path = os.path.join(ortho_folder, f"{sample_prefix}_tile_{row:02d}_{col:02d}.tif")
-                self._save_orthomosaic(tile_img, tile_path, geo_bounds, target_epsg, create_overviews, log_fn)
+                tile_path = os.path.join(alfs_folder, f"{sample_prefix}_tile_{row:02d}_{col:02d}.tif")
+                self._save_alfs(tile_img, tile_path, geo_bounds, target_epsg, create_overviews, log_fn)
 
                 del tile_img
 
@@ -4469,14 +4382,14 @@ class BambiProcessor:
             log_fn(f"  Shot filter: {len(relevant)}/{len(shots)} shots relevant for this tile")
         return relevant
 
-    def _run_orthomosaic_alfspy(
+    def _run_alfs_alfspy(
             self, config, images, poses, dem_path, mask_path,
-            output_file, ground_resolution, blend_mode,
+            output_file, ground_resolution,
             coord_offset_x, coord_offset_y, target_epsg,
             crop_to_content, create_overviews, max_tile_size,
             frames_folder, progress_fn, log_fn, cancel_check=None
     ):
-        """Run orthomosaic generation using alfspy rendering pipeline with tiling support."""
+        """Run alfs generation using alfspy rendering pipeline with tiling support."""
         import math
         import cv2
         import numpy as np
@@ -4534,8 +4447,8 @@ class BambiProcessor:
             # Check for cancellation
             if cancel_check and cancel_check():
                 if log_fn:
-                    log_fn("Orthomosaic generation cancelled by user")
-                raise CancelledException("Orthomosaic generation cancelled")
+                    log_fn("ALFS generation cancelled by user")
+                raise CancelledException("ALFS generation cancelled")
 
             image_file = img_info.get("imagefile")
             image_path = os.path.join(frames_folder, image_file)
@@ -4668,10 +4581,10 @@ class BambiProcessor:
         # neighbour tiles still hit the cache, while distant shots are evicted
         # and re-read from disk on demand.
         from collections import OrderedDict
-        cpu_cache_size = int(config.get("ortho_cpu_cache_size", 32))
+        cpu_cache_size = int(config.get("alfs_cpu_cache_size", 32))
         cpu_cache = OrderedDict()  # id(shot) -> shot, ordered oldest-first
         if log_fn:
-            log_fn(f"CPU image cache: up to {cpu_cache_size} shots resident (ortho_cpu_cache_size)")
+            log_fn(f"CPU image cache: up to {cpu_cache_size} shots resident (alfs_cpu_cache_size)")
 
         def _reclaim_cpu(used_shots):
             """Release GPU textures for the tile's shots, then trim the CPU cache.
@@ -4723,18 +4636,13 @@ class BambiProcessor:
                 renderer = Renderer(tile_res, ctx, tile_camera, mesh_data, texture_data)
 
                 try:
-                    if blend_mode == "integral":
-                        # Pass tile_shots list directly — re-iterable across tiles and
-                        # CtxShot.tex_use() handles lazy loading, so AsyncShotLoader
-                        # (which spawns 12 threads and is one-shot) is not needed.
-                        tile_img = renderer.render_integral(
-                            tile_shots, mask=mask, save=False, release_shots=False,
-                            auto_contrast=True, alpha_threshold=0.5
-                        )
-                    else:
-                        tile_img = self._render_sequential_alfspy(
-                            renderer, tile_shots, mask, tile_res, blend_mode, tile_geo_bounds
-                        )
+                    # Pass tile_shots list directly — re-iterable across tiles and
+                    # CtxShot.tex_use() handles lazy loading, so AsyncShotLoader
+                    # (which spawns 12 threads and is one-shot) is not needed.
+                    tile_img = renderer.render_integral(
+                        tile_shots, mask=mask, save=False, release_shots=False,
+                        auto_contrast=True, alpha_threshold=0.5
+                    )
                 finally:
                     renderer.release()
 
@@ -4764,7 +4672,7 @@ class BambiProcessor:
                 if log_fn:
                     log_fn(f"Saving tile ({row}, {col}) to {os.path.basename(tile_path)}")
 
-                self._save_orthomosaic(tile_img, tile_path, geo_bounds, target_epsg, create_overviews, log_fn)
+                self._save_alfs(tile_img, tile_path, geo_bounds, target_epsg, create_overviews, log_fn)
 
                 if progress_fn:
                     progress_fn(20 + int(((i + 1) / len(tiles)) * 70))
@@ -4778,14 +4686,14 @@ class BambiProcessor:
         finally:
             release_all(ctx, shots)
 
-    def _run_orthomosaic_simple(
+    def _run_alfs_simple(
             self, config, images, poses, dem_path, mask_path,
-            output_file, ground_resolution, blend_mode,
+            output_file, ground_resolution,
             coord_offset_x, coord_offset_y, target_epsg,
             crop_to_content, create_overviews,
             frames_folder, progress_fn, log_fn, cancel_check=None
     ):
-        """Simplified orthomosaic generation without alfspy.
+        """Simplified alfs generation without alfspy.
 
         This method creates a basic mosaic by projecting frames
         based on their GPS positions and orientations.
@@ -4795,7 +4703,7 @@ class BambiProcessor:
         import math
 
         if log_fn:
-            log_fn("Using simplified orthomosaic generation...")
+            log_fn("Using simplified alfs generation...")
 
         # Collect all image positions (with corrections applied)
         positions = []
@@ -4874,8 +4782,8 @@ class BambiProcessor:
             # Check for cancellation
             if cancel_check and cancel_check():
                 if log_fn:
-                    log_fn("Orthomosaic generation cancelled by user")
-                raise CancelledException("Orthomosaic generation cancelled")
+                    log_fn("ALFS generation cancelled by user")
+                raise CancelledException("ALFS generation cancelled")
 
             image_file = img_info.get("imagefile")
             image_path = os.path.join(frames_folder, image_file)
@@ -4947,22 +4855,13 @@ class BambiProcessor:
                 try:
                     region = resized[sy1:sy2, sx1:sx2]
 
-                    if blend_mode == "integral":
-                        # Accumulate for averaging
-                        current_count = count_map[y1:y2, x1:x2]
-                        for c in range(4):
-                            canvas[y1:y2, x1:x2, c] = (
-                                canvas[y1:y2, x1:x2, c] * current_count + region[:, :, c]
-                            ) / (current_count + 1)
-                        count_map[y1:y2, x1:x2] += 1
-                    elif blend_mode == "first":
-                        # Only write where empty
-                        mask = canvas[y1:y2, x1:x2, 3] == 0
-                        for c in range(4):
-                            canvas[y1:y2, x1:x2, c][mask] = region[:, :, c][mask]
-                    else:
-                        # Last write wins (default)
-                        canvas[y1:y2, x1:x2] = region
+                    # Integral: accumulate for averaging across overlapping frames
+                    current_count = count_map[y1:y2, x1:x2]
+                    for c in range(4):
+                        canvas[y1:y2, x1:x2, c] = (
+                            canvas[y1:y2, x1:x2, c] * current_count + region[:, :, c]
+                        ) / (current_count + 1)
+                    count_map[y1:y2, x1:x2] += 1
 
                     images_placed += 1
                 except Exception as e:
@@ -5008,7 +4907,7 @@ class BambiProcessor:
             progress_fn(85)
 
         # Save output
-        self._save_orthomosaic(
+        self._save_alfs(
             result, output_file, geo_bounds, target_epsg,
             create_overviews, log_fn
         )
@@ -5016,51 +4915,6 @@ class BambiProcessor:
         if progress_fn:
             progress_fn(95)
 
-    def _render_sequential(
-            self, renderer, shots, mask, resolution, blend_mode, global_bounds,
-            progress_fn, log_fn
-    ):
-        """Render orthomosaic by processing shots sequentially."""
-        import numpy as np
-        from alfspy.core.rendering import RenderResultMode
-
-        output = np.zeros((resolution.height, resolution.width, 4), dtype=np.uint8)
-
-        total_shots = len(shots)
-
-        for i, shot in enumerate(shots):
-            try:
-                results = list(renderer.project_shots_iter(
-                    shot,
-                    RenderResultMode.ShotOnly,
-                    release_shots=False,
-                    mask=mask
-                ))
-
-                if results and len(results) > 0:
-                    shot_result = results[0]
-                    shot_alpha = shot_result[:, :, 3]
-                    shot_has_data = shot_alpha > 0
-
-                    if blend_mode == "first":
-                        output_empty = output[:, :, 3] == 0
-                        write_mask = shot_has_data & output_empty
-                    else:
-                        write_mask = shot_has_data
-
-                    for c in range(4):
-                        output[:, :, c][write_mask] = shot_result[:, :, c][write_mask]
-
-            except Exception as e:
-                if log_fn:
-                    log_fn(f"Warning: Failed to render shot {i}: {e}")
-                continue
-
-            if progress_fn and i % 10 == 0:
-                progress = 45 + int((i / total_shots) * 30)
-                progress_fn(min(progress, 75))
-
-        return output
 
     def _crop_to_content(self, image, bounds):
         """Crop image to minimal bounding box containing non-empty pixels."""
@@ -5093,11 +4947,11 @@ class BambiProcessor:
 
         return cropped, (new_min_x, new_min_y, new_max_x, new_max_y)
 
-    def _save_orthomosaic(
+    def _save_alfs(
             self, image, output_file, bounds, crs_epsg,
             create_overviews, log_fn
     ):
-        """Save orthomosaic image with georeferencing."""
+        """Save alfs image with georeferencing."""
         import numpy as np
 
         height, width = image.shape[:2]
@@ -5276,7 +5130,7 @@ class BambiProcessor:
     def run_export_geotiffs(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Export each frame as an individual GeoTIFF.
 
-        Uses the same alfspy projection pipeline as the orthomosaic, with
+        Uses the same alfspy projection pipeline as the alfs, with
         mask-polygon-derived bounds (like the FoV calculation) for accurate
         georeferencing.
 
@@ -5313,12 +5167,12 @@ class BambiProcessor:
         target_folder = config["target_folder"]
         dem_path = config["dem_path"]
         target_epsg = config.get("target_epsg", 32633)
-        use_all_frames = config.get("ortho_use_all_frames", True)
-        start_frame = config.get("ortho_start_frame") or 0
-        end_frame_cfg = config.get("ortho_end_frame") or 999999
-        ground_resolution = config.get("ortho_ground_resolution", 0.1)
-        dem_metadata_path = config.get("ortho_dem_metadata_path")
-        frame_step = config.get("ortho_frame_step", 1)
+        use_all_frames = config.get("alfs_use_all_frames", True)
+        start_frame = config.get("alfs_start_frame") or 0
+        end_frame_cfg = config.get("alfs_end_frame") or 999999
+        ground_resolution = config.get("alfs_ground_resolution", 0.1)
+        dem_metadata_path = config.get("alfs_dem_metadata_path")
+        frame_step = config.get("alfs_frame_step", 1)
         mask_simplify_epsilon = config.get("geotiff_mask_simplify_epsilon", 2.0)
 
         frames_folder = os.path.join(target_folder, f"frames_{camera_suffix}")
@@ -5384,7 +5238,7 @@ class BambiProcessor:
         if log_fn:
             log_fn(f"Input resolution: {input_resolution.width}x{input_resolution.height}")
 
-        # Load mask polygon for bound calculation (same source as orthomosaic mask)
+        # Load mask polygon for bound calculation (same source as alfs mask)
         mask_filename = poses.get("mask")
         mask_file_path = os.path.join(target_folder, mask_filename) if mask_filename else None
         mask_polygon = None
@@ -5546,7 +5400,7 @@ class BambiProcessor:
                     local_max_y = utm_max_y - y_offset
                     center_x = (local_min_x + local_max_x) / 2
                     center_y = (local_min_y + local_max_y) / 2
-                    ortho_camera = Camera(
+                    orthographic_camera = Camera(
                         orthogonal=True,
                         orthogonal_size=(local_max_x - local_min_x, local_max_y - local_min_y),
                         position=Vector3([center_x, center_y, ortho_cam_z], dtype='f4'),
@@ -5561,7 +5415,7 @@ class BambiProcessor:
                     # the background producing noise.
                     from alfspy.core.rendering import RenderResultMode
                     tile_res = Resolution(out_w, out_h)
-                    renderer = Renderer(tile_res, ctx, ortho_camera, mesh_data, texture_data)
+                    renderer = Renderer(tile_res, ctx, orthographic_camera, mesh_data, texture_data)
                     proj_results = list(renderer.project_shots_iter(
                         shot, RenderResultMode.ShotOnly,
                         release_shots=True, mask=mask_texture
@@ -5719,7 +5573,7 @@ class BambiProcessor:
         confidence = float(config.get("sam3_confidence", 0.5))
         output_format = config.get("sam3_format", "polygon")  # FIX: was undefined in your code
 
-        # Frame filter options (use start/end frame like orthomosaic)
+        # Frame filter options (use start/end frame like alfs)
         use_all_frames = config.get("sam3_use_all_frames", True)
         start_frame = int(config.get("sam3_start_frame", 0))
         end_frame = int(config.get("sam3_end_frame", 999999))

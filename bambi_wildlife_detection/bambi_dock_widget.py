@@ -1776,129 +1776,118 @@ class BambiDockWidget(QDockWidget):
         fov_tab_layout.addWidget(fov_group)
         fov_tab_layout.addStretch()
 
-        # ----- Sub-Tab 5: Orthomosaic -----
-        ortho_tab = QWidget()
-        ortho_tab_layout = QVBoxLayout(ortho_tab)
-        config_sub_tabs.addTab(ortho_tab, "Orthomosaic/GeoTiff")
+        # ----- Sub-Tab 5: ALFS -----
+        alfs_tab = QWidget()
+        alfs_tab_layout = QVBoxLayout(alfs_tab)
+        config_sub_tabs.addTab(alfs_tab, "ALFS/GeoTiff")
 
-        ortho_group = QGroupBox("Orthomosaic/GeoTIFF Generation")
-        ortho_layout = QFormLayout(ortho_group)
+        alfs_group = QGroupBox("Airborne Light Field Sampling (ALFS) / GeoTIFF Generation")
+        alfs_layout = QFormLayout(alfs_group)
 
-        self.ortho_resolution_spin = QDoubleSpinBox()
-        self.ortho_resolution_spin.setRange(0.001, 1.0)
-        self.ortho_resolution_spin.setSingleStep(0.01)
-        self.ortho_resolution_spin.setValue(0.05)
-        self.ortho_resolution_spin.setDecimals(3)
-        self.ortho_resolution_spin.setSuffix(" m/px")
-        self.ortho_resolution_spin.setToolTip("Ground resolution in meters per pixel")
-        ortho_layout.addRow("Ground Resolution:", self.ortho_resolution_spin)
-
-        self.blend_mode_combo = QComboBox()
-        self.blend_mode_combo.addItems([
-            "INTEGRAL - Average all overlapping",
-            "FIRST - First pixel wins",
-            "LAST - Last pixel wins",
-            "CENTER - Center priority"
-        ])
-        self.blend_mode_combo.setCurrentIndex(0)
-        self.blend_mode_combo.setToolTip("How to blend overlapping frames")
-        ortho_layout.addRow("Blend Mode:", self.blend_mode_combo)
+        self.alfs_resolution_spin = QDoubleSpinBox()
+        self.alfs_resolution_spin.setRange(0.001, 1.0)
+        self.alfs_resolution_spin.setSingleStep(0.01)
+        self.alfs_resolution_spin.setValue(0.05)
+        self.alfs_resolution_spin.setDecimals(3)
+        self.alfs_resolution_spin.setSuffix(" m/px")
+        self.alfs_resolution_spin.setToolTip("Ground resolution in meters per pixel")
+        alfs_layout.addRow("Ground Resolution:", self.alfs_resolution_spin)
 
         frame_range_label = QLabel("Frame Range:")
-        ortho_layout.addRow(frame_range_label)
+        alfs_layout.addRow(frame_range_label)
 
-        self.ortho_all_frames_check = QCheckBox("Use all frames")
-        self.ortho_all_frames_check.setChecked(True)
-        self.ortho_all_frames_check.stateChanged.connect(self.toggle_ortho_frame_range)
-        ortho_layout.addRow("", self.ortho_all_frames_check)
+        self.alfs_all_frames_check = QCheckBox("Use all frames")
+        self.alfs_all_frames_check.setChecked(True)
+        self.alfs_all_frames_check.stateChanged.connect(self.toggle_alfs_frame_range)
+        alfs_layout.addRow("", self.alfs_all_frames_check)
 
-        self.ortho_frame_range_widget = QWidget()
-        frame_range_layout = QHBoxLayout(self.ortho_frame_range_widget)
+        self.alfs_frame_range_widget = QWidget()
+        frame_range_layout = QHBoxLayout(self.alfs_frame_range_widget)
         frame_range_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.ortho_start_frame_spin = QSpinBox()
-        self.ortho_start_frame_spin.setRange(0, 999999)
-        self.ortho_start_frame_spin.setValue(0)
-        self.ortho_start_frame_spin.setToolTip("First frame to include (inclusive)")
+        self.alfs_start_frame_spin = QSpinBox()
+        self.alfs_start_frame_spin.setRange(0, 999999)
+        self.alfs_start_frame_spin.setValue(0)
+        self.alfs_start_frame_spin.setToolTip("First frame to include (inclusive)")
         frame_range_layout.addWidget(QLabel("Start:"))
-        frame_range_layout.addWidget(self.ortho_start_frame_spin)
+        frame_range_layout.addWidget(self.alfs_start_frame_spin)
 
-        self.ortho_end_frame_spin = QSpinBox()
-        self.ortho_end_frame_spin.setRange(0, 999999)
-        self.ortho_end_frame_spin.setValue(999999)
-        self.ortho_end_frame_spin.setToolTip("Last frame to include (inclusive)")
+        self.alfs_end_frame_spin = QSpinBox()
+        self.alfs_end_frame_spin.setRange(0, 999999)
+        self.alfs_end_frame_spin.setValue(999999)
+        self.alfs_end_frame_spin.setToolTip("Last frame to include (inclusive)")
         frame_range_layout.addWidget(QLabel("End:"))
-        frame_range_layout.addWidget(self.ortho_end_frame_spin)
+        frame_range_layout.addWidget(self.alfs_end_frame_spin)
 
-        self.ortho_frame_range_widget.setEnabled(False)
-        ortho_layout.addRow("", self.ortho_frame_range_widget)
+        self.alfs_frame_range_widget.setEnabled(False)
+        alfs_layout.addRow("", self.alfs_frame_range_widget)
 
         self.preview_frames_btn = QPushButton("Detect Frame Count")
         self.preview_frames_btn.clicked.connect(self.detect_frame_count)
         self.preview_frames_btn.setToolTip("Load poses.json to detect available frames")
-        ortho_layout.addRow("", self.preview_frames_btn)
+        alfs_layout.addRow("", self.preview_frames_btn)
 
         self.frame_count_label = QLabel("Frame count: Unknown")
-        ortho_layout.addRow("", self.frame_count_label)
+        alfs_layout.addRow("", self.frame_count_label)
 
-        self.ortho_crop_check = QCheckBox()
-        self.ortho_crop_check.setChecked(True)
-        self.ortho_crop_check.setToolTip("Crop output to content area")
-        ortho_layout.addRow("Crop to Content:", self.ortho_crop_check)
+        self.alfs_crop_check = QCheckBox()
+        self.alfs_crop_check.setChecked(True)
+        self.alfs_crop_check.setToolTip("Crop output to content area")
+        alfs_layout.addRow("Crop to Content:", self.alfs_crop_check)
 
-        self.ortho_overviews_check = QCheckBox()
-        self.ortho_overviews_check.setChecked(True)
-        self.ortho_overviews_check.setToolTip("Create overview pyramids for faster GIS viewing")
-        ortho_layout.addRow("Create Overviews:", self.ortho_overviews_check)
+        self.alfs_overviews_check = QCheckBox()
+        self.alfs_overviews_check.setChecked(True)
+        self.alfs_overviews_check.setToolTip("Create overview pyramids for faster GIS viewing")
+        alfs_layout.addRow("Create Overviews:", self.alfs_overviews_check)
 
-        self.ortho_tile_size_spin = QSpinBox()
-        self.ortho_tile_size_spin.setRange(1024, 16384)
-        self.ortho_tile_size_spin.setValue(8192)
-        self.ortho_tile_size_spin.setSingleStep(1024)
-        self.ortho_tile_size_spin.setToolTip("Maximum tile size for processing large images")
-        ortho_layout.addRow("Max Tile Size:", self.ortho_tile_size_spin)
+        self.alfs_tile_size_spin = QSpinBox()
+        self.alfs_tile_size_spin.setRange(1024, 16384)
+        self.alfs_tile_size_spin.setValue(8192)
+        self.alfs_tile_size_spin.setSingleStep(1024)
+        self.alfs_tile_size_spin.setToolTip("Maximum tile size for processing large images")
+        alfs_layout.addRow("Max Tile Size:", self.alfs_tile_size_spin)
 
-        # Orthomosaic frame step (skip)
-        self.ortho_frame_step_spin = QSpinBox()
-        self.ortho_frame_step_spin.setRange(1, 100)
-        self.ortho_frame_step_spin.setValue(1)
-        self.ortho_frame_step_spin.setToolTip("Process every Nth frame (1 = all frames, 2 = every 2nd frame, etc.)")
-        ortho_layout.addRow("Frame Step:", self.ortho_frame_step_spin)
+        # ALFS frame step (skip)
+        self.alfs_frame_step_spin = QSpinBox()
+        self.alfs_frame_step_spin.setRange(1, 100)
+        self.alfs_frame_step_spin.setValue(1)
+        self.alfs_frame_step_spin.setToolTip("Process every Nth frame (1 = all frames, 2 = every 2nd frame, etc.)")
+        alfs_layout.addRow("Frame Step:", self.alfs_frame_step_spin)
 
         # Sampling mode
-        self.ortho_sampling_check = QCheckBox("Enable")
-        self.ortho_sampling_check.setChecked(False)
-        self.ortho_sampling_check.setToolTip(
-            "Create multiple small integral orthomosaics along the flight path instead of one large one"
+        self.alfs_sampling_check = QCheckBox("Enable")
+        self.alfs_sampling_check.setChecked(False)
+        self.alfs_sampling_check.setToolTip(
+            "Create multiple small integral ALFS along the flight path instead of one large one"
         )
-        self.ortho_sampling_check.stateChanged.connect(self.toggle_ortho_sampling)
-        ortho_layout.addRow("Sampling Mode:", self.ortho_sampling_check)
+        self.alfs_sampling_check.stateChanged.connect(self.toggle_alfs_sampling)
+        alfs_layout.addRow("Sampling Mode:", self.alfs_sampling_check)
 
-        self.ortho_sampling_widget = QWidget()
-        sampling_layout = QHBoxLayout(self.ortho_sampling_widget)
+        self.alfs_sampling_widget = QWidget()
+        sampling_layout = QHBoxLayout(self.alfs_sampling_widget)
         sampling_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.ortho_sampling_rate_spin = QSpinBox()
-        self.ortho_sampling_rate_spin.setRange(1, 9999)
-        self.ortho_sampling_rate_spin.setValue(10)
-        self.ortho_sampling_rate_spin.setToolTip("One central frame is picked every N frames")
+        self.alfs_sampling_rate_spin = QSpinBox()
+        self.alfs_sampling_rate_spin.setRange(1, 9999)
+        self.alfs_sampling_rate_spin.setValue(10)
+        self.alfs_sampling_rate_spin.setToolTip("One central frame is picked every N frames")
         sampling_layout.addWidget(QLabel("Rate (frames):"))
-        sampling_layout.addWidget(self.ortho_sampling_rate_spin)
+        sampling_layout.addWidget(self.alfs_sampling_rate_spin)
 
-        self.ortho_sampling_range_spin = QSpinBox()
-        self.ortho_sampling_range_spin.setRange(0, 999)
-        self.ortho_sampling_range_spin.setValue(5)
-        self.ortho_sampling_range_spin.setToolTip(
-            "Frames on each side of the central frame to include in each orthomosaic"
+        self.alfs_sampling_range_spin = QSpinBox()
+        self.alfs_sampling_range_spin.setRange(0, 999)
+        self.alfs_sampling_range_spin.setValue(5)
+        self.alfs_sampling_range_spin.setToolTip(
+            "Frames on each side of the central frame to include in each alfs"
         )
         sampling_layout.addWidget(QLabel("Range ±:"))
-        sampling_layout.addWidget(self.ortho_sampling_range_spin)
+        sampling_layout.addWidget(self.alfs_sampling_range_spin)
 
-        self.ortho_sampling_widget.setEnabled(False)
-        ortho_layout.addRow("", self.ortho_sampling_widget)
+        self.alfs_sampling_widget.setEnabled(False)
+        alfs_layout.addRow("", self.alfs_sampling_widget)
 
-        ortho_tab_layout.addWidget(ortho_group)
-        ortho_tab_layout.addStretch()
+        alfs_tab_layout.addWidget(alfs_group)
+        alfs_tab_layout.addStretch()
 
         # ----- Sub-Tab 6: SAM3 Segmentation -----
         sam3_tab = QWidget()
@@ -2222,28 +2211,28 @@ class BambiDockWidget(QDockWidget):
         add_merged_fov_row.addWidget(self.add_merged_fov_status)
         steps_btn_layout.addLayout(add_merged_fov_row)
 
-        # ----- Step 7: Generate Orthomosaic -----
+        # ----- Step 7: Generate ALFS -----
         step7_row = QHBoxLayout()
-        self.ortho_btn = QPushButton("7. Generate Orthomosaic")
-        self.ortho_btn.clicked.connect(self.run_orthomosaic)
-        self.ortho_camera_combo = QComboBox()
-        self.ortho_camera_combo.addItems(["T - Thermal", "W - RGB"])
-        self.ortho_camera_combo.setFixedWidth(100)
-        self.ortho_camera_combo.setToolTip("Select camera source for frames and poses")
-        self.ortho_status = QLabel("⚪ Not started")
-        step7_row.addWidget(self.ortho_btn)
-        step7_row.addWidget(self.ortho_camera_combo)
-        step7_row.addWidget(self.ortho_status)
+        self.alfs_btn = QPushButton("7. Generate ALFS")
+        self.alfs_btn.clicked.connect(self.run_alfs)
+        self.alfs_camera_combo = QComboBox()
+        self.alfs_camera_combo.addItems(["T - Thermal", "W - RGB"])
+        self.alfs_camera_combo.setFixedWidth(100)
+        self.alfs_camera_combo.setToolTip("Select camera source for frames and poses")
+        self.alfs_status = QLabel("⚪ Not started")
+        step7_row.addWidget(self.alfs_btn)
+        step7_row.addWidget(self.alfs_camera_combo)
+        step7_row.addWidget(self.alfs_status)
         steps_btn_layout.addLayout(step7_row)
 
-        # -> Add Orthomosaic to QGIS
-        add_ortho_row = QHBoxLayout()
-        self.add_ortho_btn = QPushButton("   → Add Orthomosaic to QGIS")
-        self.add_ortho_btn.clicked.connect(self.add_orthomosaic_to_qgis)
-        self.add_ortho_status = QLabel("⚪")
-        add_ortho_row.addWidget(self.add_ortho_btn)
-        add_ortho_row.addWidget(self.add_ortho_status)
-        steps_btn_layout.addLayout(add_ortho_row)
+        # -> Add ALFS to QGIS
+        add_alfs_row = QHBoxLayout()
+        self.add_alfs_btn = QPushButton("   → Add ALFS to QGIS")
+        self.add_alfs_btn.clicked.connect(self.add_alfs_to_qgis)
+        self.add_alfs_status = QLabel("⚪")
+        add_alfs_row.addWidget(self.add_alfs_btn)
+        add_alfs_row.addWidget(self.add_alfs_status)
+        steps_btn_layout.addLayout(add_alfs_row)
 
         # ----- Step 8: Export Frames as GeoTIFF -----
         step8_row = QHBoxLayout()
@@ -2636,32 +2625,31 @@ class BambiDockWidget(QDockWidget):
             "class_aware": self.class_aware_check.isChecked(),
             "interpolate": self.interpolate_check.isChecked(),
 
-            # Orthomosaic
-            "ortho_ground_resolution": self.ortho_resolution_spin.value(),
-            "ortho_dem_metadata_path": self.dem_metadata_path_edit.text() or None,
-            "ortho_blend_mode": self.blend_mode_combo.currentText().split(" - ")[0].lower(),
-            "ortho_use_all_frames": self.ortho_all_frames_check.isChecked(),
-            "ortho_start_frame": (
-                self.ortho_start_frame_spin.value()
-                if not self.ortho_all_frames_check.isChecked() else None),
-            "ortho_end_frame": (
-                self.ortho_end_frame_spin.value()
-                if not self.ortho_all_frames_check.isChecked() else None),
-            "ortho_crop_to_content": self.ortho_crop_check.isChecked(),
-            "ortho_create_overviews": self.ortho_overviews_check.isChecked(),
-            "ortho_max_tile_size": self.ortho_tile_size_spin.value(),
-            "ortho_frame_step": (
-                self.ortho_frame_step_spin.value()
-                if hasattr(self, 'ortho_frame_step_spin') else 1),
-            "ortho_sampling_mode": (
-                self.ortho_sampling_check.isChecked()
-                if hasattr(self, 'ortho_sampling_check') else False),
-            "ortho_sampling_rate": (
-                self.ortho_sampling_rate_spin.value()
-                if hasattr(self, 'ortho_sampling_rate_spin') else 10),
-            "ortho_sampling_range": (
-                self.ortho_sampling_range_spin.value()
-                if hasattr(self, 'ortho_sampling_range_spin') else 5),
+            # ALFS
+            "alfs_ground_resolution": self.alfs_resolution_spin.value(),
+            "alfs_dem_metadata_path": self.dem_metadata_path_edit.text() or None,
+            "alfs_use_all_frames": self.alfs_all_frames_check.isChecked(),
+            "alfs_start_frame": (
+                self.alfs_start_frame_spin.value()
+                if not self.alfs_all_frames_check.isChecked() else None),
+            "alfs_end_frame": (
+                self.alfs_end_frame_spin.value()
+                if not self.alfs_all_frames_check.isChecked() else None),
+            "alfs_crop_to_content": self.alfs_crop_check.isChecked(),
+            "alfs_create_overviews": self.alfs_overviews_check.isChecked(),
+            "alfs_max_tile_size": self.alfs_tile_size_spin.value(),
+            "alfs_frame_step": (
+                self.alfs_frame_step_spin.value()
+                if hasattr(self, 'alfs_frame_step_spin') else 1),
+            "alfs_sampling_mode": (
+                self.alfs_sampling_check.isChecked()
+                if hasattr(self, 'alfs_sampling_check') else False),
+            "alfs_sampling_rate": (
+                self.alfs_sampling_rate_spin.value()
+                if hasattr(self, 'alfs_sampling_rate_spin') else 10),
+            "alfs_sampling_range": (
+                self.alfs_sampling_range_spin.value()
+                if hasattr(self, 'alfs_sampling_range_spin') else 5),
 
             # Field of View
             "use_fov_mask": self.use_fov_mask_check.isChecked(),
@@ -2706,7 +2694,7 @@ class BambiDockWidget(QDockWidget):
             "georeference_camera": "T" if self.detection_camera_combo.currentIndex() == 0 else "W",
             "tracking_camera": "T" if self.detection_camera_combo.currentIndex() == 0 else "W",
             "fov_camera": "T" if self.fov_camera_combo.currentIndex() == 0 else "W",
-            "ortho_camera": "T" if self.ortho_camera_combo.currentIndex() == 0 else "W",
+            "alfs_camera": "T" if self.alfs_camera_combo.currentIndex() == 0 else "W",
             "geotiff_camera": "T" if self.geotiff_camera_combo.currentIndex() == 0 else "W",
             "sam3_camera": "T" if self.sam3_camera_combo.currentIndex() == 0 else "W",
         }
@@ -3254,7 +3242,7 @@ class BambiDockWidget(QDockWidget):
             "tracking backend.<br><br>"
             "<b>6 — Calculate Field of View</b><br>"
             "Computes per-frame camera footprint polygons on the ground using the DEM.<br><br>"
-            "<b>7 — Generate Orthomosaic</b><br>"
+            "<b>7 — Generate ALFS</b><br>"
             "Projects all frames onto the DEM surface and blends them into a "
             "georeferenced GeoTIFF mosaic.<br><br>"
             "<b>8 — Export Frames as GeoTIFF</b><br>"
@@ -4374,7 +4362,7 @@ class BambiDockWidget(QDockWidget):
         # outputs are correctly reflected as "Not started" after a refresh.
         for step in ("extract_thermal_frames", "extract_rgb_frames", "detection",
                      "georeference", "tracking", "calculate_fov", "flight_route",
-                     "orthomosaic", "export_geotiffs", "sam3_segmentation",
+                     "alfs", "export_geotiffs", "sam3_segmentation",
                      "sam3_georeference", "trex_import"):
             self.update_status(step, "⚪ Not started")
 
@@ -4406,7 +4394,7 @@ class BambiDockWidget(QDockWidget):
             ("georeferenced", "georeference", None),
             ("tracks", "tracking", None),
             ("fov", "calculate_fov", None),
-            ("orthomosaic", "orthomosaic", None),
+            ("alfs", "alfs", None),
             ("geotiffs", "export_geotiffs", None),
             ("segmentation", "sam3_segmentation", "segmentation_pixel.json"),
             ("segmentation", "sam3_georeference", "segmentation_georef.json"),
@@ -4450,7 +4438,7 @@ class BambiDockWidget(QDockWidget):
         """
         # Reset all QGIS-layer statuses before re-checking.
         for step in ("add_flight_route", "add_frame_detections", "add_layers",
-                     "add_fov", "add_merged_fov", "add_ortho", "add_geotiffs",
+                     "add_fov", "add_merged_fov", "add_alfs", "add_geotiffs",
                      "add_sam3"):
             self.update_status(step, "⚪")
 
@@ -4475,7 +4463,7 @@ class BambiDockWidget(QDockWidget):
             ("group", "BAMBI Wildlife Tracks", "add_layers"),
             ("group", "BAMBI FoV Polygons", "add_fov"),
             ("layer", "BAMBI FoV Coverage", "add_merged_fov"),
-            ("layer", "BAMBI Orthomosaic", "add_ortho"),
+            ("layer", "BAMBI ALFS", "add_alfs"),
             ("group", "BAMBI Frame GeoTIFFs", "add_geotiffs"),
         ]
 
@@ -4656,13 +4644,13 @@ class BambiDockWidget(QDockWidget):
         """Toggle the FoV mask path widget based on checkbox state."""
         self.fov_mask_widget.setEnabled(state)
 
-    def toggle_ortho_frame_range(self, state):
+    def toggle_alfs_frame_range(self, state):
         """Toggle the frame range controls based on checkbox state."""
-        self.ortho_frame_range_widget.setEnabled(not state)
+        self.alfs_frame_range_widget.setEnabled(not state)
 
-    def toggle_ortho_sampling(self, state):
+    def toggle_alfs_sampling(self, state):
         """Toggle sampling mode controls."""
-        self.ortho_sampling_widget.setEnabled(bool(state))
+        self.alfs_sampling_widget.setEnabled(bool(state))
 
     def toggle_detect_frame_range(self, state):
         """Toggle the detection frame range controls based on checkbox state."""
@@ -4712,7 +4700,7 @@ class BambiDockWidget(QDockWidget):
             QMessageBox.warning(self, "Error", "Please set the target folder first.")
             return
 
-        camera = config.get("ortho_camera", "T")
+        camera = config.get("alfs_camera", "T")
         poses_file = os.path.join(target_folder, f"poses_{'t' if camera == 'T' else 'w'}.json")
 
         if not os.path.exists(poses_file):
@@ -4733,10 +4721,10 @@ class BambiDockWidget(QDockWidget):
 
             # Update spinbox ranges for all frame range widgets
             if frame_count > 0:
-                # Orthomosaic
-                self.ortho_start_frame_spin.setRange(0, frame_count - 1)
-                self.ortho_end_frame_spin.setRange(0, frame_count - 1)
-                self.ortho_end_frame_spin.setValue(frame_count - 1)
+                # ALFS
+                self.alfs_start_frame_spin.setRange(0, frame_count - 1)
+                self.alfs_end_frame_spin.setRange(0, frame_count - 1)
+                self.alfs_end_frame_spin.setValue(frame_count - 1)
 
                 # Detection
                 if hasattr(self, 'detect_start_frame_spin'):
@@ -4951,10 +4939,10 @@ class BambiDockWidget(QDockWidget):
 
         self.start_worker("tracking")
 
-    def run_orthomosaic(self):
-        """Run orthomosaic generation step."""
+    def run_alfs(self):
+        """Run alfs generation step."""
         config = self.get_config()
-        camera = config.get("ortho_camera", "T")
+        camera = config.get("alfs_camera", "T")
 
         # Check if frames exist for selected camera
         target_folder = config["target_folder"]
@@ -4975,7 +4963,7 @@ class BambiDockWidget(QDockWidget):
         if not self.validate_inputs(["dem_path"]):
             return
 
-        self.start_worker("orthomosaic")
+        self.start_worker("alfs")
 
     def run_export_geotiffs(self):
         """Run frame GeoTIFF export step."""
@@ -5411,10 +5399,10 @@ class BambiDockWidget(QDockWidget):
             "calculate_fov": self.calculate_fov_status,
             "add_fov": self.add_fov_status,
             "add_merged_fov": self.add_merged_fov_status,
-            "orthomosaic": self.ortho_status,
+            "alfs": self.alfs_status,
             "export_geotiffs": self.export_geotiffs_status,
             "flight_route": self.flight_route_status,
-            "add_ortho": self.add_ortho_status,
+            "add_alfs": self.add_alfs_status,
             "add_geotiffs": self.add_geotiffs_status,
             "add_flight_route": self.add_flight_route_status,
             "perpendicular": self.perpendicular_status,
@@ -5443,10 +5431,10 @@ class BambiDockWidget(QDockWidget):
         self.calculate_fov_btn.setEnabled(enabled)
         self.add_fov_btn.setEnabled(enabled)
         self.add_merged_fov_btn.setEnabled(enabled)
-        self.ortho_btn.setEnabled(enabled)
+        self.alfs_btn.setEnabled(enabled)
         self.export_geotiffs_btn.setEnabled(enabled)
         self.flight_route_btn.setEnabled(enabled)
-        self.add_ortho_btn.setEnabled(enabled)
+        self.add_alfs_btn.setEnabled(enabled)
         self.add_geotiffs_btn.setEnabled(enabled)
         self.add_flight_route_btn.setEnabled(enabled)
         self.perpendicular_btn.setEnabled(enabled)
@@ -6725,50 +6713,50 @@ class BambiDockWidget(QDockWidget):
 
         return dict(frame_detections)
 
-    def add_orthomosaic_to_qgis(self):
-        """Add all GeoTIFFs in the orthomosaic folder to QGIS as raster layers."""
+    def add_alfs_to_qgis(self):
+        """Add all GeoTIFFs in the alfs folder to QGIS as raster layers."""
         config = self.get_config()
-        ortho_camera = config.get("ortho_camera", "T")
-        ortho_suffix = "t" if ortho_camera == "T" else "w"
-        camera_label = "Thermal" if ortho_camera == "T" else "RGB"
-        ortho_folder = os.path.join(config["target_folder"], f"orthomosaic_{ortho_suffix}")
+        alfs_camera = config.get("alfs_camera", "T")
+        alfs_suffix = "t" if alfs_camera == "T" else "w"
+        camera_label = "Thermal" if alfs_camera == "T" else "RGB"
+        alfs_folder = os.path.join(config["target_folder"], f"alfs_{alfs_suffix}")
 
-        if not os.path.exists(ortho_folder):
+        if not os.path.exists(alfs_folder):
             QMessageBox.warning(
                 self,
-                "Missing Orthomosaic",
-                f"{camera_label} orthomosaic has not been generated.\nPlease run Step 6 first."
+                "Missing ALFS",
+                f"{camera_label} alfs has not been generated.\nPlease run Step 6 first."
             )
             return
 
         try:
-            self.log(f"Adding {camera_label} orthomosaic to QGIS...")
-            self.update_status("add_ortho", "🟡 Loading...")
+            self.log(f"Adding {camera_label} alfs to QGIS...")
+            self.update_status("add_alfs", "🟡 Loading...")
 
             tif_files = sorted([
-                os.path.join(ortho_folder, f)
-                for f in os.listdir(ortho_folder)
+                os.path.join(alfs_folder, f)
+                for f in os.listdir(alfs_folder)
                 if f.lower().endswith((".tif", ".tiff"))
             ])
 
             if not tif_files:
                 QMessageBox.warning(
                     self,
-                    "Missing Orthomosaic",
-                    "Orthomosaic has not been generated.\nPlease run Step 6 first."
+                    "Missing ALFS",
+                    "ALFS has not been generated.\nPlease run Step 6 first."
                 )
-                self.update_status("add_ortho", "🔴 No files")
+                self.update_status("add_alfs", "🔴 No files")
                 return
 
             if len(tif_files) == 1:
-                layer_name = f"BAMBI Orthomosaic ({camera_label})"
+                layer_name = f"BAMBI ALFS ({camera_label})"
                 layer = QgsRasterLayer(tif_files[0], layer_name)
                 if not layer.isValid():
                     raise RuntimeError(f"Failed to load raster: {tif_files[0]}")
                 QgsProject.instance().addMapLayer(layer)
-                self.log(f"Added {camera_label} orthomosaic layer to QGIS")
+                self.log(f"Added {camera_label} alfs layer to QGIS")
             else:
-                group = self._create_layer_group(f"BAMBI Orthomosaic ({camera_label})")
+                group = self._create_layer_group(f"BAMBI ALFS ({camera_label})")
                 loaded_count = 0
                 for tif_path in tif_files:
                     layer_name = os.path.splitext(os.path.basename(tif_path))[0]
@@ -6779,15 +6767,15 @@ class BambiDockWidget(QDockWidget):
                         loaded_count += 1
                     else:
                         self.log(f"Warning: Could not load {os.path.basename(tif_path)}")
-                self.log(f"Added {loaded_count} orthomosaic file(s) to QGIS")
+                self.log(f"Added {loaded_count} alfs file(s) to QGIS")
 
-            self.update_status("add_ortho", "🟢 Added")
+            self.update_status("add_alfs", "🟢 Added")
             self.iface.mapCanvas().refresh()
 
         except Exception as e:
-            self.log(f"Error adding orthomosaic: {str(e)}")
-            self.update_status("add_ortho", "🔴 Error")
-            QMessageBox.critical(self, "Error", f"Failed to add orthomosaic: {str(e)}")
+            self.log(f"Error adding alfs: {str(e)}")
+            self.update_status("add_alfs", "🔴 Error")
+            QMessageBox.critical(self, "Error", f"Failed to add alfs: {str(e)}")
 
     def add_geotiffs_to_qgis(self):
         """Add exported frame GeoTIFFs to QGIS as raster layers in a group."""
@@ -7961,31 +7949,29 @@ class BambiDockWidget(QDockWidget):
         project.writeEntryDouble(PLUGIN_SCOPE, "FoV/SampleRate",
                                  self.fov_sample_rate_spin.value())
 
-        # ===== Orthomosaic Settings =====
-        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/Resolution",
-                                 self.ortho_resolution_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/BlendMode",
-                                 self.blend_mode_combo.currentIndex())
-        project.writeEntryBool(PLUGIN_SCOPE, "Ortho/AllFrames",
-                               self.ortho_all_frames_check.isChecked())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/StartFrame",
-                                 self.ortho_start_frame_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/EndFrame",
-                                 self.ortho_end_frame_spin.value())
-        project.writeEntryBool(PLUGIN_SCOPE, "Ortho/Crop",
-                               self.ortho_crop_check.isChecked())
-        project.writeEntryBool(PLUGIN_SCOPE, "Ortho/Overviews",
-                               self.ortho_overviews_check.isChecked())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/TileSize",
-                                 self.ortho_tile_size_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/FrameStep",
-                                 self.ortho_frame_step_spin.value())
-        project.writeEntryBool(PLUGIN_SCOPE, "Ortho/SamplingMode",
-                               self.ortho_sampling_check.isChecked())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/SamplingRate",
-                                 self.ortho_sampling_rate_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/SamplingRange",
-                                 self.ortho_sampling_range_spin.value())
+        # ===== ALFS Settings =====
+        project.writeEntryDouble(PLUGIN_SCOPE, "ALFS/Resolution",
+                                 self.alfs_resolution_spin.value())
+        project.writeEntryBool(PLUGIN_SCOPE, "ALFS/AllFrames",
+                               self.alfs_all_frames_check.isChecked())
+        project.writeEntryDouble(PLUGIN_SCOPE, "ALFS/StartFrame",
+                                 self.alfs_start_frame_spin.value())
+        project.writeEntryDouble(PLUGIN_SCOPE, "ALFS/EndFrame",
+                                 self.alfs_end_frame_spin.value())
+        project.writeEntryBool(PLUGIN_SCOPE, "ALFS/Crop",
+                               self.alfs_crop_check.isChecked())
+        project.writeEntryBool(PLUGIN_SCOPE, "ALFS/Overviews",
+                               self.alfs_overviews_check.isChecked())
+        project.writeEntryDouble(PLUGIN_SCOPE, "ALFS/TileSize",
+                                 self.alfs_tile_size_spin.value())
+        project.writeEntryDouble(PLUGIN_SCOPE, "ALFS/FrameStep",
+                                 self.alfs_frame_step_spin.value())
+        project.writeEntryBool(PLUGIN_SCOPE, "ALFS/SamplingMode",
+                               self.alfs_sampling_check.isChecked())
+        project.writeEntryDouble(PLUGIN_SCOPE, "ALFS/SamplingRate",
+                                 self.alfs_sampling_rate_spin.value())
+        project.writeEntryDouble(PLUGIN_SCOPE, "ALFS/SamplingRange",
+                                 self.alfs_sampling_range_spin.value())
 
         # ===== SAM3 Settings =====
         # Note: API key is intentionally NOT saved for security
@@ -8214,23 +8200,19 @@ class BambiDockWidget(QDockWidget):
         self.fov_end_frame_spin.setValue(read_int("FoV/EndFrame", 999999))
         self.fov_sample_rate_spin.setValue(read_int("FoV/SampleRate", 1))
 
-        # ===== Orthomosaic Settings =====
-        self.ortho_resolution_spin.setValue(read_double("Ortho/Resolution", 0.05))
+        # ===== ALFS Settings =====
+        self.alfs_resolution_spin.setValue(read_double("ALFS/Resolution", 0.05))
 
-        blend_mode_idx = read_int("Ortho/BlendMode", 0)
-        if 0 <= blend_mode_idx < self.blend_mode_combo.count():
-            self.blend_mode_combo.setCurrentIndex(blend_mode_idx)
-
-        self.ortho_all_frames_check.setChecked(read_bool("Ortho/AllFrames", True))
-        self.ortho_start_frame_spin.setValue(read_int("Ortho/StartFrame", 0))
-        self.ortho_end_frame_spin.setValue(read_int("Ortho/EndFrame", 999999))
-        self.ortho_crop_check.setChecked(read_bool("Ortho/Crop", True))
-        self.ortho_overviews_check.setChecked(read_bool("Ortho/Overviews", True))
-        self.ortho_tile_size_spin.setValue(read_int("Ortho/TileSize", 8192))
-        self.ortho_frame_step_spin.setValue(read_int("Ortho/FrameStep", 1))
-        self.ortho_sampling_check.setChecked(read_bool("Ortho/SamplingMode", False))
-        self.ortho_sampling_rate_spin.setValue(read_int("Ortho/SamplingRate", 10))
-        self.ortho_sampling_range_spin.setValue(read_int("Ortho/SamplingRange", 5))
+        self.alfs_all_frames_check.setChecked(read_bool("ALFS/AllFrames", True))
+        self.alfs_start_frame_spin.setValue(read_int("ALFS/StartFrame", 0))
+        self.alfs_end_frame_spin.setValue(read_int("ALFS/EndFrame", 999999))
+        self.alfs_crop_check.setChecked(read_bool("ALFS/Crop", True))
+        self.alfs_overviews_check.setChecked(read_bool("ALFS/Overviews", True))
+        self.alfs_tile_size_spin.setValue(read_int("ALFS/TileSize", 8192))
+        self.alfs_frame_step_spin.setValue(read_int("ALFS/FrameStep", 1))
+        self.alfs_sampling_check.setChecked(read_bool("ALFS/SamplingMode", False))
+        self.alfs_sampling_rate_spin.setValue(read_int("ALFS/SamplingRate", 10))
+        self.alfs_sampling_range_spin.setValue(read_int("ALFS/SamplingRange", 5))
 
         # ===== SAM3 Settings =====
         self.sam3_prompts_edit.setPlainText(read_str("SAM3/Prompts"))

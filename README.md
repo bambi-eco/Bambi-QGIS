@@ -45,7 +45,7 @@ A comprehensive QGIS plugin for detecting and tracking wildlife in aerial drone 
 - **Perpendicular Distance Sampling**: For each geo-referenced detection (or the last bounding box of each track), automatically find the nearest point on the flight route and measure the perpendicular distance
 - **Multi-Object Tracking**: Track animals across frames with multiple backend options (built-in, BoxMOT, Geo-Referenced Tracking)
 - **Field of View Calculation**: Calculate camera footprints for each frame with optional custom mask support
-- **Orthomosaic Generation**: Create georeferenced orthomosaics by projecting all frames onto the DEM
+- **Airborne Light Field Sampling (ALFS)**: Create a georeferenced light-field sampling by projecting all frames onto the DEM
 - **GeoTIFF Export**: Export individual frames as georeferenced GeoTIFFs for detailed analysis
 - **DEM Import**: Automatically download DEMs (currently limited to Austria), or convert any GeoTIFF DEM to the required GLB format — including source CRS override for files with incorrect embedded CRS metadata
 - **Full QGIS Integration**: All outputs are automatically added as styled layers to the QGIS layer panel
@@ -269,7 +269,7 @@ Before starting processing, configure per-step settings in the **Configuration**
 - **Extraction**: Frame skip, limit, sampling rate, and thermal visualisation (see below)
 - **Detection**: Confidence threshold, model path
 - **Tracking**: Backend selection, IoU threshold, interpolation
-- **Orthomosaic**: Resolution, tile size
+- **ALFS**: Resolution, tile size
 - **Correction factors**: Translation and rotation offsets for geo-referencing
 - **Flight route**: Frame marker interval, distance marker interval
 - **Field of View**: Custom mask, simplification
@@ -484,17 +484,17 @@ fov_t/    # or fov_w/ depending on camera selection
 
 ---
 
-### Step 7: Generate Orthomosaic
+### Step 7: Generate ALFS
 
-Creates a georeferenced orthomosaic by projecting all (or a subset of) frames onto the DEM surface and blending them together. Output is a Cloud-Optimized GeoTIFF.
+Creates a georeferenced Airborne Light Field Sampling (ALFS) by projecting all (or a subset of) frames onto the DEM surface and blending them together. Output is a Cloud-Optimized GeoTIFF.
 
 **Outputs:**
 ```
-orthomosaic_t/    # or orthomosaic_w/ depending on camera selection
-└── orthomosaic.tif    # Georeferenced mosaic (COG GeoTIFF)
+alfs_t/    # or alfs_w/ depending on camera selection
+└── alfs.tif    # Georeferenced mosaic (COG GeoTIFF)
 ```
 
-![Orthomosaic Output](images/orthomosaic.png)
+![ALFS Output](images/alfs.png)
 
 ---
 
@@ -922,10 +922,10 @@ target_folder/
 │   └── merged_fov.geojson                          # Combined coverage area
 ├── fov_w/                                          # Field of View (RGB camera)
 │   └── ...
-├── orthomosaic_t/                                  # Orthomosaic from thermal frames
-│   └── orthomosaic.tif                             # Georeferenced mosaic (COG GeoTIFF)
-├── orthomosaic_w/                                  # Orthomosaic from RGB frames
-│   └── orthomosaic.tif
+├── alfs_t/                                  # ALFS from thermal frames
+│   └── alfs.tif                             # Georeferenced mosaic (COG GeoTIFF)
+├── alfs_w/                                  # ALFS from RGB frames
+│   └── alfs.tif
 ├── geotiffs_t/                                     # GeoTIFFs from thermal frames
 │   ├── frame_000000.tiff
 │   └── ...
@@ -997,7 +997,7 @@ Detection and Re-ID models are stored globally in the QGIS profile directory and
 ### Memory Issues with Large Datasets
 
 - Reduce the number of frames processed at each step; back up intermediate results and rerun with different settings
-- For orthomosaics and GeoTIFFs: reduce resolution or decrease the max tile size parameter
+- For ALFS and GeoTIFFs: reduce resolution or decrease the max tile size parameter
 
 ### No module named 'bambi'
 
@@ -1098,9 +1098,9 @@ If you use this plugin in your research, please cite:
 
 ![Merged Flight FoV](images/flight_fov.png)
 
-### Orthomosaic and GeoTIFF Export
+### ALFS and GeoTIFF Export
 
-![Orthomosaic Output](images/orthomosaic.png)
+![ALFS Output](images/alfs.png)
 
 ![GeoTIFF Export](images/geotiff.png)
 

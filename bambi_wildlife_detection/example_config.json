@@ -85,10 +85,9 @@
         "interpolate": true
     },
     
-    "orthomosaic": {
+    "alfs": {
         "ground_resolution": 0.05,
         "dem_metadata_path": null,
-        "blend_mode": "integral",
         "use_all_frames": true,
         "start_frame": null,
         "end_frame": null,
