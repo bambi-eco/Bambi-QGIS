@@ -62,6 +62,8 @@ class BambiWildlifeDetection:
         self._dependency_manager_dlg = None
         self.flight_planner_action = None
         self._flight_planner_dlg = None
+        self.video_creator_action = None
+        self._video_creator_dlg = None
 
     def tr(self, message):
         """Get the translation for a string using Qt translation API.
@@ -214,6 +216,20 @@ class BambiWildlifeDetection:
             add_to_menu=True,
             status_tip=self.tr('Open the random flight strategy planner'))
 
+        # Video Creator
+        _video_icon = os.path.join(self.plugin_dir, 'icons', 'icon_video.png')
+        if not os.path.isfile(_video_icon):
+            _video_icon = icon_path
+        self.video_creator_action = self.add_action(
+            _video_icon,
+            text=self.tr('Video Creator'),
+            callback=self._on_video_creator,
+            parent=self.iface.mainWindow(),
+            add_to_menu=True,
+            status_tip=self.tr(
+                'Create a video from processed frames, orthographic projections '
+                'and the map view'))
+
         # Dependency Manager
         self.dependency_manager_action = self.add_action(
             os.path.join(self.plugin_dir, 'icons', 'icon_dependencies.png'),
@@ -241,6 +257,11 @@ class BambiWildlifeDetection:
         if self._flight_planner_dlg is not None:
             self._flight_planner_dlg.close()
             self._flight_planner_dlg = None
+
+        # Close video creator if open
+        if self._video_creator_dlg is not None:
+            self._video_creator_dlg.close()
+            self._video_creator_dlg = None
 
         # Close dependency manager if open
         if self._dependency_manager_dlg is not None:
@@ -331,6 +352,20 @@ class BambiWildlifeDetection:
         self._flight_planner_dlg.show()
         self._flight_planner_dlg.raise_()
         self._flight_planner_dlg.activateWindow()
+
+    def _on_video_creator(self):
+        """Toolbar action: open the video creator (non-modal)."""
+        from .bambi_video_creator import VideoCreatorDialog
+        if self._video_creator_dlg is None:
+            self._video_creator_dlg = VideoCreatorDialog(
+                self.iface, parent=self.iface.mainWindow()
+            )
+            self._video_creator_dlg.finished.connect(
+                lambda _: setattr(self, '_video_creator_dlg', None)
+            )
+        self._video_creator_dlg.show()
+        self._video_creator_dlg.raise_()
+        self._video_creator_dlg.activateWindow()
 
     def _on_dependency_manager(self):
         """Toolbar action: open the dependency manager (non-modal)."""
