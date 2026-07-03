@@ -5135,8 +5135,9 @@ class BambiProcessor:
         Unlike the ALFS product (which renders an integral light-field image),
         this mosaics the individually orthorectified frame GeoTIFFs produced by
         :meth:`run_export_geotiffs`.  Overlapping pixels are resolved with the
-        configured merge method (first/last/min/max).  Frames are selected by
-        camera (thermal/RGB) and optionally restricted to a frame-index range.
+        configured merge method (first/last/min/max/average).  Frames are
+        selected by camera (thermal/RGB) and optionally restricted to a
+        frame-index range.
 
         :param config: Configuration dictionary
         :param progress_fn: Progress callback function
@@ -5160,6 +5161,7 @@ class BambiProcessor:
         start_frame = config.get("ortho_start_frame")
         end_frame = config.get("ortho_end_frame")
         nodata = config.get("ortho_nodata", 0)
+        target_epsg = config.get("target_epsg", 32633)
 
         target_folder = config["target_folder"]
         geotiff_folder = os.path.join(target_folder, f"geotiffs_{camera_suffix}")
@@ -5203,24 +5205,27 @@ class BambiProcessor:
             progress_fn(10)
 
         # Open all datasets. The exports already share the target CRS, so no
-        # reprojection is needed — we only warn on any mismatch.
+        # reprojection is needed — we only capture a source CRS as a fallback.
         datasets = []
-        first_crs = None
+        source_crs = None
         try:
             for path in candidates:
                 if cancel_check and cancel_check():
                     raise CancelledException("Orthomosaic generation cancelled")
                 ds = rasterio.open(path)
-                if first_crs is None:
-                    first_crs = ds.crs
-                elif ds.crs != first_crs and log_fn:
-                    log_fn(f"Warning: {os.path.basename(path)} has a different CRS ({ds.crs})")
+                if source_crs is None and ds.crs is not None:
+                    source_crs = ds.crs
                 datasets.append(ds)
 
             if progress_fn:
                 progress_fn(40)
 
-            mosaic, out_transform = rio_merge(datasets, method=method, nodata=nodata)
+            if method == "average":
+                mosaic, out_transform = self._merge_orthomosaic_average(
+                    datasets, nodata, rio_merge
+                )
+            else:
+                mosaic, out_transform = rio_merge(datasets, method=method, nodata=nodata)
         finally:
             for d in datasets:
                 d.close()
@@ -5232,13 +5237,30 @@ class BambiProcessor:
         os.makedirs(out_folder, exist_ok=True)
         output_file = os.path.join(out_folder, "orthomosaic.tif")
 
+        # Resolve the output CRS the same way the frame GeoTIFFs were written
+        # (authoritatively from target_epsg), so the orthomosaic is tagged with
+        # the exact CRS the pipeline georeferenced the frames in. Fall back to a
+        # source raster's embedded CRS if target_epsg is missing/invalid.
+        out_crs = None
+        try:
+            from pyproj import CRS as PyprojCRS
+            from rasterio.crs import CRS as RasterioCRS
+            if target_epsg:
+                out_crs = RasterioCRS.from_wkt(PyprojCRS.from_epsg(target_epsg).to_wkt())
+        except Exception:
+            out_crs = None
+        if out_crs is None:
+            out_crs = source_crs
+        if log_fn:
+            log_fn(f"Output CRS: {out_crs.to_string() if out_crs else 'unknown'}")
+
         out_meta = {
             "driver": "GTiff",
             "height": mosaic.shape[1],
             "width": mosaic.shape[2],
             "count": mosaic.shape[0],
             "dtype": mosaic.dtype,
-            "crs": first_crs,
+            "crs": out_crs,
             "transform": out_transform,
             "compress": "LZW",
             "tiled": True,
@@ -5265,6 +5287,55 @@ class BambiProcessor:
             )
         if progress_fn:
             progress_fn(100)
+
+    def _merge_orthomosaic_average(self, datasets, nodata, rio_merge):
+        """Merge datasets by averaging overlapping valid pixels.
+
+        ``rasterio.merge`` has no built-in "average" method, so we accumulate a
+        per-pixel sum (in a float64 buffer to avoid uint8 overflow) together with
+        a per-pixel count of valid contributors, then divide.
+
+        A cheap first pass with the built-in ``first`` method establishes the
+        exact output grid (shape + transform); the averaging pass then reuses the
+        same inputs/parameters, so rasterio produces an identically aligned grid
+        and the per-source ``roff``/``coff`` offsets index our count array
+        correctly.
+
+        :returns: (mosaic ndarray of the sources' dtype, output affine transform)
+        """
+        import numpy as np
+
+        src_dtype = datasets[0].dtypes[0]
+
+        # First pass: determine the exact output grid rasterio will use.
+        base, out_transform = rio_merge(datasets, method="first", nodata=nodata)
+        out_height, out_width = base.shape[1], base.shape[2]
+        del base
+
+        count = np.zeros((out_height, out_width), dtype=np.float64)
+
+        def _sum_valid(merged_data, new_data, merged_mask, new_mask,
+                       index=None, roff=0, coff=0, **kwargs):
+            # Masks are True where data is *invalid* (nodata); ~mask == valid.
+            valid = ~new_mask
+            np.add(merged_data, new_data, out=merged_data, where=valid,
+                   casting="unsafe")
+            band0 = valid[0] if valid.ndim == 3 else valid
+            h, w = band0.shape
+            count[roff:roff + h, coff:coff + w] += band0
+            if merged_mask.shape == valid.shape:
+                merged_mask[valid] = False
+
+        # Second pass: accumulate the sum in a float64 buffer.
+        summed, _ = rio_merge(
+            datasets, method=_sum_valid, nodata=nodata, dtype="float64"
+        )
+
+        count_b = count[np.newaxis, :, :]
+        with np.errstate(invalid="ignore", divide="ignore"):
+            avg = np.where(count_b > 0, summed / count_b, nodata)
+        avg = np.rint(avg).astype(src_dtype)
+        return avg, out_transform
 
     def run_export_geotiffs(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Export each frame as an individual GeoTIFF.

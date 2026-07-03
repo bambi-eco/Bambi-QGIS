@@ -356,13 +356,20 @@ class BambiWildlifeDetection:
     def _on_video_creator(self):
         """Toolbar action: open the video creator (non-modal)."""
         from .bambi_video_creator import VideoCreatorDialog
+        self._ensure_dock_widget()
         if self._video_creator_dlg is None:
             self._video_creator_dlg = VideoCreatorDialog(
-                self.iface, parent=self.iface.mainWindow()
+                self.iface,
+                dock_widget=self.dock_widget,
+                parent=self.iface.mainWindow(),
             )
             self._video_creator_dlg.finished.connect(
                 lambda _: setattr(self, '_video_creator_dlg', None)
             )
+        else:
+            # Re-seed defaults from the panel in case the target folder or CRS
+            # changed since the dialog was last opened.
+            self._video_creator_dlg.apply_dock_defaults()
         self._video_creator_dlg.show()
         self._video_creator_dlg.raise_()
         self._video_creator_dlg.activateWindow()

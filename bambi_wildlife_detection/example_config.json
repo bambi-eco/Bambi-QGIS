@@ -96,7 +96,7 @@
         "max_tile_size": 8192
     },
 
-    "_orthomosaic_comment": "Real orthomosaic: merges the per-frame GeoTIFFs from the GeoTIFF export step. method options: first, last, min, max",
+    "_orthomosaic_comment": "Real orthomosaic: merges the per-frame GeoTIFFs from the GeoTIFF export step. method options: first, last, min, max, average",
     "orthomosaic": {
         "method": "first",
         "use_all_frames": true,

@@ -524,6 +524,7 @@ Like the other steps you can use **all** exported GeoTIFFs or restrict to a **fr
 - **Last** — the last frame covering a pixel wins
 - **Min** — the darkest overlapping value wins
 - **Max** — the brightest overlapping value wins
+- **Average** — the mean of all overlapping frames (smooths seams; slower, two-pass)
 
 **Outputs:**
 ```

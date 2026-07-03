@@ -25,8 +25,6 @@ aborts cleanly.
 import json
 import os
 
-from qgis.PyQt.QtCore import Qt, QSize, QVariant
-from qgis.PyQt.QtGui import QColor, QImage
 from qgis.PyQt.QtWidgets import (
     QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QFileDialog,
     QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
@@ -34,10 +32,7 @@ from qgis.PyQt.QtWidgets import (
     QTextEdit, QVBoxLayout, QWidget,
 )
 from qgis.core import (
-    QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsFeature,
-    QgsField, QgsFillSymbol, QgsGeometry, QgsLineSymbol, QgsMapRendererParallelJob,
-    QgsMapSettings, QgsPointXY, QgsProject, QgsRectangle, QgsSingleSymbolRenderer,
-    QgsVectorLayer,
+    QgsCoordinateReferenceSystem, QgsGeometry, QgsPointXY, QgsProject,
 )
 
 
@@ -54,6 +49,145 @@ def _track_color_bgr(track_id):
     return (b, g, r)
 
 
+def _id_to_color(identifier, saturation=0.65, lightness=0.5):
+    """Deterministic BGR colour for a track/detection id (mirrors the TRex tool)."""
+    import colorsys
+    import hashlib
+    h = hashlib.sha256(str(identifier).encode("utf-8")).digest()
+    hue = int.from_bytes(h[:4], "big") / 2 ** 32
+    r, g, b = colorsys.hls_to_rgb(hue, lightness, saturation)
+    return (int(b * 255), int(g * 255), int(r * 255))
+
+
+# Fixed colour for the drone marker / look-point trail (BGR).
+_DRONE_COLOR = (0, 215, 255)
+
+
+class _MapTileProvider:
+    """Downloads and stitches web-map tiles for a UTM extent (satellite/OSM
+    background). Adapted from TRexConnector's visualiser; requires requests +
+    pyproj, which are probed lazily."""
+
+    ESRI_SATELLITE = ("https://server.arcgisonline.com/ArcGIS/rest/services/"
+                      "World_Imagery/MapServer/tile/{z}/{y}/{x}")
+    OPENSTREETMAP = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+
+    def __init__(self, tile_url, utm_epsg, cache_dir=None):
+        import math  # noqa: F401
+        from pyproj import CRS, Transformer
+        self.tile_url = tile_url
+        self.cache_dir = cache_dir
+        self.transformer = Transformer.from_crs(
+            CRS.from_epsg(utm_epsg), CRS.from_epsg(4326), always_xy=True)
+        self.headers = {"User-Agent": "BambiVideoCreator/1.0"}
+        if cache_dir:
+            os.makedirs(cache_dir, exist_ok=True)
+
+    def _utm_to_latlon(self, x, y):
+        lon, lat = self.transformer.transform(x, y)
+        return lat, lon
+
+    @staticmethod
+    def _latlon_to_tile(lat, lon, zoom):
+        import math
+        n = 2.0 ** zoom
+        xt = int((lon + 180.0) / 360.0 * n)
+        yt = int((1.0 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2.0 * n)
+        return xt, yt
+
+    @staticmethod
+    def _tile_to_latlon(x, y, zoom):
+        import math
+        n = 2.0 ** zoom
+        lon = x / n * 360.0 - 180.0
+        lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / n))))
+        return lat, lon
+
+    def _download_tile(self, x, y, zoom):
+        import cv2
+        import hashlib
+        import numpy as np
+        import requests
+        cache_path = None
+        if self.cache_dir:
+            h = hashlib.md5(self.tile_url.encode()).hexdigest()[:8]
+            cache_path = os.path.join(self.cache_dir, f"{h}_{zoom}_{x}_{y}.png")
+            if os.path.exists(cache_path):
+                return cv2.imread(cache_path)
+        url = self.tile_url.format(z=zoom, x=x, y=y)
+        try:
+            resp = requests.get(url, headers=self.headers, timeout=5)
+            if resp.status_code == 200:
+                arr = np.frombuffer(resp.content, dtype=np.uint8)
+                img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                if cache_path and img is not None:
+                    cv2.imwrite(cache_path, img)
+                return img
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+
+    def render(self, extent, width, height, margin):
+        """Return a (height, width, 3) BGR image with the tiled background placed
+        inside *margin*, or None on failure."""
+        import cv2
+        import numpy as np
+        min_x, max_x, min_y, max_y = extent
+        min_lat, min_lon = self._utm_to_latlon(min_x, min_y)
+        max_lat, max_lon = self._utm_to_latlon(max_x, max_y)
+        if min_lat > max_lat:
+            min_lat, max_lat = max_lat, min_lat
+        if min_lon > max_lon:
+            min_lon, max_lon = max_lon, min_lon
+
+        zoom = 16
+        for z in range(19, 11, -1):
+            x1, y1 = self._latlon_to_tile(max_lat, min_lon, z)
+            x2, y2 = self._latlon_to_tile(min_lat, max_lon, z)
+            if (abs(x2 - x1) + 1) * 256 > width and (abs(y2 - y1) + 1) * 256 > height:
+                zoom = z
+                break
+
+        tx1, ty1 = self._latlon_to_tile(max_lat, min_lon, zoom)
+        tx2, ty2 = self._latlon_to_tile(min_lat, max_lon, zoom)
+        stitch_w = (tx2 - tx1 + 1) * 256
+        stitch_h = (ty2 - ty1 + 1) * 256
+        if stitch_w <= 0 or stitch_h <= 0 or stitch_w * stitch_h > 60_000_000:
+            return None
+        stitch = np.zeros((stitch_h, stitch_w, 3), dtype=np.uint8)
+        for y in range(ty1, ty2 + 1):
+            for x in range(tx1, tx2 + 1):
+                t = self._download_tile(x, y, zoom)
+                if t is not None:
+                    py, px = (y - ty1) * 256, (x - tx1) * 256
+                    stitch[py:py + 256, px:px + 256] = t
+
+        top_lat, left_lon = self._tile_to_latlon(tx1, ty1, zoom)
+        btm_lat, rgt_lon = self._tile_to_latlon(tx2 + 1, ty2 + 1, zoom)
+
+        def ll2px(lat, lon):
+            px = (lon - left_lon) / (rgt_lon - left_lon) * stitch_w
+            py = (top_lat - lat) / (top_lat - btm_lat) * stitch_h
+            return int(px), int(py)
+
+        px1, py1 = ll2px(max_lat, min_lon)
+        px2, py2 = ll2px(min_lat, max_lon)
+        px1, py1 = max(0, px1), max(0, py1)
+        px2, py2 = min(stitch_w, px2), min(stitch_h, py2)
+        if px2 <= px1 or py2 <= py1:
+            return None
+        crop = stitch[py1:py2, px1:px2]
+
+        iw, ih = width - 2 * margin, height - 2 * margin
+        final = np.zeros((height, width, 3), dtype=np.uint8)
+        try:
+            resized = cv2.resize(crop, (iw, ih), interpolation=cv2.INTER_AREA)
+            final[margin:margin + ih, margin:margin + iw] = resized
+        except Exception:  # noqa: BLE001
+            return None
+        return final
+
+
 class _Cancelled(Exception):
     """Raised internally when the user cancels the render."""
 
@@ -61,15 +195,39 @@ class _Cancelled(Exception):
 class VideoCreatorDialog(QDialog):
     """Non-modal dialog that composes an MP4 from processed BAMBI results."""
 
-    def __init__(self, iface, parent=None):
+    def __init__(self, iface, dock_widget=None, parent=None):
         super().__init__(parent)
         self.iface = iface
+        self._dock_widget = dock_widget
         self._cancel = False
         self._rendering = False
         self.setWindowTitle("BAMBI Video Creator")
         self.resize(640, 820)
         self._build_ui()
+        self.apply_dock_defaults()
         self._update_enabled_state()
+
+    def apply_dock_defaults(self):
+        """Initialise the target folder and data CRS from the dock widget's
+        input fields, without clobbering values the user has already entered."""
+        dock = self._dock_widget
+        if not self._target_edit.text().strip():
+            folder = ""
+            if dock is not None and hasattr(dock, "target_folder_edit"):
+                folder = dock.target_folder_edit.text().strip()
+            if folder:
+                self._target_edit.setText(folder)
+                if not self._out_edit.text().strip():
+                    self._out_edit.setText(os.path.join(folder, "bambi_video.mp4"))
+
+        if not self._data_epsg_edit.text().strip():
+            crs_text = ""
+            if dock is not None and hasattr(dock, "target_crs_edit"):
+                crs_text = dock.target_crs_edit.text().strip()
+            if not crs_text:
+                crs = QgsProject.instance().crs()
+                crs_text = crs.authid() if crs.isValid() else "EPSG:32633"
+            self._data_epsg_edit.setText(crs_text)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -92,6 +250,7 @@ class VideoCreatorDialog(QDialog):
         sv.addWidget(self._build_modality_group())
         sv.addWidget(self._build_overlay_group())
         sv.addWidget(self._build_map_group())
+        sv.addWidget(self._build_info_group())
         sv.addWidget(self._build_output_group())
         sv.addStretch()
 
@@ -135,11 +294,9 @@ class VideoCreatorDialog(QDialog):
         fl.addRow("Target Folder:", w)
 
         self._data_epsg_edit = QLineEdit()
-        crs = QgsProject.instance().crs()
-        self._data_epsg_edit.setText(crs.authid() if crs.isValid() else "EPSG:32633")
         self._data_epsg_edit.setToolTip(
             "CRS of the geo-referenced products (FoV / perpendicular). Used to place "
-            "map overlays. Defaults to the current project CRS.")
+            "map overlays. Initialised from the BAMBI panel's target CRS.")
         fl.addRow("Data CRS:", self._data_epsg_edit)
         return grp
 
@@ -218,12 +375,11 @@ class VideoCreatorDialog(QDialog):
         self._map_perp = QCheckBox("Perpendicular distances")
         self._map_merged_bg = QCheckBox("Merged FoV as background")
         self._map_accumulate = QCheckBox("Accumulate FoV frame-by-frame (monitored area)")
-        self._map_follow = QCheckBox("Follow drone (track current FoV)")
+        self._map_satellite = QCheckBox("Satellite / OSM background (needs internet)")
         self._map_flight.setChecked(True)
         self._map_fov.setChecked(True)
-        self._map_follow.setChecked(True)
         for c in (self._map_flight, self._map_fov, self._map_dettrk, self._map_perp,
-                  self._map_merged_bg, self._map_accumulate, self._map_follow):
+                  self._map_merged_bg, self._map_accumulate, self._map_satellite):
             ol.addWidget(c)
         vl.addWidget(self._map_options)
 
@@ -237,8 +393,37 @@ class VideoCreatorDialog(QDialog):
         self._map_options.layout().addLayout(cam_row)
         return grp
 
+    def _build_info_group(self):
+        grp = QGroupBox("5. Info Panel (bottom bar)")
+        vl = QVBoxLayout(grp)
+        self._info_enable = QCheckBox("Include info panel")
+        self._info_enable.toggled.connect(self._update_enabled_state)
+        vl.addWidget(self._info_enable)
+
+        self._info_options = QWidget()
+        ol = QVBoxLayout(self._info_options)
+        ol.setContentsMargins(18, 0, 0, 0)
+        self._info_frame = QCheckBox("Current frame number")
+        self._info_dets = QCheckBox("Number of detections (current frame)")
+        self._info_tracks = QCheckBox("Number of tracks (current frame)")
+        self._info_area = QCheckBox("Accumulated monitored area")
+        self._info_frame.setChecked(True)
+        for c in (self._info_frame, self._info_dets, self._info_tracks, self._info_area):
+            ol.addWidget(c)
+        vl.addWidget(self._info_options)
+
+        cam_row = QHBoxLayout()
+        cam_row.addWidget(QLabel("Statistics source camera:"))
+        self._info_camera = QComboBox()
+        self._info_camera.addItem("Thermal", "t")
+        self._info_camera.addItem("RGB", "w")
+        cam_row.addWidget(self._info_camera)
+        cam_row.addStretch()
+        ol.addLayout(cam_row)
+        return grp
+
     def _build_output_group(self):
-        grp = QGroupBox("5. Output")
+        grp = QGroupBox("6. Output")
         fl = QFormLayout(grp)
         self._out_edit = QLineEdit()
         self._out_edit.setPlaceholderText("Output .mp4 file")
@@ -261,6 +446,28 @@ class VideoCreatorDialog(QDialog):
         self._height_spin.setSingleStep(120)
         self._height_spin.setValue(720)
         fl.addRow("Panel height (px):", self._height_spin)
+
+        self._all_frames_check = QCheckBox("Render all frames")
+        self._all_frames_check.setChecked(True)
+        self._all_frames_check.toggled.connect(self._update_enabled_state)
+        fl.addRow("", self._all_frames_check)
+
+        range_row = QHBoxLayout()
+        self._start_frame_spin = QSpinBox()
+        self._start_frame_spin.setRange(0, 999999)
+        self._start_frame_spin.setValue(0)
+        self._end_frame_spin = QSpinBox()
+        self._end_frame_spin.setRange(0, 999999)
+        self._end_frame_spin.setValue(999999)
+        self._end_frame_spin.setToolTip("Inclusive; clamped to the last available frame.")
+        range_row.addWidget(QLabel("Start:"))
+        range_row.addWidget(self._start_frame_spin)
+        range_row.addWidget(QLabel("End:"))
+        range_row.addWidget(self._end_frame_spin)
+        range_row.addStretch()
+        self._frame_range_widget = QWidget()
+        self._frame_range_widget.setLayout(range_row)
+        fl.addRow("Frame range:", self._frame_range_widget)
         return grp
 
     # ------------------------------------------------------------------
@@ -313,6 +520,8 @@ class VideoCreatorDialog(QDialog):
     def _update_enabled_state(self):
         self._ortho_kind.setEnabled(self._src_ortho.isChecked())
         self._map_options.setEnabled(self._map_enable.isChecked())
+        self._info_options.setEnabled(self._info_enable.isChecked())
+        self._frame_range_widget.setEnabled(not self._all_frames_check.isChecked())
 
         has_video = self._modality() != "none"
         has_map = self._map_enable.isChecked()
@@ -397,10 +606,19 @@ class VideoCreatorDialog(QDialog):
             "map_perp": self._map_perp.isChecked(),
             "map_merged_bg": self._map_merged_bg.isChecked(),
             "map_accumulate": self._map_accumulate.isChecked(),
-            "map_follow": self._map_follow.isChecked(),
+            "map_satellite": self._map_satellite.isChecked(),
             "map_camera": self._map_camera.currentData(),
+            "info": self._info_enable.isChecked(),
+            "info_frame": self._info_frame.isChecked(),
+            "info_dets": self._info_dets.isChecked(),
+            "info_tracks": self._info_tracks.isChecked(),
+            "info_area": self._info_area.isChecked(),
+            "info_camera": self._info_camera.currentData(),
             "fps": self._fps_spin.value(),
             "height": self._height_spin.value(),
+            "all_frames": self._all_frames_check.isChecked(),
+            "start_frame": self._start_frame_spin.value(),
+            "end_frame": self._end_frame_spin.value(),
         }
 
     def _check_cancel(self):
@@ -548,6 +766,17 @@ class VideoCreatorDialog(QDialog):
                 "No frames found. Check that the target folder contains processed "
                 "poses/FoV data for the selected options.")
 
+        # ---- Frame range (subsequence) ------------------------------------
+        if params["all_frames"]:
+            start_idx, end_idx = 0, n_frames - 1
+        else:
+            start_idx = max(0, params["start_frame"])
+            end_idx = min(n_frames - 1, params["end_frame"])
+            if start_idx > end_idx:
+                raise ValueError(
+                    f"Empty frame range: start {start_idx} > last available "
+                    f"frame {end_idx} (total {n_frames}).")
+
         # ---- Overlay data --------------------------------------------------
         det_data = {}
         trk_data = {}
@@ -570,14 +799,36 @@ class VideoCreatorDialog(QDialog):
         if params["map"]:
             map_ctx = self._prepare_map_context(params, fov_polys)
 
+        # ---- Info-panel statistics sources --------------------------------
+        info_dets = {}
+        info_trks = {}
+        info_area_fov = {}
+        info_bar_h = 0
+        if params["info"]:
+            cam = params["info_camera"]
+            if params["info_dets"]:
+                info_dets = self._load_pixel_detections(target, cam)
+            if params["info_tracks"]:
+                info_trks = self._load_pixel_tracks(target, cam)
+            if params["info_area"]:
+                # Reuse already-loaded FoV if it is the same camera.
+                if fov_polys and params.get("map_camera") == cam:
+                    info_area_fov = fov_polys
+                else:
+                    info_area_fov = self._load_fov_polygons(target, cam)
+            info_bar_h = max(48, panel_h // 8)
+        info_accum_geom = None
+
         # ---- Determine composite geometry from the first renderable frame --
-        self._log_msg(f"Rendering {n_frames} frames…")
+        total_out = end_idx - start_idx + 1
+        self._log_msg(
+            f"Rendering frames {start_idx}–{end_idx} ({total_out} of {n_frames})…")
         writer = None
         composite_size = None
         panel_widths = None
 
         try:
-            for idx in range(n_frames):
+            for out_i, idx in enumerate(range(start_idx, end_idx + 1)):
                 self._check_cancel()
                 panels = []
 
@@ -605,6 +856,22 @@ class VideoCreatorDialog(QDialog):
                           for i in range(len(panels))]
                 composite = fitted[0] if len(fitted) == 1 else cv2.hconcat(fitted)
 
+                # ---- Bottom info panel ------------------------------------
+                if params["info"]:
+                    if params["info_area"]:
+                        pts = info_area_fov.get(idx)
+                        if pts:
+                            g = self._polygon_geom(pts)
+                            info_accum_geom = (g if info_accum_geom is None
+                                               else info_accum_geom.combine(g))
+                    area_m2 = info_accum_geom.area() if info_accum_geom is not None else 0.0
+                    bar = self._render_info_panel(
+                        params, composite.shape[1], info_bar_h, idx, n_frames,
+                        len(info_dets.get(idx, [])),
+                        len({r[0] for r in info_trks.get(idx, [])}),
+                        area_m2, cv2)
+                    composite = cv2.vconcat([composite, bar])
+
                 if writer is None:
                     composite_size = (composite.shape[1], composite.shape[0])
                     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
@@ -619,10 +886,10 @@ class VideoCreatorDialog(QDialog):
 
                 writer.write(composite)
 
-                if idx % 5 == 0 or idx == n_frames - 1:
-                    self._progress.setValue(int((idx + 1) / n_frames * 100))
-                    if idx % 25 == 0:
-                        self._log_msg(f"  frame {idx + 1}/{n_frames}")
+                if out_i % 5 == 0 or idx == end_idx:
+                    self._progress.setValue(int((out_i + 1) / total_out * 100))
+                    if out_i % 25 == 0:
+                        self._log_msg(f"  frame {idx} ({out_i + 1}/{total_out})")
         finally:
             if writer is not None:
                 writer.release()
@@ -693,191 +960,366 @@ class VideoCreatorDialog(QDialog):
         # rasterio yields RGB order; OpenCV expects BGR.
         return arr[:, :, ::-1].copy()
 
-    # ---- Map panel --------------------------------------------------------
+    # ---- Map panel (OpenCV renderer) --------------------------------------
 
     def _prepare_map_context(self, params, fov_polys):
-        """Assemble static layers, the merged-FoV background and base extent."""
-        ctx = {
-            "data_crs": params["data_crs"],
-            "static_layers": [],
-            "merged_layer": None,
-            "accum_geom": None,
-        }
-        # Live project layers reused as static base content.
+        """Load geo data, compute a fixed extent + canvas mapping, and prepare
+        the (optional) satellite background and accumulation state. All drawing
+        happens with OpenCV in world->canvas pixel space (see the TRex tool
+        ``visualize_trex_video_and_map.py``)."""
+        import numpy as np
+
+        target = params["target"]
+        cam = params["map_camera"]
+        size = 900
+        margin = 60
+
+        flight = self._load_flight_path(target, cam) if params["map_flight"] else []
+        geo_tracks = {}
         if params["map_dettrk"]:
-            ctx["static_layers"] += self._collect_layers("BAMBI Wildlife Tracks")
-            ctx["static_layers"] += self._collect_layers("BAMBI Frame Detections")
-        if params["map_flight"]:
-            ctx["static_layers"] += self._collect_layers("BAMBI Flight Route")
-        ctx["static_layers"] += self._collect_layers("BAMBI Orthomosaic")
+            geo_tracks = self._load_geo_tracks(target, cam)
+            if not geo_tracks:
+                geo_tracks = self._load_geo_detections(target, cam)
 
-        # Merged FoV background: union of every frame's polygon, built once.
+        # Global extent over everything to be drawn.
+        xs, ys = [], []
+        for poly in fov_polys.values():
+            for (x, y) in poly:
+                xs.append(x)
+                ys.append(y)
+        for (x, y) in flight:
+            xs.append(x)
+            ys.append(y)
+        for dets in geo_tracks.values():
+            for d in dets:
+                xs += [d["x1"], d["x2"]]
+                ys += [d["y1"], d["y2"]]
+
+        if not xs:
+            return {"empty": True, "size": size}
+
+        extent = (min(xs), max(xs), min(ys), max(ys))
+        extent = self._pad_extent_to_aspect(extent, size, size, margin)
+        # Grow slightly so content is not flush against the axes.
+        min_x, max_x, min_y, max_y = extent
+        pad = 0.06 * max(max_x - min_x, max_y - min_y)
+        extent = (min_x - pad, max_x + pad, min_y - pad, max_y + pad)
+        cfg = self._make_canvas_cfg(extent, size, size, margin)
+
+        # Optional satellite / OSM background (built once for the fixed extent).
+        background = None
+        if params["map_satellite"]:
+            try:
+                epsg = params["data_crs"].postgisSrid()
+                url = _MapTileProvider.ESRI_SATELLITE
+                prov = _MapTileProvider(url, epsg,
+                                        cache_dir=os.path.join(target, "_map_tiles"))
+                bg = prov.render(extent, size, size, margin)
+                if bg is not None:
+                    background = (bg * 0.55).astype(np.uint8)
+                    self._log_msg("Satellite background downloaded.")
+                else:
+                    self._log_msg("Satellite background unavailable (offline?); using dark canvas.")
+            except Exception as exc:  # noqa: BLE001
+                self._log_msg(f"Satellite background skipped: {exc}")
+
+        # Merged FoV background: rasterise every frame's polygon once.
+        merged_mask = None
         if params["map_merged_bg"] and fov_polys:
-            geoms = [self._polygon_geom(pts) for pts in fov_polys.values()]
-            merged = QgsGeometry.unaryUnion([g for g in geoms if g])
-            ctx["merged_layer"] = self._poly_layer(
-                "merged_fov", params["data_crs"], merged,
-                fill="180,180,180,90", stroke="120,120,120,160")
+            merged_mask = np.zeros((size, size), dtype=np.uint8)
+            for poly in fov_polys.values():
+                pix = np.array([self._world_to_canvas(x, y, cfg) for (x, y) in poly],
+                               dtype=np.int32)
+                cv2_fillable = pix.reshape((-1, 1, 2))
+                import cv2
+                cv2.fillPoly(merged_mask, [cv2_fillable], 1)
 
-        # Base extent (data CRS) for the non-following case.
-        pts = [p for poly in fov_polys.values() for p in poly]
-        if pts:
-            xs = [p[0] for p in pts]
-            ys = [p[1] for p in pts]
-            rect = QgsRectangle(min(xs), min(ys), max(xs), max(ys))
-            rect.scale(1.15)
-            ctx["base_extent"] = rect
-        else:
-            ctx["base_extent"] = None
-        return ctx
+        return {
+            "empty": False,
+            "size": size,
+            "margin": margin,
+            "cfg": cfg,
+            "extent": extent,
+            "background": background,
+            "flight": flight,
+            "geo_tracks": geo_tracks,
+            "merged_mask": merged_mask,
+            "accum_mask": np.zeros((size, size), dtype=np.uint8),
+            "track_history": {},
+            "epsg": params["data_crs"].postgisSrid(),
+        }
 
     def _render_map_panel(self, params, ctx, idx, fov_polys, perp, panel_h):
+        import cv2
         import numpy as np
 
-        data_crs = params["data_crs"]
-        dyn_layers = []
+        size = ctx["size"]
+        if ctx.get("empty"):
+            img = np.full((size, size, 3), 30, dtype=np.uint8)
+            cv2.putText(img, "No geo data for map", (30, size // 2),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 2, cv2.LINE_AA)
+            return img
 
-        # Perpendicular distance lines for this frame (drawn on top).
-        if params["map_perp"] and idx in perp:
-            lines = []
-            for (c, foot, _d) in perp[idx]:
-                lines.append(QgsGeometry.fromPolylineXY(
-                    [QgsPointXY(c[0], c[1]), QgsPointXY(foot[0], foot[1])]))
-            if lines:
-                dyn_layers.append(self._line_layer(
-                    "perp", data_crs, lines, color="230,80,20,255", width=0.6))
+        cfg = ctx["cfg"]
+        img = (ctx["background"].copy() if ctx["background"] is not None
+               else np.full((size, size, 3), 30, dtype=np.uint8))
 
-        # Current FoV outline.
+        def to_px(x, y):
+            return self._world_to_canvas(x, y, cfg)
+
+        # --- Merged FoV background (whole monitored area) ---
+        if ctx["merged_mask"] is not None:
+            m = ctx["merged_mask"] > 0
+            img[m] = (img[m] * 0.6 + np.array((150, 150, 150)) * 0.4).astype(np.uint8)
+
+        # --- Accumulated FoV so far ---
         cur_pts = fov_polys.get(idx)
-        if params["map_fov"] and cur_pts:
-            dyn_layers.append(self._poly_layer(
-                "cur_fov", data_crs, self._polygon_geom(cur_pts),
-                fill="0,0,0,0", stroke="255,215,0,255", stroke_width=0.8))
-
-        # Accumulated FoV (monitored area so far).
         if params["map_accumulate"] and cur_pts:
-            g = self._polygon_geom(cur_pts)
-            if ctx["accum_geom"] is None:
-                ctx["accum_geom"] = g
-            else:
-                ctx["accum_geom"] = ctx["accum_geom"].combine(g)
-            dyn_layers.append(self._poly_layer(
-                "accum_fov", data_crs, QgsGeometry(ctx["accum_geom"]),
-                fill="67,160,71,70", stroke="67,160,71,150"))
+            pix = np.array([to_px(x, y) for (x, y) in cur_pts], dtype=np.int32)
+            cv2.fillPoly(ctx["accum_mask"], [pix.reshape((-1, 1, 2))], 1)
+        if params["map_accumulate"]:
+            m = ctx["accum_mask"] > 0
+            img[m] = (img[m] * 0.6 + np.array((67, 160, 71)) * 0.4).astype(np.uint8)
 
-        layers = list(dyn_layers)
-        if ctx["merged_layer"] is not None:
-            layers.append(ctx["merged_layer"])
-        layers += ctx["static_layers"]
+        # --- Flight path ---
+        if params["map_flight"] and len(ctx["flight"]) > 1:
+            pts = np.array([to_px(x, y) for (x, y) in ctx["flight"]], dtype=np.int32)
+            cv2.polylines(img, [pts], False, (255, 170, 60), 1, cv2.LINE_AA)
 
-        # Extent: follow the current FoV or use the fixed base extent.
-        extent = None
-        if params["map_follow"] and cur_pts:
-            xs = [p[0] for p in cur_pts]
-            ys = [p[1] for p in cur_pts]
-            extent = QgsRectangle(min(xs), min(ys), max(xs), max(ys))
-            extent.scale(1.6)
-        elif ctx["base_extent"] is not None:
-            extent = QgsRectangle(ctx["base_extent"])
+        # --- Current FoV polygon (the mask-aware calculated FoV) ---
+        if params["map_fov"] and cur_pts:
+            pix = np.array([to_px(x, y) for (x, y) in cur_pts], dtype=np.int32)
+            overlay = img.copy()
+            cv2.fillPoly(overlay, [pix.reshape((-1, 1, 2))], (0, 200, 255))
+            cv2.addWeighted(overlay, 0.25, img, 0.75, 0, img)
+            cv2.polylines(img, [pix], True, (0, 215, 255), 2, cv2.LINE_AA)
 
-        return self._render_map_image(layers, extent, data_crs, panel_h, panel_h)
+        # --- Geo detections / tracks (boxes + trails) ---
+        if params["map_dettrk"] and ctx["geo_tracks"]:
+            hist = ctx["track_history"]
+            visible = set()
+            for d in ctx["geo_tracks"].get(idx, []):
+                tid = d["tid"]
+                visible.add(tid)
+                color = _id_to_color(tid)
+                p1 = to_px(d["x1"], d["y1"])
+                p2 = to_px(d["x2"], d["y2"])
+                cv2.rectangle(img, p1, p2, color, 2)
+                cv2.putText(img, f"ID {tid}", (p1[0], max(0, min(p1[1], p2[1]) - 5)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+                cx = (d["x1"] + d["x2"]) / 2.0
+                cy = (d["y1"] + d["y2"]) / 2.0
+                hist.setdefault(tid, []).append(to_px(cx, cy))
+            for tid, trail in hist.items():
+                if len(trail) > 1:
+                    cv2.polylines(img, [np.array(trail, dtype=np.int32)], False,
+                                  _id_to_color(tid), 1, cv2.LINE_AA)
 
-    def _render_map_image(self, layers, extent_data_crs, data_crs, width, height):
-        import numpy as np
+        # --- Perpendicular distance lines for this frame ---
+        if params["map_perp"] and idx in perp:
+            for (c, foot, dist) in perp[idx]:
+                pc = to_px(c[0], c[1])
+                pf = to_px(foot[0], foot[1])
+                cv2.line(img, pc, pf, (40, 120, 240), 1, cv2.LINE_AA)
+                cv2.circle(img, pf, 3, (40, 120, 240), -1)
+                mid = ((pc[0] + pf[0]) // 2, (pc[1] + pf[1]) // 2)
+                cv2.putText(img, f"{dist:.0f}m", mid,
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (40, 120, 240), 1, cv2.LINE_AA)
 
-        project = QgsProject.instance()
-        dest_crs = project.crs() if project.crs().isValid() else data_crs
+        # --- Drone look-point (current FoV centroid) ---
+        if cur_pts:
+            cx = sum(p[0] for p in cur_pts) / len(cur_pts)
+            cy = sum(p[1] for p in cur_pts) / len(cur_pts)
+            px, py = to_px(cx, cy)
+            cv2.circle(img, (px, py), 5, _DRONE_COLOR, -1)
+            cv2.circle(img, (px, py), 5, (0, 0, 0), 1)
 
-        ms = QgsMapSettings()
-        ms.setDestinationCrs(dest_crs)
-        ms.setLayers([l for l in layers if l is not None])
-        ms.setOutputSize(QSize(width, height))
-        ms.setBackgroundColor(QColor(30, 30, 30))
+        self._draw_axes(img, cfg)
+        cv2.putText(img, f"Map (EPSG:{ctx['epsg']})", (10, size - 16),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
+        return img
 
-        if extent_data_crs is not None:
-            extent = extent_data_crs
-            if data_crs != dest_crs:
-                xform = QgsCoordinateTransform(data_crs, dest_crs, project)
+    # ---- Map geometry / geo data helpers ---------------------------------
+
+    @staticmethod
+    def _pad_extent_to_aspect(extent, width, height, margin):
+        min_x, max_x, min_y, max_y = extent
+        draw_w = width - 2 * margin
+        draw_h = height - 2 * margin
+        target_ar = draw_w / draw_h
+        data_w = max(max_x - min_x, 1e-6)
+        data_h = max(max_y - min_y, 1e-6)
+        cx, cy = (min_x + max_x) / 2, (min_y + max_y) / 2
+        if data_w / data_h > target_ar:
+            new_h = data_w / target_ar
+            min_y, max_y = cy - new_h / 2, cy + new_h / 2
+        else:
+            new_w = data_h * target_ar
+            min_x, max_x = cx - new_w / 2, cx + new_w / 2
+        return (min_x, max_x, min_y, max_y)
+
+    @staticmethod
+    def _make_canvas_cfg(extent, width, height, margin):
+        min_x, max_x, min_y, max_y = extent
+        span_x = max(max_x - min_x, 1e-6)
+        return {
+            "min_x": min_x, "max_x": max_x, "min_y": min_y, "max_y": max_y,
+            "scale": (width - 2 * margin) / span_x,
+            "margin": margin, "width": width, "height": height,
+        }
+
+    @staticmethod
+    def _world_to_canvas(x, y, cfg):
+        px = int(cfg["margin"] + (x - cfg["min_x"]) * cfg["scale"])
+        py = int(cfg["height"] - (cfg["margin"] + (y - cfg["min_y"]) * cfg["scale"]))
+        return px, py
+
+    def _draw_axes(self, img, cfg, num_ticks=4):
+        import cv2
+        axis_color = (200, 200, 200)
+        bl = self._world_to_canvas(cfg["min_x"], cfg["min_y"], cfg)
+        br = self._world_to_canvas(cfg["max_x"], cfg["min_y"], cfg)
+        tl = self._world_to_canvas(cfg["min_x"], cfg["max_y"], cfg)
+        cv2.line(img, bl, br, axis_color, 1)
+        cv2.line(img, bl, tl, axis_color, 1)
+        for i in range(num_ticks):
+            t = i / (num_ticks - 1)
+            vx = cfg["min_x"] + t * (cfg["max_x"] - cfg["min_x"])
+            px, py = self._world_to_canvas(vx, cfg["min_y"], cfg)
+            cv2.line(img, (px, py), (px, py + 5), axis_color, 1)
+            cv2.putText(img, f"{int(vx)}", (px - 24, py + 18),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1, cv2.LINE_AA)
+            vy = cfg["min_y"] + t * (cfg["max_y"] - cfg["min_y"])
+            px, py = self._world_to_canvas(cfg["min_x"], vy, cfg)
+            cv2.line(img, (px - 5, py), (px, py), axis_color, 1)
+            cv2.putText(img, f"{int(vy)}", (px - 58, py + 4),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1, cv2.LINE_AA)
+
+    def _load_flight_path(self, target, suffix):
+        """List of (x, y) from flight_route_{suffix}/flight_route.geojson."""
+        path = os.path.join(target, f"flight_route_{suffix}", "flight_route.geojson")
+        if not os.path.exists(path):
+            return []
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:  # noqa: BLE001
+            return []
+        for feat in data.get("features", []):
+            geom = feat.get("geometry", {})
+            coords = geom.get("coordinates", [])
+            if geom.get("type") == "LineString":
+                return [(c[0], c[1]) for c in coords if len(c) >= 2]
+            if geom.get("type") == "Point" and len(coords) >= 2:
+                return [(coords[0], coords[1])]
+        return []
+
+    def _load_geo_tracks(self, target, suffix):
+        """frame -> list of {tid, x1, y1, x2, y2} from tracks_{suffix}/tracks.csv."""
+        path = os.path.join(target, f"tracks_{suffix}", "tracks.csv")
+        out = {}
+        if not os.path.exists(path):
+            return out
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                p = line.split(",")
+                if len(p) < 7:
+                    continue
+                # frame, tid, x1, y1, z1, x2, y2, z2, ...
+                frame = int(float(p[0]))
+                out.setdefault(frame, []).append({
+                    "tid": int(float(p[1])),
+                    "x1": float(p[2]), "y1": float(p[3]),
+                    "x2": float(p[5]), "y2": float(p[6]),
+                })
+        return out
+
+    def _load_geo_detections(self, target, suffix):
+        """frame -> list of {tid, x1, y1, x2, y2} from georeferenced_{suffix}.
+
+        Row format (space-separated): idx frame x1 y1 z1 x2 y2 z2 conf cls.
+        A per-frame running index is used as a pseudo track id for colouring."""
+        path = os.path.join(target, f"georeferenced_{suffix}", "georeferenced.txt")
+        out = {}
+        if not os.path.exists(path):
+            return out
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                p = line.split()
+                if len(p) < 8:
+                    continue
                 try:
-                    extent = xform.transformBoundingBox(extent_data_crs)
-                except Exception:  # noqa: BLE001
-                    extent = extent_data_crs
-            ms.setExtent(extent)
-        elif ms.layers():
-            ms.setExtent(ms.fullExtent())
-
-        job = QgsMapRendererParallelJob(ms)
-        job.start()
-        job.waitForFinished()
-        qimg = job.renderedImage().convertToFormat(QImage.Format_RGB888)
-
-        w, h = qimg.width(), qimg.height()
-        ptr = qimg.constBits()
-        ptr.setsize(qimg.byteCount() if hasattr(qimg, "byteCount") else qimg.sizeInBytes())
-        bpl = qimg.bytesPerLine()
-        arr = np.frombuffer(ptr, dtype=np.uint8).reshape((h, bpl))[:, : w * 3]
-        arr = arr.reshape((h, w, 3))
-        return arr[:, :, ::-1].copy()  # RGB -> BGR
-
-    # ---- QGIS layer builders ---------------------------------------------
-
-    def _collect_layers(self, prefix):
-        """Live project layers whose own name or containing group starts with *prefix*."""
-        found = []
-        project = QgsProject.instance()
-        root = project.layerTreeRoot()
-        for grp in root.findGroups():
-            if grp.name().startswith(prefix):
-                for node in grp.findLayers():
-                    lyr = node.layer()
-                    if lyr is not None:
-                        found.append(lyr)
-        for lyr in project.mapLayers().values():
-            if lyr.name().startswith(prefix) and lyr not in found:
-                found.append(lyr)
-        return found
+                    frame = int(p[1])
+                    x1, y1 = float(p[2]), float(p[3])
+                    x2, y2 = float(p[5]), float(p[6])
+                except (ValueError, IndexError):
+                    continue
+                if x1 < 0 or y1 < 0:
+                    continue
+                lst = out.setdefault(frame, [])
+                lst.append({"tid": len(lst), "x1": x1, "y1": y1, "x2": x2, "y2": y2})
+        return out
 
     @staticmethod
     def _polygon_geom(pts):
+        """QgsGeometry polygon (used only for accumulated-area measurement)."""
         ring = [QgsPointXY(x, y) for (x, y) in pts]
         if ring and ring[0] != ring[-1]:
             ring.append(ring[0])
         return QgsGeometry.fromPolygonXY([ring])
 
-    def _poly_layer(self, name, crs, geom, fill, stroke, stroke_width=0.4):
-        layer = QgsVectorLayer(f"Polygon?crs={crs.authid()}", name, "memory")
-        prov = layer.dataProvider()
-        prov.addAttributes([QgsField("id", QVariant.Int)])
-        layer.updateFields()
-        feat = QgsFeature()
-        feat.setGeometry(geom)
-        feat.setAttributes([0])
-        prov.addFeatures([feat])
-        layer.updateExtents()
-        sym = QgsFillSymbol.createSimple({
-            "color": fill, "outline_color": stroke,
-            "outline_width": str(stroke_width)})
-        layer.setRenderer(QgsSingleSymbolRenderer(sym))
-        return layer
-
-    def _line_layer(self, name, crs, geoms, color, width=0.5):
-        layer = QgsVectorLayer(f"LineString?crs={crs.authid()}", name, "memory")
-        prov = layer.dataProvider()
-        prov.addAttributes([QgsField("id", QVariant.Int)])
-        layer.updateFields()
-        feats = []
-        for i, g in enumerate(geoms):
-            f = QgsFeature()
-            f.setGeometry(g)
-            f.setAttributes([i])
-            feats.append(f)
-        prov.addFeatures(feats)
-        layer.updateExtents()
-        sym = QgsLineSymbol.createSimple({"color": color, "width": str(width)})
-        layer.setRenderer(QgsSingleSymbolRenderer(sym))
-        return layer
-
     # ---- Compositing helpers ---------------------------------------------
+
+    @staticmethod
+    def _fmt_area(area_m2):
+        if area_m2 >= 1e6:
+            return f"{area_m2 / 1e6:.2f} km2"
+        if area_m2 >= 1e4:
+            return f"{area_m2 / 1e4:.2f} ha"
+        return f"{area_m2:.0f} m2"
+
+    def _render_info_panel(self, params, width, bar_h, idx, n_frames,
+                           n_dets, n_tracks, area_m2, cv2):
+        """Render the full-width bottom statistics bar."""
+        import numpy as np
+
+        bar = np.zeros((bar_h, width, 3), dtype=np.uint8)
+        bar[:] = (40, 40, 40)
+
+        parts = []
+        if params["info_frame"]:
+            parts.append(f"Frame: {idx + 1}/{n_frames}")
+        if params["info_dets"]:
+            parts.append(f"Detections: {n_dets}")
+        if params["info_tracks"]:
+            parts.append(f"Tracks: {n_tracks}")
+        if params["info_area"]:
+            parts.append(f"Monitored: {self._fmt_area(area_m2)}")
+        if not parts:
+            return bar
+
+        text = "     ".join(parts)
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale = bar_h / 42.0
+        thickness = max(1, int(round(scale * 1.5)))
+        # Shrink the scale until the line fits within the available width.
+        while scale > 0.3:
+            (tw, th), _ = cv2.getTextSize(text, font, scale, thickness)
+            if tw <= width - 24:
+                break
+            scale -= 0.05
+        (tw, th), _ = cv2.getTextSize(text, font, scale, thickness)
+        x = 12
+        y = (bar_h + th) // 2
+        cv2.putText(bar, text, (x, y), font, scale, (255, 255, 255),
+                    thickness, cv2.LINE_AA)
+        return bar
 
     @staticmethod
     def _fit(img, width, height, cv2):
