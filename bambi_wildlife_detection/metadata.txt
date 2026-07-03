@@ -6,14 +6,20 @@ version=5.0.0
 author=Christoph Praschl, Anna Maschek, David C.Schedl
 email=christoph.praschl@fh-hagenberg.at
 
-about=A comprehensive QGIS plugin for wildlife detection and tracking in drone videos/photos.
+about=A comprehensive QGIS plugin for detecting, tracking, and geo-referencing wildlife in aerial drone recordings (videos or still photos) from DJI Enterprise drones with thermal and/or RGB cameras.
     Features include:
-    - Frame extraction from drone videos with configurable sample rate
-    - Animal detection using YOLO models
-    - Geo-referencing of detections/video frames/photos using DEM and camera metadata
-    - Multi-object tracking with configurable parameters
-    - Automatic creation of polygon layers for tracks in QGIS
-    - Automatic segmentation of objects using SAM3
+    - Frame extraction and undistortion from drone videos (SRT timestamps) or photo collections (EXIF)
+    - Animal detection using YOLO models (auto-downloaded from HuggingFace)
+    - Multi-object tracking with built-in, BoxMOT, or geo-referenced backends; import of pre-computed TRex tracklets
+    - Geo-referencing of detections, tracks, and SAM3 segmentations onto a DEM (real-world UTM coordinates)
+    - Flight route visualization and perpendicular distance sampling for transect-based surveys
+    - Per-frame camera field-of-view footprints and coverage areas
+    - Georeferenced map products: per-frame GeoTIFFs, true orthomosaics, and ALFS light-field mosaics
+    - DEM import: automatic download (Austria), GeoTIFF conversion, or flat surface meshes for aquatic surveys
+    - Calibration wizards for camera intrinsics (single-camera SfM, stereo RGB+thermal) and per-flight pose corrections
+    - Companion tools: result video creator, radiometric thermal image viewer (DJI Thermal SDK), randomized transect flight planner, and interactive map-canvas inspectors
+    - Built-in dependency manager to install all required and optional packages from within QGIS
+    All results are automatically added as styled layers to the QGIS project.
 
 tracker=https://github.com/bambi-eco/Bambi-QGIS/issues
 repository=https://github.com/bambi-eco/Bambi-QGIS

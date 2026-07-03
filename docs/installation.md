@@ -2,7 +2,18 @@
 
 ## Installing the plugin
 
-### Method 1: Install from ZIP (recommended)
+### Method 1: QGIS Plugin Repository (recommended)
+
+The plugin is published in the [official QGIS Plugin Repository](https://plugins.qgis.org/plugins/bambi_wildlife_detection/), so it can be installed directly from within QGIS:
+
+1. Open QGIS
+2. Go to **Plugins** → **Manage and Install Plugins...**
+3. Search for **BAMBI** in the **All** tab
+4. Click **Install Plugin**
+
+Updates are offered automatically by QGIS whenever a new version is released to the repository.
+
+### Method 2: Install from ZIP
 
 1. Download the plugin by either
     - Getting the zipped plugin from a [released version](https://github.com/bambi-eco/Bambi-QGIS/releases) (recommended)
@@ -15,7 +26,7 @@
 
 ![Install from ZIP](../images/install_zip.png)
 
-### Method 2: Manual installation
+### Method 3: Manual installation
 
 1. Download and extract the plugin folder
 2. Copy the `bambi_wildlife_detection` folder to your QGIS plugins directory:

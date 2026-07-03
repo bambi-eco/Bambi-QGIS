@@ -20,10 +20,11 @@ Detect, track, and geo-reference wildlife in aerial drone recordings — directl
 
 ## Installation
 
-1. Download the plugin ZIP from the [latest release](https://github.com/bambi-eco/Bambi-QGIS/releases) (or zip the `bambi_wildlife_detection` folder of this repository for the development version)
-2. In QGIS: **Plugins → Manage and Install Plugins… → Install from ZIP**
-3. Open the plugin's **Dependency Manager** (toolbar button) and install the two required packages: **BAMBI Detection Framework** and **ALFS-PY**
-4. **Restart QGIS** — newly installed Python packages are only picked up at startup
+1. In QGIS, go to **Plugins → Manage and Install Plugins…**, search for **BAMBI**, and install it directly from the [official QGIS Plugin Repository](https://plugins.qgis.org/plugins/bambi_wildlife_detection/)
+2. Open the plugin's **Dependency Manager** (toolbar button) and install the two required packages: **BAMBI Detection Framework** and **ALFS-PY**
+3. **Restart QGIS** — newly installed Python packages are only picked up at startup
+
+Alternatively, install from a ZIP file ([GitHub releases](https://github.com/bambi-eco/Bambi-QGIS/releases) or a zipped development version of this repository) or copy the plugin folder manually — see the [Installation Guide](docs/installation.md).
 
 Optional capabilities (GPU inference, BoxMOT trackers, camera calibration via SfM, flight planning, DJI Thermal SDK) can be added the same way. See the [Installation Guide](docs/installation.md) for details and manual installation methods.
 
