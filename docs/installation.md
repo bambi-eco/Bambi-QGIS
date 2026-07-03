@@ -42,7 +42,7 @@ Updates are offered automatically by QGIS whenever a new version is released to 
 
 ## Dependency Manager
 
-The Dependency Manager lets you install and update all BAMBI plugin dependencies directly from within QGIS — no terminal or OSGeo4W Shell required. Open it via the **Dependency Manager** toolbar button or the **Plugins → Bambi - QGIS Integration → Dependency Manager** menu entry.
+The Dependency Manager lets you install and update all BAMBI plugin dependencies directly from within QGIS, without needing a terminal or the OSGeo4W Shell. Open it via the **Dependency Manager** toolbar button or the **Plugins → Bambi - QGIS Integration → Dependency Manager** menu entry.
 
 ![Dependency Manager](../images/dependency_manager.png)
 
@@ -78,7 +78,7 @@ The plugin includes simple geo-based tracking strategies out of the box. For adv
 
 ![Tracker options](../images/trackers.png)
 
-**BoxMOT** — state-of-the-art multi-object tracking algorithms (DeepOCSORT, BoTSORT, StrongSORT, ByteTrack, etc.):
+**BoxMOT** provides state-of-the-art multi-object tracking algorithms (DeepOCSORT, BoTSORT, StrongSORT, ByteTrack, etc.):
 
 ```bash
 pip install boxmot==17.0.0
@@ -86,7 +86,7 @@ pip install boxmot==17.0.0
 
 Or install from source: [https://github.com/mikel-brostrom/boxmot](https://github.com/mikel-brostrom/boxmot)
 
-**Geo-Referenced Tracking** — tracking algorithms that operate natively in geo-referenced coordinates (recommended for wildlife surveys; builds upon BoxMOT so both dependencies are required):
+**Geo-Referenced Tracking** provides tracking algorithms that operate natively in geo-referenced coordinates (recommended for wildlife surveys; builds upon BoxMOT so both dependencies are required):
 
 ```bash
 pip install git+https://github.com/bambi-eco/Geo-Referenced-Tracking.git

@@ -2,9 +2,9 @@
 
 The Random Flight Strategy Planner generates randomized transect-based survey routes for drone wildlife missions. Open it via the **Random Flight Strategy Planner** toolbar button or the plugin menu.
 
-![Flight Strategy Planner — Dialog](../images/flight_planner_dialog.png)
+![Flight Strategy Planner: Dialog](../images/flight_planner_dialog.png)
 
-> **Requires Fiona and simplekml** — install them via the [Dependency Manager](installation.md#dependency-manager).
+> **Requires Fiona and simplekml**: install them via the [Dependency Manager](installation.md#dependency-manager).
 
 ## Inputs
 
@@ -60,9 +60,9 @@ After planning completes, results are saved to the target folder and automatical
         └── ...
 ```
 
-![Flight Strategy Planner — QGIS Results](../images/flight_planner_results.png)
+![Flight Strategy Planner: QGIS Results](../images/flight_planner_results.png)
 
 Each route is imported as a sub-group containing:
 
-- **Route** — solid total-route `LineString` in a unique colour
-- **Transects** — dashed survey segments with sequential **1, 2, 3 … labels** visible on the map
+- **Route**: solid total-route `LineString` in a unique colour
+- **Transects**: dashed survey segments with sequential **1, 2, 3 … labels** visible on the map

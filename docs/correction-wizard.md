@@ -6,7 +6,7 @@ The Correction Calibration Wizard helps you find and store the positional and ro
 
 > **Prerequisite**: Frames must be extracted first ([step 1](pipeline.md#1-extract-frames)) so that `poses_t.json` / `poses_w.json` exist in the target folder.
 
-## Step 1 — Select corresponding ground points
+## Step 1: Select corresponding ground points
 
 Two side-by-side frame views (thermal or RGB) are shown. Load a frame for each side using the type selector and frame index, then **click on the same identifiable ground feature** in both images to place a corresponding point for matching.
 
@@ -16,7 +16,7 @@ Two side-by-side frame views (thermal or RGB) are shown. Load a frame for each s
 
 ![Correction Wizard Step 1](../images/correction_wizard_step1.png)
 
-## Step 2 — Calibration
+## Step 2: Calibration
 
 The two selected points for matching are geo-referenced onto the DEM and visualized as circle markers in the **Circle Visualization** panel. Each circle is centred on the camera's XY position; the radius is the horizontal distance from the camera to the geo-referenced ground point. When the correction is correct the two circles intersect and the cross markers (×) as well as the additional visual reference points overlap.
 
@@ -35,11 +35,11 @@ All six correction components (translation X/Y/Z, rotation X/Y/Z) can be adjuste
 
 > Typically only the **z-translation** (altitude offset) and **z-rotation** (yaw) need adjustment.
 
-## Step 3 — Light-field preview & save
+## Step 3: Light-field preview & save
 
 A light-field integral image is rendered using the found correction and displayed in the preview panel.
 
-- Toggle **Show geo-referenced points** to overlay the two calibration reference points (red × and blue ×) on the render — no re-rendering needed
+- Toggle **Show geo-referenced points** to overlay the two calibration reference points (red × and blue ×) on the render; no re-rendering is needed
 - Use **Add neighbouring frames** to include frames before and after the selected indices for a denser render
 - Choose the render resolution (512, 1024, or 2048 pixels)
 
@@ -47,7 +47,7 @@ A light-field integral image is rendered using the found correction and displaye
 
 | Button | Effect |
 |--------|--------|
-| **Save as Global Default** | Writes `translation` and `rotation` as the top-level values in `correction.json` — applied to all frames that have no local override |
-| **Save as Local Correction** | Appends an `additional` entry with the specified start/end frame range to `correction.json` — overrides the global default for those frames only |
+| **Save as Global Default** | Writes `translation` and `rotation` as the top-level values in `correction.json`, applied to all frames that have no local override |
+| **Save as Local Correction** | Appends an `additional` entry with the specified start/end frame range to `correction.json`, overriding the global default for those frames only |
 
 See [Correction JSON](pipeline.md#correction-json-optional) for the resulting file format.

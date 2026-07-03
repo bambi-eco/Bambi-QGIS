@@ -19,7 +19,7 @@ Point it at a processing **target folder** (the one containing `frames_t/` / `fr
 | **Frame source** | Extracted frames, or the orthographic projection (per-frame GeoTIFFs or the ALFS mosaic) |
 | **Modality** | RGB, Thermal, Both (two video panels), or None (map only) |
 | **Overlay** | None, detections, or tracks drawn onto the video panels |
-| **Map view** | A panel rendered live from the QGIS project — flight path, current field of view, detections, tracks, perpendicular distances, merged FoV as background, a frame-by-frame accumulating FoV (area monitored so far), and an optional satellite/OSM background (needs internet) |
+| **Map view** | A panel rendered live from the QGIS project: flight path, current field of view, detections, tracks, perpendicular distances, merged FoV as background, a frame-by-frame accumulating FoV (area monitored so far), and an optional satellite/OSM background (needs internet) |
 | **Info panel** | Bottom bar showing the current frame number, detection/track counts for the current frame, and monitored area (observed / total) |
 | **Output** | MP4 file path, frames per second, panel height in pixels, and all frames or a frame range |
 
@@ -29,7 +29,7 @@ At least one video modality *or* the map panel is required. Rendering runs on th
 
 The Thermal Image Viewer is a standalone non-modal dialog for inspecting individual DJI radiometric thermal images. Open it via the **Thermal Image Viewer** toolbar button or the plugin menu.
 
-> **Requires DJI Thermal SDK** — install it via the [Dependency Manager](installation.md#dependency-manager).
+> **Requires DJI Thermal SDK**: install it via the [Dependency Manager](installation.md#dependency-manager).
 
 ![Thermal Image Viewer](../images/thermal_viewer.png)
 

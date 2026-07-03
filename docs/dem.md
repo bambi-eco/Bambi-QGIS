@@ -14,13 +14,13 @@ Any GeoTIFF DEM can be converted to the required GLB + metadata JSON format usin
 - **Output folder**: Where the `.glb` and `.json` files will be saved
 - **Output CRS**: Target UTM CRS for the mesh (e.g. `EPSG:32633`)
 - **Simplification**: Mesh vertex reduction factor (1 = full resolution)
-- **Source CRS** *(optional)*: Override the CRS embedded in the file. Use this when the GeoTIFF has incorrect CRS metadata — for example, a file containing SWEREF99TM (EPSG:3006) data but tagged as EPSG:32634. Leave empty to auto-detect.
+- **Source CRS** *(optional)*: Override the CRS embedded in the file. Use this when the GeoTIFF has incorrect CRS metadata, for example a file containing SWEREF99TM (EPSG:3006) data but tagged as EPSG:32634. Leave empty to auto-detect.
 
 ![GeoTiff Conversion](../images/geotiff_conversion.png)
 
 ## 3. Flat surface mesh (aquatic/marine surveys)
 
-For surveys over water — where no terrain model exists or is needed (e.g. sharks or manta rays near the water surface) — the **Flat Surface** tab generates a flat GLB mesh and its companion JSON:
+For surveys over water, where no terrain model exists or is needed (e.g. sharks or manta rays near the water surface), the **Flat Surface** tab generates a flat GLB mesh and its companion JSON:
 
 - **Elevation (MSL)**: Elevation of the flat projection surface in metres above mean sea level. Use `0.0` for sea-surface surveys.
 - The mesh origin and extent are derived automatically from the GPS positions in the AirData CSV or SRT files selected in the input section

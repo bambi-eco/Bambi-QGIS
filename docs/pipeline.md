@@ -42,9 +42,9 @@ In photo mode, GPS positions are matched to images via timestamps in the AirData
 | Input         | Format            | Description |
 |---------------|-------------------|-------------|
 | AirData CSV   | `.csv`            | Flight log exported from AirData (GPS positions, altitude, timestamps) |
-| Calibration   | `.json`           | Camera intrinsic parameters for undistortion — can be created with the [Camera Calibration Wizard](camera-calibration.md) |
-| Correction    | `.json`           | Positional/rotational corrections — can be found interactively with the [Correction Wizard](correction-wizard.md) |
-| DEM           | `.gltf` / `.glb`  | Digital Elevation Model + metadata JSON. Provide manually, convert a GeoTIFF, download automatically (Austria), or generate a flat surface mesh — see [DEM Import & Conversion](dem.md) |
+| Calibration   | `.json`           | Camera intrinsic parameters for undistortion; can be created with the [Camera Calibration Wizard](camera-calibration.md) |
+| Correction    | `.json`           | Positional/rotational corrections; can be found interactively with the [Correction Wizard](correction-wizard.md) |
+| DEM           | `.gltf` / `.glb`  | Digital Elevation Model + metadata JSON. Provide manually, convert a GeoTIFF, download automatically (Austria), or generate a flat surface mesh; see [DEM Import & Conversion](dem.md) |
 | Target CRS    | EPSG code         | UTM-based CRS for the output (e.g. `EPSG:32633` for UTM Zone 33N). The **Auto** button derives a suitable UTM zone from the flight data |
 | Target folder | folder path       | Output directory for all generated files |
 
@@ -75,7 +75,7 @@ The **Extraction** sub-tab provides fine-grained control over which frames are p
 | **Limit** | Cap the total number of frames processed (enable the checkbox to activate). |
 | **Sampling rate** *(video only)* | Take every N-th frame (e.g. 5 = every 5th frame). Reduces processing time for long recordings. |
 
-**Thermal visualisation** (requires the DJI Thermal SDK — install via the [Dependency Manager](installation.md#dependency-manager); the group is greyed out when the SDK is not detected):
+**Thermal visualisation** (requires the DJI Thermal SDK, installable via the [Dependency Manager](installation.md#dependency-manager); the group is greyed out when the SDK is not detected):
 
 | Setting | Description |
 |---------|-------------|
@@ -120,7 +120,7 @@ mask_W.png         # Undistortion mask (RGB)
 Builds two complementary vector layers from the mission data:
 
 - **Flight route line**: GPS positions recorded in the AirData CSV are projected to the target UTM CRS and connected as a `LineString`. This represents the true GPS-recorded flight path.
-- **Camera position points**: The position of the drone at every extracted frame (from `poses.json`) is added as a separate point layer — these are the positions at which images were actually captured.
+- **Camera position points**: The position of the drone at every extracted frame (from `poses.json`) is added as a separate point layer; these are the positions at which images were actually captured.
 
 **Outputs:**
 ```
@@ -149,7 +149,7 @@ Projects pixel-space bounding boxes to real-world UTM coordinates by ray-casting
 
 **Outputs:**
 ```
-georeferenced_t/    # or georeferenced_w/ — follows the detection camera selection
+georeferenced_t/    # or georeferenced_w/, follows the detection camera selection
 └── georeferenced.txt    # Detections with UTM bounding box coordinates
 ```
 
@@ -169,7 +169,7 @@ This is particularly useful for **transect-based wildlife surveys**, where the p
 
 **Outputs:**
 ```
-flight_route_t/    # or flight_route_w/ — uses the flight route camera selection
+flight_route_t/    # or flight_route_w/, uses the flight route camera selection
 ├── perpendicular.json             # Flat list (used by QGIS layer)
 └── perpendicular_by_image.json    # Per-image keyed results
 ```
@@ -193,14 +193,14 @@ Use **→ Add Perpendicular Lines to QGIS** to visualize the connections as line
 
 ### 4. Track Animals Or Import
 
-Associates detections across frames into continuous tracks using the selected tracking backend — or, if a TRex NPZ folder is configured (see [TRex tracklet import](#trex-tracklet-import)), imports and geo-references the pre-computed TRex tracklets instead.
+Associates detections across frames into continuous tracks using the selected tracking backend. If a TRex NPZ folder is configured (see [TRex tracklet import](#trex-tracklet-import)), the pre-computed TRex tracklets are imported and geo-referenced instead.
 
 - Tracks with a single detection (no movement) are fully supported and appear as a bounding box without a movement line
 - Multi-detection tracks show both the movement path and the final bounding box
 
 **Outputs:**
 ```
-tracks_t/    # or tracks_w/ — follows the detection camera selection
+tracks_t/    # or tracks_w/, follows the detection camera selection
 ├── tracks_pixel.csv    # Tracks in pixel coordinates
 └── tracks.csv          # Geo-referenced tracks (UTM)
 ```
@@ -215,7 +215,7 @@ For each track, takes the **last bounding box** (the animal's final recorded pos
 
 **Outputs:**
 ```
-flight_route_t/    # or flight_route_w/ — uses the flight route camera selection
+flight_route_t/    # or flight_route_w/, uses the flight route camera selection
 ├── perpendicular_tracks.json             # Flat list (used by QGIS layer)
 └── perpendicular_tracks_by_track.json    # Per-track keyed results
 ```
@@ -281,11 +281,11 @@ Builds a **true orthomosaic** by mosaicking the individually orthorectified fram
 
 Like the other steps you can use **all** exported GeoTIFFs or restrict to a **frame-index range**, choose the **camera** (Thermal / RGB), and pick the **merge mode** that resolves overlapping pixels:
 
-- **First** — the first frame covering a pixel wins (default)
-- **Last** — the last frame covering a pixel wins
-- **Min** — the darkest overlapping value wins
-- **Max** — the brightest overlapping value wins
-- **Average** — the mean of all overlapping frames (smooths seams; slower, two-pass)
+- **First**: the first frame covering a pixel wins (default)
+- **Last**: the last frame covering a pixel wins
+- **Min**: the darkest overlapping value wins
+- **Max**: the brightest overlapping value wins
+- **Average**: the mean of all overlapping frames (smooths seams; slower, two-pass)
 
 **Outputs:**
 ```
@@ -297,7 +297,7 @@ orthomosaic_t/    # or orthomosaic_w/ depending on camera selection
 
 Segments individual detected objects from aerial images using Roboflow's SAM3 API. Recommended for RGB imagery.
 
-> **Requires a Roboflow API key** — enter it in the **Configuration → SAM3** tab (Roboflow API Configuration group). The key is masked by default; use the "Show API key" checkbox to verify it.
+> **Requires a Roboflow API key**: enter it in the **Configuration → SAM3** tab (Roboflow API Configuration group). The key is masked by default; use the "Show API key" checkbox to verify it.
 
 **Outputs:**
 ```

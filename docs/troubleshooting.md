@@ -2,7 +2,7 @@
 
 ## `No module named 'bambi'` / `No module named 'alfspy'`
 
-You have not installed the `bambi_detection` / `alfs_py` dependency, or you have not restarted QGIS after installing it. Install both required packages via the [Dependency Manager](installation.md#dependency-manager) and restart QGIS — the Python environment is only loaded at startup.
+You have not installed the `bambi_detection` / `alfs_py` dependency, or you have not restarted QGIS after installing it. Install both required packages via the [Dependency Manager](installation.md#dependency-manager) and restart QGIS; the Python environment is only loaded at startup.
 
 ## Problems installing dependencies
 
@@ -40,7 +40,7 @@ See [Installation problems](installation.md#installation-problems) for Git/PATH 
 
 ## Perpendicular distances not calculated
 
-- Run **2. Generate Flight Route** before **→ Calculate Perpendicular** — the AirData GPS `LineString` is required
+- Run **2. Generate Flight Route** before **→ Calculate Perpendicular**, since the AirData GPS `LineString` is required
 - Ensure the AirData CSV contains enough GPS records (at least 2 valid positions)
 - For track perpendicular: ensure **4. Track Animals Or Import** has been completed first
 
