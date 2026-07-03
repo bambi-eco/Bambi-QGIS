@@ -371,15 +371,17 @@ class VideoCreatorDialog(QDialog):
         ol.setContentsMargins(18, 0, 0, 0)
         self._map_flight = QCheckBox("Flight path")
         self._map_fov = QCheckBox("Current field of view")
-        self._map_dettrk = QCheckBox("Detections / tracks")
+        self._map_det = QCheckBox("Detections")
+        self._map_trk = QCheckBox("Tracks")
         self._map_perp = QCheckBox("Perpendicular distances")
         self._map_merged_bg = QCheckBox("Merged FoV as background")
         self._map_accumulate = QCheckBox("Accumulate FoV frame-by-frame (monitored area)")
         self._map_satellite = QCheckBox("Satellite / OSM background (needs internet)")
         self._map_flight.setChecked(True)
         self._map_fov.setChecked(True)
-        for c in (self._map_flight, self._map_fov, self._map_dettrk, self._map_perp,
-                  self._map_merged_bg, self._map_accumulate, self._map_satellite):
+        for c in (self._map_flight, self._map_fov, self._map_det, self._map_trk,
+                  self._map_perp, self._map_merged_bg, self._map_accumulate,
+                  self._map_satellite):
             ol.addWidget(c)
         vl.addWidget(self._map_options)
 
@@ -602,7 +604,8 @@ class VideoCreatorDialog(QDialog):
             "map": self._map_enable.isChecked(),
             "map_flight": self._map_flight.isChecked(),
             "map_fov": self._map_fov.isChecked(),
-            "map_dettrk": self._map_dettrk.isChecked(),
+            "map_det": self._map_det.isChecked(),
+            "map_trk": self._map_trk.isChecked(),
             "map_perp": self._map_perp.isChecked(),
             "map_merged_bg": self._map_merged_bg.isChecked(),
             "map_accumulate": self._map_accumulate.isChecked(),
@@ -663,24 +666,212 @@ class VideoCreatorDialog(QDialog):
                      p[6] if len(p) > 6 else "0"))
         return out
 
-    def _load_pixel_tracks(self, target, suffix):
-        """frame -> list of (track_id, x1, y1, x2, y2)."""
-        path = os.path.join(target, f"tracks_pixel_{suffix}", "tracks_pixel.csv")
-        out = {}
+    def _load_detection_rows(self, target, suffix):
+        """Ordered list of (frame, x1, y1, x2, y2) pixel detections, in file order."""
+        path = os.path.join(target, f"detections_{suffix}", "detections.txt")
+        rows = []
         if not os.path.exists(path):
-            return out
+            return rows
         with open(path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
-                if not line:
+                if not line or line.startswith("#"):
+                    continue
+                p = line.split()
+                if len(p) < 5:
+                    continue
+                try:
+                    rows.append((int(float(p[0])), float(p[1]), float(p[2]),
+                                 float(p[3]), float(p[4])))
+                except ValueError:
+                    continue
+        return rows
+
+    def _load_track_id_rows(self, target, suffix):
+        """Ordered list of (frame, track_id) from the track output, in file order,
+        excluding interpolated rows so it stays aligned with the detection file.
+
+        Prefers the pixel track CSV when present, else the geo-referenced
+        ``tracks.csv`` (our tracks are typically only geo-referenced)."""
+        for fname, interp_col in (("tracks_pixel.csv", 8), ("tracks.csv", 10)):
+            path = os.path.join(target, f"tracks_{suffix}", fname)
+            if not os.path.exists(path):
+                continue
+            rows = []
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    p = line.split(",")
+                    if len(p) < 2:
+                        continue
+                    try:
+                        frame = int(float(p[0]))
+                        tid = int(float(p[1]))
+                        interp = int(float(p[interp_col])) if len(p) > interp_col else 0
+                    except (ValueError, IndexError):
+                        continue
+                    if interp:
+                        continue
+                    rows.append((frame, tid))
+            return rows
+        return []
+
+    def _load_georef_rows(self, target, suffix):
+        """Ordered list of (frame, x1, y1, x2, y2) geo detections, in file order.
+
+        Row format: idx frame x1 y1 z1 x2 y2 z2 conf cls."""
+        path = os.path.join(target, f"georeferenced_{suffix}", "georeferenced.txt")
+        rows = []
+        if not os.path.exists(path):
+            return rows
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                p = line.split()
+                if len(p) < 8:
+                    continue
+                try:
+                    rows.append((int(p[1]), float(p[2]), float(p[3]),
+                                 float(p[5]), float(p[6])))
+                except (ValueError, IndexError):
+                    continue
+        return rows
+
+    @staticmethod
+    def _parse_pixel_tracks_csv(path, interp_col):
+        """frame -> list of (track_id, x1, y1, x2, y2) from a pixel MOT CSV."""
+        out = {}
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
                     continue
                 p = line.split(",")
                 if len(p) < 6:
                     continue
-                frame = int(float(p[0]))
-                out.setdefault(frame, []).append(
-                    (int(float(p[1])), float(p[2]), float(p[3]),
-                     float(p[4]), float(p[5])))
+                try:
+                    if len(p) > interp_col and int(float(p[interp_col])):
+                        continue
+                    out.setdefault(int(float(p[0])), []).append(
+                        (int(float(p[1])), float(p[2]), float(p[3]),
+                         float(p[4]), float(p[5])))
+                except (ValueError, IndexError):
+                    continue
+        return out
+
+    @staticmethod
+    def _coord_key(coords):
+        return tuple(round(v, 3) for v in coords)
+
+    def _load_pixel_tracks(self, target, suffix):
+        """frame -> list of (track_id, x1, y1, x2, y2) in extracted-frame pixel space.
+
+        Strategy, in order of reliability:
+        1. A pixel-space track CSV if one exists (exact boxes + ids).
+        2. Otherwise pair the geo-referenced tracks to the pixel detections by
+           matching geo coordinates through georeferenced.txt. This is order-
+           independent, so it is correct even when tracks.csv is re-sorted by
+           (frame, track_id) or contains interpolated rows.
+        3. As a last resort, pair strictly by line index (valid only when the
+           detection and track files share the same ordering, e.g. TRex import)."""
+        # 1. Direct pixel tracks.
+        for folder, interp_col in ((f"tracks_{suffix}", 8), (f"tracks_pixel_{suffix}", 8)):
+            path = os.path.join(target, folder, "tracks_pixel.csv")
+            if os.path.exists(path):
+                return self._parse_pixel_tracks_csv(path, interp_col)
+
+        # 2. Geo-coordinate join.
+        out = self._pair_tracks_via_geo(target, suffix)
+        if out:
+            return out
+
+        # 3. Line-index fallback.
+        return self._pair_tracks_by_line_index(target, suffix)
+
+    def _pair_tracks_via_geo(self, target, suffix):
+        """Assign track ids to pixel detections by matching geo coordinates.
+
+        detections.txt and georeferenced.txt share the same per-frame ordering
+        (georeferenced is built from the detections in order), so the k-th pixel
+        box in a frame corresponds to the k-th geo box; that geo box's coordinates
+        then look up the track id in tracks.csv regardless of its row order."""
+        from collections import defaultdict
+
+        det_rows = self._load_detection_rows(target, suffix)
+        geo_rows = self._load_georef_rows(target, suffix)
+        if not det_rows or not geo_rows:
+            return {}
+
+        # Track id keyed by (frame, rounded geo box) from the geo tracks csv.
+        trk_lookup = {}
+        tpath = os.path.join(target, f"tracks_{suffix}", "tracks.csv")
+        if not os.path.exists(tpath):
+            return {}
+        with open(tpath, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                p = line.split(",")
+                if len(p) < 7:
+                    continue
+                try:
+                    if len(p) > 10 and int(float(p[10])):
+                        continue  # interpolated row, no detection
+                    frame = int(float(p[0]))
+                    tid = int(float(p[1]))
+                    key = (frame, self._coord_key(
+                        (float(p[2]), float(p[3]), float(p[5]), float(p[6]))))
+                except (ValueError, IndexError):
+                    continue
+                trk_lookup.setdefault(key, tid)
+        if not trk_lookup:
+            return {}
+
+        det_by_frame = defaultdict(list)
+        for (frame, x1, y1, x2, y2) in det_rows:
+            det_by_frame[frame].append((x1, y1, x2, y2))
+        geo_by_frame = defaultdict(list)
+        for (frame, x1, y1, x2, y2) in geo_rows:
+            geo_by_frame[frame].append((x1, y1, x2, y2))
+
+        out = {}
+        matched = 0
+        for frame, boxes in det_by_frame.items():
+            geos = geo_by_frame.get(frame, [])
+            if len(geos) != len(boxes):
+                continue  # cannot align this frame safely (dropped detections)
+            for box, geo in zip(boxes, geos):
+                tid = trk_lookup.get((frame, self._coord_key(geo)))
+                if tid is not None:
+                    out.setdefault(frame, []).append((tid,) + box)
+                    matched += 1
+        return out if matched else {}
+
+    def _pair_tracks_by_line_index(self, target, suffix):
+        """Pair pixel detections with track ids by shared line index (last resort)."""
+        det_rows = self._load_detection_rows(target, suffix)
+        id_rows = self._load_track_id_rows(target, suffix)
+        out = {}
+        if not det_rows or not id_rows:
+            return out
+        n = min(len(det_rows), len(id_rows))
+        skipped = 0
+        for i in range(n):
+            dframe, x1, y1, x2, y2 = det_rows[i]
+            tframe, tid = id_rows[i]
+            if tframe != dframe:
+                skipped += 1
+                continue
+            out.setdefault(dframe, []).append((tid, x1, y1, x2, y2))
+        if skipped:
+            self._log_msg(
+                f"Tracks overlay ({suffix}): {skipped}/{n} rows skipped "
+                "(detection/track lines out of sync).")
         return out
 
     def _load_fov_polygons(self, target, suffix):
@@ -817,6 +1008,9 @@ class VideoCreatorDialog(QDialog):
                 else:
                     info_area_fov = self._load_fov_polygons(target, cam)
             info_bar_h = max(48, panel_h // 8)
+        # Totals across the whole dataset (the "n" in "x / n").
+        info_dets_total = sum(len(v) for v in info_dets.values())
+        info_trks_total = len({r[0] for v in info_trks.values() for r in v})
         info_accum_geom = None
 
         # ---- Determine composite geometry from the first renderable frame --
@@ -867,8 +1061,8 @@ class VideoCreatorDialog(QDialog):
                     area_m2 = info_accum_geom.area() if info_accum_geom is not None else 0.0
                     bar = self._render_info_panel(
                         params, composite.shape[1], info_bar_h, idx, n_frames,
-                        len(info_dets.get(idx, [])),
-                        len({r[0] for r in info_trks.get(idx, [])}),
+                        len(info_dets.get(idx, [])), info_dets_total,
+                        len({r[0] for r in info_trks.get(idx, [])}), info_trks_total,
                         area_m2, cv2)
                     composite = cv2.vconcat([composite, bar])
 
@@ -974,26 +1168,25 @@ class VideoCreatorDialog(QDialog):
         size = 900
         margin = 60
 
-        flight = self._load_flight_path(target, cam) if params["map_flight"] else []
-        geo_tracks = {}
-        if params["map_dettrk"]:
-            geo_tracks = self._load_geo_tracks(target, cam)
-            if not geo_tracks:
-                geo_tracks = self._load_geo_detections(target, cam)
+        flight_pos = self._load_camera_positions(target, cam) if params["map_flight"] else {}
+        geo_tracks = self._load_geo_tracks(target, cam) if params["map_trk"] else {}
+        geo_dets = self._load_geo_detections(target, cam) if params["map_det"] else {}
 
-        # Global extent over everything to be drawn.
+        # Global extent over everything to be drawn (whole flight, so the map does
+        # not jump while the path is revealed frame by frame).
         xs, ys = [], []
         for poly in fov_polys.values():
             for (x, y) in poly:
                 xs.append(x)
                 ys.append(y)
-        for (x, y) in flight:
+        for (x, y) in flight_pos.values():
             xs.append(x)
             ys.append(y)
-        for dets in geo_tracks.values():
-            for d in dets:
-                xs += [d["x1"], d["x2"]]
-                ys += [d["y1"], d["y2"]]
+        for group in (geo_tracks, geo_dets):
+            for dets in group.values():
+                for d in dets:
+                    xs += [d["x1"], d["x2"]]
+                    ys += [d["y1"], d["y2"]]
 
         if not xs:
             return {"empty": True, "size": size}
@@ -1041,8 +1234,10 @@ class VideoCreatorDialog(QDialog):
             "cfg": cfg,
             "extent": extent,
             "background": background,
-            "flight": flight,
+            "flight_pos": flight_pos,
+            "flight_trail": [],
             "geo_tracks": geo_tracks,
+            "geo_dets": geo_dets,
             "merged_mask": merged_mask,
             "accum_mask": np.zeros((size, size), dtype=np.uint8),
             "track_history": {},
@@ -1081,10 +1276,14 @@ class VideoCreatorDialog(QDialog):
             m = ctx["accum_mask"] > 0
             img[m] = (img[m] * 0.6 + np.array((67, 160, 71)) * 0.4).astype(np.uint8)
 
-        # --- Flight path ---
-        if params["map_flight"] and len(ctx["flight"]) > 1:
-            pts = np.array([to_px(x, y) for (x, y) in ctx["flight"]], dtype=np.int32)
-            cv2.polylines(img, [pts], False, (255, 170, 60), 1, cv2.LINE_AA)
+        # --- Flight path (revealed live, frame by frame from the poses) ---
+        if params["map_flight"]:
+            pos = ctx["flight_pos"].get(idx)
+            if pos is not None:
+                ctx["flight_trail"].append(to_px(pos[0], pos[1]))
+            if len(ctx["flight_trail"]) > 1:
+                cv2.polylines(img, [np.array(ctx["flight_trail"], dtype=np.int32)],
+                              False, (255, 170, 60), 2, cv2.LINE_AA)
 
         # --- Current FoV polygon (the mask-aware calculated FoV) ---
         if params["map_fov"] and cur_pts:
@@ -1094,13 +1293,18 @@ class VideoCreatorDialog(QDialog):
             cv2.addWeighted(overlay, 0.25, img, 0.75, 0, img)
             cv2.polylines(img, [pix], True, (0, 215, 255), 2, cv2.LINE_AA)
 
-        # --- Geo detections / tracks (boxes + trails) ---
-        if params["map_dettrk"] and ctx["geo_tracks"]:
+        # --- Geo detections (current frame only, single colour, no id/trail) ---
+        if params["map_det"] and ctx["geo_dets"]:
+            for d in ctx["geo_dets"].get(idx, []):
+                p1 = to_px(d["x1"], d["y1"])
+                p2 = to_px(d["x2"], d["y2"])
+                cv2.rectangle(img, p1, p2, (60, 60, 235), 2)
+
+        # --- Geo tracks (per-id colour + id label + trajectory trail) ---
+        if params["map_trk"] and ctx["geo_tracks"]:
             hist = ctx["track_history"]
-            visible = set()
             for d in ctx["geo_tracks"].get(idx, []):
                 tid = d["tid"]
-                visible.add(tid)
                 color = _id_to_color(tid)
                 p1 = to_px(d["x1"], d["y1"])
                 p2 = to_px(d["x2"], d["y2"])
@@ -1126,11 +1330,13 @@ class VideoCreatorDialog(QDialog):
                 cv2.putText(img, f"{dist:.0f}m", mid,
                             cv2.FONT_HERSHEY_SIMPLEX, 0.4, (40, 120, 240), 1, cv2.LINE_AA)
 
-        # --- Drone look-point (current FoV centroid) ---
-        if cur_pts:
-            cx = sum(p[0] for p in cur_pts) / len(cur_pts)
-            cy = sum(p[1] for p in cur_pts) / len(cur_pts)
-            px, py = to_px(cx, cy)
+        # --- Drone position (actual camera position; FoV centroid as fallback) ---
+        drone_xy = ctx["flight_pos"].get(idx) if params["map_flight"] else None
+        if drone_xy is None and cur_pts:
+            drone_xy = (sum(p[0] for p in cur_pts) / len(cur_pts),
+                        sum(p[1] for p in cur_pts) / len(cur_pts))
+        if drone_xy is not None:
+            px, py = to_px(drone_xy[0], drone_xy[1])
             cv2.circle(img, (px, py), 5, _DRONE_COLOR, -1)
             cv2.circle(img, (px, py), 5, (0, 0, 0), 1)
 
@@ -1195,24 +1401,26 @@ class VideoCreatorDialog(QDialog):
             cv2.putText(img, f"{int(vy)}", (px - 58, py + 4),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1, cv2.LINE_AA)
 
-    def _load_flight_path(self, target, suffix):
-        """List of (x, y) from flight_route_{suffix}/flight_route.geojson."""
-        path = os.path.join(target, f"flight_route_{suffix}", "flight_route.geojson")
+    def _load_camera_positions(self, target, suffix):
+        """frame_idx -> (x, y) per-frame camera positions in the data CRS, from
+        flight_route_{suffix}/camera_positions.geojson (one Point per pose). Used
+        to reveal the flight path progressively, frame by frame."""
+        path = os.path.join(target, f"flight_route_{suffix}", "camera_positions.geojson")
+        out = {}
         if not os.path.exists(path):
-            return []
+            return out
         try:
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
         except Exception:  # noqa: BLE001
-            return []
-        for feat in data.get("features", []):
-            geom = feat.get("geometry", {})
-            coords = geom.get("coordinates", [])
-            if geom.get("type") == "LineString":
-                return [(c[0], c[1]) for c in coords if len(c) >= 2]
-            if geom.get("type") == "Point" and len(coords) >= 2:
-                return [(coords[0], coords[1])]
-        return []
+            return out
+        for i, feat in enumerate(data.get("features", [])):
+            coords = feat.get("geometry", {}).get("coordinates", [])
+            if len(coords) < 2:
+                continue
+            frame_idx = feat.get("properties", {}).get("frame_idx", i)
+            out[int(frame_idx)] = (coords[0], coords[1])
+        return out
 
     def _load_geo_tracks(self, target, suffix):
         """frame -> list of {tid, x1, y1, x2, y2} from tracks_{suffix}/tracks.csv."""
@@ -1285,7 +1493,7 @@ class VideoCreatorDialog(QDialog):
         return f"{area_m2:.0f} m2"
 
     def _render_info_panel(self, params, width, bar_h, idx, n_frames,
-                           n_dets, n_tracks, area_m2, cv2):
+                           n_dets, total_dets, n_tracks, total_tracks, area_m2, cv2):
         """Render the full-width bottom statistics bar."""
         import numpy as np
 
@@ -1296,9 +1504,9 @@ class VideoCreatorDialog(QDialog):
         if params["info_frame"]:
             parts.append(f"Frame: {idx + 1}/{n_frames}")
         if params["info_dets"]:
-            parts.append(f"Detections: {n_dets}")
+            parts.append(f"Detections: {n_dets} / {total_dets}")
         if params["info_tracks"]:
-            parts.append(f"Tracks: {n_tracks}")
+            parts.append(f"Tracks: {n_tracks} / {total_tracks}")
         if params["info_area"]:
             parts.append(f"Monitored: {self._fmt_area(area_m2)}")
         if not parts:
