@@ -1914,7 +1914,7 @@ class BambiDockWidget(QDockWidget):
             "MAX - Brightest pixel wins",
             "AVERAGE - Mean of overlapping frames",
         ])
-        self.ortho_method_combo.setCurrentIndex(0)
+        self.ortho_method_combo.setCurrentIndex(4)
         self.ortho_method_combo.setToolTip(
             "How overlapping pixels from different frames are resolved"
         )

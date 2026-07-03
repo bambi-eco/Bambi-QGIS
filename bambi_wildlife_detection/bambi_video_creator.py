@@ -440,7 +440,7 @@ class VideoCreatorDialog(QDialog):
 
         self._fps_spin = QSpinBox()
         self._fps_spin.setRange(1, 60)
-        self._fps_spin.setValue(10)
+        self._fps_spin.setValue(30)
         fl.addRow("Frames per second:", self._fps_spin)
 
         self._height_spin = QSpinBox()
