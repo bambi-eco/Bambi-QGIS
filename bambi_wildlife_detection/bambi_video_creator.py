@@ -408,7 +408,7 @@ class VideoCreatorDialog(QDialog):
         self._info_frame = QCheckBox("Current frame number")
         self._info_dets = QCheckBox("Number of detections (current frame)")
         self._info_tracks = QCheckBox("Number of tracks (current frame)")
-        self._info_area = QCheckBox("Accumulated monitored area")
+        self._info_area = QCheckBox("Monitored area (observed / total)")
         self._info_frame.setChecked(True)
         for c in (self._info_frame, self._info_dets, self._info_tracks, self._info_area):
             ol.addWidget(c)
@@ -554,6 +554,21 @@ class VideoCreatorDialog(QDialog):
             QMessageBox.warning(self, "Invalid Configuration", str(exc))
             return
 
+        # Warn up-front about every selected item whose data is missing, so the
+        # user can fix the selection before the (possibly long) render instead
+        # of discovering the gaps in the finished video.
+        warns = self._availability_warnings(params)
+        if warns:
+            msg = ("The following selected options have no data in the target "
+                   "folder and will be skipped or shown empty:\n\n  • "
+                   + "\n  • ".join(warns)
+                   + "\n\nCreate the video anyway?")
+            if QMessageBox.warning(
+                    self, "Missing Data", msg,
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.Yes) != QMessageBox.Yes:
+                return
+
         self._rendering = True
         self._cancel = False
         self._create_btn.setText("Cancel")
@@ -623,6 +638,90 @@ class VideoCreatorDialog(QDialog):
             "start_frame": self._start_frame_spin.value(),
             "end_frame": self._end_frame_spin.value(),
         }
+
+    def _pixel_tracks_available(self, target, suffix):
+        """True if any source :meth:`_load_pixel_tracks` could use is present:
+        a direct pixel-track CSV, or the detections + tracks.csv needed for the
+        geo-join / line-index fallbacks."""
+        for folder in (f"tracks_{suffix}", f"tracks_pixel_{suffix}"):
+            for fname in ("tracks_pixel_undistorted.csv", "tracks_pixel.csv"):
+                if os.path.exists(os.path.join(target, folder, fname)):
+                    return True
+        return (os.path.exists(os.path.join(target, f"detections_{suffix}", "detections.txt"))
+                and os.path.exists(os.path.join(target, f"tracks_{suffix}", "tracks.csv")))
+
+    def _availability_warnings(self, params):
+        """Return a human-readable warning for every selected option whose
+        backing data is missing on disk. Loaders degrade gracefully (draw
+        nothing) when data is absent, so these are warnings, not errors."""
+        target = params["target"]
+        labels = {"t": "Thermal", "w": "RGB"}
+        warns = []
+
+        def exists(*parts):
+            return os.path.exists(os.path.join(target, *parts))
+
+        # ---- Video panels + their per-frame image source ------------------
+        for s in params["video_suffixes"]:
+            lbl = labels.get(s, s)
+            if params["source"] == "extracted":
+                if not exists(f"poses_{s}.json") or not exists(f"frames_{s}"):
+                    warns.append(f"{lbl} video: extracted frames missing "
+                                 f"(poses_{s}.json / frames_{s}/).")
+            elif params["ortho_kind"] == "alfs":
+                if not exists(f"alfs_{s}", "alfs.tif"):
+                    warns.append(f"{lbl} video: ALFS orthophoto missing "
+                                 f"(alfs_{s}/alfs.tif).")
+            else:
+                if not exists(f"geotiffs_{s}"):
+                    warns.append(f"{lbl} video: per-frame geotiffs missing "
+                                 f"(geotiffs_{s}/).")
+
+        # ---- Overlays (drawn only on extracted frames) --------------------
+        if params["source"] == "extracted":
+            for s in params["video_suffixes"]:
+                lbl = labels.get(s, s)
+                if (params["overlay"] == "detections"
+                        and not exists(f"detections_{s}", "detections.txt")):
+                    warns.append(f"{lbl} detections overlay: "
+                                 f"detections_{s}/detections.txt missing.")
+                elif (params["overlay"] == "tracks"
+                      and not self._pixel_tracks_available(target, s)):
+                    warns.append(f"{lbl} tracks overlay: no track data found.")
+
+        # ---- Map panel ----------------------------------------------------
+        if params["map"]:
+            cam = params["map_camera"]
+            if params["map_flight"] and not exists(f"flight_route_{cam}", "camera_positions.geojson"):
+                warns.append("Map flight path: "
+                             f"flight_route_{cam}/camera_positions.geojson missing.")
+            if params["map_fov"] and not exists(f"fov_{cam}", "fov_polygons.txt"):
+                warns.append(f"Map field of view: fov_{cam}/fov_polygons.txt missing.")
+            if params["map_det"] and not exists(f"georeferenced_{cam}", "georeferenced.txt"):
+                warns.append("Map detections: "
+                             f"georeferenced_{cam}/georeferenced.txt missing.")
+            if params["map_trk"] and not exists(f"tracks_{cam}", "tracks.csv"):
+                warns.append(f"Map tracks: tracks_{cam}/tracks.csv missing.")
+            if params["map_perp"] and not (
+                    exists(f"flight_route_{cam}", f"perpendicular_{cam}.json")
+                    or exists(f"flight_route_{cam}", "perpendicular.json")):
+                warns.append("Map perpendicular distances: "
+                             f"flight_route_{cam}/perpendicular_{cam}.json missing.")
+
+        # ---- Info panel ---------------------------------------------------
+        if params["info"]:
+            cam = params["info_camera"]
+            lbl = labels.get(cam, cam)
+            if params["info_dets"] and not exists(f"detections_{cam}", "detections.txt"):
+                warns.append(f"Info panel detections ({lbl}): "
+                             f"detections_{cam}/detections.txt missing.")
+            if params["info_tracks"] and not self._pixel_tracks_available(target, cam):
+                warns.append(f"Info panel tracks ({lbl}): no track data found.")
+            if params["info_area"] and not exists(f"fov_{cam}", "fov_polygons.txt"):
+                warns.append(f"Info panel monitored area ({lbl}): "
+                             f"fov_{cam}/fov_polygons.txt missing.")
+
+        return warns
 
     def _check_cancel(self):
         QApplication.processEvents()
@@ -1019,6 +1118,13 @@ class VideoCreatorDialog(QDialog):
         info_dets_total = sum(len(v) for v in info_dets.values())
         info_trks_total = len({r[0] for v in info_trks.values() for r in v})
         info_accum_geom = None
+        # Total monitored area = union of every FoV polygon over the whole flight.
+        info_area_total = 0.0
+        if info_area_fov:
+            geoms = [self._polygon_geom(pts) for pts in info_area_fov.values() if pts]
+            total_geom = QgsGeometry.unaryUnion(geoms) if geoms else None
+            if total_geom is not None and not total_geom.isEmpty():
+                info_area_total = total_geom.area()
 
         # ---- Determine composite geometry from the first renderable frame --
         total_out = end_idx - start_idx + 1
@@ -1070,7 +1176,7 @@ class VideoCreatorDialog(QDialog):
                         params, composite.shape[1], info_bar_h, idx, n_frames,
                         len(info_dets.get(idx, [])), info_dets_total,
                         len({r[0] for r in info_trks.get(idx, [])}), info_trks_total,
-                        area_m2, cv2)
+                        area_m2, info_area_total, cv2)
                     composite = cv2.vconcat([composite, bar])
 
                 if writer is None:
@@ -1499,8 +1605,23 @@ class VideoCreatorDialog(QDialog):
             return f"{area_m2 / 1e4:.2f} ha"
         return f"{area_m2:.0f} m2"
 
+    @staticmethod
+    def _fmt_area_ratio(area_m2, total_m2):
+        """Format 'observed / total unit (pct)' with a shared unit picked from
+        the total, mirroring the 'x / n' style used for detections/tracks."""
+        if total_m2 >= 1e6:
+            div, unit, dec = 1e6, "km2", 2
+        elif total_m2 >= 1e4:
+            div, unit, dec = 1e4, "ha", 2
+        else:
+            div, unit, dec = 1.0, "m2", 0
+        pct = (area_m2 / total_m2 * 100.0) if total_m2 > 0 else 0.0
+        return (f"{area_m2 / div:.{dec}f} / {total_m2 / div:.{dec}f} {unit} "
+                f"({pct:.0f}%)")
+
     def _render_info_panel(self, params, width, bar_h, idx, n_frames,
-                           n_dets, total_dets, n_tracks, total_tracks, area_m2, cv2):
+                           n_dets, total_dets, n_tracks, total_tracks,
+                           area_m2, total_area, cv2):
         """Render the full-width bottom statistics bar."""
         import numpy as np
 
@@ -1515,7 +1636,7 @@ class VideoCreatorDialog(QDialog):
         if params["info_tracks"]:
             parts.append(f"Tracks: {n_tracks} / {total_tracks}")
         if params["info_area"]:
-            parts.append(f"Monitored: {self._fmt_area(area_m2)}")
+            parts.append(f"Monitored: {self._fmt_area_ratio(area_m2, total_area)}")
         if not parts:
             return bar
 
