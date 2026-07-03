@@ -778,11 +778,14 @@ class VideoCreatorDialog(QDialog):
            (frame, track_id) or contains interpolated rows.
         3. As a last resort, pair strictly by line index (valid only when the
            detection and track files share the same ordering, e.g. TRex import)."""
-        # 1. Direct pixel tracks.
-        for folder, interp_col in ((f"tracks_{suffix}", 8), (f"tracks_pixel_{suffix}", 8)):
-            path = os.path.join(target, folder, "tracks_pixel.csv")
-            if os.path.exists(path):
-                return self._parse_pixel_tracks_csv(path, interp_col)
+        # 1. Direct pixel tracks. Prefer the undistorted file, which matches the
+        # extracted (undistorted) frames the overlay is drawn on; the plain
+        # tracks_pixel.csv is in raw video space for the TRex pipelines.
+        for folder in (f"tracks_{suffix}", f"tracks_pixel_{suffix}"):
+            for fname in ("tracks_pixel_undistorted.csv", "tracks_pixel.csv"):
+                path = os.path.join(target, folder, fname)
+                if os.path.exists(path):
+                    return self._parse_pixel_tracks_csv(path, 8)
 
         # 2. Geo-coordinate join.
         out = self._pair_tracks_via_geo(target, suffix)

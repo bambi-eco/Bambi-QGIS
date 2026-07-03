@@ -2452,21 +2452,30 @@ class BambiProcessor:
         if log_fn:
             log_fn(f"Wrote pixel-space tracks: {pixel_tracks_file}")
 
-        if undistorter is not None:
-            pixel_und_file = os.path.join(tracks_pixel_folder, "tracks_pixel_undistorted.csv")
-            with open(pixel_und_file, "w", encoding="utf-8") as f:
-                for d in detections:
+        # Always write tracks_pixel_undistorted.csv (extracted-frame pixel space).
+        # When an undistorter is active the raw tracks_pixel.csv above is in raw
+        # video space; here we map to the undistorted frame space that matches the
+        # extracted frames. When the labels are already in extracted-frame space
+        # (undistorter is None) the boxes are used verbatim, so downstream tools
+        # (e.g. the Video Creator) can always rely on this file for overlays.
+        pixel_und_file = os.path.join(tracks_pixel_folder, "tracks_pixel_undistorted.csv")
+        with open(pixel_und_file, "w", encoding="utf-8") as f:
+            for d in detections:
+                if undistorter is not None:
                     corners = np.array(
                         [[d["x1"], d["y1"]], [d["x2"], d["y1"]],
                          [d["x2"], d["y2"]], [d["x1"], d["y2"]]], dtype=np.float32
                     )
                     und = undistorter.points(corners)
-                    f.write(f"{d['frame']:08d},{d['track_id']},"
-                            f"{und[:,0].min():.6f},{und[:,1].min():.6f},"
-                            f"{und[:,0].max():.6f},{und[:,1].max():.6f},"
-                            f"{d['confidence']:.6f},{d['class_id']},0\n")
-            if log_fn:
-                log_fn(f"Wrote undistorted pixel-space tracks: {pixel_und_file}")
+                    x1, y1 = float(und[:, 0].min()), float(und[:, 1].min())
+                    x2, y2 = float(und[:, 0].max()), float(und[:, 1].max())
+                else:
+                    x1, y1, x2, y2 = d["x1"], d["y1"], d["x2"], d["y2"]
+                f.write(f"{d['frame']:08d},{d['track_id']},"
+                        f"{x1:.6f},{y1:.6f},{x2:.6f},{y2:.6f},"
+                        f"{d['confidence']:.6f},{d['class_id']},0\n")
+        if log_fn:
+            log_fn(f"Wrote undistorted pixel-space tracks: {pixel_und_file}")
 
         # ---- Step 5: load DEM + poses -------------------------------------------
         if log_fn:
