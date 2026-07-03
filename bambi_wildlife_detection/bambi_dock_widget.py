@@ -1106,8 +1106,9 @@ class BambiDockWidget(QDockWidget):
 
         extraction_tab_layout.addWidget(tz_group)
 
-        # Thermal visualisation
-        self.thermal_vis_group = QGroupBox("Thermal Visualisation (Photo Mode only)")
+        # Thermal visualisation (photo mode only — hidden in video mode)
+        self.thermal_vis_group = QGroupBox("Thermal Visualisation")
+        self.thermal_vis_group.setVisible(not self.video_mode_check.isChecked())
         thermal_vis_group = self.thermal_vis_group
         thermal_vis_layout = QFormLayout(thermal_vis_group)
 
@@ -2073,25 +2074,23 @@ class BambiDockWidget(QDockWidget):
         steps_group = QGroupBox("Processing Steps")
         steps_btn_layout = QVBoxLayout(steps_group)
 
-        # ----- Step 1a: Extract Thermal Frames -----
-        step1a_row = QHBoxLayout()
-        self.extract_thermal_btn = QPushButton("1a. Extract Thermal Frames")
-        self.extract_thermal_btn.clicked.connect(self.run_extract_thermal_frames)
-        self.extract_thermal_btn.setToolTip("Extract frames from thermal videos (_T_) to frames_t/")
-        self.extract_thermal_status = QLabel("⚪ Not started")
-        step1a_row.addWidget(self.extract_thermal_btn)
-        step1a_row.addWidget(self.extract_thermal_status)
-        steps_btn_layout.addLayout(step1a_row)
-
-        # ----- Step 1b: Extract RGB Frames -----
-        step1b_row = QHBoxLayout()
-        self.extract_rgb_btn = QPushButton("1b. Extract RGB Frames")
-        self.extract_rgb_btn.clicked.connect(self.run_extract_rgb_frames)
-        self.extract_rgb_btn.setToolTip("Extract frames from RGB videos (_W_/_V_) to frames_w/")
-        self.extract_rgb_status = QLabel("⚪ Not started")
-        step1b_row.addWidget(self.extract_rgb_btn)
-        step1b_row.addWidget(self.extract_rgb_status)
-        steps_btn_layout.addLayout(step1b_row)
+        # ----- Step 1: Extract Frames -----
+        step1_row = QHBoxLayout()
+        self.extract_btn = QPushButton("1. Extract Frames")
+        self.extract_btn.clicked.connect(self.run_extract_frames)
+        self.extract_btn.setToolTip(
+            "Extract frames from the selected camera's videos:\n"
+            "Thermal (_T_) → frames_t/, RGB (_W_/_V_) → frames_w/"
+        )
+        self.extract_camera_combo = QComboBox()
+        self.extract_camera_combo.addItems(["T - Thermal", "W - RGB"])
+        self.extract_camera_combo.setFixedWidth(100)
+        self.extract_camera_combo.setToolTip("Select camera source for frame extraction")
+        self.extract_status = QLabel("⚪ Not started")
+        step1_row.addWidget(self.extract_btn)
+        step1_row.addWidget(self.extract_camera_combo)
+        step1_row.addWidget(self.extract_status)
+        steps_btn_layout.addLayout(step1_row)
 
         correction_info_label = QLabel(
             "If not already done: Use the correction tooling to determine "
@@ -2145,9 +2144,9 @@ class BambiDockWidget(QDockWidget):
         step3_row.addWidget(self.detect_status)
         steps_btn_layout.addLayout(step3_row)
 
-        # ----- Step 4: Geo-Reference Detections -----
+        # -> Geo-Reference Detections (sub-step of detection)
         step4_row = QHBoxLayout()
-        self.georef_btn = QPushButton("4. Geo-Reference Detections")
+        self.georef_btn = QPushButton("   → Geo-Reference Detections")
         self.georef_btn.clicked.connect(self.run_georeference)
         self.georef_status = QLabel("⚪ Not started")
         step4_row.addWidget(self.georef_btn)
@@ -2190,17 +2189,22 @@ class BambiDockWidget(QDockWidget):
         perp_add_row.addWidget(self.add_perpendicular_status)
         steps_btn_layout.addLayout(perp_add_row)
 
-        # ----- Step 5: Track Animals Or Import -----
+        # ----- Step 4: Track Animals Or Import -----
         step5_row = QHBoxLayout()
-        self.track_btn = QPushButton("5. Track Animals Or Import")
+        self.track_btn = QPushButton("4. Track Animals Or Import")
         self.track_btn.setToolTip(
             "Track geo-referenced detections.\n"
             "If a TRex NPZ folder is set (Config → Tracking tab), the pre-computed\n"
             "TRex tracklets are imported and geo-referenced instead."
         )
         self.track_btn.clicked.connect(self.run_tracking)
+        self.tracking_camera_combo = QComboBox()
+        self.tracking_camera_combo.addItems(["T - Thermal", "W - RGB"])
+        self.tracking_camera_combo.setFixedWidth(100)
+        self.tracking_camera_combo.setToolTip("Select camera source for geo-referenced detections")
         self.track_status = QLabel("⚪ Not started")
         step5_row.addWidget(self.track_btn)
+        step5_row.addWidget(self.tracking_camera_combo)
         step5_row.addWidget(self.track_status)
         steps_btn_layout.addLayout(step5_row)
 
@@ -2240,9 +2244,9 @@ class BambiDockWidget(QDockWidget):
         track_perp_add_row.addWidget(self.add_track_perpendicular_status)
         steps_btn_layout.addLayout(track_perp_add_row)
 
-        # ----- Step 6: Calculate Field of View -----
+        # ----- Step 5: Calculate Field of View -----
         step6_row = QHBoxLayout()
-        self.calculate_fov_btn = QPushButton("6. Calculate Field of View")
+        self.calculate_fov_btn = QPushButton("5. Calculate Field of View")
         self.calculate_fov_btn.clicked.connect(self.run_calculate_fov)
         self.calculate_fov_btn.setToolTip("Calculate and save camera FoV footprints for each frame")
         self.fov_camera_combo = QComboBox()
@@ -2275,9 +2279,9 @@ class BambiDockWidget(QDockWidget):
         add_merged_fov_row.addWidget(self.add_merged_fov_status)
         steps_btn_layout.addLayout(add_merged_fov_row)
 
-        # ----- Step 7: Generate ALFS -----
+        # ----- Step 6: Generate ALFS -----
         step7_row = QHBoxLayout()
-        self.alfs_btn = QPushButton("7. Generate ALFS")
+        self.alfs_btn = QPushButton("6. Generate ALFS")
         self.alfs_btn.clicked.connect(self.run_alfs)
         self.alfs_camera_combo = QComboBox()
         self.alfs_camera_combo.addItems(["T - Thermal", "W - RGB"])
@@ -2298,9 +2302,9 @@ class BambiDockWidget(QDockWidget):
         add_alfs_row.addWidget(self.add_alfs_status)
         steps_btn_layout.addLayout(add_alfs_row)
 
-        # ----- Step 8: Export Frames as GeoTIFF -----
+        # ----- Step 7: Export Frames as GeoTIFF -----
         step8_row = QHBoxLayout()
-        self.export_geotiffs_btn = QPushButton("8. Export Frames as GeoTIFF")
+        self.export_geotiffs_btn = QPushButton("7. Export Frames as GeoTIFF")
         self.export_geotiffs_btn.clicked.connect(self.run_export_geotiffs)
         self.geotiff_camera_combo = QComboBox()
         self.geotiff_camera_combo.addItems(["T - Thermal", "W - RGB"])
@@ -2321,11 +2325,11 @@ class BambiDockWidget(QDockWidget):
         add_geotiffs_row.addWidget(self.add_geotiffs_status)
         steps_btn_layout.addLayout(add_geotiffs_row)
 
-        # ----- Step 8b: Generate Orthomosaic (merge exported GeoTIFFs) -----
+        # ----- Step 8: Generate Orthomosaic (merge exported GeoTIFFs) -----
         ortho_step_row = QHBoxLayout()
-        self.orthomosaic_btn = QPushButton("8b. Generate Orthomosaic")
+        self.orthomosaic_btn = QPushButton("8. Generate Orthomosaic")
         self.orthomosaic_btn.setToolTip(
-            "Merge the exported frame GeoTIFFs (Step 8) into a single orthomosaic"
+            "Merge the exported frame GeoTIFFs (Step 7) into a single orthomosaic"
         )
         self.orthomosaic_btn.clicked.connect(self.run_orthomosaic)
         self.ortho_camera_combo = QComboBox()
@@ -2381,6 +2385,15 @@ class BambiDockWidget(QDockWidget):
         add_sam3_row.addWidget(self.add_sam3_btn)
         add_sam3_row.addWidget(self.add_sam3_status)
         steps_btn_layout.addLayout(add_sam3_row)
+
+        # Re-evaluate step statuses when a camera selection changes so the
+        # indicators always reflect the selected modality's outputs.
+        for camera_combo in (self.extract_camera_combo, self.flight_route_camera_combo,
+                             self.detection_camera_combo, self.tracking_camera_combo,
+                             self.fov_camera_combo, self.alfs_camera_combo,
+                             self.geotiff_camera_combo, self.ortho_camera_combo,
+                             self.sam3_camera_combo):
+            camera_combo.currentIndexChanged.connect(self._on_step_camera_changed)
 
         processing_layout.addWidget(steps_group)
 
@@ -2783,7 +2796,7 @@ class BambiDockWidget(QDockWidget):
             "flight_route_camera": "T" if self.flight_route_camera_combo.currentIndex() == 0 else "W",
             "detection_camera": "T" if self.detection_camera_combo.currentIndex() == 0 else "W",
             "georeference_camera": "T" if self.detection_camera_combo.currentIndex() == 0 else "W",
-            "tracking_camera": "T" if self.detection_camera_combo.currentIndex() == 0 else "W",
+            "tracking_camera": "T" if self.tracking_camera_combo.currentIndex() == 0 else "W",
             "fov_camera": "T" if self.fov_camera_combo.currentIndex() == 0 else "W",
             "alfs_camera": "T" if self.alfs_camera_combo.currentIndex() == 0 else "W",
             "geotiff_camera": "T" if self.geotiff_camera_combo.currentIndex() == 0 else "W",
@@ -3246,6 +3259,7 @@ class BambiDockWidget(QDockWidget):
         video_mode = bool(state)
         self.video_inputs_widget.setVisible(video_mode)
         self.photo_inputs_widget.setVisible(not video_mode)
+        self.thermal_vis_group.setVisible(not video_mode)
         self.embedded_srt_check.setVisible(video_mode)
         self._airdata_exif_info_label.setVisible(not video_mode)
         if not video_mode:
@@ -3323,33 +3337,34 @@ class BambiDockWidget(QDockWidget):
             "<b>Processing Pipeline</b><br><br>"
             "Execute the steps below in order. Each step builds on the outputs of the "
             "previous one.<br><br>"
-            "<b>1a / 1b — Extract Frames</b><br>"
-            "Decodes and undistorts thermal and RGB frames; matches GPS positions from "
-            "the AirData log via SRT timestamps (video) or EXIF timestamps (photo).<br><br>"
+            "<b>1 — Extract Frames</b><br>"
+            "Decodes and undistorts frames for the selected camera (thermal or RGB); "
+            "matches GPS positions from the AirData log via SRT timestamps (video) or "
+            "EXIF timestamps (photo). Run once per camera you need.<br><br>"
             "<b>2 — Generate Flight Route</b><br>"
             "Creates a GPS flight-path line layer and per-frame camera-position points "
             "from the extracted pose data.<br><br>"
             "<b>3 — Detect Animals</b><br>"
             "Runs YOLO-based detection on every extracted frame. The thermal model is "
             "downloaded automatically on first use.<br><br>"
-            "<b>4 — Geo-Reference Detections</b><br>"
+            "<b>→ Geo-Reference Detections</b><br>"
             "Projects pixel-space bounding boxes to UTM coordinates by ray-casting "
             "against the DEM mesh.<br><br>"
             "<b>→ Calculate Perpendicular</b><br>"
             "Measures the perpendicular distance from each geo-referenced detection "
             "to the flight route line — useful for transect-based surveys.<br><br>"
-            "<b>5 — Track Animals</b><br>"
+            "<b>4 — Track Animals</b><br>"
             "Links detections across frames into continuous tracks using the selected "
             "tracking backend.<br><br>"
-            "<b>6 — Calculate Field of View</b><br>"
+            "<b>5 — Calculate Field of View</b><br>"
             "Computes per-frame camera footprint polygons on the ground using the DEM.<br><br>"
-            "<b>7 — Generate ALFS</b><br>"
+            "<b>6 — Generate ALFS</b><br>"
             "Projects all frames onto the DEM surface and blends them into a "
             "georeferenced GeoTIFF mosaic.<br><br>"
-            "<b>8 — Export Frames as GeoTIFF</b><br>"
+            "<b>7 — Export Frames as GeoTIFF</b><br>"
             "Exports individual frames as separate georeferenced GeoTIFFs.<br><br>"
-            "<b>8b — Generate Orthomosaic</b><br>"
-            "Merges the exported frame GeoTIFFs (Step 8) into a single true "
+            "<b>8 — Generate Orthomosaic</b><br>"
+            "Merges the exported frame GeoTIFFs (Step 7) into a single true "
             "orthomosaic, using all frames or a selected range and a configurable "
             "overlap merge mode.<br><br>"
             "<b>9 / 10 — Object Segmentation</b><br>"
@@ -4424,7 +4439,7 @@ class BambiDockWidget(QDockWidget):
     def run_trex_import(self):
         """Import TRex tracklets and geo-reference them against the DEM."""
         config = self.get_config()
-        camera = config.get("detection_camera", "T")
+        camera = config.get("tracking_camera", "T")
         target_folder = config.get("target_folder", "")
         npz_dir = config.get("trex_npz_dir", "")
 
@@ -4443,7 +4458,7 @@ class BambiDockWidget(QDockWidget):
                 self,
                 "Missing Prerequisites",
                 f"{camera_name} frame extraction has not been completed.\n"
-                f"Please run Step 1{'a' if camera == 'T' else 'b'} first."
+                f"Please run Step 1 (Extract Frames) for {camera_name} first."
             )
             return
 
@@ -4455,8 +4470,9 @@ class BambiDockWidget(QDockWidget):
     def _check_existing_outputs(self, target_folder: str):
         """Check for existing output subfolders and update status labels accordingly.
 
-        This method checks if the target folder and its expected subfolders exist,
-        and marks the corresponding processing steps as 'Completed' if outputs are found.
+        Each camera-selectable step is checked against the camera currently
+        selected in its combo box, so the status always reflects the selected
+        modality's outputs.
 
         :param target_folder: Path to the target folder
         """
@@ -4470,62 +4486,70 @@ class BambiDockWidget(QDockWidget):
                      "alfs", "export_geotiffs", "orthomosaic", "sam3_segmentation",
                      "sam3_georeference", "trex_import"):
             self.update_status(step, "⚪ Not started")
+        for step in ("perpendicular", "track_perpendicular"):
+            self.update_status(step, "⚪")
 
         completed_count = 0
 
-        # Check for thermal frame extraction
-        frames_t_path = os.path.join(target_folder, "frames_t")
-        poses_t_path = os.path.join(target_folder, "poses_t.json")
+        def combo_suffix(camera_combo) -> str:
+            return "_t" if camera_combo.currentIndex() == 0 else "_w"
 
-        if os.path.isdir(frames_t_path) and os.listdir(frames_t_path) and os.path.isfile(poses_t_path):
-            self.update_status("extract_thermal_frames", "🟢 Completed")
+        # Check frame extraction for the camera selected in the step's combo
+        suffix = combo_suffix(self.extract_camera_combo)
+        frames_path = os.path.join(target_folder, "frames" + suffix)
+        poses_path = os.path.join(target_folder, f"poses{suffix}.json")
+
+        if os.path.isdir(frames_path) and os.listdir(frames_path) and os.path.isfile(poses_path):
+            self.update_status(
+                "extract_thermal_frames" if suffix == "_t" else "extract_rgb_frames",
+                "🟢 Completed")
             completed_count += 1
 
-        # Check for RGB frame extraction
-        frames_w_path = os.path.join(target_folder, "frames_w")
-        poses_w_path = os.path.join(target_folder, "poses_w.json")
-
-        if os.path.isdir(frames_w_path) and os.listdir(frames_w_path) and os.path.isfile(poses_w_path):
-            self.update_status("extract_rgb_frames", "🟢 Completed")
-            completed_count += 1
-
-        # Define the mapping between subfolder base names and their corresponding status updates.
-        # Each base name is checked with both _t and _w suffixes — whichever exists and has
-        # content marks the step as completed.
-        # Format: (subfolder_base, status_step_key, additional_check_file)
+        # Define the mapping between subfolder base names and their corresponding status
+        # updates. Each base name is checked with the suffix of the camera currently
+        # selected in the step's combo box.
+        # Format: (subfolder_base, status_step_key, additional_check_file, camera_combo)
         folder_status_mapping = [
-            ("flight_route", "flight_route", None),
-            ("detections", "detection", None),
-            ("georeferenced", "georeference", None),
-            ("tracks", "tracking", None),
-            ("fov", "calculate_fov", None),
-            ("alfs", "alfs", None),
-            ("geotiffs", "export_geotiffs", None),
-            ("orthomosaic", "orthomosaic", None),
-            ("segmentation", "sam3_segmentation", "segmentation_pixel.json"),
-            ("segmentation", "sam3_georeference", "segmentation_georef.json"),
-            ("tracks_pixel", "trex_import", None),
+            ("flight_route", "flight_route", None, self.flight_route_camera_combo),
+            ("detections", "detection", None, self.detection_camera_combo),
+            ("georeferenced", "georeference", None, self.detection_camera_combo),
+            ("tracks", "tracking", None, self.tracking_camera_combo),
+            ("fov", "calculate_fov", None, self.fov_camera_combo),
+            ("alfs", "alfs", None, self.alfs_camera_combo),
+            ("geotiffs", "export_geotiffs", None, self.geotiff_camera_combo),
+            ("orthomosaic", "orthomosaic", None, self.ortho_camera_combo),
+            ("segmentation", "sam3_segmentation", "segmentation_pixel.json", self.sam3_camera_combo),
+            ("segmentation", "sam3_georeference", "segmentation_georef.json", self.sam3_camera_combo),
+            ("tracks_pixel", "trex_import", None, self.tracking_camera_combo),
         ]
 
-        for subfolder_base, status_key, check_file in folder_status_mapping:
-            found = False
-            for suffix in ("_t", "_w"):
-                subfolder_path = os.path.join(target_folder, subfolder_base + suffix)
+        for subfolder_base, status_key, check_file, combo in folder_status_mapping:
+            subfolder_path = os.path.join(target_folder, subfolder_base + combo_suffix(combo))
 
-                if not os.path.isdir(subfolder_path):
+            if not os.path.isdir(subfolder_path):
+                continue
+
+            if check_file:
+                check_path_subfolder = os.path.join(subfolder_path, check_file)
+                check_path_target = os.path.join(target_folder, check_file)
+                if not os.path.isfile(check_path_subfolder) and not os.path.isfile(check_path_target):
                     continue
 
-                if check_file:
-                    check_path_subfolder = os.path.join(subfolder_path, check_file)
-                    check_path_target = os.path.join(target_folder, check_file)
-                    if not os.path.isfile(check_path_subfolder) and not os.path.isfile(check_path_target):
-                        continue
+            if os.listdir(subfolder_path):
+                self.update_status(status_key, "🟢 Completed")
+                completed_count += 1
 
-                if os.listdir(subfolder_path):
-                    found = True
-                    break
-
-            if found:
+        # Perpendicular results live in the selected flight-route camera's folder
+        # and are suffixed with the camera of the detections/tracks they were
+        # computed for.
+        route_folder = os.path.join(
+            target_folder, "flight_route" + combo_suffix(self.flight_route_camera_combo))
+        for status_key, filename in (
+                ("perpendicular",
+                 f"perpendicular{combo_suffix(self.detection_camera_combo)}.json"),
+                ("track_perpendicular",
+                 f"perpendicular_tracks{combo_suffix(self.tracking_camera_combo)}.json")):
+            if os.path.isfile(os.path.join(route_folder, filename)):
                 self.update_status(status_key, "🟢 Completed")
                 completed_count += 1
 
@@ -4545,7 +4569,8 @@ class BambiDockWidget(QDockWidget):
         # Reset all QGIS-layer statuses before re-checking.
         for step in ("add_flight_route", "add_frame_detections", "add_layers",
                      "add_fov", "add_merged_fov", "add_alfs", "add_geotiffs",
-                     "add_orthomosaic", "add_sam3"):
+                     "add_orthomosaic", "add_sam3", "add_perpendicular",
+                     "add_track_perpendicular"):
             self.update_status(step, "⚪")
 
         root = QgsProject.instance().layerTreeRoot()
@@ -4561,30 +4586,34 @@ class BambiDockWidget(QDockWidget):
         for layer in QgsProject.instance().mapLayers().values():
             existing_layers.add(layer.name())
 
-        # Define mapping: (check_type, name_prefix, status_key)
-        # Matches any group/layer whose name starts with name_prefix (handles camera suffixes).
+        # Define mapping: (check_type, name_prefix, status_key, camera_combo)
+        # Group/layer names carry the camera label of the modality they were
+        # created for (e.g. "BAMBI Wildlife Tracks (Thermal)"), so only names
+        # matching the camera currently selected for the step count as added.
         layer_status_mapping = [
-            ("group", "BAMBI Flight Route", "add_flight_route"),
-            ("group", "BAMBI Frame Detections", "add_frame_detections"),
-            ("group", "BAMBI Wildlife Tracks", "add_layers"),
-            ("group", "BAMBI FoV Polygons", "add_fov"),
-            ("layer", "BAMBI FoV Coverage", "add_merged_fov"),
-            ("layer", "BAMBI ALFS", "add_alfs"),
-            ("group", "BAMBI Frame GeoTIFFs", "add_geotiffs"),
-            ("layer", "BAMBI Orthomosaic", "add_orthomosaic"),
+            ("group", "BAMBI Flight Route", "add_flight_route", self.flight_route_camera_combo),
+            ("group", "BAMBI Frame Detections", "add_frame_detections", self.detection_camera_combo),
+            ("group", "BAMBI Wildlife Tracks", "add_layers", self.tracking_camera_combo),
+            ("group", "BAMBI FoV Polygons", "add_fov", self.fov_camera_combo),
+            ("layer", "BAMBI FoV Coverage", "add_merged_fov", self.fov_camera_combo),
+            ("layer", "BAMBI ALFS", "add_alfs", self.alfs_camera_combo),
+            ("group", "BAMBI Frame GeoTIFFs", "add_geotiffs", self.geotiff_camera_combo),
+            ("layer", "BAMBI Orthomosaic", "add_orthomosaic", self.ortho_camera_combo),
+            ("group", "SAM3 Segmentation", "add_sam3", self.sam3_camera_combo),
+            # Perpendicular groups are labeled with the camera of the
+            # detections/tracks the distances were computed for.
+            ("group", "BAMBI Perpendicular", "add_perpendicular", self.detection_camera_combo),
+            ("group", "BAMBI Track Perpendicular", "add_track_perpendicular", self.tracking_camera_combo),
         ]
 
         added_count = 0
 
-        for check_type, name_prefix, status_key in layer_status_mapping:
-            if check_type == "group":
-                if any(g.startswith(name_prefix) for g in existing_groups):
-                    self.update_status(status_key, "🟢 Added")
-                    added_count += 1
-            elif check_type == "layer":
-                if any(la.startswith(name_prefix) for la in existing_layers):
-                    self.update_status(status_key, "🟢 Added")
-                    added_count += 1
+        for check_type, name_prefix, status_key, camera_combo in layer_status_mapping:
+            camera_label = "Thermal" if camera_combo.currentIndex() == 0 else "RGB"
+            names = existing_groups if check_type == "group" else existing_layers
+            if any(n.startswith(name_prefix) and n.endswith(f"({camera_label})") for n in names):
+                self.update_status(status_key, "🟢 Added")
+                added_count += 1
 
         if added_count > 0:
             self.log(f"Detected {added_count} existing BAMBI layer(s) in QGIS project")
@@ -4714,6 +4743,14 @@ class BambiDockWidget(QDockWidget):
             self._set_fov_inspector_off()
         if self._fov_georef_click_tool is not None and new_tool is not self._fov_georef_click_tool:
             self._set_fov_georef_inspector_off()
+
+    def _on_step_camera_changed(self):
+        """Re-evaluate step statuses when a step's camera selection changes."""
+        if self.worker is not None:
+            return  # don't clobber the status of a currently running step
+        target_folder = self.target_folder_edit.text().strip()
+        if target_folder and os.path.isdir(target_folder):
+            self._check_existing_outputs(target_folder)
 
     def _refresh_all_statuses(self):
         """Refresh all status indicators by checking outputs and QGIS layers."""
@@ -4861,6 +4898,13 @@ class BambiDockWidget(QDockWidget):
             QMessageBox.warning(self, "Error", f"Failed to read poses.json: {str(e)}")
 
     # Processing functions
+    def run_extract_frames(self):
+        """Run frame extraction for the camera selected in the step's combo."""
+        if self.extract_camera_combo.currentIndex() == 0:
+            self.run_extract_thermal_frames()
+        else:
+            self.run_extract_rgb_frames()
+
     def run_extract_thermal_frames(self):
         """Run frame extraction for thermal modality."""
         config = self.get_config()
@@ -4969,7 +5013,7 @@ class BambiDockWidget(QDockWidget):
                 self,
                 "Missing Prerequisites",
                 f"{camera_name} frame extraction has not been completed.\n"
-                f"Please run Step 1{'a' if camera == 'T' else 'b'} first."
+                f"Please run Step 1 (Extract Frames) for {camera_name} first."
             )
             return
 
@@ -4989,7 +5033,7 @@ class BambiDockWidget(QDockWidget):
             QMessageBox.warning(
                 self,
                 "Missing Prerequisites",
-                f"{camera_name} detection has not been completed.\nPlease run Step 2 first."
+                f"{camera_name} detection has not been completed.\nPlease run Step 3 (Detect Animals) first."
             )
             return
 
@@ -5013,7 +5057,7 @@ class BambiDockWidget(QDockWidget):
                 self,
                 "Missing Prerequisites",
                 f"{camera_name} frame extraction has not been completed.\n"
-                f"Please run Step 1{'a' if camera == 'T' else 'b'} first."
+                f"Please run Step 1 (Extract Frames) for {camera_name} first."
             )
             return
 
@@ -5033,18 +5077,19 @@ class BambiDockWidget(QDockWidget):
             self.run_trex_import()
             return
 
-        det_camera = config.get("detection_camera", "T")
-        det_suffix = "t" if det_camera == "T" else "w"
+        trk_camera = config.get("tracking_camera", "T")
+        trk_suffix = "t" if trk_camera == "T" else "w"
 
         # Check if georeferenced detections exist (camera-specific folder)
-        georef_folder = os.path.join(config["target_folder"], f"georeferenced_{det_suffix}")
+        georef_folder = os.path.join(config["target_folder"], f"georeferenced_{trk_suffix}")
 
         if not os.path.exists(georef_folder):
-            camera_name = "Thermal" if det_camera == "T" else "RGB"
+            camera_name = "Thermal" if trk_camera == "T" else "RGB"
             QMessageBox.warning(
                 self,
                 "Missing Prerequisites",
-                f"{camera_name} geo-referencing has not been completed.\nPlease run Step 3 first."
+                f"{camera_name} geo-referencing has not been completed.\n"
+                f"Please run Geo-Reference Detections (under Step 3) first."
             )
             return
 
@@ -5066,7 +5111,7 @@ class BambiDockWidget(QDockWidget):
                 self,
                 "Missing Prerequisites",
                 f"{camera_name} frame extraction has not been completed.\n"
-                f"Please run Step 1{'a' if camera == 'T' else 'b'} first."
+                f"Please run Step 1 (Extract Frames) for {camera_name} first."
             )
             return
 
@@ -5092,7 +5137,7 @@ class BambiDockWidget(QDockWidget):
                 self,
                 "Missing Prerequisites",
                 f"{camera_name} frame extraction has not been completed.\n"
-                f"Please run Step 1{'a' if camera == 'T' else 'b'} first."
+                f"Please run Step 1 (Extract Frames) for {camera_name} first."
             )
             return
 
@@ -5118,7 +5163,7 @@ class BambiDockWidget(QDockWidget):
                 self,
                 "Missing GeoTIFFs",
                 f"{camera_name} frame GeoTIFFs have not been exported.\n"
-                f"Please run Step 8 (Export Frames as GeoTIFF) first."
+                f"Please run Step 7 (Export Frames as GeoTIFF) first."
             )
             return
 
@@ -5177,7 +5222,7 @@ class BambiDockWidget(QDockWidget):
                 self,
                 "Missing Prerequisites",
                 f"{camera_name} frame extraction has not been completed.\n"
-                f"Please run Step 1{'a' if camera == 'T' else 'b'} first."
+                f"Please run Step 1 (Extract Frames) for {camera_name} first."
             )
             return
 
@@ -5215,7 +5260,7 @@ class BambiDockWidget(QDockWidget):
             QMessageBox.warning(
                 self,
                 "Missing Prerequisites",
-                "SAM3 segmentation has not been completed.\nPlease run Step 9 first."
+                "SAM3 segmentation has not been completed.\nPlease run Step 9 (Run SAM3 Segmentation) first."
             )
             return
 
@@ -5242,7 +5287,8 @@ class BambiDockWidget(QDockWidget):
             QMessageBox.warning(
                 self,
                 "Missing Prerequisites",
-                f"{camera_label} SAM3 geo-referencing has not been completed.\nPlease run Step 10 first."
+                f"{camera_label} SAM3 geo-referencing has not been completed.\n"
+                f"Please run Step 10 (Geo-Reference Segmentation) first."
             )
             return
 
@@ -5450,7 +5496,7 @@ class BambiDockWidget(QDockWidget):
                 self,
                 "Missing Prerequisites",
                 f"{camera_name} frame extraction has not been completed.\n"
-                f"Please run Step 1{'a' if camera == 'T' else 'b'} first."
+                f"Please run Step 1 (Extract Frames) for {camera_name} first."
             )
             return
 
@@ -5559,8 +5605,10 @@ class BambiDockWidget(QDockWidget):
     def update_status(self, step: str, status: str):
         """Update the status label for a step."""
         status_map = {
-            "extract_thermal_frames": self.extract_thermal_status,
-            "extract_rgb_frames": self.extract_rgb_status,
+            # Both extraction modalities run under the single "Extract Frames"
+            # step, so they share one status label.
+            "extract_thermal_frames": self.extract_status,
+            "extract_rgb_frames": self.extract_status,
             "detection": self.detect_status,
             "georeference": self.georef_status,
             "add_frame_detections": self.frame_detections_status,
@@ -5593,8 +5641,7 @@ class BambiDockWidget(QDockWidget):
 
     def set_buttons_enabled(self, enabled: bool):
         """Enable or disable all processing buttons."""
-        self.extract_thermal_btn.setEnabled(enabled)
-        self.extract_rgb_btn.setEnabled(enabled)
+        self.extract_btn.setEnabled(enabled)
         self.detect_btn.setEnabled(enabled)
         self.georef_btn.setEnabled(enabled)
         self.add_frame_detections_btn.setEnabled(enabled)
@@ -5650,8 +5697,11 @@ class BambiDockWidget(QDockWidget):
         config = self.get_config()
         fr_camera = config.get("flight_route_camera", "T")
         fr_suffix = "t" if fr_camera == "T" else "w"
-        camera_label = "Thermal" if fr_camera == "T" else "RGB"
-        perp_file = os.path.join(config["target_folder"], f"flight_route_{fr_suffix}", "perpendicular.json")
+        det_camera = config.get("detection_camera", "T")
+        det_suffix = "t" if det_camera == "T" else "w"
+        camera_label = "Thermal" if det_camera == "T" else "RGB"
+        perp_file = os.path.join(config["target_folder"], f"flight_route_{fr_suffix}",
+                                 f"perpendicular_{det_suffix}.json")
 
         if not os.path.exists(perp_file):
             QMessageBox.warning(
@@ -5802,8 +5852,11 @@ class BambiDockWidget(QDockWidget):
         config = self.get_config()
         fr_camera = config.get("flight_route_camera", "T")
         fr_suffix = "t" if fr_camera == "T" else "w"
-        camera_label = "Thermal" if fr_camera == "T" else "RGB"
-        perp_file = os.path.join(config["target_folder"], f"flight_route_{fr_suffix}", "perpendicular_tracks.json")
+        trk_camera = config.get("tracking_camera", "T")
+        trk_suffix = "t" if trk_camera == "T" else "w"
+        camera_label = "Thermal" if trk_camera == "T" else "RGB"
+        perp_file = os.path.join(config["target_folder"], f"flight_route_{fr_suffix}",
+                                 f"perpendicular_tracks_{trk_suffix}.json")
 
         if not os.path.exists(perp_file):
             QMessageBox.warning(
@@ -5814,7 +5867,7 @@ class BambiDockWidget(QDockWidget):
             return
 
         try:
-            self.log("Adding track perpendicular lines to QGIS...")
+            self.log(f"Adding {camera_label} track perpendicular lines to QGIS...")
             self.update_status("add_track_perpendicular", "🟡 Loading...")
 
             with open(perp_file, 'r', encoding='utf-8') as f:
@@ -5943,7 +5996,7 @@ class BambiDockWidget(QDockWidget):
             QMessageBox.warning(
                 self,
                 "Missing Prerequisites",
-                f"{camera_label} tracking has not been completed.\nPlease run Step 4 first."
+                f"{camera_label} tracking has not been completed.\nPlease run Step 4 (Track Animals Or Import) first."
             )
             return
 
@@ -6291,7 +6344,8 @@ class BambiDockWidget(QDockWidget):
             QMessageBox.warning(
                 self,
                 "Missing FoV Data",
-                f"{camera_label} FoV calculation has not been completed.\nPlease run Step 6 first."
+                f"{camera_label} FoV calculation has not been completed.\n"
+                f"Please run Step 5 (Calculate Field of View) first."
             )
             return
 
@@ -6473,7 +6527,8 @@ class BambiDockWidget(QDockWidget):
             QMessageBox.warning(
                 self,
                 "Missing FoV Data",
-                f"{camera_label} FoV calculation has not been completed.\nPlease run Step 6 first."
+                f"{camera_label} FoV calculation has not been completed.\n"
+                f"Please run Step 5 (Calculate Field of View) first."
             )
             return
 
@@ -6649,7 +6704,8 @@ class BambiDockWidget(QDockWidget):
             QMessageBox.warning(
                 self,
                 "Missing Data",
-                f"{camera_label} geo-referencing has not been completed.\nPlease run Step 3 first."
+                f"{camera_label} geo-referencing has not been completed.\n"
+                f"Please run Geo-Reference Detections (under Step 3) first."
             )
             return
 
@@ -6899,7 +6955,7 @@ class BambiDockWidget(QDockWidget):
             QMessageBox.warning(
                 self,
                 "Missing ALFS",
-                f"{camera_label} alfs has not been generated.\nPlease run Step 6 first."
+                f"{camera_label} alfs has not been generated.\nPlease run Step 6 (Generate ALFS) first."
             )
             return
 
@@ -6917,7 +6973,7 @@ class BambiDockWidget(QDockWidget):
                 QMessageBox.warning(
                     self,
                     "Missing ALFS",
-                    "ALFS has not been generated.\nPlease run Step 6 first."
+                    "ALFS has not been generated.\nPlease run Step 6 (Generate ALFS) first."
                 )
                 self.update_status("add_alfs", "🔴 No files")
                 return
@@ -6963,7 +7019,8 @@ class BambiDockWidget(QDockWidget):
             QMessageBox.warning(
                 self,
                 "Missing GeoTIFFs",
-                f"{camera_label} frame GeoTIFFs have not been exported.\nPlease run Step 7 first."
+                f"{camera_label} frame GeoTIFFs have not been exported.\n"
+                f"Please run Step 7 (Export Frames as GeoTIFF) first."
             )
             return
 
@@ -7052,7 +7109,8 @@ class BambiDockWidget(QDockWidget):
             QMessageBox.warning(
                 self,
                 "Missing Flight Route",
-                f"{camera_label} flight route has not been generated.\nPlease run Step 9 first."
+                f"{camera_label} flight route has not been generated.\n"
+                f"Please run Step 2 (Generate Flight Route) first."
             )
             return
 

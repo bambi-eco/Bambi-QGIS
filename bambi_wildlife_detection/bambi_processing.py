@@ -1327,7 +1327,8 @@ class BambiProcessor:
 
         For each georeferenced detection center, finds the nearest point on the
         AirData flight route (LineString) and records the perpendicular distance.
-        Results are saved to flight_route_{suffix}/perpendicular.json.
+        Results are saved to flight_route_{fr}/perpendicular_{det}.json, suffixed
+        with the detection camera the distances were computed for.
 
         :param config: Configuration dictionary
         :param progress_fn: Progress callback function
@@ -1517,17 +1518,18 @@ class BambiProcessor:
         route_folder = os.path.join(target_folder, f"flight_route_{fr_suffix}")
         os.makedirs(route_folder, exist_ok=True)
 
-        # Save flat perpendicular.json (used by "Add Perpendicular Lines to QGIS")
+        # Save flat perpendicular_{det}.json (used by "Add Perpendicular Lines
+        # to QGIS"), suffixed with the detection camera.
         output = {
             'crs': f"EPSG:{target_epsg}",
             'total_detections': len(results),
             'perpendiculas': results
         }
-        output_file = os.path.join(route_folder, "perpendicular.json")
+        output_file = os.path.join(route_folder, f"perpendicular_{det_suffix}.json")
         with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(output, f, indent=2)
 
-        # Save image-keyed perpendicular_by_image.json
+        # Save image-keyed perpendicular_by_image_{det}.json
         # Structure: { "imagefile": { "0": { center, perpendicular, distance }, ... } }
         by_image: Dict[str, Dict] = {}
         for r in results:
@@ -1543,7 +1545,7 @@ class BambiProcessor:
                 'distance': r['distance_m']
             }
 
-        by_image_file = os.path.join(route_folder, "perpendicular_by_image.json")
+        by_image_file = os.path.join(route_folder, f"perpendicular_by_image_{det_suffix}.json")
         with open(by_image_file, 'w', encoding='utf-8') as f:
             json.dump(by_image, f, indent=2)
 
@@ -1564,8 +1566,9 @@ class BambiProcessor:
         For each track, finds the last detection (highest frame number), computes its
         center, and finds the nearest point on the AirData flight route LineString.
         Results are saved to:
-          flight_route_{suffix}/perpendicular_tracks.json        (flat list, used by QGIS layer)
-          flight_route_{suffix}/perpendicular_tracks_by_track.json (keyed by track_id)
+          flight_route_{fr}/perpendicular_tracks_{trk}.json          (flat list, used by QGIS layer)
+          flight_route_{fr}/perpendicular_tracks_by_track_{trk}.json (keyed by track_id)
+        Both are suffixed with the tracking camera the distances were computed for.
 
         :param config: Configuration dictionary
         :param progress_fn: Progress callback function
@@ -1783,12 +1786,12 @@ class BambiProcessor:
             'total_tracks': len(results),
             'tracks': results
         }
-        flat_file = os.path.join(route_folder, "perpendicular_tracks.json")
+        flat_file = os.path.join(route_folder, f"perpendicular_tracks_{trk_suffix}.json")
         with open(flat_file, 'w', encoding='utf-8') as f:
             json.dump(flat_output, f, indent=2)
 
         # Per-track keyed output
-        by_track_file = os.path.join(route_folder, "perpendicular_tracks_by_track.json")
+        by_track_file = os.path.join(route_folder, f"perpendicular_tracks_by_track_{trk_suffix}.json")
         with open(by_track_file, 'w', encoding='utf-8') as f:
             json.dump(by_track, f, indent=2)
 
@@ -2231,7 +2234,7 @@ class BambiProcessor:
         from alfspy.render.render import read_gltf, process_render_data, release_all
         from bambi.util.projection_util import label_to_world_coordinates
 
-        camera = config.get("detection_camera", "T")
+        camera = config.get("tracking_camera", "T")
         camera_suffix = "t" if camera == "T" else "w"
         camera_name = "Thermal" if camera == "T" else "RGB"
         already_undistorted = config.get("trex_already_undistorted", False)

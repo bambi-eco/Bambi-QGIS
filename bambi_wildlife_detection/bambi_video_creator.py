@@ -904,7 +904,11 @@ class VideoCreatorDialog(QDialog):
 
     def _load_perpendicular(self, target, suffix):
         """frame -> list of ((cx, cy), (fx, fy), distance)."""
-        path = os.path.join(target, f"flight_route_{suffix}", "perpendicular.json")
+        path = os.path.join(target, f"flight_route_{suffix}", f"perpendicular_{suffix}.json")
+        if not os.path.exists(path):
+            # Legacy name from before the perpendicular outputs were suffixed
+            # with the detection camera.
+            path = os.path.join(target, f"flight_route_{suffix}", "perpendicular.json")
         out = {}
         if not os.path.exists(path):
             return out
