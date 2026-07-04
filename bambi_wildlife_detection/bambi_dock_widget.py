@@ -905,6 +905,31 @@ class BambiDockWidget(QDockWidget):
         flat_surf_elev_row.addStretch()
         flat_surface_layout.addRow("Elevation (MSL):", flat_surf_elev_row)
 
+        flat_surf_pad_row = QHBoxLayout()
+        self.flat_surface_padding_auto_check = QCheckBox("Auto (50 m)")
+        self.flat_surface_padding_auto_check.setChecked(True)
+        self.flat_surface_padding_auto_check.setToolTip(
+            "When checked, the default 50 m margin is added around the GPS bounding box\n"
+            "to cover the camera footprint. Uncheck to set a custom padding."
+        )
+        self.flat_surface_padding_spin = QDoubleSpinBox()
+        self.flat_surface_padding_spin.setRange(0.0, 10000.0)
+        self.flat_surface_padding_spin.setSingleStep(5.0)
+        self.flat_surface_padding_spin.setDecimals(1)
+        self.flat_surface_padding_spin.setValue(50.0)
+        self.flat_surface_padding_spin.setSuffix(" m")
+        self.flat_surface_padding_spin.setEnabled(False)
+        self.flat_surface_padding_spin.setToolTip(
+            "Margin added around the GPS bounding box of the flight when sizing the mesh."
+        )
+        self.flat_surface_padding_auto_check.toggled.connect(
+            lambda checked: self.flat_surface_padding_spin.setEnabled(not checked)
+        )
+        flat_surf_pad_row.addWidget(self.flat_surface_padding_auto_check)
+        flat_surf_pad_row.addWidget(self.flat_surface_padding_spin)
+        flat_surf_pad_row.addStretch()
+        flat_surface_layout.addRow("Padding:", flat_surf_pad_row)
+
         flat_surf_gen_row = QHBoxLayout()
         flat_surface_generate_btn = QPushButton("Generate Flat Surface Mesh")
         flat_surface_generate_btn.setToolTip(
@@ -3507,9 +3532,14 @@ class BambiDockWidget(QDockWidget):
         lon = (min(lons) + max(lons)) / 2
         delta_y = (max(lats) - min(lats)) * 111320.0
         delta_x = (max(lons) - min(lons)) * 111320.0 * _math.cos(_math.radians(lat))
-        # half-diagonal of the GPS bounding box + 50 m margin for camera footprint
+        # half-diagonal of the GPS bounding box + margin for camera footprint
+        # (default 50 m, or user-defined when the Auto checkbox is unchecked)
+        if self.flat_surface_padding_auto_check.isChecked():
+            padding_m = 50.0
+        else:
+            padding_m = self.flat_surface_padding_spin.value()
         half_diag = _math.sqrt((delta_x / 2) ** 2 + (delta_y / 2) ** 2)
-        extent_m = max(half_diag + 50.0, 50.0)
+        extent_m = max(half_diag + padding_m, padding_m, 1.0)
 
         output_glb  = os.path.join(target_folder, "flat_surface_dem.glb")
         output_json = os.path.join(target_folder, "flat_surface_dem.json")
@@ -3518,7 +3548,8 @@ class BambiDockWidget(QDockWidget):
 
         try:
             self.log(f"Generating flat surface mesh: {flat_msl:.1f} m MSL, "
-                     f"extent ±{extent_m:.0f} m, origin ({lat:.5f}, {lon:.5f}), "
+                     f"extent ±{extent_m:.0f} m (padding {padding_m:.0f} m), "
+                     f"origin ({lat:.5f}, {lon:.5f}), "
                      f"CRS EPSG:{target_epsg or 'auto'} …")
             from .bambi_processing import BambiProcessor
             BambiProcessor.generate_flat_surface_mesh(
