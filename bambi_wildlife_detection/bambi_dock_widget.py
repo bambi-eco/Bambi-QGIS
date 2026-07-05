@@ -392,6 +392,9 @@ class BambiDockWidget(QDockWidget):
         # Setup UI
         self.setup_ui()
 
+        # Snapshot pristine widget state so a new project can reset to defaults
+        self._snapshot_default_config()
+
         # Connect to project signals for config persistence
         self._connect_project_signals()
 
@@ -8032,9 +8035,65 @@ class BambiDockWidget(QDockWidget):
             self._loading_config = False
 
     def _on_project_cleared(self):
-        """Called when project is cleared (new project)."""
-        # Optionally reset fields to defaults when creating new project
-        pass
+        """Called when project is cleared (new project).
+
+        Also fires when an existing project is opened (QGIS clears before
+        reading), in which case readProject re-loads the saved config
+        right after this reset.
+        """
+        self._loading_config = True
+        try:
+            self.reset_config_to_defaults()
+        finally:
+            self._loading_config = False
+
+    def _snapshot_default_config(self):
+        """Capture the pristine post-construction state of all config widgets.
+
+        Must be called once right after setup_ui(), before any project
+        config is loaded. reset_config_to_defaults() restores this state.
+        """
+        self._default_config = {}
+        for name, widget in vars(self).items():
+            if name == "log_text":
+                continue  # keep log history across projects
+            if isinstance(widget, QLineEdit):
+                self._default_config[name] = widget.text()
+            elif isinstance(widget, QCheckBox):
+                self._default_config[name] = widget.isChecked()
+            elif isinstance(widget, QComboBox):
+                self._default_config[name] = (widget.currentIndex(),
+                                              widget.currentText())
+            elif isinstance(widget, (QSpinBox, QDoubleSpinBox)):
+                self._default_config[name] = widget.value()
+            elif isinstance(widget, QTextEdit):
+                self._default_config[name] = widget.toPlainText()
+
+    def reset_config_to_defaults(self):
+        """Reset all configuration widgets to their default (startup) state."""
+        for name, value in self._default_config.items():
+            widget = getattr(self, name, None)
+            if widget is None:
+                continue
+            if isinstance(widget, QLineEdit):
+                widget.setText(value)
+            elif isinstance(widget, QCheckBox):
+                widget.setChecked(value)
+            elif isinstance(widget, QComboBox):
+                index, text = value
+                if widget.isEditable():
+                    widget.setCurrentText(text)
+                elif 0 <= index < widget.count():
+                    widget.setCurrentIndex(index)
+            elif isinstance(widget, (QSpinBox, QDoubleSpinBox)):
+                widget.setValue(value)
+            elif isinstance(widget, QTextEdit):
+                widget.setPlainText(value)
+
+        self._additional_corrections = []
+        self._update_corrections_list_ui()
+
+        self.log("Configuration reset to defaults")
 
     def save_config_to_project(self):
         """Save all configuration to the QGIS project."""
@@ -8436,7 +8495,8 @@ class BambiDockWidget(QDockWidget):
         corrections_json = read_str("Correction/AdditionalCorrections", "[]")
         try:
             corrections_data = json.loads(corrections_json)
-            self.additional_corrections_list.clear()
+            self._additional_corrections = []
+            self._update_corrections_list_ui()
             for corr in corrections_data:
                 self._add_correction_to_list(corr)
         except json.JSONDecodeError:
