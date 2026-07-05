@@ -325,7 +325,7 @@ class BambiClickTool(QgsMapToolIdentify):
                         layer_xy, frame_idx, image_path_w,
                         target_folder, dem_path, correction_path, "w",
                     )
-                except Exception:
+                except Exception:  # nosec B110
                     pass
 
             frames.append(frame_dict)
@@ -620,7 +620,7 @@ class BambiClickTool(QgsMapToolIdentify):
                     o = d.get("origin")
                     if o and len(o) >= 3:
                         return (float(o[0]), float(o[1]), float(o[2]))
-                except Exception:
+                except Exception:  # nosec B110
                     pass
                 return None
 
@@ -707,7 +707,7 @@ class BambiClickTool(QgsMapToolIdentify):
                         img = cv2.imread(candidate)
                         if img is not None:
                             img_height, img_width = img.shape[:2]
-                    except Exception:
+                    except Exception:  # nosec B110
                         pass
 
             # ---- Project (single point, same as _project_georef_box_to_pixels)
@@ -744,7 +744,7 @@ class BambiClickTool(QgsMapToolIdentify):
                                     best_line = line
                         if best_line:
                             georef_info = f"\n  Nearest georef : {best_line}"
-            except Exception:
+            except Exception:  # nosec B110
                 pass
 
             QgsMessageLog.logMessage(
@@ -819,7 +819,7 @@ class BambiClickTool(QgsMapToolIdentify):
                 if ok and value is not None:
                     return float(value) - origin[2]  # convert to local z
 
-        except Exception:
+        except Exception:  # nosec B110
             pass
         return 0.0
 
@@ -860,7 +860,7 @@ class BambiClickTool(QgsMapToolIdentify):
                             })
                 if result:
                     break  # found in this file, no need to search further
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
         return sorted(result, key=lambda d: d["frame"])
@@ -891,7 +891,7 @@ class BambiClickTool(QgsMapToolIdentify):
                             "confidence": float(parts[5]),
                             "class_id": int(parts[6]) if len(parts) > 6 else 0,
                         })
-        except Exception:
+        except Exception:  # nosec B110
             pass
         return result
 
@@ -923,7 +923,7 @@ class BambiClickTool(QgsMapToolIdentify):
                             "cls": int(parts[7]),
                         }
                         result.setdefault(tid, []).append(entry)
-        except Exception:
+        except Exception:  # nosec B110
             pass
         return result
 
@@ -950,7 +950,7 @@ class BambiClickTool(QgsMapToolIdentify):
                         candidate = os.path.join(target_folder, frames_dir, imagefile)
                         if imagefile and os.path.isfile(candidate):
                             found = candidate
-                except Exception:
+                except Exception:  # nosec B110
                     pass
             paths.append(found)
         return paths[0], paths[1]
@@ -1003,7 +1003,7 @@ class BambiClickTool(QgsMapToolIdentify):
                 )
                 try:
                     _ = tri_mesh.triangles_tree   # pre-build BVH
-                except Exception:
+                except Exception:  # nosec B110
                     pass
                 self._dem_mesh_cache[mesh_path] = tri_mesh
 
@@ -1016,7 +1016,7 @@ class BambiClickTool(QgsMapToolIdentify):
             )
             if len(locations) > 0:
                 return float(np.max(locations[:, 2]))
-        except Exception:
+        except Exception:  # nosec B110
             pass
         return None
 

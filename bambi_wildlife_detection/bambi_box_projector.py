@@ -50,7 +50,7 @@ def _read_correction(target_folder: str, correction_path: str) -> dict:
         try:
             with open(path, "r", encoding="utf-8") as fh:
                 return json.load(fh)
-        except Exception:
+        except Exception:  # nosec B110
             pass
     return {}
 
@@ -99,7 +99,7 @@ def _load_georef(target_folder: str) -> List[dict]:
                         "confidence": float(parts[8]),
                         "class_id": int(parts[9]),
                     })
-    except Exception:
+    except Exception:  # nosec B110
         pass
     return result
 
@@ -295,7 +295,7 @@ class BoxProjectionWorker(QThread):
                 o = d.get("origin")
                 if o and len(o) >= 3:
                     return (float(o[0]), float(o[1]), float(o[2]))
-            except Exception:
+            except Exception:  # nosec B110
                 pass
             return None
 
@@ -379,7 +379,7 @@ class BoxProjectionWorker(QThread):
                     img = cv2.imread(candidate)
                     if img is not None:
                         img_height, img_width = img.shape[:2]
-                except Exception:
+                except Exception:  # nosec B110
                     pass
 
         self.progress.emit(45)

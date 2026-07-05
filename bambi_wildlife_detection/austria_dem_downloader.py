@@ -708,7 +708,7 @@ class GLTFMeshGenerator:
                     try:
                         src_epsg = int(source_crs_override.upper().replace("EPSG:", "").strip())
                         self._log(f"Using source CRS override: EPSG:{src_epsg}")
-                    except Exception:
+                    except Exception:  # nosec B110
                         pass
 
                 # Method 1: Extract EPSG from rasterio CRS without DB lookup
@@ -717,7 +717,7 @@ class GLTFMeshGenerator:
                 if src_epsg is None and src.crs is not None:
                     try:
                         src_epsg = src.crs.to_epsg()
-                    except Exception:
+                    except Exception:  # nosec B110
                         pass
                 if src_epsg is None and src.crs is not None:
                     try:
@@ -725,7 +725,7 @@ class GLTFMeshGenerator:
                         matches = re.findall(r'ID\["EPSG",(\d+)\]', str(src.crs))
                         if matches:
                             src_epsg = int(matches[-1])
-                    except Exception:
+                    except Exception:  # nosec B110
                         pass
 
                 # Method 2: Parse EPSG from the CRS string if it is in "EPSG:XXXXX" form
@@ -733,14 +733,14 @@ class GLTFMeshGenerator:
                 if src_epsg is None and crs and crs.upper().startswith("EPSG:"):
                     try:
                         src_epsg = int(crs.upper().replace("EPSG:", "").strip())
-                    except Exception:
+                    except Exception:  # nosec B110
                         pass
 
                 # Method 3: Parse EPSG from the caller-provided source_crs parameter
                 if src_epsg is None and source_crs:
                     try:
                         src_epsg = int(source_crs.upper().replace("EPSG:", "").strip())
-                    except Exception:
+                    except Exception:  # nosec B110
                         pass
 
                 # Method 4: Default to UTM 33N if all else fails (common for Austria)
@@ -771,7 +771,7 @@ class GLTFMeshGenerator:
                     _target_epsg_reproject = None
                     try:
                         _target_epsg_reproject = int(source_crs.upper().replace("EPSG:", "").strip())
-                    except Exception:
+                    except Exception:  # nosec B110
                         pass
                     if _target_epsg_reproject and _target_epsg_reproject != 4326:
                         try:

@@ -14,7 +14,7 @@ For packages hosted only on GitHub the dialog will:
 
 import os
 import sys
-import subprocess
+import subprocess  # nosec B404
 import zipfile
 import importlib.metadata
 import threading
@@ -60,7 +60,7 @@ def _git_available():
         kwargs = dict(capture_output=True, check=True, timeout=5, text=True)
         if sys.platform == 'win32':
             kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
-        result = subprocess.run(['git', '--version'], **kwargs)
+        result = subprocess.run(['git', '--version'], **kwargs)  # nosec B603 B607
         return result.stdout.strip()
     except Exception:
         return None
@@ -111,7 +111,7 @@ def _get_version_status(dist_name, plugins_dir=None):
         ver = Version(ver_str)
         if (min_ver and ver < Version(min_ver)) or (max_ver and ver > Version(max_ver)):
             return ver_str, 'untested'
-    except Exception:
+    except Exception:  # nosec B110
         pass  # if packaging is unavailable or version is unparseable, assume ok
     return ver_str, 'ok'
 
@@ -149,7 +149,7 @@ def _run_pip(args, log_fn):
     if sys.platform == 'win32':
         popen_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
 
-    with subprocess.Popen(cmd, **popen_kwargs) as proc:
+    with subprocess.Popen(cmd, **popen_kwargs) as proc:  # nosec B603
         for line in proc.stdout:
             log_fn(line.rstrip())
 

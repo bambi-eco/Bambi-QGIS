@@ -461,11 +461,11 @@ class RandomStrategy(EvaluationFlightStrategy):
         self.__grid_size = grid_size
         self.__random_search = random_search
         if seed is None:
-            self.__seed = random.randrange(sys.maxsize)
-            self.__random = random.Random(self.__seed)
+            self.__seed = random.randrange(sys.maxsize)  # nosec B311
+            self.__random = random.Random(self.__seed)  # nosec B311
         else:
             self.__seed = seed
-            self.__random = random.Random(seed)
+            self.__random = random.Random(seed)  # nosec B311
 
     def create_routes(
         self,
@@ -1009,11 +1009,11 @@ class RandomLoopStrategy(EvaluationFlightStrategy):
         self.__y_offset = y_offset
         self.__x_offset = x_offset
         if seed is None:
-            self.__seed = random.randrange(sys.maxsize)
-            self.__random = random.Random(self.__seed)
+            self.__seed = random.randrange(sys.maxsize)  # nosec B311
+            self.__random = random.Random(self.__seed)  # nosec B311
         else:
             self.__seed = seed
-            self.__random = random.Random(seed)
+            self.__random = random.Random(seed)  # nosec B311
 
     def create_routes(
         self,

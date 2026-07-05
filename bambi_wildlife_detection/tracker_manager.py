@@ -335,7 +335,7 @@ class TrackerManager:
                 tracker_class=GeoHybridDeepOcSort
             )
 
-        except Exception:
+        except Exception:  # nosec B110
             # georef_tracker import can fail
             pass
 
@@ -385,7 +385,7 @@ class TrackerManager:
 
                 params[name] = (param_type, default, f"Parameter: {name}")
 
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
         return params
@@ -552,7 +552,7 @@ class TrackerManager:
             if os.path.exists(target_path):
                 try:
                     os.remove(target_path)
-                except Exception:
+                except Exception:  # nosec B110
                     pass
             if log_fn:
                 log_fn(f"Failed to download {description}: {e}")

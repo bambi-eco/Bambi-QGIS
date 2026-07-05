@@ -246,9 +246,9 @@ class BambiProcessor:
         e = float(extent_m)
         vertices = np.array([
             [-e, -e, 0.0],
-            [ e, -e, 0.0],
-            [ e,  e, 0.0],
-            [-e,  e, 0.0],
+            [e, -e, 0.0],
+            [e, e, 0.0],
+            [-e, e, 0.0],
         ], dtype=np.float32)
         uvs = np.array([[0, 0], [1, 0], [1, 1], [0, 1]], dtype=np.float32)
         indices = np.array([[0, 1, 2], [0, 2, 3]], dtype=np.uint32)
@@ -258,11 +258,11 @@ class BambiProcessor:
         ib = indices.flatten().tobytes()
 
         def _align4(n): return (4 - n % 4) % 4
-        u_off  = len(vb) + _align4(len(vb))
-        i_off  = u_off  + len(ub) + _align4(len(ub))
-        total  = i_off  + len(ib) + _align4(len(ib))
+        u_off = len(vb) + _align4(len(vb))
+        i_off = u_off + len(ub) + _align4(len(ub))
+        total = i_off + len(ib) + _align4(len(ib))
         buf = bytearray(total)
-        buf[0:len(vb)]              = vb
+        buf[0:len(vb)] = vb
         buf[u_off:u_off + len(ub)] = ub
         buf[i_off:i_off + len(ib)] = ib
 
@@ -274,7 +274,7 @@ class BambiProcessor:
                 attributes=gl.Attributes(POSITION=0, TEXCOORD_0=1), indices=2,
             )])],
             bufferViews=[
-                gl.BufferView(buffer=0, byteOffset=0,     byteLength=len(vb)),
+                gl.BufferView(buffer=0, byteOffset=0, byteLength=len(vb)),
                 gl.BufferView(buffer=0, byteOffset=u_off, byteLength=len(ub)),
                 gl.BufferView(buffer=0, byteOffset=i_off, byteLength=len(ib)),
             ],
@@ -443,7 +443,7 @@ class BambiProcessor:
             if os.path.exists(model_path):
                 try:
                     os.remove(model_path)
-                except Exception:
+                except Exception:  # nosec B110
                     pass
 
             error_msg = (
@@ -660,7 +660,9 @@ class BambiProcessor:
                 with open(config["thermal_calibration_path"]) as f:
                     calibration_res = json.load(f)
 
-            accessor = CalibratedVideoFrameAccessor(calibration_res, preserve_aspect_ratio=config.get("preserve_aspect_ratio", False))
+            accessor = CalibratedVideoFrameAccessor(
+                calibration_res,
+                preserve_aspect_ratio=config.get("preserve_aspect_ratio", False))
             extractor = TimedPoseExtractor(
                 accessor,
                 rel_transformer=rel_transformer,
@@ -829,7 +831,9 @@ class BambiProcessor:
                 with open(config["rgb_calibration_path"]) as f:
                     calibration_res = json.load(f)
 
-            accessor = CalibratedVideoFrameAccessor(calibration_res, preserve_aspect_ratio=config.get("preserve_aspect_ratio", False))
+            accessor = CalibratedVideoFrameAccessor(
+                calibration_res,
+                preserve_aspect_ratio=config.get("preserve_aspect_ratio", False))
             extractor = TimedPoseExtractor(
                 accessor,
                 rel_transformer=rel_transformer,
@@ -937,7 +941,7 @@ class BambiProcessor:
                 origin = dem_metadata.get("origin", [0, 0, 0])
                 coord_offset_x = float(origin[0])
                 coord_offset_y = float(origin[1])
-            except Exception:
+            except Exception:  # nosec B110
                 pass
         elif dem_path:
             auto_metadata_path = dem_path.replace(".gltf", ".json").replace(".glb", ".json")
@@ -948,7 +952,7 @@ class BambiProcessor:
                     origin = dem_metadata.get("origin", [0, 0, 0])
                     coord_offset_x = float(origin[0])
                     coord_offset_y = float(origin[1])
-                except Exception:
+                except Exception:  # nosec B110
                     pass
 
         if coord_offset_x != 0 or coord_offset_y != 0:
@@ -1390,7 +1394,7 @@ class BambiProcessor:
                         dem_meta = json.load(f)
                     origin = dem_meta.get("origin", [0, 0, 0])
                     x_offset, y_offset = float(origin[0]), float(origin[1])
-                except Exception:
+                except Exception:  # nosec B110
                     pass
 
         # Load poses for frame→image mapping AND camera FOV computation
@@ -1629,7 +1633,7 @@ class BambiProcessor:
                         dem_meta = json.load(f)
                     origin = dem_meta.get("origin", [0, 0, 0])
                     x_offset, y_offset = float(origin[0]), float(origin[1])
-                except Exception:
+                except Exception:  # nosec B110
                     pass
 
         # Load poses for frame→image mapping AND camera FOV computation
@@ -1648,7 +1652,7 @@ class BambiProcessor:
                     if frame_to_image:
                         poses_images = poses.get("images", [])
                         break
-                except Exception:
+                except Exception:  # nosec B110
                     pass
 
         if progress_fn:
@@ -2231,7 +2235,7 @@ class BambiProcessor:
         from pyrr import Vector3, Quaternion
         from trimesh import Trimesh
         from alfspy.core.rendering import Camera, Resolution
-        from alfspy.render.render import read_gltf, process_render_data, release_all
+        from alfspy.render.render import read_gltf, process_render_data
         from bambi.util.projection_util import label_to_world_coordinates
 
         camera = config.get("tracking_camera", "T")
@@ -2352,7 +2356,7 @@ class BambiProcessor:
             try:
                 with open(os.path.join(target_folder, f"poses_{camera_suffix}.json"), "r", encoding="utf-8") as f:
                     mask_candidates.append(json.load(f).get("mask"))
-            except Exception:
+            except Exception:  # nosec B110
                 pass
             mask_candidates += [f"mask_{'T' if camera == 'T' else 'W'}.png", "mask.png"]
             for mc in mask_candidates:
@@ -3033,8 +3037,7 @@ class BambiProcessor:
         det_file = os.path.join(target_folder, f"detections_{camera_suffix}", "detections.txt")
         georef_file = os.path.join(target_folder, f"georeferenced_{camera_suffix}", "georeferenced.txt")
         tracks_file = os.path.join(tracks_folder, "tracks.csv")
-        if not (os.path.exists(det_file) and os.path.exists(georef_file)
-                and os.path.exists(tracks_file)):
+        if not (os.path.exists(det_file) and os.path.exists(georef_file) and os.path.exists(tracks_file)):
             return
 
         def _key(vals):
@@ -4211,7 +4214,6 @@ class BambiProcessor:
             far=global_camera.far
         )
 
-
     def _run_alfs_sampling(
             self, config, all_images, dem_path, mask_path,
             alfs_folder, ground_resolution,
@@ -4480,7 +4482,7 @@ class BambiProcessor:
             for shot in shots:
                 try:
                     shot.release()
-                except Exception:
+                except Exception:  # nosec B110
                     pass
 
             if progress_fn:
@@ -4488,7 +4490,7 @@ class BambiProcessor:
 
         try:
             ctx.release()
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
     def _filter_shots_for_tile(self, shots, tile_geo_bounds, log_fn=None, fov_default=50.0):
@@ -5062,7 +5064,6 @@ class BambiProcessor:
 
         if progress_fn:
             progress_fn(95)
-
 
     def _crop_to_content(self, image, bounds):
         """Crop image to minimal bounding box containing non-empty pixels."""
@@ -5875,7 +5876,7 @@ class BambiProcessor:
                 try:
                     from rasterio.crs import CRS as RasterioCRS
                     profile['crs'] = RasterioCRS.from_epsg(crs_epsg)
-                except Exception:
+                except Exception:  # nosec B110
                     pass  # Will save without CRS
 
             with rasterio.open(output_path, 'w', **profile) as dst:

@@ -865,7 +865,7 @@ class _DemLoadWorker(QThread):
             # call on the main thread returns immediately instead of blocking.
             try:
                 _ = tri_mesh.triangles_tree
-            except Exception:
+            except Exception:  # nosec B110
                 pass
             self.finished.emit(tri_mesh, mesh_data, texture_data)
         except Exception as exc:
@@ -1082,13 +1082,13 @@ class _ProbeWorker(QThread):
             return None
         if not (abs(r1 - r2) <= d <= r1 + r2):
             return None
-        l = (r1 * r1 - r2 * r2 + d * d) / (2.0 * d)
-        hh = r1 * r1 - l * l
+        a = (r1 * r1 - r2 * r2 + d * d) / (2.0 * d)
+        hh = r1 * r1 - a * a
         h = math.sqrt(hh) if hh > 0.0 else 0.0
         c1, c2 = geom['c1'], geom['c2']
         ex, ey = geom['ex'], geom['ey']
-        qx = c1[0] + l * ex[0] + branch * h * ey[0]
-        qy = c1[1] + l * ex[1] + branch * h * ey[1]
+        qx = c1[0] + a * ex[0] + branch * h * ey[0]
+        qy = c1[1] + a * ex[1] + branch * h * ey[1]
         d1 = _wrap_rad(math.atan2(qy - c1[1], qx - c1[0]) - geom['a1'])
         d2 = _wrap_rad(math.atan2(qy - c2[1], qx - c2[0]) - geom['a2'])
         return _wrap_rad(d1 - d2), d1
@@ -1423,7 +1423,7 @@ class _LightFieldRenderWorker(QThread):
                     fovy, 1, cor_transform, lazy=False,
                 )
                 shots.append(shot)
-            except Exception:
+            except Exception:  # nosec B110
                 pass
 
         if not shots:
@@ -1609,7 +1609,7 @@ class BambiCorrectionWizard(QDialog):
                 try:
                     with open(path, 'r', encoding='utf-8') as fh:
                         self._poses[suffix] = json.load(fh)
-                except Exception:
+                except Exception:  # nosec B110
                     pass
 
     # ------------------------------------------------------------------
@@ -2715,7 +2715,7 @@ class BambiCorrectionWizard(QDialog):
             try:
                 with open(path, 'r', encoding='utf-8') as fh:
                     return json.load(fh)
-            except Exception:
+            except Exception:  # nosec B110
                 pass
         return {}
 

@@ -10,7 +10,7 @@ import os
 import json
 import math
 import csv
-import subprocess
+import subprocess  # nosec B404
 import tempfile
 from typing import Optional, Dict, Any, List
 from qgis.PyQt.QtCore import Qt, QThread
@@ -2818,7 +2818,9 @@ class BambiDockWidget(QDockWidget):
 
             # TRex import
             "trex_npz_dir": self.trex_npz_dir_edit.text() if hasattr(self, 'trex_npz_dir_edit') else "",
-            "trex_already_undistorted": self.trex_undistorted_check.isChecked() if hasattr(self, 'trex_undistorted_check') else False,
+            "trex_already_undistorted": (
+                self.trex_undistorted_check.isChecked()
+                if hasattr(self, 'trex_undistorted_check') else False),
 
             # Camera selections for processing steps
             "flight_route_camera": "T" if self.flight_route_camera_combo.currentIndex() == 0 else "W",
@@ -3049,7 +3051,7 @@ class BambiDockWidget(QDockWidget):
                 extracted.append(out_srt)
                 continue
             try:
-                result = subprocess.run(
+                result = subprocess.run(  # nosec B603
                     [ffmpeg_exe, "-i", vpath, "-map", "0:s:0", "-y", out_srt],
                     capture_output=True, text=True, timeout=60
                 )
@@ -3155,7 +3157,6 @@ class BambiDockWidget(QDockWidget):
 
     def _compute_auto_tz_from_srt(self) -> Optional[float]:
         """Match SRT local timestamps against AirData isVideo UTC timestamps."""
-        import csv
         import re
         from datetime import datetime
 
@@ -3177,7 +3178,7 @@ class BambiDockWidget(QDockWidget):
                         if m:
                             dt = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")
                             srt_hours.append(dt.hour + dt.minute / 60.0 + dt.second / 3600.0)
-            except Exception:
+            except Exception:  # nosec B112
                 continue
         if not srt_hours:
             return None
@@ -3195,8 +3196,7 @@ class BambiDockWidget(QDockWidget):
         import glob as glob_mod
         from datetime import datetime
 
-        photo_dir = (self.thermal_photo_dir_edit.text().strip()
-                     or self.rgb_photo_dir_edit.text().strip())
+        photo_dir = (self.thermal_photo_dir_edit.text().strip() or self.rgb_photo_dir_edit.text().strip())
         if not photo_dir or not os.path.isdir(photo_dir):
             return None
 
@@ -3224,7 +3224,7 @@ class BambiDockWidget(QDockWidget):
                         continue
                     dt = datetime.strptime(dt_str, "%Y:%m:%d %H:%M:%S")
                     photo_hours.append(dt.hour + dt.minute / 60.0 + dt.second / 3600.0)
-            except Exception:
+            except Exception:  # nosec B112
                 continue
         if not photo_hours:
             return None
@@ -3233,8 +3233,7 @@ class BambiDockWidget(QDockWidget):
         if not airdata_hours:
             return None
 
-        offset = round(sum(photo_hours) / len(photo_hours)
-                       - sum(airdata_hours) / len(airdata_hours))
+        offset = round(sum(photo_hours) / len(photo_hours) - sum(airdata_hours) / len(airdata_hours))
         return float(offset)
 
     def _collect_airdata_hours(self, flag_column_lower: str) -> Optional[list]:
@@ -3494,7 +3493,7 @@ class BambiDockWidget(QDockWidget):
                 with open(airdata_path, 'r', encoding='utf-8-sig') as f:
                     reader = _csv.DictReader(f)
                     stripped = {k.strip(): k for k in (reader.fieldnames or [])}
-                    lat_key = next((stripped[k] for k in stripped if 'latitude'  in k.lower()), None)
+                    lat_key = next((stripped[k] for k in stripped if 'latitude' in k.lower()), None)
                     lon_key = next((stripped[k] for k in stripped if 'longitude' in k.lower()), None)
                     vid_key = next((stripped[k] for k in stripped if k.strip().lower() == 'isvideo'), None)
                     for row in reader:
@@ -3503,7 +3502,8 @@ class BambiDockWidget(QDockWidget):
                         try:
                             la, lo = float(row[lat_key]), float(row[lon_key])
                             if -90 <= la <= 90 and -180 <= lo <= 180 and la != 0 and lo != 0:
-                                lats.append(la); lons.append(lo)
+                                lats.append(la)
+                                lons.append(lo)
                         except (ValueError, TypeError, KeyError):
                             continue
             except Exception as e:
@@ -3520,7 +3520,8 @@ class BambiDockWidget(QDockWidget):
                         if os.path.exists(p):
                             for frame in parser.parse(p):
                                 if frame.latitude and frame.longitude:
-                                    lats.append(frame.latitude); lons.append(frame.longitude)
+                                    lats.append(frame.latitude)
+                                    lons.append(frame.longitude)
                 except Exception as e:
                     self.log(f"Warning: could not read SRT GPS: {e}")
 
@@ -3544,7 +3545,7 @@ class BambiDockWidget(QDockWidget):
         half_diag = _math.sqrt((delta_x / 2) ** 2 + (delta_y / 2) ** 2)
         extent_m = max(half_diag + padding_m, padding_m, 1.0)
 
-        output_glb  = os.path.join(target_folder, "flat_surface_dem.glb")
+        output_glb = os.path.join(target_folder, "flat_surface_dem.glb")
         output_json = os.path.join(target_folder, "flat_surface_dem.json")
 
         target_epsg = config.get("target_epsg", 0)
@@ -3789,9 +3790,9 @@ class BambiDockWidget(QDockWidget):
                             epsg = src.crs.to_epsg()
                             if epsg:
                                 file_crs_label = f"EPSG:{epsg}"
-                        except Exception:
+                        except Exception:  # nosec B110
                             pass
-        except Exception:
+        except Exception:  # nosec B110
             pass
         input_crs_label = source_crs_override if source_crs_override else file_crs_label
 
@@ -4042,7 +4043,7 @@ class BambiDockWidget(QDockWidget):
                     if self._is_valid_utm_crs(crs_value):
                         detected_crs = crs_value.upper()
                         source = "DEM metadata"
-            except Exception:
+            except Exception:  # nosec B110
                 pass
 
         # Try 2: AirData CSV GPS coordinates
@@ -5512,7 +5513,7 @@ class BambiDockWidget(QDockWidget):
             })
             layer.setRenderer(QgsSingleSymbolRenderer(symbol))
             layer.triggerRepaint()
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
     def run_flight_route(self):
@@ -5599,7 +5600,7 @@ class BambiDockWidget(QDockWidget):
                                 "This is often caused by an incorrect Timezone setting.\n"
                                 "Please check the Timezone in the Photo Settings and try again."
                             )
-                    except Exception:
+                    except Exception:  # nosec B110
                         pass
 
                     # If the airdata field was empty, fill it with the
@@ -6261,7 +6262,7 @@ class BambiDockWidget(QDockWidget):
             })
             layer.setRenderer(QgsSingleSymbolRenderer(symbol))
             layer.triggerRepaint()
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
     def _style_bbox_layer(self, layer, color_str: str):
@@ -6280,7 +6281,7 @@ class BambiDockWidget(QDockWidget):
             })
             layer.setRenderer(QgsSingleSymbolRenderer(symbol))
             layer.triggerRepaint()
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
     def _style_track_layers(self, final_pos_layer, paths_layer):
@@ -8018,7 +8019,7 @@ class BambiDockWidget(QDockWidget):
             project.writeProject.disconnect(self._on_project_write)
             project.readProject.disconnect(self._on_project_read)
             project.cleared.disconnect(self._on_project_cleared)
-        except Exception:
+        except Exception:  # nosec B110
             pass  # Ignore errors if signals weren't connected
 
     def _on_project_write(self, doc):

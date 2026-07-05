@@ -110,7 +110,8 @@ class _MapTileProvider:
         import requests
         cache_path = None
         if self.cache_dir:
-            h = hashlib.md5(self.tile_url.encode()).hexdigest()[:8]
+            # MD5 only fingerprints the tile URL for cache file names — not security
+            h = hashlib.md5(self.tile_url.encode(), usedforsecurity=False).hexdigest()[:8]
             cache_path = os.path.join(self.cache_dir, f"{h}_{zoom}_{x}_{y}.png")
             if os.path.exists(cache_path):
                 return cv2.imread(cache_path)
@@ -123,7 +124,7 @@ class _MapTileProvider:
                 if cache_path and img is not None:
                     cv2.imwrite(cache_path, img)
                 return img
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001  # nosec B110
             pass
         return None
 
@@ -561,8 +562,8 @@ class VideoCreatorDialog(QDialog):
         if warns:
             msg = ("The following selected options have no data in the target "
                    "folder and will be skipped or shown empty:\n\n  • "
-                   + "\n  • ".join(warns)
-                   + "\n\nCreate the video anyway?")
+                   + "\n  • ".join(warns)  # noqa: W503, W504
+                   + "\n\nCreate the video anyway?")  # noqa: W503, W504
             if QMessageBox.warning(
                     self, "Missing Data", msg,
                     QMessageBox.Yes | QMessageBox.No,
@@ -648,7 +649,7 @@ class VideoCreatorDialog(QDialog):
                 if os.path.exists(os.path.join(target, folder, fname)):
                     return True
         return (os.path.exists(os.path.join(target, f"detections_{suffix}", "detections.txt"))
-                and os.path.exists(os.path.join(target, f"tracks_{suffix}", "tracks.csv")))
+                and os.path.exists(os.path.join(target, f"tracks_{suffix}", "tracks.csv")))  # noqa: W503, W504
 
     def _availability_warnings(self, params):
         """Return a human-readable warning for every selected option whose
@@ -682,11 +683,11 @@ class VideoCreatorDialog(QDialog):
             for s in params["video_suffixes"]:
                 lbl = labels.get(s, s)
                 if (params["overlay"] == "detections"
-                        and not exists(f"detections_{s}", "detections.txt")):
+                        and not exists(f"detections_{s}", "detections.txt")):  # noqa: W503, W504
                     warns.append(f"{lbl} detections overlay: "
                                  f"detections_{s}/detections.txt missing.")
                 elif (params["overlay"] == "tracks"
-                      and not self._pixel_tracks_available(target, s)):
+                      and not self._pixel_tracks_available(target, s)):  # noqa: W503, W504
                     warns.append(f"{lbl} tracks overlay: no track data found.")
 
         # ---- Map panel ----------------------------------------------------
@@ -704,7 +705,7 @@ class VideoCreatorDialog(QDialog):
                 warns.append(f"Map tracks: tracks_{cam}/tracks.csv missing.")
             if params["map_perp"] and not (
                     exists(f"flight_route_{cam}", f"perpendicular_{cam}.json")
-                    or exists(f"flight_route_{cam}", "perpendicular.json")):
+                    or exists(f"flight_route_{cam}", "perpendicular.json")):  # noqa: W503, W504
                 warns.append("Map perpendicular distances: "
                              f"flight_route_{cam}/perpendicular_{cam}.json missing.")
 

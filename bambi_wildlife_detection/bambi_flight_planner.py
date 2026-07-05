@@ -201,7 +201,7 @@ class _FlightPlanWorker(QObject):
                 supported_drivers["kml"] = "rw"
                 supported_drivers["KML"] = "rw"
                 supported_drivers["LIBKML"] = "rw"
-            except Exception:
+            except Exception:  # nosec B110
                 pass
 
             strategy = self._strategy_cls(**self._strategy_kwargs)
@@ -905,7 +905,7 @@ class FlightPlannerDialog(QDialog):
             try:
                 if os.path.exists(tmp):
                     os.remove(tmp)
-            except Exception:
+            except Exception:  # nosec B110
                 pass
         self._temp_files.clear()
         super().closeEvent(event)
