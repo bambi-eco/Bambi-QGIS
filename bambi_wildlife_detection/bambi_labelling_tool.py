@@ -14,6 +14,9 @@ Features
   Label tracks are stored per modality in ``labels_{m}/labels.json``.
 * Key-frame based annotation: bounding boxes are only stored on key frames
   (e.g. every 10th frame); all frames in between are linearly interpolated.
+* Stop frames: a key frame can be flagged as "stop" when the animal
+  disappears — no interpolation happens between a stop frame and the next
+  key frame (where the track resumes), leaving a gap in the track.
 * New tracks are drawn as bounding boxes and carry a species class, sex
   class, age class (per track) and an occlusion level (per key frame).
 * Existing label boxes can be moved/resized (which writes a key frame at the
@@ -88,8 +91,10 @@ def _track_color(track_id: int) -> QColor:
 class LabelTrack:
     """A single annotated track made of key frames.
 
-    Key frames map ``frame -> {"x1","y1","x2","y2","occlusion"}``; boxes on
-    frames between two key frames are linearly interpolated.
+    Key frames map ``frame -> {"x1","y1","x2","y2","occlusion"[,"stop"]}``;
+    boxes on frames between two key frames are linearly interpolated —
+    except after a key frame flagged ``stop`` (the animal disappeared):
+    frames between a stop frame and the next key frame have no box.
     """
 
     def __init__(self, track_id: int, species: str = "unknown",
@@ -112,7 +117,8 @@ class LabelTrack:
         return fs[0], fs[-1]
 
     def set_keyframe(self, frame: int, box: Tuple[float, float, float, float],
-                     occlusion: Optional[str] = None) -> None:
+                     occlusion: Optional[str] = None,
+                     stop: Optional[bool] = None) -> None:
         prev = self.keyframes.get(frame)
         if occlusion is None:
             if prev is not None:
@@ -121,11 +127,38 @@ class LabelTrack:
                 # inherit from the interpolation state at this frame
                 interp = self.box_at(frame)
                 occlusion = interp[2] if interp else "none"
-        self.keyframes[frame] = {
+        if stop is None:
+            # preserve an existing stop flag when only the box is updated
+            stop = bool(prev.get("stop", False)) if prev else False
+        entry = {
             "x1": float(box[0]), "y1": float(box[1]),
             "x2": float(box[2]), "y2": float(box[3]),
             "occlusion": occlusion,
         }
+        if stop:
+            entry["stop"] = True
+        self.keyframes[frame] = entry
+
+    def is_stop(self, frame: int) -> bool:
+        return bool(self.keyframes.get(frame, {}).get("stop", False))
+
+    def visible_segments(self) -> List[Tuple[int, int]]:
+        """Return the frame ranges in which the track has boxes.
+
+        Without stop frames this is one ``[(first, last)]`` segment; every
+        stop frame ends its segment and the next key frame starts a new one.
+        """
+        fs = self.frames()
+        if not fs:
+            return []
+        segments: List[Tuple[int, int]] = []
+        start = fs[0]
+        for i, f in enumerate(fs[:-1]):
+            if self.keyframes[f].get("stop"):
+                segments.append((start, f))
+                start = fs[i + 1]
+        segments.append((start, fs[-1]))
+        return segments
 
     def remove_keyframe(self, frame: int) -> bool:
         return self.keyframes.pop(frame, None) is not None
@@ -149,6 +182,8 @@ class LabelTrack:
         f_prev = max(f for f in fs if f < frame)
         f_next = min(f for f in fs if f > frame)
         a = self.keyframes[f_prev]
+        if a.get("stop"):
+            return None  # gap: the animal disappeared after f_prev
         b = self.keyframes[f_next]
         alpha = (frame - f_prev) / (f_next - f_prev)
         box = tuple(
@@ -176,11 +211,14 @@ class LabelTrack:
             d.get("age", "unknown"),
         )
         for f, kf in d.get("keyframes", {}).items():
-            track.keyframes[int(f)] = {
+            entry = {
                 "x1": float(kf["x1"]), "y1": float(kf["y1"]),
                 "x2": float(kf["x2"]), "y2": float(kf["y2"]),
                 "occlusion": kf.get("occlusion", "none"),
             }
+            if kf.get("stop"):
+                entry["stop"] = True
+            track.keyframes[int(f)] = entry
         return track
 
 
@@ -803,15 +841,18 @@ class _TimelineWidget(QWidget):
         self._total = 1
         self._current = 0
         self._keyframes: List[int] = []
-        self._range: Optional[Tuple[int, int]] = None
+        self._segments: List[Tuple[int, int]] = []
+        self._stops: List[int] = []
 
     def set_data(self, total: int, current: int,
                  keyframes: List[int],
-                 track_range: Optional[Tuple[int, int]]) -> None:
+                 segments: List[Tuple[int, int]],
+                 stops: List[int]) -> None:
         self._total = max(1, total)
         self._current = current
         self._keyframes = keyframes
-        self._range = track_range
+        self._segments = segments
+        self._stops = stops
         self.update()
 
     def _frame_to_x(self, frame: int) -> float:
@@ -826,17 +867,24 @@ class _TimelineWidget(QWidget):
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor(45, 45, 45))
 
-        # Selected track range
-        if self._range is not None:
-            x0 = self._frame_to_x(self._range[0])
-            x1 = self._frame_to_x(self._range[1])
+        # Selected track's visible segments (gaps after stop frames stay dark)
+        for seg in self._segments:
+            x0 = self._frame_to_x(seg[0])
+            x1 = self._frame_to_x(seg[1])
             painter.fillRect(
                 int(x0), 4, max(2, int(x1 - x0)), self.height() - 8,
                 QColor(70, 110, 70))
 
-        # Key frames
+        # Key frames (stop frames in red)
+        stops = set(self._stops)
         painter.setPen(QPen(QColor(0, 220, 0), 2))
         for kf in self._keyframes:
+            if kf in stops:
+                continue
+            x = int(self._frame_to_x(kf))
+            painter.drawLine(x, 2, x, self.height() - 2)
+        painter.setPen(QPen(QColor(230, 60, 60), 2))
+        for kf in self._stops:
             x = int(self._frame_to_x(kf))
             painter.drawLine(x, 2, x, self.height() - 2)
 
@@ -1117,6 +1165,14 @@ class LabellingToolDialog(QDialog):
             "the track without geo-propagation.")
         self.draw_kf_btn.toggled.connect(self._on_draw_kf_toggled)
         kg.addWidget(self.draw_kf_btn)
+        self.stop_check = QCheckBox("Stop frame (S)")
+        self.stop_check.setToolTip(
+            "Mark this key frame as the last sighting before the animal "
+            "disappears: no boxes are interpolated between a stop frame and "
+            "the next key frame, where the track resumes. Shown red in the "
+            "timeline.")
+        self.stop_check.toggled.connect(self._on_stop_toggled)
+        kg.addWidget(self.stop_check)
         vbox.addWidget(kf_group)
 
         # Geo propagation
@@ -1187,6 +1243,9 @@ class LabellingToolDialog(QDialog):
             self.draw_kf_btn.toggle()
         elif key == Qt.Key_K:
             self._on_add_keyframe()
+        elif key == Qt.Key_S:
+            if self.stop_check.isEnabled():
+                self.stop_check.toggle()
         elif key == Qt.Key_Delete:
             self._on_delete_keyframe()
         elif key == Qt.Key_Escape:
@@ -1429,11 +1488,14 @@ class LabellingToolDialog(QDialog):
                 continue
             (x1, y1, x2, y2), is_kf, _occ = res
             selected = track.track_id == self._selected_track
+            label = f"L{track.track_id} {track.species}"
+            if is_kf and track.is_stop(frame):
+                label += " [stop]"
             item = _BoxItem(
                 track.track_id,
                 QRectF(x1, y1, x2 - x1, y2 - y1),
                 _track_color(track.track_id),
-                f"L{track.track_id} {track.species}",
+                label,
                 font_px,
                 editable=selected,
                 dashed=not is_kf,
@@ -1450,14 +1512,16 @@ class LabellingToolDialog(QDialog):
 
     def _update_timeline(self):
         keyframes: List[int] = []
-        track_range = None
+        segments: List[Tuple[int, int]] = []
+        stops: List[int] = []
         if self._selected_track is not None and self._store:
             track = self._store.tracks.get(self._selected_track)
             if track:
                 keyframes = track.frames()
-                track_range = track.frame_range()
+                segments = track.visible_segments()
+                stops = [f for f in keyframes if track.is_stop(f)]
         self.timeline.set_data(
-            len(self._images), self._current_frame, keyframes, track_range)
+            len(self._images), self._current_frame, keyframes, segments, stops)
 
     def _update_status(self):
         parts = [f"Frame {self._current_frame} / {len(self._images) - 1}"]
@@ -1465,11 +1529,17 @@ class LabellingToolDialog(QDialog):
             track = self._store.tracks.get(self._selected_track)
             if track:
                 res = track.box_at(self._current_frame)
+                rng = track.frame_range()
                 if res is None:
-                    parts.append(
-                        f"track L{track.track_id}: outside key-frame range")
+                    if rng and rng[0] <= self._current_frame <= rng[1]:
+                        parts.append(
+                            f"track L{track.track_id}: gap (after stop frame)")
+                    else:
+                        parts.append(
+                            f"track L{track.track_id}: outside key-frame range")
                 elif res[1]:
-                    parts.append(f"track L{track.track_id}: KEY FRAME")
+                    suffix = " (stop)" if track.is_stop(self._current_frame) else ""
+                    parts.append(f"track L{track.track_id}: KEY FRAME{suffix}")
                 else:
                     parts.append(f"track L{track.track_id}: interpolated")
         if self._dirty:
@@ -1495,6 +1565,8 @@ class LabellingToolDialog(QDialog):
             res = track.box_at(self._current_frame)
             if res is not None:
                 self.occlusion_combo.setCurrentText(res[2])
+            self.stop_check.setEnabled(res is not None)
+            self.stop_check.setChecked(track.is_stop(self._current_frame))
             kfs = track.frames()
             kf_list = ", ".join(str(f) for f in kfs[:12])
             ellipsis = "…" if len(kfs) > 12 else ""
@@ -1502,6 +1574,8 @@ class LabellingToolDialog(QDialog):
                 f"{len(kfs)} key frame(s): {kf_list}{ellipsis}")
         else:
             self.kf_info_label.setText("–")
+            self.stop_check.setEnabled(False)
+            self.stop_check.setChecked(False)
         self._updating_ui = False
 
     def _refresh_track_list(self):
@@ -1743,6 +1817,23 @@ class LabellingToolDialog(QDialog):
             self._current_frame, res[0],
             occlusion=self.occlusion_combo.currentText())
         self._mark_dirty()
+        self._render_frame()
+
+    def _on_stop_toggled(self, checked: bool):
+        if self._updating_ui:
+            return
+        track = self._current_track()
+        if track is None:
+            return
+        res = track.box_at(self._current_frame)
+        if res is None:
+            return
+        # Like occlusion, the stop flag lives on a key frame; toggling it on
+        # an interpolated frame promotes that frame to a key frame.
+        track.set_keyframe(
+            self._current_frame, res[0], occlusion=res[2], stop=checked)
+        self._mark_dirty()
+        self._refresh_track_list()
         self._render_frame()
 
     # ------------------------------------------------------------------

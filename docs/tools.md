@@ -64,6 +64,8 @@ Each track carries a **species** (free-text combo with common defaults), **sex**
 
 To place a key frame fully manually — including on frames before/after the track's current range — select the track and press **Draw key frame (B)**, then drag the new box on the canvas. This extends or corrects the track without geo-propagation.
 
+When an animal temporarily disappears (e.g. under a tree) and reappears recognizably later, mark the last sighting as a **Stop frame (S)**: no boxes are interpolated between a stop frame and the next key frame — the track pauses and resumes there. Stop frames appear red in the timeline, the gap is left unshaded, and gap frames are excluded from all exports. To continue the track after the gap, place a key frame on the reappearance frame (**Draw key frame (B)**, or **K** to copy the nearest box, or geo-propagation).
+
 ### Geo-referenced propagation
 
 Instead of manually re-drawing a box on a far-away frame, **Propagate box (geo)** ray-casts the current box onto the DEM (pixel → world) with the current frame's camera pose and back-projects it (world → pixel) into the frame at the configured **Frame offset**, creating a key frame there. The DEM mesh is loaded once on first use (may take a while). As with the geo-referenced FoV inspector, the result depends on calibration and correction accuracy — usually only small size adaptions are needed.
@@ -92,6 +94,7 @@ Instead of manually re-drawing a box on a far-away frame, **Propagate box (geo)*
 | `N`                     | Toggle New Track drawing mode              |
 | `B`                     | Toggle Draw Key Frame mode                 |
 | `K`                     | Set key frame from the interpolated box    |
+| `S`                     | Toggle stop frame (pause interpolation)    |
 | `Delete`                | Delete the key frame at the current frame  |
 | `Esc`                   | Cancel drawing mode                        |
 
