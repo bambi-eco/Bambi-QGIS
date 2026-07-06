@@ -51,6 +51,8 @@ Point it at a processing **target folder** (the one containing `frames_t/` / `fr
 
 Detections (`detections_{t,w}/detections.txt`) and tracks (`tracks_{t,w}/tracks_pixel.csv`) are drawn as read-only overlays (toggleable via checkboxes). An existing pipeline track can be converted into an editable label track with **Import as label track**; the **Resample** value controls how many key frames are kept (`1` = every frame of the track becomes a key frame, `N` = only every N-th frame plus the first and last).
 
+**Copy labels from _&lt;other modality&gt;_** imports the label tracks you already made on the other camera (RGB ↔ thermal) into the current one — see [Cross-modality copy](#cross-modality-copy) below.
+
 ### Key frames & interpolation
 
 Labels do not need to be drawn on every frame. A track stores boxes only on **key frames**; all frames in between are interpolated linearly and drawn with a dashed border. The typical workflow:
@@ -69,6 +71,14 @@ When an animal temporarily disappears (e.g. under a tree) and reappears recogniz
 ### Geo-referenced propagation
 
 Instead of manually re-drawing a box on a far-away frame, **Propagate box (geo)** ray-casts the current box onto the DEM (pixel → world) with the current frame's camera pose and back-projects it (world → pixel) into the frame at the configured **Frame offset**, creating a key frame there. The DEM mesh is loaded once on first use (may take a while). As with the geo-referenced FoV inspector, the result depends on calibration and correction accuracy — usually only small size adaptions are needed.
+
+### Cross-modality copy
+
+Wildlife is often easier to spot in one modality than the other (e.g. warm animals in thermal, or distinctive shapes in RGB). Once a modality is labelled, **Copy labels from _&lt;other modality&gt;_** (in the *Overlays* section, its caption follows the current modality) brings those tracks over instead of re-labelling from scratch.
+
+Each key-frame box of every track in the other modality is projected onto this modality using the same geo-referenced propagation as above: it is ray-cast onto the DEM with the *source* camera and back-projected with *this* modality's camera. Because thermal and RGB frames are captured on the same clock but at different rates, the two are matched by **capture time** — for each source key frame the nearest-in-time frame of the current modality is used (source and target resolutions may differ).
+
+The projected boxes are added as **new label tracks** (species/sex/age/occlusion and stop flags are carried over) rather than merged into existing ones, because — like single-frame propagation — they typically need small manual adaptions before export. A summary reports how many tracks and key frames were copied and how many were skipped (no DEM intersection, projected outside the target frame, or no time-matched frame). The other modality must already have been processed far enough to have `poses_<other>.json`, extracted frames, and `labels_<other>/labels.json`.
 
 ### Saving & pipeline export
 

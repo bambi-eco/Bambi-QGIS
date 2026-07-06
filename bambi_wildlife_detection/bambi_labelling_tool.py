@@ -26,6 +26,11 @@ Features
   DEM (pixel → world) with the camera pose of the current frame and
   back-projected (world → pixel) with the pose of an offset frame — the
   result usually only needs small size adaptions.
+* Cross-modality copy: the label tracks of the other modality (RGB ↔
+  thermal) are projected onto this modality's frames — frames are matched by
+  capture time, each box is ray-cast onto the DEM with the source camera and
+  back-projected with this modality's camera — and added as new, editable
+  label tracks that typically need small manual adaptions.
 
 Files written (relative to *target_folder*, ``{m}`` = ``t`` / ``w``)
 --------------------------------------------------------------------
@@ -432,6 +437,75 @@ def _load_pixel_tracks(tracks_file: str) -> Dict[int, List[dict]]:
 
 
 # ---------------------------------------------------------------------------
+# Cross-modality frame correspondence (by capture timestamp)
+# ---------------------------------------------------------------------------
+
+def _pose_epochs(images: List[dict]) -> List[Optional[float]]:
+    """Return the capture time (epoch seconds) of every pose image.
+
+    Poses store an ISO-8601 ``timestamp`` (with timezone) taken from the SRT
+    capture time, so thermal and RGB frames share the same real-world clock
+    and can be matched across modalities.  Entries without a parseable
+    timestamp yield ``None``.
+    """
+    from datetime import datetime
+
+    epochs: List[Optional[float]] = []
+    for img in images:
+        ts = img.get("timestamp", "")
+        if not ts:
+            epochs.append(None)
+            continue
+        try:
+            epochs.append(datetime.fromisoformat(ts).timestamp())
+        except Exception:
+            epochs.append(None)
+    return epochs
+
+
+class _FrameMatcher:
+    """Maps a source-modality frame index to the nearest target-modality one.
+
+    Correspondence is by capture time: for a source frame's timestamp the
+    target frame with the closest timestamp is returned, together with the
+    absolute time difference so callers can reject poor matches.
+    """
+
+    def __init__(self, src_images: List[dict], dst_images: List[dict]):
+        import bisect
+
+        self._src_epochs = _pose_epochs(src_images)
+        dst_epochs = _pose_epochs(dst_images)
+        # Sorted (epoch, dst_index) of target frames that have a timestamp.
+        self._pairs = sorted(
+            (e, i) for i, e in enumerate(dst_epochs) if e is not None)
+        self._keys = [e for e, _ in self._pairs]
+        self._bisect = bisect.bisect_left
+
+    @property
+    def usable(self) -> bool:
+        """True when both sides carry enough timestamps to match by time."""
+        return bool(self._pairs) and any(e is not None for e in self._src_epochs)
+
+    def match(self, src_frame: int) -> Optional[Tuple[int, float]]:
+        """Return ``(dst_frame, dt_seconds)`` nearest in time, or ``None``."""
+        if not (0 <= src_frame < len(self._src_epochs)):
+            return None
+        target = self._src_epochs[src_frame]
+        if target is None or not self._keys:
+            return None
+        pos = self._bisect(self._keys, target)
+        best = None
+        for j in (pos - 1, pos):
+            if 0 <= j < len(self._pairs):
+                epoch, idx = self._pairs[j]
+                dt = abs(epoch - target)
+                if best is None or dt < best[1]:
+                    best = (idx, dt)
+        return best
+
+
+# ---------------------------------------------------------------------------
 # Geo-referenced box propagation
 # ---------------------------------------------------------------------------
 
@@ -520,6 +594,31 @@ class _GeoPropagator:
                   ) -> Tuple[float, float, float, float]:
         """Return *box* re-projected from *src_frame* to *dst_frame*.
 
+        Both frames belong to the same modality (same ``images`` list and
+        resolution).  Raises ``RuntimeError`` with a human-readable message
+        on failure.
+        """
+        if not (0 <= src_frame < len(images)) or not (0 <= dst_frame < len(images)):
+            raise RuntimeError("Frame index outside the poses file range.")
+        return self.propagate_between(
+            box, src_frame, images, img_width, img_height,
+            dst_frame, images, img_width, img_height)
+
+    def propagate_between(self, box: Tuple[float, float, float, float],
+                          src_frame: int, src_images: List[dict],
+                          src_width: int, src_height: int,
+                          dst_frame: int, dst_images: List[dict],
+                          dst_width: int, dst_height: int,
+                          ) -> Tuple[float, float, float, float]:
+        """Re-project *box* from a source frame/camera onto a target one.
+
+        The source and target may come from different modalities (different
+        ``images`` lists and resolutions): the box corners are ray-cast onto
+        the shared DEM with the source camera and back-projected with the
+        target camera.  Both cameras apply the same drone-pose correction
+        (``correction.json`` is per-flight, not per-camera), each keyed by its
+        own frame index.
+
         Raises ``RuntimeError`` with a human-readable message on failure.
         """
         import numpy as np
@@ -536,17 +635,19 @@ class _GeoPropagator:
         if not self.is_loaded:
             self.load()
 
-        if not (0 <= src_frame < len(images)) or not (0 <= dst_frame < len(images)):
-            raise RuntimeError("Frame index outside the poses file range.")
+        if not (0 <= src_frame < len(src_images)):
+            raise RuntimeError("Source frame index outside the poses range.")
+        if not (0 <= dst_frame < len(dst_images)):
+            raise RuntimeError("Target frame index outside the poses range.")
 
-        resolution = Resolution(img_width, img_height)
         x1, y1, x2, y2 = box
         label_coords = [x1, y1, x2, y1, x2, y2, x1, y2]
 
         # ---- forward: pixel -> local world (DEM ray-cast) -----------------
-        cam_src = self._build_camera(images, src_frame, img_width, img_height)
+        cam_src = self._build_camera(src_images, src_frame, src_width, src_height)
         world = label_to_world_coordinates(
-            label_coords, resolution, self._tri_mesh, cam_src)
+            label_coords, Resolution(src_width, src_height),
+            self._tri_mesh, cam_src)
         if world is None or len(world) == 0:
             raise RuntimeError(
                 "The bounding box could not be ray-cast onto the DEM "
@@ -554,19 +655,19 @@ class _GeoPropagator:
             )
 
         # ---- reverse: local world -> pixel of the target frame -----------
-        cam_dst = self._build_camera(images, dst_frame, img_width, img_height)
+        cam_dst = self._build_camera(dst_images, dst_frame, dst_width, dst_height)
         pxs, pys = _world_to_pixel(
-            np.asarray(world, dtype=np.float64), img_width, img_height, cam_dst)
+            np.asarray(world, dtype=np.float64), dst_width, dst_height, cam_dst)
 
         nx1, ny1 = float(np.min(pxs)), float(np.min(pys))
         nx2, ny2 = float(np.max(pxs)), float(np.max(pys))
-        if nx2 < 0 or ny2 < 0 or nx1 > img_width or ny1 > img_height:
+        if nx2 < 0 or ny2 < 0 or nx1 > dst_width or ny1 > dst_height:
             raise RuntimeError(
                 f"The projected box lies completely outside frame {dst_frame}."
             )
         return (
             max(0.0, nx1), max(0.0, ny1),
-            min(float(img_width - 1), nx2), min(float(img_height - 1), ny2),
+            min(float(dst_width - 1), nx2), min(float(dst_height - 1), ny2),
         )
 
 
@@ -1082,6 +1183,18 @@ class LabellingToolDialog(QDialog):
         resample_row.addWidget(self.import_resample_spin)
         resample_row.addStretch()
         og.addLayout(resample_row)
+
+        # Cross-modality import: project the other modality's label tracks
+        # (RGB <-> thermal) into this modality via the DEM and add them as
+        # new, editable label tracks for manual refinement.
+        self.copy_from_btn = QPushButton("Copy labels from other modality")
+        self.copy_from_btn.setToolTip(
+            "Project the label tracks of the other modality (RGB ↔ "
+            "thermal) onto this modality's frames via the DEM and add them "
+            "as new label tracks. Frames are matched by capture time; the "
+            "projected boxes usually need small manual adaptions.")
+        self.copy_from_btn.clicked.connect(self._on_copy_from_other_modality)
+        og.addWidget(self.copy_from_btn)
         vbox.addWidget(overlay_group)
 
         # Label tracks
@@ -1396,6 +1509,8 @@ class LabellingToolDialog(QDialog):
         self.import_track_combo.clear()
         for tid in sorted(self._pixel_tracks.keys()):
             self.import_track_combo.addItem(f"Track {tid}", tid)
+        other_name = "RGB" if m == "t" else "Thermal"
+        self.copy_from_btn.setText(f"Copy labels from {other_name}")
         self._updating_ui = False
 
         self._current_frame = min(self._current_frame, total - 1)
@@ -1732,6 +1847,207 @@ class LabellingToolDialog(QDialog):
         if self._store is None or self._selected_track is None:
             return None
         return self._store.tracks.get(self._selected_track)
+
+    # ------------------------------------------------------------------
+    # Cross-modality label import (RGB <-> thermal)
+    # ------------------------------------------------------------------
+
+    def _modality_image_size(
+            self, modality: str, images: List[dict]) -> Optional[Tuple[int, int]]:
+        """Return the pixel size of *modality*'s frames, or ``None``.
+
+        Read from the first extracted frame image that exists on disk, since
+        the poses file does not store the resolution.
+        """
+        frames_dir = os.path.join(self._target_folder, f"frames_{modality}")
+        for img in images:
+            imagefile = img.get("imagefile", "")
+            if not imagefile:
+                continue
+            path = os.path.join(frames_dir, imagefile)
+            if os.path.isfile(path):
+                pix = QPixmap(path)
+                if not pix.isNull():
+                    return pix.width(), pix.height()
+        return None
+
+    def _on_copy_from_other_modality(self):
+        """Project the other modality's label tracks onto this modality.
+
+        Frames are matched across modalities by capture time; each source
+        key-frame box is ray-cast onto the DEM with the source camera and
+        back-projected with this modality's camera at the matched frame. The
+        results are added as new label tracks (manual refinement expected).
+        """
+        if self._store is None or not self._images:
+            QMessageBox.information(
+                self, "BAMBI Labelling Tool",
+                "Load a target folder first.")
+            return
+
+        other = "w" if self._modality == "t" else "t"
+        other_name = "RGB" if other == "w" else "Thermal"
+        this_name = "RGB" if self._modality == "w" else "Thermal"
+
+        # ---- source poses -------------------------------------------------
+        other_poses = os.path.join(self._target_folder, f"poses_{other}.json")
+        if not os.path.isfile(other_poses):
+            QMessageBox.warning(
+                self, "BAMBI Labelling Tool",
+                f"No {other_name} poses found ({os.path.basename(other_poses)}).\n"
+                f"Process the {other_name} camera first.")
+            return
+        try:
+            with open(other_poses, "r", encoding="utf-8") as fh:
+                other_images = json.load(fh).get("images", [])
+        except Exception as exc:
+            QMessageBox.warning(
+                self, "BAMBI Labelling Tool",
+                f"Could not read {other_name} poses:\n{exc}")
+            return
+        if not other_images:
+            QMessageBox.warning(
+                self, "BAMBI Labelling Tool",
+                f"{other_name} poses contain no frames.")
+            return
+
+        # ---- source labels ------------------------------------------------
+        other_store = LabelStore(self._target_folder, other)
+        try:
+            other_store.load()
+        except Exception as exc:
+            QMessageBox.warning(
+                self, "BAMBI Labelling Tool",
+                f"Could not load {other_name} labels:\n{exc}")
+            return
+        src_tracks = [t for t in other_store.tracks.values() if t.keyframes]
+        if not src_tracks:
+            QMessageBox.information(
+                self, "BAMBI Labelling Tool",
+                f"No {other_name} label tracks found to copy.\n"
+                f"Create labels on the {other_name} modality first.")
+            return
+
+        # ---- frame correspondence by capture time -------------------------
+        matcher = _FrameMatcher(other_images, self._images)
+        if not matcher.usable:
+            QMessageBox.warning(
+                self, "BAMBI Labelling Tool",
+                "Cannot match frames across modalities: the poses files carry "
+                "no usable capture timestamps.")
+            return
+
+        # ---- resolutions --------------------------------------------------
+        src_size = self._modality_image_size(other, other_images)
+        if src_size is None:
+            QMessageBox.warning(
+                self, "BAMBI Labelling Tool",
+                f"Could not read a {other_name} frame image to determine its "
+                f"resolution (frames_{other}/). Extract the {other_name} "
+                "frames first.")
+            return
+        if self._img_size is None:
+            self._img_size = self._modality_image_size(
+                self._modality, self._images)
+        if self._img_size is None:
+            QMessageBox.warning(
+                self, "BAMBI Labelling Tool",
+                f"Could not determine this modality's frame resolution "
+                f"(frames_{self._modality}/).")
+            return
+
+        # ---- DEM propagator ----------------------------------------------
+        if self._propagator is None:
+            if not self._dem_path:
+                self._resolve_paths_from_layers()
+            self._propagator = _GeoPropagator(
+                self._target_folder, self._dem_path,
+                self._correction_path, self._modality)
+        if not self._propagator.is_loaded:
+            reply = QMessageBox.question(
+                self, "Load Digital Elevation Model",
+                f"Copying labels from {other_name} needs to load the DEM "
+                "mesh.\n\nThis may take some time on the first use. Continue?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+            if reply != QMessageBox.Yes:
+                return
+
+        # ---- project every source key frame -------------------------------
+        src_w, src_h = src_size
+        dst_w, dst_h = self._img_size
+        added_tracks = 0
+        added_keyframes = 0
+        skipped_keyframes = 0
+        first_new_frame: Optional[int] = None
+
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            if not self._propagator.is_loaded:
+                self._propagator.load()
+        except Exception as exc:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.warning(
+                self, "BAMBI Labelling Tool",
+                f"Could not load the DEM mesh:\n{exc}")
+            return
+
+        try:
+            for src in sorted(src_tracks, key=lambda t: t.track_id):
+                new_track = LabelTrack(
+                    self._store.next_track_id(),
+                    species=src.species, sex=src.sex, age=src.age)
+                for sf in src.frames():
+                    kf = src.keyframes[sf]
+                    m = matcher.match(sf)
+                    if m is None:
+                        skipped_keyframes += 1
+                        continue
+                    dst_frame, _dt = m
+                    try:
+                        new_box = self._propagator.propagate_between(
+                            (kf["x1"], kf["y1"], kf["x2"], kf["y2"]),
+                            sf, other_images, src_w, src_h,
+                            dst_frame, self._images, dst_w, dst_h)
+                    except Exception:
+                        skipped_keyframes += 1
+                        continue
+                    new_track.set_keyframe(
+                        dst_frame, new_box,
+                        occlusion=kf.get("occlusion", "none"),
+                        stop=bool(kf.get("stop", False)))
+                    added_keyframes += 1
+                    if first_new_frame is None:
+                        first_new_frame = dst_frame
+                if new_track.keyframes:
+                    self._store.tracks[new_track.track_id] = new_track
+                    added_tracks += 1
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        if added_tracks == 0:
+            QMessageBox.warning(
+                self, "BAMBI Labelling Tool",
+                f"None of the {other_name} label boxes could be projected onto "
+                f"the {this_name} frames (no DEM intersection or all outside "
+                "the frames).")
+            return
+
+        self._mark_dirty()
+        self._refresh_track_list()
+        if first_new_frame is not None:
+            self._goto_frame(first_new_frame, force=True)
+        else:
+            self._render_frame()
+
+        msg = (f"Copied {added_tracks} track(s) from {other_name} "
+               f"({added_keyframes} key frame(s)).")
+        if skipped_keyframes:
+            msg += (f"\n\n{skipped_keyframes} key frame(s) were skipped "
+                    "(no DEM intersection, outside the target frame, or no "
+                    "time-matched frame).")
+        msg += "\n\nThe projected boxes were added as new tracks — review and "
+        msg += "adjust them before exporting."
+        QMessageBox.information(self, "BAMBI Labelling Tool", msg)
 
     # ------------------------------------------------------------------
     # Key frame editing
