@@ -321,7 +321,7 @@ segmentation_t/    # or segmentation_w/ depending on camera selection
 
 ## Survey analytics
 
-The **Survey Analytics** tab (next to *Processing*) turns geo-referenced detections or tracks into population-level products. Both tools let you pick the **source**: *Detections* uses every geo-referenced bounding box, while *Tracks* uses one representative point per track (so an animal followed across many frames is counted once). The camera (thermal/RGB) follows the existing Detection / Tracking camera selectors on the Processing tab, and results are written to a new `analytics_t/` or `analytics_w/` folder. The run log for these steps appears on the Processing tab.
+The **Survey Analytics** tab (next to *Processing*) turns geo-referenced detections, tracks, or exported frames into population-level products. The point-based tools (density heatmap, distance sampling) let you pick the **source**: *Detections* uses every geo-referenced bounding box, while *Tracks* uses one representative point per track (so an animal followed across many frames is counted once); their camera (thermal/RGB) follows the existing Detection / Tracking camera selectors on the Processing tab. The coverage map instead combines the exported frame GeoTIFFs and has its own camera selector. Results are written to a new `analytics_t/` or `analytics_w/` folder, and the run log for these steps appears on the Processing tab.
 
 ### Density heatmap
 
@@ -362,6 +362,24 @@ analytics_t/    # or analytics_w/
 ```
 
 The JSON also stores the fitted detection-function curve and the distance histogram for external plotting. Abundance is reported for the covered strip area (2·w·L); multiply the density estimate by your study-area size for a study-area abundance.
+
+### Coverage map
+
+Combines the exported per-frame GeoTIFFs on the same grid as the **Orthomosaic**, but instead of merging image content it counts, per output pixel, how many frames contain valid (non-nodata) data at that position. The result is a single-band raster where `1` means the ground was imaged once, `N` means it was seen in `N` overlapping frames, and nodata (`0`) means it was never covered — a map of survey effort/overlap. Run **Export Frames as GeoTIFF** for the chosen camera first.
+
+| Setting | Description |
+|---------|-------------|
+| **Camera** | Thermal or RGB — which exported frame GeoTIFFs to combine |
+| **Cell (m)** | Output raster cell size in metres. `0` = native resolution of the exported GeoTIFFs (larger output) |
+
+**Outputs:**
+```
+analytics_t/    # or analytics_w/
+├── coverage_map.tif    # uint16 GeoTIFF — overlapping frame count per pixel
+└── coverage_map.json   # stats: frame count, max/mean overlap, covered & multi-covered area (ha)
+```
+
+Use **→ Add Coverage Map to QGIS** to load the raster with a graduated colour ramp scaled to the data. Uncovered cells are stored as nodata so the surround renders transparent.
 
 ## Input file formats
 
@@ -472,7 +490,9 @@ target_folder/
 ├── analytics_t/                             # Survey analytics (thermal camera)
 │   ├── density_detections.tif              # Density heatmap raster (points/hectare)
 │   ├── density_detections.json             # Density heatmap stats
-│   └── distance_sampling_detections.json   # Distance-sampling density/abundance estimate
+│   ├── distance_sampling_detections.json   # Distance-sampling density/abundance estimate
+│   ├── coverage_map.tif                    # Coverage map raster (overlapping frame count)
+│   └── coverage_map.json                   # Coverage map stats
 └── analytics_w/
     └── ...
 ```

@@ -155,6 +155,10 @@ class ProcessingWorker(QObject):
                 self.processor.run_density_heatmap(
                     self.config, self.progress.emit, self.log.emit, self.is_cancelled
                 )
+            elif self.step == "coverage_map":
+                self.processor.run_coverage_map(
+                    self.config, self.progress.emit, self.log.emit, self.is_cancelled
+                )
             elif self.step == "distance_sampling":
                 self.processor.run_distance_sampling(
                     self.config, self.progress.emit, self.log.emit, self.is_cancelled
@@ -2091,6 +2095,189 @@ class BambiProcessor:
             raise RuntimeError(
                 "rasterio is required to write the density heatmap GeoTIFF."
             )
+
+    def run_coverage_map(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
+        """Build a survey coverage map from the exported frame GeoTIFFs.
+
+        Combines the per-frame GeoTIFFs on the same grid as the orthomosaic,
+        but instead of merging image content it counts, per output pixel, how
+        many frames contain valid (non-nodata) data at that position. The
+        result is a single-band raster where 1 means the ground was imaged
+        once, N means it was seen in N overlapping frames, and nodata (0)
+        means it was never covered.
+
+        :param config: Configuration dictionary. Relevant keys:
+            ``coverage_camera`` ("T"|"W"), ``coverage_cell_size`` (m, 0 =
+            native GeoTIFF resolution), ``target_epsg``.
+        """
+        import numpy as np
+
+        try:
+            import rasterio
+            from rasterio.merge import merge as rio_merge
+        except ImportError as exc:
+            raise ImportError(
+                f"rasterio is required for coverage-map generation.\n"
+                f"Original error: {exc}"
+            )
+
+        camera_sel = config.get("coverage_camera", "T")
+        camera_suffix = "t" if camera_sel == "T" else "w"
+        camera_name = "Thermal" if camera_sel == "T" else "RGB"
+        cell_size = float(config.get("coverage_cell_size", 1.0))
+        nodata_src = config.get("ortho_nodata", 0)
+        target_epsg = config.get("target_epsg", 32633)
+        target_folder = config["target_folder"]
+        geotiff_folder = os.path.join(target_folder, f"geotiffs_{camera_suffix}")
+
+        if log_fn:
+            log_fn(f"Building coverage map from {camera_name} frame GeoTIFFs...")
+
+        if not os.path.isdir(geotiff_folder):
+            raise FileNotFoundError(
+                f"GeoTIFF folder not found: {geotiff_folder}\n"
+                f"Run 'Export Frames as GeoTIFF' for the {camera_name} camera first."
+            )
+
+        candidates = self._collect_frame_geotiffs(geotiff_folder)
+        if not candidates:
+            raise RuntimeError(f"No frame GeoTIFFs found in {geotiff_folder}.")
+
+        if log_fn:
+            log_fn(f"Counting overlap across {len(candidates)} GeoTIFF(s)"
+                   + (f" at {cell_size} m/px..." if cell_size > 0
+                      else " at native resolution..."))
+        if progress_fn:
+            progress_fn(10)
+
+        # 0 (or negative) means: keep the native resolution of the exports.
+        res = (cell_size, cell_size) if cell_size > 0 else None
+
+        datasets = []
+        source_crs = None
+        try:
+            for path in candidates:
+                if cancel_check and cancel_check():
+                    raise CancelledException("Coverage map cancelled")
+                ds = rasterio.open(path)
+                if source_crs is None and ds.crs is not None:
+                    source_crs = ds.crs
+                datasets.append(ds)
+
+            if progress_fn:
+                progress_fn(30)
+
+            # First pass establishes the exact output grid (shape + transform);
+            # the counting pass then reuses the same inputs/parameters, so
+            # rasterio produces an identically aligned grid and the per-source
+            # roff/coff offsets index our count array correctly (same approach
+            # as _merge_orthomosaic_average).
+            base, out_transform = rio_merge(
+                datasets, method="first", nodata=nodata_src, res=res)
+            out_height, out_width = base.shape[1], base.shape[2]
+            del base
+
+            if cancel_check and cancel_check():
+                raise CancelledException("Coverage map cancelled")
+            if progress_fn:
+                progress_fn(50)
+
+            count = np.zeros((out_height, out_width), dtype=np.float64)
+
+            def _count_valid(merged_data, new_data, merged_mask, new_mask,
+                             index=None, roff=0, coff=0, **kwargs):
+                # Masks are True where data is *invalid* (nodata); a pixel is
+                # covered by this frame when its first band is valid.
+                valid = ~new_mask
+                band0 = valid[0] if valid.ndim == 3 else valid
+                h, w = band0.shape
+                count[roff:roff + h, coff:coff + w] += band0
+                if merged_mask.shape == valid.shape:
+                    merged_mask[valid] = False
+
+            rio_merge(datasets, method=_count_valid, nodata=nodata_src, res=res)
+        finally:
+            for d in datasets:
+                d.close()
+
+        if progress_fn:
+            progress_fn(80)
+
+        out = count.astype(np.uint16)
+
+        analytics_folder = os.path.join(target_folder, f"analytics_{camera_suffix}")
+        os.makedirs(analytics_folder, exist_ok=True)
+        output_file = os.path.join(analytics_folder, "coverage_map.tif")
+
+        # Resolve the output CRS the same way the orthomosaic does:
+        # authoritatively from target_epsg, falling back to the sources' CRS.
+        out_crs = None
+        try:
+            from pyproj import CRS as PyprojCRS
+            from rasterio.crs import CRS as RasterioCRS
+            if target_epsg:
+                out_crs = RasterioCRS.from_wkt(PyprojCRS.from_epsg(target_epsg).to_wkt())
+        except Exception:
+            out_crs = None
+        if out_crs is None:
+            out_crs = source_crs
+
+        out_meta = {
+            "driver": "GTiff",
+            "height": out_height,
+            "width": out_width,
+            "count": 1,
+            "dtype": "uint16",
+            "crs": out_crs,
+            "transform": out_transform,
+            "compress": "LZW",
+            "tiled": True,
+            "BIGTIFF": "IF_SAFER",
+            "nodata": 0,
+        }
+        with rasterio.open(output_file, "w", **out_meta) as dst:
+            dst.write(out, 1)
+            dst.set_band_description(1, "overlapping_frame_count")
+
+        # Overview pyramids for fast GIS rendering; nearest keeps the counts
+        # meaningful at reduced zoom (non-fatal on failure).
+        try:
+            from rasterio.enums import Resampling as RioResampling
+            with rasterio.open(output_file, "r+") as dst:
+                dst.build_overviews([2, 4, 8, 16], RioResampling.nearest)
+                dst.update_tags(ns="rio_overview", resampling="nearest")
+        except Exception as exc:
+            if log_fn:
+                log_fn(f"Note: could not build overviews ({exc})")
+
+        # Summary statistics over the covered area.
+        px_area_m2 = abs(out_transform.a * out_transform.e)
+        covered = out[out > 0]
+        stats = {
+            "camera_suffix": camera_suffix,
+            "crs": f"EPSG:{target_epsg}",
+            "n_frames": len(candidates),
+            "cell_size_m": abs(out_transform.a),
+            "unit": "overlapping_frame_count",
+            "max_overlap": int(covered.max()) if covered.size else 0,
+            "mean_overlap": float(covered.mean()) if covered.size else 0.0,
+            "covered_area_ha": float(covered.size * px_area_m2 / 10000.0),
+            "multi_covered_area_ha": float(
+                int((covered >= 2).sum()) * px_area_m2 / 10000.0),
+            "raster": output_file,
+        }
+        with open(os.path.join(analytics_folder, "coverage_map.json"),
+                  'w', encoding='utf-8') as f:
+            json.dump(stats, f, indent=2)
+
+        if log_fn:
+            log_fn(f"Coverage map written to: {output_file} "
+                   f"({out_width} x {out_height} px)")
+            log_fn(f"Covered area: {stats['covered_area_ha']:.2f} ha, "
+                   f"max overlap: {stats['max_overlap']} frame(s), "
+                   f"mean overlap: {stats['mean_overlap']:.2f}")
+        if progress_fn:
+            progress_fn(100)
 
     def run_distance_sampling(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Estimate density/abundance via conventional line-transect distance sampling.
@@ -5906,6 +6093,30 @@ class BambiProcessor:
             if log_fn:
                 log_fn(f"Warning: Could not save PRJ file: {e}")
 
+    @staticmethod
+    def _collect_frame_geotiffs(geotiff_folder, use_all_frames=True,
+                                start_frame=None, end_frame=None):
+        """Collect exported frame GeoTIFFs ({idx:08d}.tiff), filtered by range.
+
+        Non-frame rasters (e.g. a previous orthomosaic) are skipped because
+        their file names are not plain frame indices.
+        """
+        candidates = []
+        for f in sorted(os.listdir(geotiff_folder)):
+            if not f.lower().endswith((".tif", ".tiff")):
+                continue
+            try:
+                frame_idx = int(os.path.splitext(f)[0])
+            except ValueError:
+                continue
+            if not use_all_frames:
+                if start_frame is not None and frame_idx < start_frame:
+                    continue
+                if end_frame is not None and frame_idx > end_frame:
+                    continue
+            candidates.append(os.path.join(geotiff_folder, f))
+        return candidates
+
     def run_orthomosaic(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Merge exported per-frame GeoTIFFs into a single true orthomosaic.
 
@@ -5953,22 +6164,8 @@ class BambiProcessor:
                 f"Run 'Export Frames as GeoTIFF' for the {camera_name} camera first."
             )
 
-        # Collect exported frame GeoTIFFs ({idx:08d}.tiff) and filter by range.
-        # Non-frame rasters (e.g. a previous orthomosaic) are skipped.
-        candidates = []
-        for f in sorted(os.listdir(geotiff_folder)):
-            if not f.lower().endswith((".tif", ".tiff")):
-                continue
-            try:
-                frame_idx = int(os.path.splitext(f)[0])
-            except ValueError:
-                continue
-            if not use_all_frames:
-                if start_frame is not None and frame_idx < start_frame:
-                    continue
-                if end_frame is not None and frame_idx > end_frame:
-                    continue
-            candidates.append(os.path.join(geotiff_folder, f))
+        candidates = self._collect_frame_geotiffs(
+            geotiff_folder, use_all_frames, start_frame, end_frame)
 
         if not candidates:
             raise RuntimeError(

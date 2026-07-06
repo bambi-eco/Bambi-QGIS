@@ -2592,6 +2592,63 @@ class BambiDockWidget(QDockWidget):
 
         analytics_tab_layout.addWidget(ds_group)
 
+        # ----- Coverage Map -----
+        coverage_group = QGroupBox("Coverage Map")
+        coverage_layout = QVBoxLayout(coverage_group)
+
+        coverage_desc = QLabel(
+            "Combines the exported frame GeoTIFFs like the orthomosaic, but "
+            "counts how many frames cover each pixel (survey effort/overlap). "
+            "Requires 'Export Frames as GeoTIFF' on the Processing tab."
+        )
+        coverage_desc.setWordWrap(True)
+        coverage_desc.setStyleSheet("color: gray; font-size: 10px;")
+        coverage_layout.addWidget(coverage_desc)
+
+        coverage_params_row = QHBoxLayout()
+        coverage_params_row.addWidget(QLabel("Camera:"))
+        self.coverage_camera_combo = QComboBox()
+        self.coverage_camera_combo.addItems(["Thermal", "RGB"])
+        self.coverage_camera_combo.setToolTip(
+            "Which camera's exported frame GeoTIFFs to combine.")
+        coverage_params_row.addWidget(self.coverage_camera_combo)
+        coverage_params_row.addWidget(QLabel("Cell (m):"))
+        self.coverage_cell_spin = QDoubleSpinBox()
+        self.coverage_cell_spin.setRange(0.0, 100.0)
+        self.coverage_cell_spin.setValue(1.0)
+        self.coverage_cell_spin.setSingleStep(0.5)
+        self.coverage_cell_spin.setSpecialValueText("native")
+        self.coverage_cell_spin.setToolTip(
+            "Output raster cell size in metres.\n"
+            "0 = native resolution of the exported GeoTIFFs (larger output).")
+        coverage_params_row.addWidget(self.coverage_cell_spin)
+        coverage_params_row.addStretch()
+        coverage_layout.addLayout(coverage_params_row)
+
+        coverage_run_row = QHBoxLayout()
+        self.coverage_btn = QPushButton("→ Generate Coverage Map")
+        self.coverage_btn.clicked.connect(self.run_coverage_map)
+        self.coverage_btn.setToolTip(
+            "Count, per ground pixel, the number of overlapping frame GeoTIFFs.\n"
+            "1 = seen once, N = seen in N frames, transparent = never covered."
+        )
+        self.coverage_status = QLabel("⚪")
+        coverage_run_row.addWidget(self.coverage_btn)
+        coverage_run_row.addWidget(self.coverage_status)
+        coverage_layout.addLayout(coverage_run_row)
+
+        coverage_add_row = QHBoxLayout()
+        self.add_coverage_btn = QPushButton("→ Add Coverage Map to QGIS")
+        self.add_coverage_btn.clicked.connect(self.add_coverage_map_to_qgis)
+        self.add_coverage_btn.setToolTip(
+            "Load the coverage raster with a graduated colour ramp.")
+        self.add_coverage_status = QLabel("⚪")
+        coverage_add_row.addWidget(self.add_coverage_btn)
+        coverage_add_row.addWidget(self.add_coverage_status)
+        coverage_layout.addLayout(coverage_add_row)
+
+        analytics_tab_layout.addWidget(coverage_group)
+
         # Progress mirror for analytics runs (main log lives on the Processing tab)
         self.analytics_progress_bar = QProgressBar()
         self.analytics_progress_bar.setRange(0, 100)
@@ -2987,6 +3044,14 @@ class BambiDockWidget(QDockWidget):
             "density_bandwidth": (
                 self.density_bandwidth_spin.value()
                 if hasattr(self, 'density_bandwidth_spin') else 25.0),
+
+            # Survey analytics: coverage map
+            "coverage_camera": (
+                ("T" if self.coverage_camera_combo.currentIndex() == 0 else "W")
+                if hasattr(self, 'coverage_camera_combo') else "T"),
+            "coverage_cell_size": (
+                self.coverage_cell_spin.value()
+                if hasattr(self, 'coverage_cell_spin') else 1.0),
 
             # Survey analytics: distance sampling
             "ds_source": (
@@ -5796,6 +5861,61 @@ class BambiDockWidget(QDockWidget):
         except Exception as e:  # nosec B110
             self.log(f"Warning: could not style density layer: {e}")
 
+    def run_coverage_map(self):
+        """Run the coverage-map generation step."""
+        config = self.get_config()
+        target_folder = config.get("target_folder", "")
+        if not target_folder or not os.path.isdir(target_folder):
+            QMessageBox.warning(self, "Missing Target Folder",
+                                "Please set a valid target folder first.")
+            return
+
+        suffix = "t" if config.get("coverage_camera", "T") == "T" else "w"
+        camera_label = "Thermal" if suffix == "t" else "RGB"
+        geotiff_folder = os.path.join(target_folder, f"geotiffs_{suffix}")
+        if not os.path.isdir(geotiff_folder):
+            QMessageBox.warning(
+                self, "Missing Prerequisites",
+                "The following are required:\n\n"
+                f"• {camera_label} frame GeoTIFFs "
+                "(run 'Export Frames as GeoTIFF' first)"
+            )
+            return
+
+        self.start_worker("coverage_map")
+
+    def add_coverage_map_to_qgis(self):
+        """Load the generated coverage-map raster with a graduated colour ramp."""
+        config = self.get_config()
+        suffix = "t" if config.get("coverage_camera", "T") == "T" else "w"
+        camera_label = "Thermal" if suffix == "t" else "RGB"
+
+        raster_file = os.path.join(config["target_folder"], f"analytics_{suffix}",
+                                   "coverage_map.tif")
+        if not os.path.exists(raster_file):
+            QMessageBox.warning(
+                self, "Missing Data",
+                "Coverage map has not been generated.\n"
+                "Please run 'Generate Coverage Map' first."
+            )
+            return
+
+        try:
+            self.update_status("add_coverage", "🟡 Loading...")
+            layer_name = f"BAMBI Coverage Map ({camera_label})"
+            layer = QgsRasterLayer(raster_file, layer_name)
+            if not layer.isValid():
+                raise RuntimeError(f"Failed to load raster: {raster_file}")
+            self._apply_density_style(layer)
+            QgsProject.instance().addMapLayer(layer)
+            self.update_status("add_coverage", "🟢 Added")
+            self.iface.mapCanvas().refresh()
+            self.log(f"Added coverage map layer: {layer_name}")
+        except Exception as e:
+            self.update_status("add_coverage", "🔴 Error")
+            self.log(f"Error adding coverage map: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to add coverage map: {e}")
+
     def run_distance_sampling(self):
         """Run the distance-sampling estimation step."""
         config = self.get_config()
@@ -6043,6 +6163,8 @@ class BambiDockWidget(QDockWidget):
             "density_heatmap": self.density_status,
             "add_density": self.add_density_status,
             "distance_sampling": self.distance_sampling_status,
+            "coverage_map": self.coverage_status,
+            "add_coverage": self.add_coverage_status,
         }
         if step in status_map:
             status_map[step].setText(status)
@@ -6078,6 +6200,9 @@ class BambiDockWidget(QDockWidget):
             self.density_btn.setEnabled(enabled)
             self.add_density_btn.setEnabled(enabled)
             self.distance_sampling_btn.setEnabled(enabled)
+        if hasattr(self, 'coverage_btn'):
+            self.coverage_btn.setEnabled(enabled)
+            self.add_coverage_btn.setEnabled(enabled)
 
     def run_perpendicular(self):
         """Run perpendicular distance calculation step."""
