@@ -29,13 +29,19 @@ Files written (relative to *target_folder*, ``{m}`` = ``t`` / ``w``)
 ``labels_{m}/labels.json``  — key-frame source of truth
 ``labels_{m}/labels.csv``   — per-frame interpolated export
     format: ``frame,track_id,x1,y1,x2,y2,species,sex,age,occlusion,keyframe``
+
+"Add detections to project" additionally merges the interpolated label boxes
+into ``detections_{m}/detections.txt`` in the exact format of the "Detect
+Animals" stage (``frame x1 y1 x2 y2 confidence class_id``) so the rest of the
+pipeline (geo-referencing, tracking, …) can consume them.  The exported block
+is delimited by a marker comment and replaced on re-export.
 """
 
 import os
 import json
 from typing import Dict, List, Optional, Tuple
 
-from qgis.PyQt.QtCore import Qt, QRectF, QPointF, QTimer, pyqtSignal
+from qgis.PyQt.QtCore import Qt, QRectF, QPointF, QSettings, QTimer, pyqtSignal
 from qgis.PyQt.QtGui import (
     QColor, QPen, QFont, QPixmap, QPainter, QCursor, QPainterPath,
 )
@@ -221,6 +227,85 @@ class LabelStore:
         with open(self.json_path, "w", encoding="utf-8") as fh:
             json.dump(data, fh, indent=2)
         self._export_csv()
+
+    # Marker line that delimits the label-tool block in detections.txt so a
+    # re-export replaces the previous block instead of duplicating it.
+    DETECTIONS_MARKER = "# --- labelled detections (BAMBI labelling tool) ---"
+
+    def species_class_ids(self) -> Dict[str, int]:
+        """Return a ``species -> class_id`` mapping for the pipeline export.
+
+        The pipeline only knows integer class ids, so species from the
+        default taxonomy keep their list index and custom species are
+        appended after it in alphabetical order.
+        """
+        mapping = {s: i for i, s in enumerate(SPECIES_CLASSES)}
+        custom = sorted({
+            (t.species or "unknown").strip().lower()
+            for t in self.tracks.values()
+        } - set(SPECIES_CLASSES))
+        for i, s in enumerate(custom):
+            mapping[s] = len(SPECIES_CLASSES) + i
+        return mapping
+
+    def export_to_detections(self) -> Tuple[str, int]:
+        """Merge the interpolated label boxes into ``detections.txt``.
+
+        Uses the exact line format of the "Detect Animals" stage
+        (``frame x1 y1 x2 y2 confidence class_id``, confidence 1.0 for
+        manual labels) so downstream steps (geo-referencing, tracking)
+        consume the labels like regular detections.  Detector output is
+        preserved; a previous label export block is replaced.
+
+        Returns ``(detections_path, number_of_exported_boxes)``.
+        """
+        det_folder = os.path.join(
+            self.target_folder, f"detections_{self.modality}")
+        os.makedirs(det_folder, exist_ok=True)
+        det_file = os.path.join(det_folder, "detections.txt")
+
+        # Keep everything up to (excluding) a previous export block.
+        existing: List[str] = []
+        if os.path.isfile(det_file):
+            with open(det_file, "r", encoding="utf-8") as fh:
+                for line in fh:
+                    if line.rstrip("\n") == self.DETECTIONS_MARKER:
+                        break
+                    existing.append(line)
+        if not existing:
+            existing = ["# frame x1 y1 x2 y2 confidence class_id\n"]
+        if existing and not existing[-1].endswith("\n"):
+            existing[-1] += "\n"
+
+        mapping = self.species_class_ids()
+        rows: List[tuple] = []  # (frame, track_id, x1, y1, x2, y2, class_id)
+        for track in sorted(self.tracks.values(), key=lambda t: t.track_id):
+            rng = track.frame_range()
+            if rng is None:
+                continue
+            species = (track.species or "unknown").strip().lower()
+            class_id = mapping.get(species, 0)
+            for frame in range(rng[0], rng[1] + 1):
+                res = track.box_at(frame)
+                if res is None:
+                    continue
+                (x1, y1, x2, y2), _is_kf, _occ = res
+                rows.append((frame, track.track_id, x1, y1, x2, y2, class_id))
+        rows.sort(key=lambda r: (r[0], r[1]))
+
+        used_ids = sorted({r[6] for r in rows})
+        id_to_species = {i: s for s, i in mapping.items()}
+
+        with open(det_file, "w", encoding="utf-8") as fh:
+            fh.writelines(existing)
+            fh.write(self.DETECTIONS_MARKER + "\n")
+            if used_ids:
+                pairs = ", ".join(f"{i}={id_to_species[i]}" for i in used_ids)
+                fh.write(f"# class_id mapping: {pairs}\n")
+            for frame, _tid, x1, y1, x2, y2, class_id in rows:
+                fh.write(f"{frame} {x1:.2f} {y1:.2f} {x2:.2f} {y2:.2f} "
+                         f"1.0000 {class_id}\n")
+        return det_file, len(rows)
 
     def _export_csv(self) -> None:
         """Write the per-frame interpolated CSV export."""
@@ -798,6 +883,13 @@ class LabellingToolDialog(QDialog):
         self._dirty = False
         self._updating_ui = False
 
+        # Autosave debounce: rapid edits (dragging, typing a species name)
+        # collapse into one save shortly after the last change.
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setSingleShot(True)
+        self._autosave_timer.setInterval(1000)
+        self._autosave_timer.timeout.connect(self._autosave_now)
+
         self._setup_ui()
         self.apply_dock_defaults()
 
@@ -830,18 +922,15 @@ class LabellingToolDialog(QDialog):
         self.modality_combo.currentIndexChanged.connect(self._on_modality_changed)
         top.addWidget(self.modality_combo)
 
-        top.addSpacing(12)
-        top.addWidget(QLabel("Key-frame step:"))
-        self.step_spin = QSpinBox()
-        self.step_spin.setRange(1, 500)
-        self.step_spin.setValue(10)
-        self.step_spin.setToolTip(
-            "Frame stride used by the step navigation buttons and by "
-            "'Import existing track'. Frames between key frames are "
-            "interpolated linearly.")
-        top.addWidget(self.step_spin)
-
         top.addStretch()
+        self.autosave_check = QCheckBox("Autosave")
+        self.autosave_check.setToolTip(
+            "Automatically save the labels (labels.json / labels.csv) "
+            "shortly after every change.")
+        self.autosave_check.setChecked(
+            QSettings().value("bambi/labelling_tool/autosave", False, type=bool))
+        self.autosave_check.toggled.connect(self._on_autosave_toggled)
+        top.addWidget(self.autosave_check)
         self.save_btn = QPushButton("Save Labels")
         self.save_btn.clicked.connect(self._on_save)
         top.addWidget(self.save_btn)
@@ -862,14 +951,20 @@ class LabellingToolDialog(QDialog):
 
         # ---- bottom: navigation --------------------------------------------
         nav = QHBoxLayout()
+        self.nav_step_spin = QSpinBox()
+        self.nav_step_spin.setRange(1, 500)
+        self.nav_step_spin.setValue(10)
+        self.nav_step_spin.setToolTip(
+            "Frame stride of the step navigation buttons (and PageUp / "
+            "PageDown).")
         self.prev_step_btn = QPushButton("<< Step")
-        self.prev_step_btn.clicked.connect(lambda: self._go_relative(-self.step_spin.value()))
+        self.prev_step_btn.clicked.connect(lambda: self._go_relative(-self.nav_step_spin.value()))
         self.prev_btn = QPushButton("< Prev")
         self.prev_btn.clicked.connect(lambda: self._go_relative(-1))
         self.next_btn = QPushButton("Next >")
         self.next_btn.clicked.connect(lambda: self._go_relative(1))
         self.next_step_btn = QPushButton("Step >>")
-        self.next_step_btn.clicked.connect(lambda: self._go_relative(self.step_spin.value()))
+        self.next_step_btn.clicked.connect(lambda: self._go_relative(self.nav_step_spin.value()))
 
         self.frame_spin = QSpinBox()
         self.frame_spin.setRange(0, 0)
@@ -885,6 +980,8 @@ class LabellingToolDialog(QDialog):
         nav.addWidget(self.frame_slider, 1)
         nav.addWidget(self.next_btn)
         nav.addWidget(self.next_step_btn)
+        nav.addWidget(QLabel("Step:"))
+        nav.addWidget(self.nav_step_spin)
         layout.addLayout(nav)
 
         self.timeline = _TimelineWidget()
@@ -919,11 +1016,24 @@ class LabellingToolDialog(QDialog):
         import_btn = QPushButton("Import as label track")
         import_btn.setToolTip(
             "Convert the selected pipeline track into an editable label "
-            "track (key frames every N-th frame).")
+            "track.")
         import_btn.clicked.connect(self._on_import_track)
         import_row.addWidget(self.import_track_combo)
         import_row.addWidget(import_btn)
         og.addLayout(import_row)
+
+        resample_row = QHBoxLayout()
+        resample_row.addWidget(QLabel("Resample:"))
+        self.import_resample_spin = QSpinBox()
+        self.import_resample_spin.setRange(1, 500)
+        self.import_resample_spin.setValue(1)
+        self.import_resample_spin.setToolTip(
+            "Keep a key frame only at every N-th frame of the imported "
+            "track (first and last frame are always kept). 1 = keep every "
+            "frame as a key frame (no simplification).")
+        resample_row.addWidget(self.import_resample_spin)
+        resample_row.addStretch()
+        og.addLayout(resample_row)
         vbox.addWidget(overlay_group)
 
         # Label tracks
@@ -1025,6 +1135,19 @@ class LabellingToolDialog(QDialog):
         pg.addWidget(prop_hint)
         vbox.addWidget(prop_group)
 
+        # Pipeline export
+        export_group = QGroupBox("Pipeline export")
+        eg = QVBoxLayout(export_group)
+        self.export_det_btn = QPushButton("Add detections to project")
+        self.export_det_btn.setToolTip(
+            "Save the labels and merge the interpolated label boxes into "
+            "detections_{t,w}/detections.txt in the same format as the "
+            "'Detect Animals' stage, so geo-referencing and tracking can "
+            "use them. Re-exporting replaces the previously added block.")
+        self.export_det_btn.clicked.connect(self._on_add_detections_to_project)
+        eg.addWidget(self.export_det_btn)
+        vbox.addWidget(export_group)
+
         vbox.addStretch()
         fit_btn = QPushButton("Fit view")
         fit_btn.clicked.connect(self.canvas.fit)
@@ -1046,9 +1169,9 @@ class LabellingToolDialog(QDialog):
         elif key == Qt.Key_Left:
             self._go_relative(-1)
         elif key == Qt.Key_PageUp:
-            self._go_relative(self.step_spin.value())
+            self._go_relative(self.nav_step_spin.value())
         elif key == Qt.Key_PageDown:
-            self._go_relative(-self.step_spin.value())
+            self._go_relative(-self.nav_step_spin.value())
         elif key == Qt.Key_N:
             self.new_track_btn.toggle()
         elif key == Qt.Key_K:
@@ -1468,7 +1591,7 @@ class LabellingToolDialog(QDialog):
         if not entries:
             return
 
-        step = self.step_spin.value()
+        step = self.import_resample_spin.value()
         track = LabelTrack(self._store.next_track_id())
         frames = [d["frame"] for d in entries]
         first, last = frames[0], frames[-1]
@@ -1641,10 +1764,38 @@ class LabellingToolDialog(QDialog):
 
     def _mark_dirty(self):
         self._dirty = True
+        if self.autosave_check.isChecked():
+            self._autosave_timer.start()  # (re)start the debounce interval
+
+    def _on_autosave_toggled(self, checked: bool):
+        QSettings().setValue("bambi/labelling_tool/autosave", checked)
+        if checked and self._dirty:
+            self._autosave_now()
+        elif not checked:
+            self._autosave_timer.stop()
+
+    def _autosave_now(self):
+        """Debounced autosave — silent except for the status line."""
+        if not self._dirty or self._store is None:
+            return
+        try:
+            self._store.save()
+        except Exception as exc:
+            # Do not nag once per edit: disable autosave and tell the user.
+            self.autosave_check.setChecked(False)
+            QMessageBox.warning(
+                self, "BAMBI Labelling Tool",
+                f"Autosave failed — autosave has been disabled:\n{exc}")
+            return
+        self._dirty = False
+        self._update_status()
+        self.status_label.setText(
+            self.status_label.text() + "   |   autosaved")
 
     def _on_save(self):
         if self._store is None:
             return
+        self._autosave_timer.stop()  # manual save supersedes a pending one
         try:
             self._store.save()
         except Exception as exc:
@@ -1656,8 +1807,44 @@ class LabellingToolDialog(QDialog):
         self.status_label.setText(
             f"Saved {len(self._store.tracks)} track(s) to {self._store.json_path}")
 
+    def _on_add_detections_to_project(self):
+        """Merge the label boxes into the pipeline's detections.txt."""
+        if self._store is None:
+            return
+        if not any(t.keyframes for t in self._store.tracks.values()):
+            QMessageBox.information(
+                self, "BAMBI Labelling Tool",
+                "There are no label tracks with key frames to export.")
+            return
+        try:
+            # Keep labels.json/csv in sync with what is exported.
+            self._store.save()
+            self._dirty = False
+            det_file, n_boxes = self._store.export_to_detections()
+        except Exception as exc:
+            QMessageBox.warning(
+                self, "BAMBI Labelling Tool",
+                f"Could not export detections:\n{exc}")
+            return
+
+        # Refresh the read-only overlay so the exported boxes show up.
+        self._detections = _load_detections_by_frame(det_file)
+        self._render_frame()
+
+        QMessageBox.information(
+            self, "BAMBI Labelling Tool",
+            f"Added {n_boxes} bounding box(es) from "
+            f"{len(self._store.tracks)} label track(s) to:\n{det_file}\n\n"
+            "Re-run 'Geo-Reference Detections' (and tracking, if needed) in "
+            "the plugin panel to update the QGIS layers.")
+
     def _maybe_save_dirty(self) -> bool:
         """Ask the user about unsaved changes. Returns False on cancel."""
+        if self._dirty and self._store is not None \
+                and self.autosave_check.isChecked():
+            # Autosave mode: flush pending changes without prompting.
+            self._autosave_timer.stop()
+            self._autosave_now()
         if not self._dirty or self._store is None:
             return True
         reply = QMessageBox.question(
