@@ -151,6 +151,14 @@ class ProcessingWorker(QObject):
                 )
             elif self.step == "trex_import":
                 self.processor.run_trex_import(self.config, self.progress.emit, self.log.emit, self.is_cancelled)
+            elif self.step == "density_heatmap":
+                self.processor.run_density_heatmap(
+                    self.config, self.progress.emit, self.log.emit, self.is_cancelled
+                )
+            elif self.step == "distance_sampling":
+                self.processor.run_distance_sampling(
+                    self.config, self.progress.emit, self.log.emit, self.is_cancelled
+                )
             else:
                 raise ValueError(f"Unknown step: {self.step}")
 
@@ -1809,6 +1817,628 @@ class BambiProcessor:
 
         if progress_fn:
             progress_fn(100)
+
+    # ------------------------------------------------------------------ #
+    # Survey analytics: density heatmap + distance sampling
+    # ------------------------------------------------------------------ #
+
+    def _collect_analytics_points(self, config, source, log_fn=None):
+        """Collect world-coordinate (UTM) point locations for analytics.
+
+        For ``source == "detections"`` every geo-referenced detection centre is
+        returned. For ``source == "tracks"`` one representative point per track
+        (the centroid of that track's bounding-box centres) is returned, so a
+        single animal followed across many frames counts once.
+
+        :returns: (points, suffix) where points is a list of (x, y) tuples and
+                  suffix is the camera folder suffix the data came from.
+        """
+        target_folder = config["target_folder"]
+        points = []
+
+        if source == "tracks":
+            trk_camera = config.get("tracking_camera", "T")
+            suffix = "t" if trk_camera == "T" else "w"
+            tracks_folder = os.path.join(target_folder, f"tracks_{suffix}")
+            if not os.path.isdir(tracks_folder):
+                raise FileNotFoundError(
+                    f"tracks_{suffix}/ folder not found. Please run 'Track Animals' first."
+                )
+            from collections import defaultdict
+            centres = defaultdict(list)
+            for fname in os.listdir(tracks_folder):
+                if not fname.endswith(".csv") or fname.endswith("_pixel.csv"):
+                    continue
+                with open(os.path.join(tracks_folder, fname), 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith('#'):
+                            continue
+                        parts = line.split(',')
+                        if len(parts) >= 8:
+                            try:
+                                tid = int(parts[1])
+                                cx = (float(parts[2]) + float(parts[5])) / 2.0
+                                cy = (float(parts[3]) + float(parts[6])) / 2.0
+                            except (ValueError, IndexError):
+                                continue
+                            centres[tid].append((cx, cy))
+            for tid, pts in centres.items():
+                mx = sum(p[0] for p in pts) / len(pts)
+                my = sum(p[1] for p in pts) / len(pts)
+                points.append((mx, my))
+        else:
+            det_camera = config.get("detection_camera", "T")
+            suffix = "t" if det_camera == "T" else "w"
+            georef_file = os.path.join(
+                target_folder, f"georeferenced_{suffix}", "georeferenced.txt")
+            if not os.path.exists(georef_file):
+                raise FileNotFoundError(
+                    "georeferenced.txt not found. Please run 'Geo-Reference Detections' first."
+                )
+            with open(georef_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    parts = line.split()
+                    if len(parts) >= 8:
+                        try:
+                            cx = (float(parts[2]) + float(parts[5])) / 2.0
+                            cy = (float(parts[3]) + float(parts[6])) / 2.0
+                        except (ValueError, IndexError):
+                            continue
+                        points.append((cx, cy))
+
+        if log_fn:
+            log_fn(f"Collected {len(points)} {source} point(s) from {suffix} outputs")
+        return points, suffix
+
+    def run_density_heatmap(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
+        """Generate a kernel-density estimate raster of animal locations.
+
+        Points come from either geo-referenced detections or tracks (one point
+        per track). A Gaussian kernel is applied and the result written as a
+        single-band float32 GeoTIFF where each pixel is the estimated point
+        density in animals per hectare. Cells with no signal are set to nodata.
+
+        :param config: Configuration dictionary. Relevant keys:
+            ``density_source`` ("detections"|"tracks"), ``density_cell_size`` (m),
+            ``density_bandwidth`` (m), ``target_epsg``.
+        """
+        import math
+        import numpy as np
+
+        source = config.get("density_source", "detections")
+        cell_size = float(config.get("density_cell_size", 5.0))
+        bandwidth = float(config.get("density_bandwidth", 25.0))
+        target_epsg = config.get("target_epsg", 32633)
+        target_folder = config["target_folder"]
+
+        if cell_size <= 0:
+            raise ValueError("Density cell size must be > 0.")
+        if bandwidth <= 0:
+            raise ValueError("Density bandwidth must be > 0.")
+
+        if log_fn:
+            log_fn(f"Generating {source} density heatmap "
+                   f"(cell={cell_size} m, bandwidth={bandwidth} m)...")
+        if progress_fn:
+            progress_fn(5)
+
+        points, suffix = self._collect_analytics_points(config, source, log_fn)
+        if len(points) < 1:
+            raise RuntimeError(f"No {source} points available to build a density heatmap.")
+
+        pts = np.asarray(points, dtype=np.float64)
+        if progress_fn:
+            progress_fn(20)
+
+        # Grid bounds padded by 3 bandwidths so the kernel tails are captured.
+        pad = 3.0 * bandwidth
+        min_x = pts[:, 0].min() - pad
+        max_x = pts[:, 0].max() + pad
+        min_y = pts[:, 1].min() - pad
+        max_y = pts[:, 1].max() + pad
+
+        width = int(math.ceil((max_x - min_x) / cell_size))
+        height = int(math.ceil((max_y - min_y) / cell_size))
+        max_dim = 8192
+        if width > max_dim or height > max_dim:
+            scale = max((max_x - min_x) / max_dim, (max_y - min_y) / max_dim)
+            cell_size = scale
+            width = int(math.ceil((max_x - min_x) / cell_size))
+            height = int(math.ceil((max_y - min_y) / cell_size))
+            if log_fn:
+                log_fn(f"Grid too large, increased cell size to {cell_size:.2f} m")
+        width = max(1, width)
+        height = max(1, height)
+
+        if log_fn:
+            log_fn(f"Density grid: {width} x {height} cells")
+        if progress_fn:
+            progress_fn(35)
+
+        # Accumulate raw point counts into grid cells.
+        counts = np.zeros((height, width), dtype=np.float64)
+        for x, y in points:
+            col = int((x - min_x) / cell_size)
+            row = int((max_y - y) / cell_size)  # flip Y for raster orientation
+            if 0 <= row < height and 0 <= col < width:
+                counts[row, col] += 1.0
+
+        if cancel_check and cancel_check():
+            raise CancelledException("Density heatmap cancelled")
+        if progress_fn:
+            progress_fn(55)
+
+        # Smooth with a Gaussian kernel (sigma in cells). gaussian_filter
+        # conserves the total sum, so the smoothed value is counts per cell.
+        sigma = bandwidth / cell_size
+        try:
+            from scipy.ndimage import gaussian_filter
+            smoothed = gaussian_filter(counts, sigma=sigma, mode="constant", cval=0.0)
+        except ImportError:
+            smoothed = self._gaussian_blur_numpy(counts, sigma)
+
+        if progress_fn:
+            progress_fn(75)
+
+        # Convert counts-per-cell to density per hectare.
+        cell_area_m2 = cell_size * cell_size
+        density = smoothed / cell_area_m2 * 10000.0
+
+        # Everything below this threshold is treated as "no signal" (nodata) so
+        # the empty surround renders transparent.
+        nodata = -9999.0
+        eps = (1.0 / cell_area_m2 * 10000.0) * 1e-4  # ~0 relative to one point
+        out = np.where(density > eps, density, nodata).astype(np.float32)
+
+        analytics_folder = os.path.join(target_folder, f"analytics_{suffix}")
+        os.makedirs(analytics_folder, exist_ok=True)
+        out_file = os.path.join(analytics_folder, f"density_{source}.tif")
+
+        bounds = (min_x, min_y, max_x, max_y)
+        self._save_single_band_raster(out, out_file, bounds, target_epsg, nodata, log_fn)
+
+        valid = density[density > eps]
+        stats = {
+            "source": source,
+            "camera_suffix": suffix,
+            "crs": f"EPSG:{target_epsg}",
+            "n_points": len(points),
+            "cell_size_m": cell_size,
+            "bandwidth_m": bandwidth,
+            "unit": "points_per_hectare",
+            "max_density": float(valid.max()) if valid.size else 0.0,
+            "mean_density": float(valid.mean()) if valid.size else 0.0,
+            "raster": out_file,
+        }
+        with open(os.path.join(analytics_folder, f"density_{source}.json"),
+                  'w', encoding='utf-8') as f:
+            json.dump(stats, f, indent=2)
+
+        if log_fn:
+            log_fn(f"Density heatmap saved to: {out_file}")
+            log_fn(f"Peak density: {stats['max_density']:.3f} points/ha "
+                   f"from {len(points)} {source}")
+        if progress_fn:
+            progress_fn(100)
+
+    @staticmethod
+    def _gaussian_blur_numpy(grid, sigma):
+        """Separable Gaussian blur fallback when SciPy is unavailable."""
+        import math
+        import numpy as np
+
+        if sigma <= 0:
+            return grid.astype(np.float64)
+        radius = max(1, int(math.ceil(sigma * 3)))
+        x = np.arange(-radius, radius + 1, dtype=np.float64)
+        kernel = np.exp(-(x * x) / (2.0 * sigma * sigma))
+        kernel /= kernel.sum()
+
+        out = grid.astype(np.float64)
+        # Convolve rows then columns (separable).
+        out = np.apply_along_axis(
+            lambda m: np.convolve(m, kernel, mode="same"), axis=1, arr=out)
+        out = np.apply_along_axis(
+            lambda m: np.convolve(m, kernel, mode="same"), axis=0, arr=out)
+        return out
+
+    def _save_single_band_raster(self, array, output_file, bounds, crs_epsg, nodata, log_fn=None):
+        """Write a single-band float32 GeoTIFF with the given world bounds."""
+        import numpy as np
+
+        height, width = array.shape
+        min_x, min_y, max_x, max_y = bounds
+        array = array.astype(np.float32)
+
+        try:
+            import rasterio
+            from rasterio.transform import from_bounds
+
+            transform = from_bounds(min_x, min_y, max_x, max_y, width, height)
+            profile = {
+                'driver': 'GTiff',
+                'dtype': 'float32',
+                'width': width,
+                'height': height,
+                'count': 1,
+                'transform': transform,
+                'compress': 'lzw',
+                'nodata': nodata,
+            }
+            try:
+                from pyproj import CRS as PyprojCRS
+                from rasterio.crs import CRS as RasterioCRS
+                profile['crs'] = RasterioCRS.from_wkt(PyprojCRS.from_epsg(crs_epsg).to_wkt())
+            except Exception:  # nosec B110
+                try:
+                    from rasterio.crs import CRS as RasterioCRS
+                    profile['crs'] = RasterioCRS.from_epsg(crs_epsg)
+                except Exception:  # nosec B110
+                    pass
+            if width > 256 and height > 256:
+                profile.update({'tiled': True, 'blockxsize': 256, 'blockysize': 256})
+
+            with rasterio.open(output_file, 'w', **profile) as dst:
+                dst.write(array, 1)
+                dst.set_band_description(1, "density_points_per_hectare")
+            self._save_world_file(output_file, bounds, width, height)
+            self._save_prj_file(output_file, crs_epsg, log_fn)
+        except ImportError:
+            raise RuntimeError(
+                "rasterio is required to write the density heatmap GeoTIFF."
+            )
+
+    def run_distance_sampling(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
+        """Estimate density/abundance via conventional line-transect distance sampling.
+
+        Uses the perpendicular distances already computed by 'Calculate
+        Perpendicular' (detections) or 'Calculate Track Perpendicular' (tracks),
+        fits half-normal and hazard-rate detection functions by maximum
+        likelihood, selects the best by AIC, and reports the effective strip
+        width, detection probability, density and abundance with 95% CIs.
+
+        :param config: Configuration dictionary. Relevant keys:
+            ``ds_source`` ("detections"|"tracks"), ``ds_truncation`` (m or 0/None
+            for automatic 95th-percentile truncation), ``flight_route_camera``,
+            ``detection_camera``/``tracking_camera``, ``target_epsg``.
+        """
+        import math
+        import numpy as np
+
+        source = config.get("ds_source", "detections")
+        target_folder = config["target_folder"]
+        target_epsg = config.get("target_epsg", 32633)
+        fr_camera = config.get("flight_route_camera", "T")
+        fr_suffix = "t" if fr_camera == "T" else "w"
+
+        if log_fn:
+            log_fn(f"Running distance-sampling estimation ({source})...")
+        if progress_fn:
+            progress_fn(5)
+
+        # ---- Load perpendicular distances -------------------------------- #
+        if source == "tracks":
+            trk_suffix = "t" if config.get("tracking_camera", "T") == "T" else "w"
+            perp_file = os.path.join(
+                target_folder, f"flight_route_{fr_suffix}",
+                f"perpendicular_tracks_{trk_suffix}.json")
+            list_key, dist_key = "tracks", "distance_m"
+            prereq = "Calculate Track Perpendicular"
+        else:
+            det_suffix = "t" if config.get("detection_camera", "T") == "T" else "w"
+            perp_file = os.path.join(
+                target_folder, f"flight_route_{fr_suffix}",
+                f"perpendicular_{det_suffix}.json")
+            list_key, dist_key = "perpendiculas", "distance_m"
+            prereq = "Calculate Perpendicular"
+
+        if not os.path.exists(perp_file):
+            raise FileNotFoundError(
+                f"{os.path.basename(perp_file)} not found. Please run '{prereq}' first."
+            )
+        with open(perp_file, 'r', encoding='utf-8') as f:
+            perp_data = json.load(f)
+        distances = np.asarray(
+            [float(e[dist_key]) for e in perp_data.get(list_key, []) if dist_key in e],
+            dtype=np.float64)
+        distances = distances[np.isfinite(distances) & (distances >= 0)]
+        if distances.size < 2:
+            raise RuntimeError("Not enough perpendicular distances for distance sampling.")
+
+        if progress_fn:
+            progress_fn(20)
+
+        # ---- Transect length L from the flight route --------------------- #
+        route_file = os.path.join(
+            target_folder, f"flight_route_{fr_suffix}", "flight_route.geojson")
+        if not os.path.exists(route_file):
+            raise FileNotFoundError(
+                "flight_route.geojson not found. Please run 'Generate Flight Route' first."
+            )
+        with open(route_file, 'r', encoding='utf-8') as f:
+            route_geojson = json.load(f)
+        route_coords = None
+        for feature in route_geojson.get("features", []):
+            if feature.get("geometry", {}).get("type") == "LineString":
+                route_coords = feature["geometry"]["coordinates"]
+                break
+        if not route_coords or len(route_coords) < 2:
+            raise RuntimeError("Flight route does not contain a valid LineString.")
+        rc = np.asarray(route_coords, dtype=np.float64)
+        seg = np.diff(rc[:, :2], axis=0)
+        transect_length = float(np.hypot(seg[:, 0], seg[:, 1]).sum())
+        if transect_length <= 0:
+            raise RuntimeError("Flight route has zero length.")
+
+        # ---- Truncation -------------------------------------------------- #
+        w_cfg = config.get("ds_truncation", 0) or 0
+        if w_cfg and float(w_cfg) > 0:
+            w = float(w_cfg)
+        else:
+            w = float(np.percentile(distances, 95))
+        x = distances[distances <= w]
+        n = int(x.size)
+        if n < 2:
+            raise RuntimeError("Truncation distance leaves too few observations.")
+
+        if log_fn:
+            log_fn(f"n={n} observations, transect length L={transect_length:.1f} m, "
+                   f"truncation w={w:.2f} m")
+        if progress_fn:
+            progress_fn(40)
+
+        # ---- Fit detection functions ------------------------------------- #
+        models = []
+        hn = self._fit_detection_function("half-normal", x, w, log_fn)
+        if hn:
+            models.append(hn)
+        hr = self._fit_detection_function("hazard-rate", x, w, log_fn)
+        if hr:
+            models.append(hr)
+        if not models:
+            raise RuntimeError("Detection-function fitting failed for all models.")
+
+        best = min(models, key=lambda m: m["aic"])
+        if progress_fn:
+            progress_fn(70)
+
+        # ---- Density / abundance ----------------------------------------- #
+        esw = best["esw"]          # effective strip half-width (m)
+        p = esw / w                # average detection probability
+        density_m2 = n / (2.0 * esw * transect_length)
+        density_km2 = density_m2 * 1e6
+        covered_area_m2 = 2.0 * w * transect_length
+        abundance_covered = density_m2 * covered_area_m2  # == n / p
+
+        # Combine encounter-rate (Poisson) and detection-function CVs.
+        cv_n = 1.0 / math.sqrt(n)
+        cv_esw = best["cv_esw"]
+        cv_density = math.sqrt(cv_n * cv_n + cv_esw * cv_esw)
+        ci_d = self._lognormal_ci(density_km2, cv_density)
+        ci_n = self._lognormal_ci(abundance_covered, cv_density)
+
+        if progress_fn:
+            progress_fn(85)
+
+        # ---- Detection-function curve + histogram for plotting ----------- #
+        xs = np.linspace(0, w, 60)
+        gx = best["g"](xs)
+        hist_counts, hist_edges = np.histogram(x, bins=min(20, max(5, n // 5)), range=(0, w))
+
+        result = {
+            "source": source,
+            "crs": f"EPSG:{target_epsg}",
+            "n": n,
+            "n_before_truncation": int(distances.size),
+            "transect_length_m": transect_length,
+            "truncation_m": w,
+            "best_model": best["name"],
+            "effective_strip_width_m": esw,
+            "detection_probability": p,
+            "density_per_km2": density_km2,
+            "density_ci95": ci_d,
+            "cv_density": cv_density,
+            "covered_area_km2": covered_area_m2 / 1e6,
+            "abundance_in_covered_area": abundance_covered,
+            "abundance_ci95": ci_n,
+            "models": [
+                {
+                    "name": m["name"],
+                    "params": m["params"],
+                    "log_likelihood": m["log_likelihood"],
+                    "aic": m["aic"],
+                    "esw_m": m["esw"],
+                }
+                for m in models
+            ],
+            "detection_function_curve": {"x": xs.tolist(), "g": gx.tolist()},
+            "distance_histogram": {
+                "counts": hist_counts.tolist(),
+                "edges": hist_edges.tolist(),
+            },
+            "notes": (
+                "Encounter-rate variance uses a Poisson approximation (CV = 1/sqrt(n)); "
+                "abundance is reported for the covered strip area 2*w*L. Multiply density "
+                "by your study-area size for a study-area abundance estimate."
+            ),
+        }
+
+        det_suffix_out = ("t" if config.get("tracking_camera", "T") == "T" else "w") \
+            if source == "tracks" \
+            else ("t" if config.get("detection_camera", "T") == "T" else "w")
+        analytics_folder = os.path.join(target_folder, f"analytics_{det_suffix_out}")
+        os.makedirs(analytics_folder, exist_ok=True)
+        out_file = os.path.join(analytics_folder, f"distance_sampling_{source}.json")
+        with open(out_file, 'w', encoding='utf-8') as f:
+            json.dump(result, f, indent=2)
+
+        if log_fn:
+            log_fn(f"Best model: {best['name']} (AIC={best['aic']:.2f})")
+            log_fn(f"ESW={esw:.2f} m, detection probability p={p:.3f}")
+            log_fn(f"Density={density_km2:.3f} /km^2 "
+                   f"(95% CI {ci_d[0]:.3f}-{ci_d[1]:.3f})")
+            log_fn(f"Abundance in covered area ({covered_area_m2 / 1e6:.3f} km^2): "
+                   f"{abundance_covered:.1f} (95% CI {ci_n[0]:.1f}-{ci_n[1]:.1f})")
+            log_fn(f"Distance-sampling results saved to: {out_file}")
+        if progress_fn:
+            progress_fn(100)
+
+    def _fit_detection_function(self, name, x, w, log_fn=None):
+        """Fit a detection function by MLE; returns a dict of results or None.
+
+        Supported: "half-normal" (1 param sigma) and "hazard-rate" (sigma, b).
+        The observed-distance likelihood is f(x) = g(x) / mu, with
+        mu = integral of g over [0, w] (the effective strip half-width, ESW).
+        """
+        import math
+        import numpy as np
+
+        n = x.size
+        # NumPy 2.0 renamed ``trapz`` to ``trapezoid`` and 2.x removed the alias.
+        _trapz = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
+
+        def esw_of(g):
+            xs = np.linspace(0.0, w, 512)
+            return float(_trapz(g(xs), xs))
+
+        if name == "half-normal":
+            def make_g(theta):
+                sigma = math.exp(theta[0])
+                two_var = 2.0 * sigma * sigma
+                return lambda t: np.exp(-(np.asarray(t, dtype=np.float64) ** 2) / two_var)
+
+            def nll(theta):
+                sigma = math.exp(theta[0])
+                g = make_g(theta)
+                mu = esw_of(g)
+                if mu <= 0:
+                    return 1e12
+                return float(np.sum(x * x) / (2.0 * sigma * sigma) + n * math.log(mu))
+
+            theta0 = [math.log(max(np.std(x), 1.0))]
+            k = 1
+        elif name == "hazard-rate":
+            def make_g(theta):
+                sigma = math.exp(theta[0])
+                b = 1.0 + math.exp(theta[1])
+
+                def g(t):
+                    t = np.asarray(t, dtype=np.float64)
+                    out = np.ones_like(t)
+                    nz = t > 0
+                    out[nz] = 1.0 - np.exp(-((t[nz] / sigma) ** (-b)))
+                    return out
+                return g
+
+            def nll(theta):
+                g = make_g(theta)
+                mu = esw_of(g)
+                if mu <= 0:
+                    return 1e12
+                gx = g(x)
+                gx = np.clip(gx, 1e-12, 1.0)
+                return float(-np.sum(np.log(gx)) + n * math.log(mu))
+
+            theta0 = [math.log(max(np.std(x), 1.0)), 0.0]
+            k = 2
+        else:
+            return None
+
+        try:
+            from scipy.optimize import minimize
+            res = minimize(nll, theta0, method="Nelder-Mead",
+                           options={"xatol": 1e-6, "fatol": 1e-6, "maxiter": 2000})
+            theta = res.x
+            best_nll = float(res.fun)
+        except ImportError:
+            if name != "half-normal":
+                return None  # hazard-rate needs an optimizer
+            # Closed-form-ish 1D search for the half-normal.
+            grid = np.log(np.linspace(max(np.std(x), 0.5), w * 2 + 1, 400))
+            vals = [nll([t]) for t in grid]
+            theta = [grid[int(np.argmin(vals))]]
+            best_nll = float(min(vals))
+
+        g = make_g(theta)
+        esw = esw_of(g)
+        if not math.isfinite(best_nll) or esw <= 0:
+            return None
+
+        # CV of ESW via a numeric Hessian of the NLL (observed information).
+        cv_esw = self._cv_esw_numeric(nll, esw_of, make_g, theta)
+        aic = 2.0 * k + 2.0 * best_nll
+
+        if name == "half-normal":
+            params = {"sigma": math.exp(theta[0])}
+        else:
+            params = {"sigma": math.exp(theta[0]), "b": 1.0 + math.exp(theta[1])}
+
+        if log_fn:
+            log_fn(f"  {name}: ESW={esw:.2f} m, AIC={aic:.2f}, params={params}")
+
+        return {
+            "name": name, "params": params, "log_likelihood": -best_nll,
+            "aic": aic, "esw": esw, "cv_esw": cv_esw, "g": g,
+        }
+
+    @staticmethod
+    def _cv_esw_numeric(nll, esw_of, make_g, theta):
+        """Delta-method CV of the ESW from a numeric Hessian of the NLL."""
+        import math
+        import numpy as np
+
+        def perturb(base, idx, delta):
+            out = base.copy()
+            out[idx] += delta
+            return out
+
+        theta = np.asarray(theta, dtype=np.float64)
+        m = theta.size
+        h = 1e-4 * (np.abs(theta) + 1.0)
+
+        # Hessian of the NLL (observed information matrix).
+        hess = np.zeros((m, m))
+        for i in range(m):
+            for j in range(i, m):
+                tpp = perturb(perturb(theta, i, h[i]), j, h[j])
+                tpm = perturb(perturb(theta, i, h[i]), j, -h[j])
+                tmp = perturb(perturb(theta, i, -h[i]), j, h[j])
+                tmm = perturb(perturb(theta, i, -h[i]), j, -h[j])
+                numer = nll(tpp.tolist()) - nll(tpm.tolist()) - nll(tmp.tolist()) + nll(tmm.tolist())
+                hess[i, j] = hess[j, i] = numer / (4.0 * h[i] * h[j])
+        try:
+            cov = np.linalg.inv(hess)
+        except np.linalg.LinAlgError:
+            return 0.0
+        if not np.all(np.isfinite(cov)):
+            return 0.0
+
+        # Gradient of ESW w.r.t. theta (numeric).
+        grad = np.zeros(m)
+        esw0 = esw_of(make_g(theta.tolist()))
+        for i in range(m):
+            tp = perturb(theta, i, h[i])
+            tm = perturb(theta, i, -h[i])
+            d_esw = esw_of(make_g(tp.tolist())) - esw_of(make_g(tm.tolist()))
+            grad[i] = d_esw / (2.0 * h[i])
+        var_esw = float(grad @ cov @ grad)
+        if var_esw <= 0 or not math.isfinite(var_esw) or esw0 <= 0:
+            return 0.0
+        return math.sqrt(var_esw) / esw0
+
+    @staticmethod
+    def _lognormal_ci(estimate, cv, z=1.96):
+        """95% lognormal confidence interval for a positive estimate."""
+        import math
+
+        if estimate <= 0 or cv <= 0 or not math.isfinite(cv):
+            return [estimate, estimate]
+        c = math.exp(z * math.sqrt(math.log(1.0 + cv * cv)))
+        return [estimate / c, estimate * c]
 
     def run_detection(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Run animal detection on extracted frames.

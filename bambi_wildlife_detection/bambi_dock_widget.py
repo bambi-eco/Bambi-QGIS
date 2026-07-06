@@ -2465,6 +2465,141 @@ class BambiDockWidget(QDockWidget):
         processing_layout.addWidget(log_group)
         processing_layout.addStretch()
 
+        # =====================================================================
+        # MAIN TAB 4: SURVEY ANALYTICS
+        # =====================================================================
+        analytics_tab = QWidget()
+        analytics_tab_layout = QVBoxLayout(analytics_tab)
+        main_tabs.addTab(analytics_tab, "Survey Analytics")
+
+        analytics_info = QLabel(
+            "Population-level products derived from geo-referenced detections or "
+            "tracks. Tracks count each animal once; detections use every box. "
+            "The full run log is shown on the Processing tab."
+        )
+        analytics_info.setWordWrap(True)
+        analytics_info.setStyleSheet("color: gray; font-size: 10px;")
+        analytics_tab_layout.addWidget(analytics_info)
+
+        # ----- Density Heatmap -----
+        density_group = QGroupBox("Density Heatmap")
+        density_layout = QVBoxLayout(density_group)
+
+        density_desc = QLabel(
+            "Kernel-density estimate raster (points per hectare) of animal "
+            "locations. Requires geo-referenced detections or tracks."
+        )
+        density_desc.setWordWrap(True)
+        density_desc.setStyleSheet("color: gray; font-size: 10px;")
+        density_layout.addWidget(density_desc)
+
+        density_params_row = QHBoxLayout()
+        density_params_row.addWidget(QLabel("Source:"))
+        self.density_source_combo = QComboBox()
+        self.density_source_combo.addItems(["Detections", "Tracks"])
+        self.density_source_combo.setToolTip(
+            "Detections: every geo-referenced box.\n"
+            "Tracks: one point per track (centroid), so each animal counts once."
+        )
+        density_params_row.addWidget(self.density_source_combo)
+        density_params_row.addWidget(QLabel("Cell (m):"))
+        self.density_cell_spin = QDoubleSpinBox()
+        self.density_cell_spin.setRange(0.5, 500.0)
+        self.density_cell_spin.setValue(5.0)
+        self.density_cell_spin.setSingleStep(1.0)
+        self.density_cell_spin.setToolTip("Output raster cell size in metres")
+        density_params_row.addWidget(self.density_cell_spin)
+        density_params_row.addWidget(QLabel("Bandwidth (m):"))
+        self.density_bandwidth_spin = QDoubleSpinBox()
+        self.density_bandwidth_spin.setRange(1.0, 2000.0)
+        self.density_bandwidth_spin.setValue(25.0)
+        self.density_bandwidth_spin.setSingleStep(5.0)
+        self.density_bandwidth_spin.setToolTip(
+            "Gaussian kernel bandwidth (smoothing radius) in metres")
+        density_params_row.addWidget(self.density_bandwidth_spin)
+        density_params_row.addStretch()
+        density_layout.addLayout(density_params_row)
+
+        density_run_row = QHBoxLayout()
+        self.density_btn = QPushButton("→ Generate Density Heatmap")
+        self.density_btn.clicked.connect(self.run_density_heatmap)
+        self.density_btn.setToolTip(
+            "Kernel-density estimate raster (points per hectare) of animal locations."
+        )
+        self.density_status = QLabel("⚪")
+        density_run_row.addWidget(self.density_btn)
+        density_run_row.addWidget(self.density_status)
+        density_layout.addLayout(density_run_row)
+
+        density_add_row = QHBoxLayout()
+        self.add_density_btn = QPushButton("→ Add Density Heatmap to QGIS")
+        self.add_density_btn.clicked.connect(self.add_density_heatmap_to_qgis)
+        self.add_density_btn.setToolTip("Load the density raster with a graduated colour ramp.")
+        self.add_density_status = QLabel("⚪")
+        density_add_row.addWidget(self.add_density_btn)
+        density_add_row.addWidget(self.add_density_status)
+        density_layout.addLayout(density_add_row)
+
+        analytics_tab_layout.addWidget(density_group)
+
+        # ----- Distance Sampling -----
+        ds_group = QGroupBox("Distance Sampling")
+        ds_layout = QVBoxLayout(ds_group)
+
+        ds_desc = QLabel(
+            "Line-transect density/abundance with 95% confidence intervals, fitted "
+            "from the perpendicular distances. Run 'Calculate Perpendicular' (or "
+            "'Calculate Track Perpendicular') on the Processing tab first."
+        )
+        ds_desc.setWordWrap(True)
+        ds_desc.setStyleSheet("color: gray; font-size: 10px;")
+        ds_layout.addWidget(ds_desc)
+
+        ds_params_row = QHBoxLayout()
+        ds_params_row.addWidget(QLabel("Source:"))
+        self.ds_source_combo = QComboBox()
+        self.ds_source_combo.addItems(["Detections", "Tracks"])
+        self.ds_source_combo.setToolTip(
+            "Which perpendicular distances to analyse. Tracks (one observation per\n"
+            "animal) are usually preferred for distance sampling."
+        )
+        ds_params_row.addWidget(self.ds_source_combo)
+        ds_params_row.addWidget(QLabel("Truncation (m):"))
+        self.ds_truncation_spin = QDoubleSpinBox()
+        self.ds_truncation_spin.setRange(0.0, 100000.0)
+        self.ds_truncation_spin.setValue(0.0)
+        self.ds_truncation_spin.setSingleStep(5.0)
+        self.ds_truncation_spin.setSpecialValueText("auto (95th pct)")
+        self.ds_truncation_spin.setToolTip(
+            "Discard observations beyond this distance. 0 = automatic "
+            "(95th percentile of distances).")
+        ds_params_row.addWidget(self.ds_truncation_spin)
+        ds_params_row.addStretch()
+        ds_layout.addLayout(ds_params_row)
+
+        ds_run_row = QHBoxLayout()
+        self.distance_sampling_btn = QPushButton("→ Estimate Density (Distance Sampling)")
+        self.distance_sampling_btn.clicked.connect(self.run_distance_sampling)
+        self.distance_sampling_btn.setToolTip(
+            "Fit half-normal & hazard-rate detection functions to the perpendicular\n"
+            "distances and estimate density/abundance with 95% confidence intervals.\n"
+            "Requires 'Calculate Perpendicular' (or track perpendicular) first."
+        )
+        self.distance_sampling_status = QLabel("⚪")
+        ds_run_row.addWidget(self.distance_sampling_btn)
+        ds_run_row.addWidget(self.distance_sampling_status)
+        ds_layout.addLayout(ds_run_row)
+
+        analytics_tab_layout.addWidget(ds_group)
+
+        # Progress mirror for analytics runs (main log lives on the Processing tab)
+        self.analytics_progress_bar = QProgressBar()
+        self.analytics_progress_bar.setRange(0, 100)
+        self.analytics_progress_bar.setValue(0)
+        analytics_tab_layout.addWidget(self.analytics_progress_bar)
+
+        analytics_tab_layout.addStretch()
+
     def _populate_tracker_backends(self):
         """Populate the tracker backend dropdown with available trackers."""
         from .tracker_manager import get_tracker_manager
@@ -2841,6 +2976,25 @@ class BambiDockWidget(QDockWidget):
             "ortho_end_frame": (
                 self.ortho_end_frame_spin.value()
                 if not self.ortho_all_frames_check.isChecked() else None),
+
+            # Survey analytics: density heatmap
+            "density_source": (
+                self.density_source_combo.currentText().lower()
+                if hasattr(self, 'density_source_combo') else "detections"),
+            "density_cell_size": (
+                self.density_cell_spin.value()
+                if hasattr(self, 'density_cell_spin') else 5.0),
+            "density_bandwidth": (
+                self.density_bandwidth_spin.value()
+                if hasattr(self, 'density_bandwidth_spin') else 25.0),
+
+            # Survey analytics: distance sampling
+            "ds_source": (
+                self.ds_source_combo.currentText().lower()
+                if hasattr(self, 'ds_source_combo') else "detections"),
+            "ds_truncation": (
+                self.ds_truncation_spin.value()
+                if hasattr(self, 'ds_truncation_spin') else 0.0),
         }
 
     def validate_inputs(self, required_fields: list) -> bool:
@@ -5537,6 +5691,212 @@ class BambiDockWidget(QDockWidget):
 
         self.start_worker("flight_route")
 
+    # ------------------------------------------------------------------ #
+    # Survey analytics
+    # ------------------------------------------------------------------ #
+
+    def run_density_heatmap(self):
+        """Run the density-heatmap generation step."""
+        config = self.get_config()
+        target_folder = config.get("target_folder", "")
+        if not target_folder or not os.path.isdir(target_folder):
+            QMessageBox.warning(self, "Missing Target Folder",
+                                "Please set a valid target folder first.")
+            return
+
+        source = config.get("density_source", "detections")
+        if source == "tracks":
+            suffix = "t" if config.get("tracking_camera", "T") == "T" else "w"
+            required = os.path.join(target_folder, f"tracks_{suffix}")
+            ok = os.path.isdir(required)
+            msg = "Geo-referenced tracks (run 'Track Animals' first)"
+        else:
+            suffix = "t" if config.get("detection_camera", "T") == "T" else "w"
+            required = os.path.join(target_folder, f"georeferenced_{suffix}", "georeferenced.txt")
+            ok = os.path.exists(required)
+            msg = "Geo-referenced detections (run 'Geo-Reference Detections' first)"
+
+        if not ok:
+            QMessageBox.warning(self, "Missing Prerequisites",
+                                f"The following are required:\n\n• {msg}")
+            return
+
+        self.start_worker("density_heatmap")
+
+    def add_density_heatmap_to_qgis(self):
+        """Load the generated density-heatmap raster with a graduated colour ramp."""
+        config = self.get_config()
+        source = config.get("density_source", "detections")
+        if source == "tracks":
+            suffix = "t" if config.get("tracking_camera", "T") == "T" else "w"
+        else:
+            suffix = "t" if config.get("detection_camera", "T") == "T" else "w"
+        camera_label = "Thermal" if suffix == "t" else "RGB"
+
+        raster_file = os.path.join(config["target_folder"], f"analytics_{suffix}",
+                                   f"density_{source}.tif")
+        if not os.path.exists(raster_file):
+            QMessageBox.warning(
+                self, "Missing Data",
+                "Density heatmap has not been generated.\n"
+                "Please run 'Generate Density Heatmap' first."
+            )
+            return
+
+        try:
+            self.update_status("add_density", "🟡 Loading...")
+            layer_name = f"BAMBI Density {source.capitalize()} ({camera_label})"
+            layer = QgsRasterLayer(raster_file, layer_name)
+            if not layer.isValid():
+                raise RuntimeError(f"Failed to load raster: {raster_file}")
+            self._apply_density_style(layer)
+            QgsProject.instance().addMapLayer(layer)
+            self.update_status("add_density", "🟢 Added")
+            self.iface.mapCanvas().refresh()
+            self.log(f"Added density heatmap layer: {layer_name}")
+        except Exception as e:
+            self.update_status("add_density", "🔴 Error")
+            self.log(f"Error adding density heatmap: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to add density heatmap: {e}")
+
+    def _apply_density_style(self, layer):
+        """Apply a single-band pseudocolor (blue→red) ramp scaled to the data."""
+        try:
+            from qgis.core import (
+                QgsSingleBandPseudoColorRenderer, QgsColorRampShader,
+                QgsRasterShader,
+            )
+            stats = layer.dataProvider().bandStatistics(1)
+            vmin, vmax = stats.minimumValue, stats.maximumValue
+            if vmax <= vmin:
+                vmax = vmin + 1.0
+
+            ramp = QgsColorRampShader(vmin, vmax)
+            ramp.setColorRampType(QgsColorRampShader.Interpolated)
+            steps = [
+                (0.0, QColor(44, 123, 182)),
+                (0.25, QColor(171, 217, 233)),
+                (0.5, QColor(255, 255, 191)),
+                (0.75, QColor(253, 174, 97)),
+                (1.0, QColor(215, 25, 28)),
+            ]
+            items = [
+                QgsColorRampShader.ColorRampItem(
+                    vmin + frac * (vmax - vmin), color, f"{vmin + frac * (vmax - vmin):.2f}")
+                for frac, color in steps
+            ]
+            ramp.setColorRampItemList(items)
+
+            shader = QgsRasterShader()
+            shader.setRasterShaderFunction(ramp)
+            renderer = QgsSingleBandPseudoColorRenderer(
+                layer.dataProvider(), 1, shader)
+            layer.setRenderer(renderer)
+            layer.triggerRepaint()
+        except Exception as e:  # nosec B110
+            self.log(f"Warning: could not style density layer: {e}")
+
+    def run_distance_sampling(self):
+        """Run the distance-sampling estimation step."""
+        config = self.get_config()
+        target_folder = config.get("target_folder", "")
+        if not target_folder or not os.path.isdir(target_folder):
+            QMessageBox.warning(self, "Missing Target Folder",
+                                "Please set a valid target folder first.")
+            return
+
+        source = config.get("ds_source", "detections")
+        fr_suffix = "t" if config.get("flight_route_camera", "T") == "T" else "w"
+        if source == "tracks":
+            trk_suffix = "t" if config.get("tracking_camera", "T") == "T" else "w"
+            perp_file = os.path.join(target_folder, f"flight_route_{fr_suffix}",
+                                     f"perpendicular_tracks_{trk_suffix}.json")
+            msg = "Track perpendicular distances (run 'Calculate Track Perpendicular' first)"
+        else:
+            det_suffix = "t" if config.get("detection_camera", "T") == "T" else "w"
+            perp_file = os.path.join(target_folder, f"flight_route_{fr_suffix}",
+                                     f"perpendicular_{det_suffix}.json")
+            msg = "Perpendicular distances (run 'Calculate Perpendicular' first)"
+
+        if not os.path.exists(perp_file):
+            QMessageBox.warning(self, "Missing Prerequisites",
+                                f"The following are required:\n\n• {msg}")
+            return
+
+        self.start_worker("distance_sampling")
+
+    def _show_distance_sampling_results(self):
+        """Read the distance-sampling JSON and show a summary dialog."""
+        config = self.get_config()
+        source = config.get("ds_source", "detections")
+        if source == "tracks":
+            suffix = "t" if config.get("tracking_camera", "T") == "T" else "w"
+        else:
+            suffix = "t" if config.get("detection_camera", "T") == "T" else "w"
+        result_file = os.path.join(config["target_folder"], f"analytics_{suffix}",
+                                   f"distance_sampling_{source}.json")
+        if not os.path.exists(result_file):
+            return
+        try:
+            with open(result_file, 'r', encoding='utf-8') as f:
+                r = json.load(f)
+        except Exception as e:
+            self.log(f"Could not read distance-sampling results: {e}")
+            return
+
+        d_ci = r.get("density_ci95", [0, 0])
+        n_ci = r.get("abundance_ci95", [0, 0])
+        rows = "".join(
+            f"<tr><td>{m['name']}</td><td align='right'>{m['esw_m']:.2f}</td>"
+            f"<td align='right'>{m['aic']:.2f}</td></tr>"
+            for m in r.get("models", [])
+        )
+        html = f"""
+        <h3>Distance-Sampling Estimate ({r.get('source', '')})</h3>
+        <table cellpadding='4'>
+          <tr><td><b>Observations (n)</b></td><td align='right'>{r.get('n', 0)}
+              (of {r.get('n_before_truncation', 0)})</td></tr>
+          <tr><td><b>Transect length (L)</b></td>
+              <td align='right'>{r.get('transect_length_m', 0):.0f} m</td></tr>
+          <tr><td><b>Truncation (w)</b></td>
+              <td align='right'>{r.get('truncation_m', 0):.2f} m</td></tr>
+          <tr><td><b>Best model</b></td><td align='right'>{r.get('best_model', '')}</td></tr>
+          <tr><td><b>Effective strip width</b></td>
+              <td align='right'>{r.get('effective_strip_width_m', 0):.2f} m</td></tr>
+          <tr><td><b>Detection probability (p)</b></td>
+              <td align='right'>{r.get('detection_probability', 0):.3f}</td></tr>
+          <tr><td><b>Density</b></td>
+              <td align='right'>{r.get('density_per_km2', 0):.3f} /km²
+              (95% CI {d_ci[0]:.3f}–{d_ci[1]:.3f})</td></tr>
+          <tr><td><b>Abundance in covered area</b></td>
+              <td align='right'>{r.get('abundance_in_covered_area', 0):.1f}
+              (95% CI {n_ci[0]:.1f}–{n_ci[1]:.1f})</td></tr>
+          <tr><td><b>Covered area</b></td>
+              <td align='right'>{r.get('covered_area_km2', 0):.3f} km²</td></tr>
+        </table>
+        <h4>Model comparison</h4>
+        <table cellpadding='4'>
+          <tr><th align='left'>Model</th><th align='right'>ESW (m)</th>
+              <th align='right'>AIC</th></tr>
+          {rows}
+        </table>
+        <p style='color:gray;font-size:11px'>{r.get('notes', '')}</p>
+        <p style='color:gray;font-size:11px'>Saved to: {result_file}</p>
+        """
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Distance-Sampling Results")
+        dlg.setMinimumWidth(480)
+        layout = QVBoxLayout(dlg)
+        text = QTextEdit()
+        text.setReadOnly(True)
+        text.setHtml(html)
+        layout.addWidget(text)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok)
+        buttons.accepted.connect(dlg.accept)
+        layout.addWidget(buttons)
+        dlg.exec_()
+
     def start_worker(self, step: str):
         """Start a background worker for the given step."""
         if self.worker is not None:
@@ -5566,6 +5926,8 @@ class BambiDockWidget(QDockWidget):
         self.abort_btn.setEnabled(True)  # Enable abort button during processing
         self.update_status(step, "🟡 Running...")
         self.progress_bar.setValue(0)
+        if hasattr(self, 'analytics_progress_bar'):
+            self.analytics_progress_bar.setValue(0)
 
         self.log(f"Starting {step}...")
         self.worker_thread.start()
@@ -5580,6 +5942,12 @@ class BambiDockWidget(QDockWidget):
             self.update_status(step, "🟢 Completed")
             self.log(f"{step} completed successfully!")
             self.progress_bar.setValue(100)
+            if hasattr(self, 'analytics_progress_bar'):
+                self.analytics_progress_bar.setValue(100)
+
+            # Show the distance-sampling summary dialog on completion.
+            if step == "distance_sampling":
+                self._show_distance_sampling_results()
 
             # In photo mode, warn if 0 images were matched (likely a timezone issue)
             if step in ("extract_thermal_frames", "extract_rgb_frames"):
@@ -5628,6 +5996,8 @@ class BambiDockWidget(QDockWidget):
     def on_worker_progress(self, value: int):
         """Update progress bar."""
         self.progress_bar.setValue(value)
+        if hasattr(self, 'analytics_progress_bar'):
+            self.analytics_progress_bar.setValue(value)
 
     def _abort_current_process(self):
         """Abort the currently running process."""
@@ -5670,6 +6040,9 @@ class BambiDockWidget(QDockWidget):
             # TRex import runs under the "Track Animals Or Import" step, so its
             # progress is reported on the tracking status label.
             "trex_import": self.track_status,
+            "density_heatmap": self.density_status,
+            "add_density": self.add_density_status,
+            "distance_sampling": self.distance_sampling_status,
         }
         if step in status_map:
             status_map[step].setText(status)
@@ -5701,6 +6074,10 @@ class BambiDockWidget(QDockWidget):
         self.sam3_segment_btn.setEnabled(enabled)
         self.sam3_georef_btn.setEnabled(enabled)
         self.add_sam3_btn.setEnabled(enabled)
+        if hasattr(self, 'density_btn'):
+            self.density_btn.setEnabled(enabled)
+            self.add_density_btn.setEnabled(enabled)
+            self.distance_sampling_btn.setEnabled(enabled)
 
     def run_perpendicular(self):
         """Run perpendicular distance calculation step."""

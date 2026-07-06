@@ -64,6 +64,8 @@ class BambiWildlifeDetection:
         self._flight_planner_dlg = None
         self.video_creator_action = None
         self._video_creator_dlg = None
+        self.labelling_tool_action = None
+        self._labelling_tool_dlg = None
 
     def tr(self, message):
         """Get the translation for a string using Qt translation API.
@@ -207,6 +209,17 @@ class BambiWildlifeDetection:
                 'Click a Field of View polygon to view the frame image with '
                 'the clicked map position projected into the image space'))
 
+        # Labelling Tool
+        self.labelling_tool_action = self.add_action(
+            os.path.join(self.plugin_dir, 'icons', 'icon_labelling.png'),
+            text=self.tr('Labelling Tool'),
+            callback=self._on_labelling_tool,
+            parent=self.iface.mainWindow(),
+            add_to_menu=True,
+            status_tip=self.tr(
+                'Review detections/tracks on extracted frames and create '
+                'key-frame based track annotations'))
+
         # Flight Strategy Planner
         self.flight_planner_action = self.add_action(
             os.path.join(self.plugin_dir, 'icons', 'icon_flight_planner.png'),
@@ -267,6 +280,11 @@ class BambiWildlifeDetection:
         if self._dependency_manager_dlg is not None:
             self._dependency_manager_dlg.close()
             self._dependency_manager_dlg = None
+
+        # Close labelling tool if open
+        if self._labelling_tool_dlg is not None:
+            self._labelling_tool_dlg.close()
+            self._labelling_tool_dlg = None
 
         # Disconnect project signals and remove dock widget
         if self.dock_widget:
@@ -373,6 +391,27 @@ class BambiWildlifeDetection:
         self._video_creator_dlg.show()
         self._video_creator_dlg.raise_()
         self._video_creator_dlg.activateWindow()
+
+    def _on_labelling_tool(self):
+        """Toolbar action: open the labelling tool (non-modal)."""
+        from .bambi_labelling_tool import LabellingToolDialog
+        self._ensure_dock_widget()
+        if self._labelling_tool_dlg is None:
+            self._labelling_tool_dlg = LabellingToolDialog(
+                self.iface,
+                dock_widget=self.dock_widget,
+                parent=self.iface.mainWindow(),
+            )
+            self._labelling_tool_dlg.finished.connect(
+                lambda _: setattr(self, '_labelling_tool_dlg', None)
+            )
+        else:
+            # Re-seed defaults in case the target folder changed since the
+            # dialog was last opened.
+            self._labelling_tool_dlg.apply_dock_defaults()
+        self._labelling_tool_dlg.show()
+        self._labelling_tool_dlg.raise_()
+        self._labelling_tool_dlg.activateWindow()
 
     def _on_dependency_manager(self):
         """Toolbar action: open the dependency manager (non-modal)."""

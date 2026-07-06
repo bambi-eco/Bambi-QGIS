@@ -13,7 +13,7 @@ Detect, track, and geo-reference wildlife in aerial drone recordings, directly i
 
 - **Detect & track animals**: YOLO-based detection (model auto-downloaded from HuggingFace) and multi-object tracking with built-in, BoxMOT, or geo-referenced backends; pre-computed [TRex](https://trex.run) tracklets can be imported instead of running a tracker
 - **Geo-reference everything**: detections, tracks, and SAM3 segmentations are projected onto a DEM to real-world UTM coordinates
-- **Survey analytics**: perpendicular distance sampling from detections/tracks to the flight route, per-frame camera field-of-view footprints, and coverage areas
+- **Survey analytics**: perpendicular distance sampling from detections/tracks to the flight route, per-frame camera field-of-view footprints, coverage areas, kernel-density heatmaps of animal locations, and line-transect distance-sampling density/abundance estimation with confidence intervals
 - **Map products**: georeferenced per-frame GeoTIFFs, true orthomosaics, and Airborne Light Field Sampling (ALFS) mosaics
 - **Calibration wizards**: guided workflows for camera intrinsics (single-camera SfM or stereo RGB+thermal) and per-flight positional/rotational corrections
 - **Companion tools**: video creator for shareable result videos, radiometric thermal image viewer, randomized transect flight planner, interactive map-canvas inspectors, and a built-in dependency manager

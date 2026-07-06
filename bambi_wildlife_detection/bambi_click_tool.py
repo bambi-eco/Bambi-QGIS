@@ -15,13 +15,14 @@ Layer custom properties used
 ``bambi_dem_path``         : absolute path to the DEM GLTF/GLB file
 ``bambi_correction_path``  : absolute path to correction.json (may be empty)
 
-Data files read (relative to *target_folder*)
+Data files read (relative to *target_folder*, ``{m}`` = ``t`` thermal / ``w`` RGB,
+selected from the layer's ``bambi_detection_camera`` property)
 ---------------------------------------------
-``detections/detections.txt``  — pixel-space detections
+``detections_{m}/detections.txt``  — pixel-space detections
     format: ``frame x1 y1 x2 y2 confidence class_id`` (space-separated)
     header line starts with ``#``
 
-``tracks/tracks_pixel.csv``    — pixel-space track detections
+``tracks_{m}/tracks_pixel.csv``    — pixel-space track detections
     format: ``frame,track_id,x1,y1,x2,y2,conf,cls[,interpolated]``
     header line starts with ``#``
 
@@ -866,7 +867,7 @@ class BambiClickTool(QgsMapToolIdentify):
         return sorted(result, key=lambda d: d["frame"])
 
     def _load_pixel_detections(self, det_file: str) -> List[dict]:
-        """Parse ``detections/detections.txt``.
+        """Parse a ``detections_{t,w}/detections.txt`` file.
 
         Format (space-separated, comment header with #):
         ``frame x1 y1 x2 y2 confidence class_id``

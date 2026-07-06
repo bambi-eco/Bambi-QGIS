@@ -13,11 +13,13 @@ about=A comprehensive QGIS plugin for detecting, tracking, and geo-referencing w
     - Multi-object tracking with built-in, BoxMOT, or geo-referenced backends; import of pre-computed TRex tracklets
     - Geo-referencing of detections, tracks, and SAM3 segmentations onto a DEM (real-world UTM coordinates)
     - Flight route visualization and perpendicular distance sampling for transect-based surveys
+    - Survey analytics: kernel-density heatmaps and line-transect distance-sampling density/abundance estimation (from detections or tracks)
     - Per-frame camera field-of-view footprints and coverage areas
     - Georeferenced map products: per-frame GeoTIFFs, true orthomosaics, and ALFS light-field mosaics
     - DEM import: automatic download (Austria), GeoTIFF conversion, or flat surface meshes for aquatic surveys
     - Calibration wizards for camera intrinsics (single-camera SfM, stereo RGB+thermal) and per-flight pose corrections
     - Companion tools: result video creator, radiometric thermal image viewer (DJI Thermal SDK), randomized transect flight planner, and interactive map-canvas inspectors
+    - Key-frame based labelling tool: review detections/tracks on extracted frames (thermal or RGB), draw and edit track bounding boxes with species/sex/age/occlusion classes, interpolate between key frames, and propagate boxes across frames via DEM geo-referencing
     - Built-in dependency manager to install all required and optional packages from within QGIS
     All results are automatically added as styled layers to the QGIS project.
 

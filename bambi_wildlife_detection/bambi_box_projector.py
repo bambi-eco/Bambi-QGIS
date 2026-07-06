@@ -70,13 +70,17 @@ def _correction_for_frame(frame_idx: int, corr: dict) -> Tuple[dict, dict]:
     return default_t, default_r
 
 
-def _load_georef(target_folder: str) -> List[dict]:
-    """Parse georeferenced/georeferenced.txt.
+def _load_georef(target_folder: str, src_modality: str) -> List[dict]:
+    """Parse ``georeferenced_{src_modality}/georeferenced.txt``.
+
+    The geo-referenced detections live in the camera-specific folder matching
+    the modality the boxes were detected in (``_t`` thermal, ``_w`` RGB).
 
     Format: ``idx frame x1 y1 z1 x2 y2 z2 confidence class_id``
     Coordinates have the DEM origin offset already added.
     """
-    path = os.path.join(target_folder, "georeferenced", "georeferenced.txt")
+    path = os.path.join(
+        target_folder, f"georeferenced_{src_modality}", "georeferenced.txt")
     result: List[dict] = []
     if not os.path.isfile(path):
         return result
@@ -226,7 +230,7 @@ class BoxProjectionWorker(QThread):
     Parameters
     ----------
     target_folder : str
-        Root output folder (contains ``georeferenced/``, ``poses_*.json``).
+        Root output folder (contains ``georeferenced_{t,w}/``, ``poses_*.json``).
     dem_path : str
         Path to the DEM GLTF/GLB file (the matching ``.json`` is derived from
         it to read the mesh origin offset).
@@ -335,11 +339,15 @@ class BoxProjectionWorker(QThread):
         corr = _read_correction(self._target_folder, self._correction_path)
 
         # ---- Geo-referenced detections -----------------------------------
-        georef_all = _load_georef(self._target_folder)
+        # Boxes were detected in the source modality, so the geo-referenced
+        # file lives in that modality's camera-specific folder.
+        georef_all = _load_georef(self._target_folder, self._src_modality)
         if not georef_all:
+            src_label = "RGB" if self._src_modality == "w" else "thermal"
             raise RuntimeError(
-                "No geo-referenced detections found.\n"
-                "Please run the geo-referencing step first."
+                f"No geo-referenced detections found for the {src_label} modality "
+                f"(expected georeferenced_{self._src_modality}/georeferenced.txt).\n"
+                "Please run the 'Geo-Reference Detections' step first."
             )
 
         # Index by frame for fast lookup

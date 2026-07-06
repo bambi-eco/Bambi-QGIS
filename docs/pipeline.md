@@ -317,6 +317,50 @@ segmentation_t/    # or segmentation_w/ depending on camera selection
 
 ![Segmentation Output](../images/segmentations.png)
 
+## Survey analytics
+
+The **Survey Analytics** tab (next to *Processing*) turns geo-referenced detections or tracks into population-level products. Both tools let you pick the **source**: *Detections* uses every geo-referenced bounding box, while *Tracks* uses one representative point per track (so an animal followed across many frames is counted once). The camera (thermal/RGB) follows the existing Detection / Tracking camera selectors on the Processing tab, and results are written to a new `analytics_t/` or `analytics_w/` folder. The run log for these steps appears on the Processing tab.
+
+### Density heatmap
+
+Generates a **kernel-density estimate raster** of animal locations. Points are binned to a grid and smoothed with a Gaussian kernel; each output pixel is the estimated density in **animals per hectare**.
+
+| Setting | Description |
+|---------|-------------|
+| **Source** | Detections (every box) or Tracks (one point per track) |
+| **Cell (m)** | Output raster cell size in metres (default 5 m) |
+| **Bandwidth (m)** | Gaussian smoothing radius in metres (default 25 m) — larger values give smoother, broader hotspots |
+
+**Outputs:**
+```
+analytics_t/    # or analytics_w/
+├── density_detections.tif    # or density_tracks.tif — float32 GeoTIFF (points/hectare)
+└── density_detections.json   # stats: peak/mean density, point count, parameters
+```
+
+Use **→ Add Density Heatmap to QGIS** to load the raster with a blue→red colour ramp scaled to the data. Empty (no-signal) cells are stored as nodata so the surround renders transparent.
+
+### Distance sampling
+
+Estimates **density and abundance with 95% confidence intervals** using conventional line-transect distance sampling. It reuses the perpendicular distances already produced by **Calculate Perpendicular** (detections) or **Calculate Track Perpendicular** (tracks), so run one of those first.
+
+The tool fits both a **half-normal** and a **hazard-rate** detection function by maximum likelihood, selects the better fit by **AIC**, and computes the effective strip width (ESW), average detection probability, density (per km²) and abundance for the covered strip. Uncertainty combines a Poisson encounter-rate term with the detection-function variance via the delta method, reported as a lognormal confidence interval.
+
+| Setting | Description |
+|---------|-------------|
+| **Source** | Detections or Tracks (tracks — one observation per animal — are usually preferred) |
+| **Truncation (m)** | Discard observations beyond this perpendicular distance. `0` = automatic (95th percentile) |
+
+On completion a results dialog summarises n, transect length, truncation, the selected model, ESW, detection probability, density and abundance with CIs, plus the model-comparison (AIC) table.
+
+**Outputs:**
+```
+analytics_t/    # or analytics_w/
+└── distance_sampling_detections.json   # or distance_sampling_tracks.json
+```
+
+The JSON also stores the fitted detection-function curve and the distance histogram for external plotting. Abundance is reported for the covered strip area (2·w·L); multiply the density estimate by your study-area size for a study-area abundance.
+
 ## Input file formats
 
 ### Calibration JSON
@@ -416,7 +460,13 @@ target_folder/
 ├── segmentation_t/                          # SAM3 segmentation on thermal frames
 │   ├── segmentation_pixel.json              # Pixel-space segmentation masks
 │   └── segmentation_georef.json             # Geo-referenced segmentation polygons
-└── segmentation_w/
+├── segmentation_w/
+│   └── ...
+├── analytics_t/                             # Survey analytics (thermal camera)
+│   ├── density_detections.tif              # Density heatmap raster (points/hectare)
+│   ├── density_detections.json             # Density heatmap stats
+│   └── distance_sampling_detections.json   # Distance-sampling density/abundance estimate
+└── analytics_w/
     └── ...
 ```
 

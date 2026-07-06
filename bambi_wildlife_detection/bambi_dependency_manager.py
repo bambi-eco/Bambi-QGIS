@@ -116,6 +116,24 @@ def _get_version_status(dist_name, plugins_dir=None):
     return ver_str, 'ok'
 
 
+def _torch_build_variant(ver_str):
+    """Classify a torch/torchvision version string by compute platform.
+
+    PyTorch encodes the platform in the local version segment
+    (e.g. ``2.5.1+cu121``, ``2.5.1+cpu``). Wheels from PyPI carry no
+    segment; on Windows those are always CPU-only. Returns ``'cuda'``,
+    ``'rocm'``, ``'cpu'`` or ``None`` (unknown).
+    """
+    local = ver_str.split('+', 1)[1] if '+' in ver_str else ''
+    if local.startswith('cu'):
+        return 'cuda'
+    if local.startswith('rocm'):
+        return 'rocm'
+    if local.startswith('cpu') or sys.platform == 'win32':
+        return 'cpu'
+    return None
+
+
 def _find_python():
     """Return the Python interpreter suitable for running pip.
 
@@ -444,7 +462,8 @@ class DependencyManagerDialog(QDialog):
             lbl_pairs = []
             for display_name, dn in dist_names:
                 lbl = QLabel()
-                lbl.setFixedWidth(160)
+                # wide enough for e.g. "torchvision: ✔ v0.20.1+cu121"
+                lbl.setFixedWidth(200)
                 lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
                 lbl.setTextFormat(Qt.RichText)
                 ver, status = _get_version_status(dn, self._plugins_dir)
@@ -478,16 +497,38 @@ class DependencyManagerDialog(QDialog):
         """Update a status QLabel based on the version-check result."""
         lbl.setToolTip('')
         pre = f'{prefix}: ' if prefix else ''
+
+        # For torch/torchvision also surface the compute platform (CUDA vs CPU)
+        variant = None
+        if dist_name in ('torch', 'torchvision') and ver:
+            variant = _torch_build_variant(ver)
+        variant_note = {'cuda': 'CUDA build', 'rocm': 'ROCm build',
+                        'cpu': 'CPU build'}.get(variant)
+
         if status == 'not_found':
             lbl.setText(f'<span style="color:#888;">{pre}not found</span>')
         elif status == 'ok':
-            lbl.setText(f'<span style="color:green;">{pre}✔ v{ver}</span>')
+            if variant == 'cpu':
+                lbl.setText(
+                    f'<span style="color:#e67e00;">{pre}⚠ v{ver}'
+                    '<br><small>CPU build</small></span>'
+                )
+                lbl.setToolTip('CPU-only build installed — use Install to replace it '
+                               'with the CUDA (cu121) variant for GPU support.')
+            elif variant_note:
+                lbl.setText(
+                    f'<span style="color:green;">{pre}✔ v{ver}'
+                    f'<br><small>{variant_note}</small></span>'
+                )
+            else:
+                lbl.setText(f'<span style="color:green;">{pre}✔ v{ver}</span>')
         elif status == 'untested':
             min_ver, max_ver = _VERSION_RANGES.get(dist_name, (None, None))
             range_str = f'{min_ver or "any"} – {max_ver or "any"}'
+            note = f'not tested · {variant_note}' if variant_note else 'not tested'
             lbl.setText(
                 f'<span style="color:#e67e00;">{pre}⚠ v{ver}'
-                '<br><small>not tested</small></span>'
+                f'<br><small>{note}</small></span>'
             )
             lbl.setToolTip(f'Installed version is outside the tested range: {range_str}')
 
