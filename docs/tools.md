@@ -60,9 +60,11 @@ Labels do not need to be drawn on every frame. A track stores boxes only on **ke
 1. Press **New Track (N)** and drag a bounding box around the animal — this creates the track with a key frame at the current frame
 2. Jump ahead with **Step >>** (stride set by the **Step** spinbox, e.g. 10 frames)
 3. Drag/resize the interpolated box to fit — any edit automatically turns the frame into a key frame
-4. Repeat; the timeline bar below the slider shows the track's range and its key frames (click it to jump)
+4. Repeat; the timeline bar below the slider shows the track's range and its key frames (click it to jump). The key-frame list in the side panel is clickable too — each frame number is an anchor that jumps to that frame (stop frames red, current frame bold; long lists show a window around the current frame)
 
-Each track carries a **species** (free-text combo with common defaults), **sex**, and **age** class; the **occlusion** level is stored per key frame. Boxes can be moved/resized and classes changed at any time; **Set key frame (K)** freezes the current interpolated box (outside the track's range it copies the nearest key frame's box, extending the track), **Delete key frame** removes one (deleting the last key frame removes the track).
+Each track carries a **species** (free-text combo with common defaults), **sex**, and **age** class (*Track classes* section — the identity of the animal, constant along the track). The **occlusion** level (*none* / *partially* / *fully*), in contrast, is stored **per key frame** (it sits in the *Key frames* section next to the stop-frame toggle): an animal can be fully visible on one key frame and occluded on the next. Interpolated frames inherit the occlusion of the previous key frame; changing occlusion on an interpolated frame promotes that frame to a key frame. The current value is also shown in the status line while scrubbing.
+
+Boxes can be moved/resized and classes changed at any time; **Set key frame (K)** freezes the current interpolated box (outside the track's range it copies the nearest key frame's box, extending the track), **Delete key frame** removes one (deleting the last key frame removes the track).
 
 To place a key frame fully manually — including on frames before/after the track's current range — select the track and press **Draw key frame (B)**, then drag the new box on the canvas. This extends or corrects the track without geo-propagation.
 

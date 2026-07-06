@@ -72,7 +72,7 @@ SPECIES_CLASSES = [
 ]
 SEX_CLASSES = ["unknown", "female", "male"]
 AGE_CLASSES = ["unknown", "adult", "juvenile"]
-OCCLUSION_LEVELS = ["none", "partial", "heavy", "full"]
+OCCLUSION_LEVELS = ["none", "partially", "fully"]
 
 # Distinct colours cycled per label track id
 _TRACK_COLORS = [
@@ -1218,8 +1218,8 @@ class LabellingToolDialog(QDialog):
         tg.addLayout(btn_row)
         vbox.addWidget(tracks_group)
 
-        # Attributes
-        attr_group = QGroupBox("Classes")
+        # Track-level attributes (identity of the animal; per track)
+        attr_group = QGroupBox("Track classes")
         ag = QVBoxLayout(attr_group)
 
         def combo_row(label, combo):
@@ -1244,19 +1244,17 @@ class LabellingToolDialog(QDialog):
         self.age_combo.addItems(AGE_CLASSES)
         self.age_combo.currentTextChanged.connect(self._on_attributes_changed)
         combo_row("Age:", self.age_combo)
-
-        self.occlusion_combo = QComboBox()
-        self.occlusion_combo.addItems(OCCLUSION_LEVELS)
-        self.occlusion_combo.setToolTip(
-            "Occlusion level of the current key frame (stored per key frame).")
-        self.occlusion_combo.currentTextChanged.connect(self._on_occlusion_changed)
-        combo_row("Occlusion:", self.occlusion_combo)
         vbox.addWidget(attr_group)
 
         # Key frames
         kf_group = QGroupBox("Key frames")
         kg = QVBoxLayout(kf_group)
         self.kf_info_label = QLabel("–")
+        self.kf_info_label.setWordWrap(True)
+        self.kf_info_label.setTextFormat(Qt.RichText)
+        self.kf_info_label.setToolTip(
+            "Click a frame number to jump to that key frame.")
+        self.kf_info_label.linkActivated.connect(self._on_kf_link_clicked)
         kg.addWidget(self.kf_info_label)
         kf_row = QHBoxLayout()
         add_kf_btn = QPushButton("Set key frame (K)")
@@ -1278,6 +1276,20 @@ class LabellingToolDialog(QDialog):
             "the track without geo-propagation.")
         self.draw_kf_btn.toggled.connect(self._on_draw_kf_toggled)
         kg.addWidget(self.draw_kf_btn)
+        # Per-key-frame attribute: occlusion can change along the track
+        # (visible on one key frame, occluded on the next).
+        occ_row = QHBoxLayout()
+        occ_row.addWidget(QLabel("Occlusion:"))
+        self.occlusion_combo = QComboBox()
+        self.occlusion_combo.addItems(OCCLUSION_LEVELS)
+        self.occlusion_combo.setToolTip(
+            "Occlusion level of the box at the current frame — stored per "
+            "key frame, so it can change along the track. Interpolated "
+            "frames inherit the previous key frame's occlusion; changing it "
+            "on an interpolated frame promotes that frame to a key frame.")
+        self.occlusion_combo.currentTextChanged.connect(self._on_occlusion_changed)
+        occ_row.addWidget(self.occlusion_combo, 1)
+        kg.addLayout(occ_row)
         self.stop_check = QCheckBox("Stop frame (S)")
         self.stop_check.setToolTip(
             "Mark this key frame as the last sighting before the animal "
@@ -1655,8 +1667,10 @@ class LabellingToolDialog(QDialog):
                 elif res[1]:
                     suffix = " (stop)" if track.is_stop(self._current_frame) else ""
                     parts.append(f"track L{track.track_id}: KEY FRAME{suffix}")
+                    parts.append(f"occlusion: {res[2]}")
                 else:
                     parts.append(f"track L{track.track_id}: interpolated")
+                    parts.append(f"occlusion: {res[2]}")
         if self._dirty:
             parts.append("unsaved changes")
         self.status_label.setText("   |   ".join(parts))
@@ -1668,27 +1682,56 @@ class LabellingToolDialog(QDialog):
         if self._selected_track is not None and self._store:
             track = self._store.tracks.get(self._selected_track)
 
+        # Track-level classes follow the selection …
         enabled = track is not None
-        for w in (self.species_combo, self.sex_combo, self.age_combo,
-                  self.occlusion_combo):
+        for w in (self.species_combo, self.sex_combo, self.age_combo):
             w.setEnabled(enabled)
 
         if track is not None:
             self.species_combo.setCurrentText(track.species)
             self.sex_combo.setCurrentText(track.sex)
             self.age_combo.setCurrentText(track.age)
+            # … while occlusion and the stop flag are per key frame: they
+            # need a box on the current frame.
             res = track.box_at(self._current_frame)
             if res is not None:
                 self.occlusion_combo.setCurrentText(res[2])
+            self.occlusion_combo.setEnabled(res is not None)
             self.stop_check.setEnabled(res is not None)
             self.stop_check.setChecked(track.is_stop(self._current_frame))
             kfs = track.frames()
-            kf_list = ", ".join(str(f) for f in kfs[:12])
-            ellipsis = "…" if len(kfs) > 12 else ""
+
+            def _kf_anchor(f: int) -> str:
+                # Anchor per key frame — clicking jumps to that frame.
+                # Stop frames are red, matching the timeline; the current
+                # frame is bold.
+                text = str(f)
+                if track.is_stop(f):
+                    text = f'<span style="color:#e63c3c;">{text}</span>'
+                if f == self._current_frame:
+                    text = f"<b>{text}</b>"
+                return f'<a href="{f}">{text}</a>'
+
+            # Long lists: show a window of anchors around the current frame
+            # instead of always the first few.
+            max_shown = 12
+            if len(kfs) > max_shown:
+                nearest_i = min(
+                    range(len(kfs)),
+                    key=lambda i: abs(kfs[i] - self._current_frame))
+                start = max(
+                    0, min(nearest_i - max_shown // 2, len(kfs) - max_shown))
+                shown = kfs[start:start + max_shown]
+                prefix = "… " if start > 0 else ""
+                suffix = " …" if start + max_shown < len(kfs) else ""
+            else:
+                shown, prefix, suffix = kfs, "", ""
+            kf_list = ", ".join(_kf_anchor(f) for f in shown)
             self.kf_info_label.setText(
-                f"{len(kfs)} key frame(s): {kf_list}{ellipsis}")
+                f"{len(kfs)} key frame(s): {prefix}{kf_list}{suffix}")
         else:
             self.kf_info_label.setText("–")
+            self.occlusion_combo.setEnabled(False)
             self.stop_check.setEnabled(False)
             self.stop_check.setChecked(False)
         self._updating_ui = False
@@ -2134,6 +2177,13 @@ class LabellingToolDialog(QDialog):
             occlusion=self.occlusion_combo.currentText())
         self._mark_dirty()
         self._render_frame()
+
+    def _on_kf_link_clicked(self, href: str):
+        """A key-frame anchor in the overview label was clicked — jump there."""
+        try:
+            self._goto_frame(int(href))
+        except ValueError:
+            pass
 
     def _on_stop_toggled(self, checked: bool):
         if self._updating_ui:
