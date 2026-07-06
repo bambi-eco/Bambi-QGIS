@@ -2144,9 +2144,10 @@ class BambiProcessor:
             raise RuntimeError(f"No frame GeoTIFFs found in {geotiff_folder}.")
 
         if log_fn:
-            log_fn(f"Counting overlap across {len(candidates)} GeoTIFF(s)"
-                   + (f" at {cell_size} m/px..." if cell_size > 0
-                      else " at native resolution..."))
+            res_tex = " at native resolution..."
+            if cell_size > 0:
+                res_tex = f" at {cell_size} m/px..."
+            log_fn(f"Counting overlap across {len(candidates)} GeoTIFF(s) {res_tex}")
         if progress_fn:
             progress_fn(10)
 
