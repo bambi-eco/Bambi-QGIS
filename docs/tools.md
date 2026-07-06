@@ -4,6 +4,7 @@ Besides the main processing pipeline, the plugin ships several companion tools a
 
 - [Video Creator](#video-creator)
 - [Thermal Image Viewer](#thermal-image-viewer)
+- [Labelling Tool](#labelling-tool)
 - [Interactive selection tools](#interactive-selection-tools)
 
 ## Video Creator
@@ -39,6 +40,60 @@ Key features:
 - Choose from multiple **colormaps** (`white-hotspot`, `black-hotspot`, `plasma`, `inferno`, `magma`, `viridis`, `jet`)
 - Set optional **lower and upper temperature thresholds** (°C) that clip the display range, making it easier to isolate warm or cold targets
 - Pixel temperature readout on hover
+
+## Labelling Tool
+
+The Labelling Tool is a key-frame based annotation editor for reviewing pipeline results and creating or correcting MOT-style track labels directly on the extracted frames. Open it via the **Labelling Tool** toolbar button or the plugin menu.
+
+Point it at a processing **target folder** (the one containing `frames_t/` / `frames_w/`) — when opened from a configured plugin panel the folder, DEM, and correction paths are picked up automatically. Labelling is done per **modality** (thermal *or* RGB, never mixed); the selector at the top switches between the two and each modality keeps its own label set.
+
+### Reviewing existing results
+
+Detections (`detections_{t,w}/detections.txt`) and tracks (`tracks_{t,w}/tracks_pixel.csv`) are drawn as read-only overlays (toggleable via checkboxes). An existing pipeline track can be converted into an editable label track with **Import as label track**; the **Resample** value controls how many key frames are kept (`1` = every frame of the track becomes a key frame, `N` = only every N-th frame plus the first and last).
+
+### Key frames & interpolation
+
+Labels do not need to be drawn on every frame. A track stores boxes only on **key frames**; all frames in between are interpolated linearly and drawn with a dashed border. The typical workflow:
+
+1. Press **New Track (N)** and drag a bounding box around the animal — this creates the track with a key frame at the current frame
+2. Jump ahead with **Step >>** (stride set by the **Step** spinbox, e.g. 10 frames)
+3. Drag/resize the interpolated box to fit — any edit automatically turns the frame into a key frame
+4. Repeat; the timeline bar below the slider shows the track's range and its key frames (click it to jump)
+
+Each track carries a **species** (free-text combo with common defaults), **sex**, and **age** class; the **occlusion** level is stored per key frame. Boxes can be moved/resized and classes changed at any time; **Set key frame (K)** freezes the current interpolated box (outside the track's range it copies the nearest key frame's box, extending the track), **Delete key frame** removes one (deleting the last key frame removes the track).
+
+To place a key frame fully manually — including on frames before/after the track's current range — select the track and press **Draw key frame (B)**, then drag the new box on the canvas. This extends or corrects the track without geo-propagation.
+
+### Geo-referenced propagation
+
+Instead of manually re-drawing a box on a far-away frame, **Propagate box (geo)** ray-casts the current box onto the DEM (pixel → world) with the current frame's camera pose and back-projects it (world → pixel) into the frame at the configured **Frame offset**, creating a key frame there. The DEM mesh is loaded once on first use (may take a while). As with the geo-referenced FoV inspector, the result depends on calibration and correction accuracy — usually only small size adaptions are needed.
+
+### Saving & pipeline export
+
+**Save Labels** (or the **Autosave** checkbox, which saves automatically shortly after every change) writes per modality:
+
+| File                       | Contents                                                                                            |
+|----------------------------|-----------------------------------------------------------------------------------------------------|
+| `labels_{t,w}/labels.json` | Key-frame label tracks (source of truth, re-loaded on opening)                                      |
+| `labels_{t,w}/labels.csv`  | Per-frame interpolated export: `frame,track_id,x1,y1,x2,y2,species,sex,age,occlusion,keyframe`      |
+
+**Add detections to project** additionally merges the interpolated label boxes into `detections_{t,w}/detections.txt` in the exact format of the **Detect Animals** step (`frame x1 y1 x2 y2 confidence class_id`, confidence `1.0000` for manual labels) so the rest of the pipeline can consume them. Detector output is preserved: the labels are appended as a marked block that is replaced on re-export, and the species → `class_id` mapping is documented as a comment inside the block. Re-run **Geo-Reference Detections** (and tracking, if needed) afterwards to update the QGIS layers.
+
+### Controls
+
+| Input                   | Action                                     |
+|-------------------------|--------------------------------------------|
+| Mouse wheel             | Zoom                                       |
+| Middle-button drag      | Pan                                        |
+| Drag box edge / corner  | Resize (creates a key frame)               |
+| Drag box interior       | Move (creates a key frame)                 |
+| `←` / `→`               | Previous / next frame                      |
+| `PageUp` / `PageDown`   | Jump forward / back by the step size       |
+| `N`                     | Toggle New Track drawing mode              |
+| `B`                     | Toggle Draw Key Frame mode                 |
+| `K`                     | Set key frame from the interpolated box    |
+| `Delete`                | Delete the key frame at the current frame  |
+| `Esc`                   | Cancel drawing mode                        |
 
 ## Interactive selection tools
 

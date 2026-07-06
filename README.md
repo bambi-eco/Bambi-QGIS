@@ -13,6 +13,7 @@ Detect, track, and geo-reference wildlife in aerial drone recordings, directly i
 
 - **Detect & track animals**: YOLO-based detection (model auto-downloaded from HuggingFace) and multi-object tracking with built-in, BoxMOT, or geo-referenced backends; pre-computed [TRex](https://trex.run) tracklets can be imported instead of running a tracker
 - **Geo-reference everything**: detections, tracks, and SAM3 segmentations are projected onto a DEM to real-world UTM coordinates
+- **Label manually**: key-frame based labelling tool to review results on the extracted frames (thermal or RGB) and to create or correct MOT-style track annotations with species/sex/age/occlusion classes, interpolation between key frames, geo-referenced box propagation, and export back into the detection pipeline
 - **Survey analytics**: perpendicular distance sampling from detections/tracks to the flight route, per-frame camera field-of-view footprints, coverage areas, kernel-density heatmaps of animal locations, and line-transect distance-sampling density/abundance estimation with confidence intervals
 - **Map products**: georeferenced per-frame GeoTIFFs, true orthomosaics, and Airborne Light Field Sampling (ALFS) mosaics
 - **Calibration wizards**: guided workflows for camera intrinsics (single-camera SfM or stereo RGB+thermal) and per-flight positional/rotational corrections
@@ -47,7 +48,7 @@ What you need as input: MP4 videos + SRT subtitle files (video mode) *or* a fold
 | [DEM Import & Conversion](docs/dem.md) | Automatic download (Austria), GeoTIFF conversion, manual DEMs, flat surface meshes for aquatic surveys |
 | [Correction Wizard](docs/correction-wizard.md) | Finding per-flight positional/rotational correction factors |
 | [Camera Calibration Wizard](docs/camera-calibration.md) | Estimating camera intrinsics for single cameras (SfM) and stereo RGB+thermal setups |
-| [Tools](docs/tools.md) | Video Creator, Thermal Image Viewer, interactive map-canvas inspectors |
+| [Tools](docs/tools.md) | Video Creator, Thermal Image Viewer, Labelling Tool, interactive map-canvas inspectors |
 | [Flight Strategy Planner](docs/flight-planner.md) | Randomized transect-based survey route generation |
 | [Troubleshooting](docs/troubleshooting.md) | Common errors and how to resolve them |
 

@@ -1100,14 +1100,23 @@ class LabellingToolDialog(QDialog):
         kf_row = QHBoxLayout()
         add_kf_btn = QPushButton("Set key frame (K)")
         add_kf_btn.setToolTip(
-            "Store the currently shown (interpolated) box as a key frame "
-            "on this frame.")
+            "Store the currently shown (interpolated) box as a key frame on "
+            "this frame. Outside the track's range the nearest key frame's "
+            "box is copied here (extending the track).")
         add_kf_btn.clicked.connect(self._on_add_keyframe)
         del_kf_btn = QPushButton("Delete key frame")
         del_kf_btn.clicked.connect(self._on_delete_keyframe)
         kf_row.addWidget(add_kf_btn)
         kf_row.addWidget(del_kf_btn)
         kg.addLayout(kf_row)
+        self.draw_kf_btn = QPushButton("Draw key frame (B)")
+        self.draw_kf_btn.setCheckable(True)
+        self.draw_kf_btn.setToolTip(
+            "Draw the selected track's bounding box on the current frame — "
+            "also on frames outside the track's current range, extending "
+            "the track without geo-propagation.")
+        self.draw_kf_btn.toggled.connect(self._on_draw_kf_toggled)
+        kg.addWidget(self.draw_kf_btn)
         vbox.addWidget(kf_group)
 
         # Geo propagation
@@ -1174,14 +1183,18 @@ class LabellingToolDialog(QDialog):
             self._go_relative(-self.nav_step_spin.value())
         elif key == Qt.Key_N:
             self.new_track_btn.toggle()
+        elif key == Qt.Key_B:
+            self.draw_kf_btn.toggle()
         elif key == Qt.Key_K:
             self._on_add_keyframe()
         elif key == Qt.Key_Delete:
             self._on_delete_keyframe()
         elif key == Qt.Key_Escape:
-            # Do not close the dialog on Escape — just cancel draw mode.
+            # Do not close the dialog on Escape — just cancel draw modes.
             if self.new_track_btn.isChecked():
                 self.new_track_btn.setChecked(False)
+            if self.draw_kf_btn.isChecked():
+                self.draw_kf_btn.setChecked(False)
         else:
             super().keyPressEvent(event)
 
@@ -1539,7 +1552,25 @@ class LabellingToolDialog(QDialog):
             self._render_frame()
 
     def _on_new_track_toggled(self, checked: bool):
-        self.canvas.set_draw_mode(checked)
+        if checked and self.draw_kf_btn.isChecked():
+            self.draw_kf_btn.setChecked(False)
+        self._update_draw_mode()
+
+    def _on_draw_kf_toggled(self, checked: bool):
+        if checked:
+            if self._current_track() is None:
+                QMessageBox.information(
+                    self, "BAMBI Labelling Tool",
+                    "Please select a label track first.")
+                self.draw_kf_btn.setChecked(False)
+                return
+            if self.new_track_btn.isChecked():
+                self.new_track_btn.setChecked(False)
+        self._update_draw_mode()
+
+    def _update_draw_mode(self):
+        self.canvas.set_draw_mode(
+            self.new_track_btn.isChecked() or self.draw_kf_btn.isChecked())
 
     def _clamp_rect(self, rect: QRectF) -> QRectF:
         """Clamp *rect* to the frame image area (scene rect)."""
@@ -1548,10 +1579,26 @@ class LabellingToolDialog(QDialog):
         return clamped if not clamped.isEmpty() else rect
 
     def _on_box_drawn(self, rect: QRectF):
-        """A new box was drawn on the canvas (New Track mode)."""
+        """A box was drawn on the canvas (New Track / Draw Key Frame mode)."""
         if self._store is None:
             return
         rect = self._clamp_rect(rect)
+
+        if self.draw_kf_btn.isChecked():
+            # Key frame for the selected track at the current frame — also
+            # valid outside the track's current range (extends the track).
+            self.draw_kf_btn.setChecked(False)
+            track = self._current_track()
+            if track is None:
+                return
+            track.set_keyframe(
+                self._current_frame,
+                (rect.left(), rect.top(), rect.right(), rect.bottom()))
+            self._mark_dirty()
+            self._refresh_track_list()
+            self._render_frame()
+            return
+
         self.new_track_btn.setChecked(False)
         track = LabelTrack(self._store.next_track_id())
         track.species = self.species_combo.currentText() or "unknown"
@@ -1638,16 +1685,21 @@ class LabellingToolDialog(QDialog):
             return
         res = track.box_at(self._current_frame)
         if res is None:
-            QMessageBox.information(
-                self, "BAMBI Labelling Tool",
-                "The current frame is outside the track's key-frame range.\n"
-                "Use 'Propagate box (geo)' or move/draw the box directly to "
-                "extend the track.")
-            return
-        if res[1]:
+            # Outside the track's range: extend it by copying the nearest
+            # key frame's box here; the user then adjusts it by dragging.
+            fs = track.frames()
+            nearest = min(fs, key=lambda f: abs(f - self._current_frame))
+            kf = track.keyframes[nearest]
+            track.set_keyframe(
+                self._current_frame,
+                (kf["x1"], kf["y1"], kf["x2"], kf["y2"]),
+                occlusion=kf.get("occlusion", "none"))
+        elif res[1]:
             return  # already a key frame
-        track.set_keyframe(self._current_frame, res[0], occlusion=res[2])
+        else:
+            track.set_keyframe(self._current_frame, res[0], occlusion=res[2])
         self._mark_dirty()
+        self._refresh_track_list()
         self._render_frame()
 
     def _on_delete_keyframe(self):

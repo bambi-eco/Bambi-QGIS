@@ -143,6 +143,8 @@ detections_t/    # or detections_w/ depending on camera selection
 └── detections.txt    # Bounding box detections (frame, x1, y1, x2, y2, confidence, class)
 ```
 
+Manual annotations created with the [Labelling Tool](tools.md#labelling-tool) can be merged into the same `detections.txt` (via its **Add detections to project** button), so they flow through geo-referencing and tracking like regular detections.
+
 #### → Geo-Reference Detections
 
 Projects pixel-space bounding boxes to real-world UTM coordinates by ray-casting against the DEM mesh. Each detection's four corners are projected and the result is stored as a world-space bounding box.
@@ -438,6 +440,11 @@ target_folder/
 │   ├── tracks_pixel.csv                     # Tracks in pixel coordinates
 │   └── tracks.csv                           # Geo-referenced tracks (UTM)
 ├── tracks_w/
+│   └── ...
+├── labels_t/                                # Manual labels (Labelling Tool, thermal)
+│   ├── labels.json                          # Key-frame label tracks (source of truth)
+│   └── labels.csv                           # Per-frame interpolated label export
+├── labels_w/
 │   └── ...
 ├── fov_t/                                   # Field of View (thermal camera)
 │   ├── fov_polygons.txt                     # Per-frame FoV polygon coordinates
