@@ -1,6 +1,7 @@
 *.zip
 .idea
 .claude/
+DECOUPLING_PLAN.md
 
 # Security / linting check artefacts
 reports/

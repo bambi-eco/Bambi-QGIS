@@ -25,5 +25,7 @@ fi
 
 pytest tests_integration -v \
     --junitxml="$REPORTS_DIR/pytest-integration.xml" \
+    --cov=bambi_wildlife_detection \
+    --cov-report=term \
     2>&1 | tee "$REPORTS_DIR/pytest-integration.txt"
 exit "${PIPESTATUS[0]}"

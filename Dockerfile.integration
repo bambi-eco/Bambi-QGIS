@@ -33,7 +33,7 @@ RUN pip install --no-cache-dir \
 RUN pip install --no-cache-dir "git+https://github.com/bambi-eco/alfs_py.git" && \
     pip install --no-cache-dir "git+https://github.com/bambi-eco/bambi_detection.git"
 
-RUN pip install --no-cache-dir pytest requests scipy
+RUN pip install --no-cache-dir pytest pytest-cov requests scipy
 
 # moderngl renders through Xvfb (started by run_integration_tests.sh).
 ENV DISPLAY=:99

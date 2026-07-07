@@ -373,7 +373,7 @@ class TrackerManager:
         try:
             sig = inspect.signature(info.tracker_class.__init__)
             for name, param in sig.parameters.items():
-                if name in ('sel', 'args', 'kwargs'):
+                if name in ('self', 'args', 'kwargs'):
                     continue
 
                 # Determine type from annotation or default value
@@ -703,7 +703,7 @@ class TrackerManager:
             if 'device' in sig.parameters:
                 constructor_args["device"] = device_obj
             if 'half' in sig.parameters:
-                constructor_args["hal"] = False
+                constructor_args["half"] = False
 
         # Add user parameters
         constructor_args.update(valid_params)
