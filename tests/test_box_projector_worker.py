@@ -10,70 +10,20 @@ matrices, so expected pixel coordinates follow directly from the NDC mapping
 """
 import json
 import sys
-import types
 
-import numpy as np
 import pytest
 
 from bambi_wildlife_detection.bambi_box_projector import BoxProjectionWorker
+from tests.fakes import SignalRecorder, install_fake_render_stack
 
 IMG_W, IMG_H = 640, 512  # worker fallback resolution (no frame files on disk)
 ORIGIN = (1000.0, 2000.0, 300.0)
 
 
-class SignalRecorder:
-    def __init__(self):
-        self.calls = []
-
-    def emit(self, *args):
-        self.calls.append(args)
-
-    def connect(self, *args, **kwargs):
-        pass
-
-
-class _IdentityCamera:
-    """alfspy.core.rendering.Camera stand-in with identity view/projection."""
-
-    def __init__(self, fovy=50, aspect_ratio=1.0, position=None, rotation=None):
-        self.fovy = fovy
-        self.aspect_ratio = aspect_ratio
-        self.position = position
-        self.rotation = rotation
-
-    def get_view(self):
-        return np.eye(4)
-
-    def get_proj(self):
-        return np.eye(4)
-
-
 @pytest.fixture
 def fake_render_stack(monkeypatch):
     """Install fake ``pyrr`` and ``alfspy`` modules into sys.modules."""
-    pyrr = types.ModuleType("pyrr")
-    pyrr.Vector3 = lambda values, dtype=None: np.asarray(values, dtype=np.float64)
-
-    class Quaternion:
-        @staticmethod
-        def from_eulers(eulers):
-            return tuple(eulers)
-
-    pyrr.Quaternion = Quaternion
-
-    alfspy = types.ModuleType("alfspy")
-    alfspy.__path__ = []
-    core = types.ModuleType("alfspy.core")
-    core.__path__ = []
-    rendering = types.ModuleType("alfspy.core.rendering")
-    rendering.Camera = _IdentityCamera
-    alfspy.core = core
-    core.rendering = rendering
-
-    monkeypatch.setitem(sys.modules, "pyrr", pyrr)
-    monkeypatch.setitem(sys.modules, "alfspy", alfspy)
-    monkeypatch.setitem(sys.modules, "alfspy.core", core)
-    monkeypatch.setitem(sys.modules, "alfspy.core.rendering", rendering)
+    install_fake_render_stack(monkeypatch)
 
 
 def _write_pipeline_folder(tmp_path, with_georef=True, with_poses=True):

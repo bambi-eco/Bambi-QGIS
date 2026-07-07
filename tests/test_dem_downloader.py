@@ -6,9 +6,7 @@ paths are exercised either through their documented ImportError fallbacks
 (by blocking the import) or through a minimal fake rasterio module.
 """
 import json
-import struct
 import sys
-import types
 
 import numpy as np
 import pytest
@@ -27,19 +25,16 @@ from bambi_wildlife_detection.austria_dem_downloader import (  # noqa: E402
     TILE_SIZE,
     get_proj4_for_crs,
 )
-
-
-class SignalRecorder:
-    """Stands in for a stubbed pyqtSignal so emissions can be asserted."""
-
-    def __init__(self):
-        self.calls = []
-
-    def emit(self, *args):
-        self.calls.append(args)
-
-    def connect(self, *args, **kwargs):
-        pass
+from tests.fakes import (  # noqa: E402
+    FakeAffine,
+    FakeBounds,
+    FakeRasterioDataset,
+    FakeResponse,
+    FakeSession,
+    SignalRecorder,
+    install_fake_rasterio,
+    parse_glb,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -211,40 +206,6 @@ class TestBEVTileCalculator:
 # BEVDownloader (network mocked)
 # ---------------------------------------------------------------------------
 
-class FakeResponse:
-    def __init__(self, status_code=200, chunks=None, content_length=None):
-        self.status_code = status_code
-        self._chunks = chunks or []
-        total = content_length
-        if total is None:
-            total = sum(len(c) for c in self._chunks)
-        self.headers = {"content-length": str(total)} if total else {}
-
-    def raise_for_status(self):
-        if self.status_code >= 400:
-            raise RuntimeError(f"HTTP {self.status_code}")
-
-    def iter_content(self, chunk_size=None):
-        for chunk in self._chunks:
-            yield chunk
-
-
-class FakeSession:
-    """Returns queued responses (or raises queued exceptions) per get() call."""
-
-    def __init__(self, responses):
-        self.responses = list(responses)
-        self.requested_urls = []
-        self.headers = {}
-
-    def get(self, url, **kwargs):
-        self.requested_urls.append(url)
-        item = self.responses.pop(0)
-        if isinstance(item, Exception):
-            raise item
-        return item
-
-
 class TestBEVDownloader:
     TILE = "N2650000E4400000"
 
@@ -367,69 +328,6 @@ class TestDEMProcessorWithoutRasterio:
 # GLTFMeshGenerator
 # ---------------------------------------------------------------------------
 
-def _parse_glb(path):
-    """Parse a GLB container, returning (gltf_json, binary_chunk)."""
-    data = path.read_bytes()
-    assert data[:4] == b"glTF"
-    version, total_length = struct.unpack_from("<II", data, 4)
-    assert version == 2
-    assert total_length == len(data)
-    json_length = struct.unpack_from("<I", data, 12)[0]
-    assert data[16:20] == b"JSON"
-    gltf = json.loads(data[20:20 + json_length].decode("utf-8"))
-    bin_offset = 20 + json_length
-    bin_length = struct.unpack_from("<I", data, bin_offset)[0]
-    assert data[bin_offset + 4:bin_offset + 8] == b"BIN\x00"
-    binary = data[bin_offset + 8:bin_offset + 8 + bin_length]
-    return gltf, binary
-
-
-class _FakeAffine:
-    def __init__(self, a, b, c, d, e, f):
-        self.a, self.b, self.c, self.d, self.e, self.f = a, b, c, d, e, f
-
-
-class _FakeBounds:
-    def __init__(self, left, bottom, right, top):
-        self.left, self.bottom, self.right, self.top = left, bottom, right, top
-
-
-class _FakeCrs:
-    def __init__(self, epsg):
-        self._epsg = epsg
-
-    def to_epsg(self):
-        return self._epsg
-
-    def __str__(self):
-        return f"EPSG:{self._epsg}"
-
-
-class _FakeRasterioDataset:
-    def __init__(self, elevation, transform, bounds, epsg, nodata=None):
-        self._elevation = elevation
-        self.transform = transform
-        self.bounds = bounds
-        self.crs = _FakeCrs(epsg)
-        self.nodata = nodata
-        self.height, self.width = elevation.shape
-
-    def read(self, band):
-        return self._elevation
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-
-def _install_fake_rasterio(monkeypatch, dataset):
-    fake = types.ModuleType("rasterio")
-    fake.open = lambda path: dataset
-    monkeypatch.setitem(sys.modules, "rasterio", fake)
-
-
 class TestGLTFMeshGenerator:
     def test_simplify_factor_clamped_to_one(self):
         assert GLTFMeshGenerator(simplify_factor=0).simplify_factor == 1
@@ -444,7 +342,7 @@ class TestGLTFMeshGenerator:
         out = tmp_path / "mesh.glb"
         gen._write_gltf(out, vertices, normals, indices)
 
-        gltf, binary = _parse_glb(out)
+        gltf, binary = parse_glb(out)
         assert gltf["accessors"][0]["count"] == 4      # vertices
         assert gltf["accessors"][1]["count"] == 4      # normals
         assert gltf["accessors"][2]["count"] == 6      # indices
@@ -466,13 +364,13 @@ class TestGLTFMeshGenerator:
     def test_generate_mesh_from_utm_dem(self, monkeypatch, tmp_path):
         pytest.importorskip("pyproj")
         elevation = np.arange(16, dtype=np.float64).reshape(4, 4) + 400.0
-        dataset = _FakeRasterioDataset(
+        dataset = FakeRasterioDataset(
             elevation,
-            transform=_FakeAffine(10.0, 0.0, 500000.0, 0.0, -10.0, 5265000.0),
-            bounds=_FakeBounds(500000.0, 5264960.0, 500040.0, 5265000.0),
+            transform=FakeAffine(10.0, 0.0, 500000.0, 0.0, -10.0, 5265000.0),
+            bounds=FakeBounds(500000.0, 5264960.0, 500040.0, 5265000.0),
             epsg=32633,
         )
-        _install_fake_rasterio(monkeypatch, dataset)
+        install_fake_rasterio(monkeypatch, dataset)
 
         gen = GLTFMeshGenerator()
         glb_path = tmp_path / "dem.glb"
@@ -490,7 +388,7 @@ class TestGLTFMeshGenerator:
         assert meta["origin_wgs84"]["longitude"] == pytest.approx(15.0, abs=0.01)
         assert 47.0 < meta["origin_wgs84"]["latitude"] < 48.0
 
-        gltf, _ = _parse_glb(glb_path)
+        gltf, _ = parse_glb(glb_path)
         assert gltf["accessors"][0]["count"] == 16          # 4x4 grid, no NaNs
         assert gltf["accessors"][2]["count"] == 3 * 2 * 9   # 3x3 quads, 2 tris each
 
@@ -499,13 +397,13 @@ class TestGLTFMeshGenerator:
         # degree range with a UTM EPSG must be re-interpreted as EPSG:4326.
         pytest.importorskip("pyproj")
         elevation = np.full((3, 3), 500.0)
-        dataset = _FakeRasterioDataset(
+        dataset = FakeRasterioDataset(
             elevation,
-            transform=_FakeAffine(0.0001, 0.0, 13.4, 0.0, -0.0001, 47.5003),
-            bounds=_FakeBounds(13.4, 47.5, 13.4003, 47.5003),
+            transform=FakeAffine(0.0001, 0.0, 13.4, 0.0, -0.0001, 47.5003),
+            bounds=FakeBounds(13.4, 47.5, 13.4003, 47.5003),
             epsg=32643,
         )
-        _install_fake_rasterio(monkeypatch, dataset)
+        install_fake_rasterio(monkeypatch, dataset)
 
         logs = []
         gen = GLTFMeshGenerator(log_callback=logs.append)
@@ -521,14 +419,14 @@ class TestGLTFMeshGenerator:
 
     def test_generate_mesh_all_nodata_fails(self, monkeypatch, tmp_path):
         elevation = np.full((3, 3), -9999.0)
-        dataset = _FakeRasterioDataset(
+        dataset = FakeRasterioDataset(
             elevation,
-            transform=_FakeAffine(10.0, 0.0, 500000.0, 0.0, -10.0, 5265000.0),
-            bounds=_FakeBounds(500000.0, 5264970.0, 500030.0, 5265000.0),
+            transform=FakeAffine(10.0, 0.0, 500000.0, 0.0, -10.0, 5265000.0),
+            bounds=FakeBounds(500000.0, 5264970.0, 500030.0, 5265000.0),
             epsg=32633,
             nodata=-9999.0,
         )
-        _install_fake_rasterio(monkeypatch, dataset)
+        install_fake_rasterio(monkeypatch, dataset)
 
         logs = []
         gen = GLTFMeshGenerator(log_callback=logs.append)

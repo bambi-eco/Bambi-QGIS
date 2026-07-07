@@ -2,9 +2,19 @@ FROM python:3.11-slim
 
 WORKDIR /workspace
 
+# Minimal system libraries for the rasterio and opencv-python-headless
+# wheels (slim base image lacks them).
+RUN apt-get update -qq && \
+    apt-get install -y --no-install-recommends \
+    libexpat1 \
+    libglib2.0-0 && \
+    rm -rf /var/lib/apt/lists/*
+
 # Unit test dependencies: pytest + the scientific stack used by the
 # pure-logic plugin code (the qgis package itself is stubbed by
 # tests/qgis_stub.py, so no QGIS installation is needed).
+# rasterio + shapely enable the real DEM merge/clip/reproject/mesh tests;
+# opencv-python-headless enables the camera-calibration math tests.
 RUN pip install --no-cache-dir \
     pytest \
     pytest-cov \
@@ -12,7 +22,13 @@ RUN pip install --no-cache-dir \
     scipy \
     pyproj \
     gltflib \
-    requests
+    requests \
+    rasterio \
+    shapely \
+    opencv-python-headless \
+    geopandas \
+    fiona \
+    simplekml
 
 # Code is mounted at runtime via docker-compose volume — no COPY needed.
 CMD ["bash", "run_tests.sh"]

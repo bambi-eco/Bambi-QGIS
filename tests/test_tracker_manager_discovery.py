@@ -5,7 +5,6 @@ tracker creation.
 Neither boxmot nor georef_tracker are installed in the test environment;
 fake modules are injected into sys.modules to exercise the discovery code.
 """
-import importlib.machinery
 import sys
 import types
 
@@ -21,19 +20,12 @@ from bambi_wildlife_detection.tracker_manager import (  # noqa: E402
     TrackerManager,
     get_tracker_manager,
 )
+from tests.fakes import FakeResponse, make_module  # noqa: E402
 
 
 @pytest.fixture
 def manager(tmp_path):
     return TrackerManager(models_folder=str(tmp_path / "models"))
-
-
-def _fake_module(name, **attrs):
-    mod = types.ModuleType(name)
-    mod.__spec__ = importlib.machinery.ModuleSpec(name, loader=None)
-    for key, value in attrs.items():
-        setattr(mod, key, value)
-    return mod
 
 
 class FakeDeepOcSort:
@@ -54,7 +46,7 @@ class FakeByteTrack:
 @pytest.fixture
 def fake_boxmot(monkeypatch):
     """A boxmot module exposing two of the seven expected tracker classes."""
-    module = _fake_module(
+    module = make_module(
         "boxmot", DeepOcSort=FakeDeepOcSort, ByteTrack=FakeByteTrack)
     monkeypatch.setitem(sys.modules, "boxmot", module)
     return module
@@ -68,7 +60,7 @@ def fake_georef(monkeypatch):
     class GeoHybridDeepOcSort:
         pass
 
-    module = _fake_module(
+    module = make_module(
         "georef_tracker",
         GeoNativeDeepOcSort=GeoNativeDeepOcSort,
         GeoHybridDeepOcSort=GeoHybridDeepOcSort,
@@ -183,22 +175,6 @@ class TestGetReidWeightsPath:
         assert manager.get_reid_weights_path(ReIDModel.BAMBI) == "/models/bambi.pt"
 
 
-class FakeResponse:
-    def __init__(self, chunks, status=200):
-        self._chunks = chunks
-        self.status = status
-        total = sum(len(c) for c in chunks)
-        self.headers = {"content-length": str(total)}
-
-    def raise_for_status(self):
-        if self.status >= 400:
-            raise RuntimeError(f"HTTP {self.status}")
-
-    def iter_content(self, chunk_size=None):
-        for chunk in self._chunks:
-            yield chunk
-
-
 class TestDownloadFile:
     def _patch_requests(self, monkeypatch, get_fn):
         fake_requests = types.SimpleNamespace(get=get_fn)
@@ -206,7 +182,7 @@ class TestDownloadFile:
 
     def test_successful_download(self, manager, tmp_path, monkeypatch):
         self._patch_requests(
-            monkeypatch, lambda url, **kw: FakeResponse([b"x" * 4096]))
+            monkeypatch, lambda url, **kw: FakeResponse(chunks=[b"x" * 4096]))
         target = tmp_path / "model.pt"
         ok = manager._download_file(
             "https://example.com/model.pt", str(target), "model", min_size=1000)
@@ -214,7 +190,7 @@ class TestDownloadFile:
         assert target.stat().st_size == 4096
 
     def test_too_small_download_removed(self, manager, tmp_path, monkeypatch):
-        self._patch_requests(monkeypatch, lambda url, **kw: FakeResponse([b"tiny"]))
+        self._patch_requests(monkeypatch, lambda url, **kw: FakeResponse(chunks=[b"tiny"]))
         target = tmp_path / "model.pt"
         logs = []
         ok = manager._download_file(
@@ -225,7 +201,7 @@ class TestDownloadFile:
         assert any("Failed to download" in m for m in logs)
 
     def test_rejects_non_http_url(self, manager, tmp_path, monkeypatch):
-        self._patch_requests(monkeypatch, lambda url, **kw: FakeResponse([b"x" * 4096]))
+        self._patch_requests(monkeypatch, lambda url, **kw: FakeResponse(chunks=[b"x" * 4096]))
         ok = manager._download_file(
             "ftp://example.com/model.pt", str(tmp_path / "m.pt"), "model")
         assert ok is False
@@ -237,7 +213,7 @@ class TestDownloadFile:
             attempts.append(kwargs)
             if len(attempts) == 1:
                 raise RuntimeError("SSL error")
-            return FakeResponse([b"y" * 4096])
+            return FakeResponse(chunks=[b"y" * 4096])
 
         self._patch_requests(monkeypatch, flaky_get)
         target = tmp_path / "model.pt"

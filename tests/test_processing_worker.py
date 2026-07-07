@@ -6,7 +6,6 @@ The ``bambi`` framework modules used by ``count_srt_frames`` and
 progress/cancellation plumbing can be tested without the real dependencies.
 """
 import sys
-import types
 
 import pytest
 
@@ -16,17 +15,7 @@ from bambi_wildlife_detection.bambi_processing import (
     count_srt_frames,
     patch_frame_extraction_progress,
 )
-
-
-class SignalRecorder:
-    def __init__(self):
-        self.calls = []
-
-    def emit(self, *args):
-        self.calls.append(args)
-
-    def connect(self, *args, **kwargs):
-        pass
+from tests.fakes import SignalRecorder, make_module
 
 
 # Mapping of worker step names to the BambiProcessor method each dispatches to.
@@ -125,18 +114,16 @@ class TestProcessingWorkerDispatch:
 
 @pytest.fixture
 def fake_srt_parser(monkeypatch):
-    """SrtParser whose parse() returns one entry per character of the path stem."""
-    bambi = types.ModuleType("bambi")
-    bambi.__path__ = []
-    srt = types.ModuleType("bambi.srt")
-    srt.__path__ = []
-    srt_parser = types.ModuleType("bambi.srt.srt_parser")
-
+    """SrtParser whose parse() returns as many entries as the path requests."""
     class SrtParser:
         def parse(self, path):
             return [None] * int(path.rsplit("=", 1)[1])
 
-    srt_parser.SrtParser = SrtParser
+    bambi = make_module("bambi")
+    bambi.__path__ = []
+    srt = make_module("bambi.srt")
+    srt.__path__ = []
+    srt_parser = make_module("bambi.srt.srt_parser", SrtParser=SrtParser)
     bambi.srt = srt
     srt.srt_parser = srt_parser
     monkeypatch.setitem(sys.modules, "bambi", bambi)
@@ -151,12 +138,13 @@ def fake_extractor_callback(monkeypatch):
         def __call__(self, idx, img):
             return True
 
-    bambi = types.ModuleType("bambi")
+    bambi = make_module("bambi")
     bambi.__path__ = []
-    webgl = types.ModuleType("bambi.webgl")
+    webgl = make_module("bambi.webgl")
     webgl.__path__ = []
-    tpe = types.ModuleType("bambi.webgl.timed_pose_extractor")
-    tpe.TimedFrameExtractorCallback = TimedFrameExtractorCallback
+    tpe = make_module(
+        "bambi.webgl.timed_pose_extractor",
+        TimedFrameExtractorCallback=TimedFrameExtractorCallback)
     bambi.webgl = webgl
     webgl.timed_pose_extractor = tpe
     monkeypatch.setitem(sys.modules, "bambi", bambi)
