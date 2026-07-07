@@ -58,6 +58,59 @@ What you need as input: MP4 videos + SRT subtitle files (video mode) *or* a fold
 - **Drone data** from DJI Enterprise drones (M30T, M3T, M4T, M300, …) with thermal and/or RGB cameras; GPS RTK recordings recommended for best geo-referencing accuracy
 - **Video mode** needs SRT subtitle files and an AirData flight log CSV; **photo mode** needs still images with EXIF timestamps and an AirData CSV
 
+## Development
+
+### Unit tests
+
+The repository ships a QGIS-free unit test suite (`tests/`) covering the pure
+processing logic: geometry and FOV footprints, per-frame corrections, track
+interpolation, distance-sampling statistics, world/prj file output, box
+projection, flat surface mesh generation, and tracker configuration. The
+`qgis` package is stubbed by `tests/conftest.py`, so no QGIS installation is
+needed. Run the suite in Docker (reports land in `reports/`):
+
+```bash
+docker compose run --rm tests
+```
+
+Or locally in any Python 3.9+ environment with
+`pytest pytest-cov numpy scipy pyproj gltflib requests` installed:
+
+```bash
+pytest tests
+```
+
+### Integration tests
+
+`tests_integration/` runs the real pipeline — thermal/RGB frame extraction,
+DEM ray-casting geo-reference, per-frame GeoTIFF export, orthomosaic, and
+ALFS rendering — against **flight 6 of the public BAMBI raw dataset**
+([Zenodo](https://zenodo.org/record/19155449), DJI M30T, red deer, Austria)
+with the matching DEM fetched through the plugin's Austrian BEV downloader.
+Detection inference is skipped; synthetic detections exercise the
+geo-referencing math against real poses and terrain.
+
+```bash
+docker compose run --rm integration
+```
+
+The first run downloads ~12 GB (flight ZIP + DEM tiles) into the
+`bambi-test-data` Docker volume; subsequent runs reuse the cache and only
+re-execute the pipeline. The image installs the BAMBI Detection Framework
+and ALFS-PY from GitHub (CPU-only torch) and renders through Xvfb/Mesa —
+no GPU or QGIS required. To reclaim the cache: `docker volume rm
+bambi-qgis_bambi-test-data`.
+
+### Linting & security checks
+
+Bandit, detect-secrets, and flake8 run in their own image (`Dockerfile`;
+the unit tests use `Dockerfile.unit`, the integration tests
+`Dockerfile.integration`):
+
+```bash
+docker compose run --rm checks
+```
+
 ## Citation
 
 If you use this plugin in your research, please cite:

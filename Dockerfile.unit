@@ -1,0 +1,18 @@
+FROM python:3.11-slim
+
+WORKDIR /workspace
+
+# Unit test dependencies: pytest + the scientific stack used by the
+# pure-logic plugin code (the qgis package itself is stubbed by
+# tests/qgis_stub.py, so no QGIS installation is needed).
+RUN pip install --no-cache-dir \
+    pytest \
+    pytest-cov \
+    numpy \
+    scipy \
+    pyproj \
+    gltflib \
+    requests
+
+# Code is mounted at runtime via docker-compose volume — no COPY needed.
+CMD ["bash", "run_tests.sh"]

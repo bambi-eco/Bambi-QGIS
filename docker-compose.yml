@@ -5,3 +5,27 @@ services:
       - .:/workspace
     working_dir: /workspace
     command: bash run_checks.sh
+
+  tests:
+    build:
+      context: .
+      dockerfile: Dockerfile.unit
+    volumes:
+      - .:/workspace
+    working_dir: /workspace
+    command: bash run_tests.sh
+
+  integration:
+    build:
+      context: .
+      dockerfile: Dockerfile.integration
+    volumes:
+      - .:/workspace
+      - bambi-test-data:/data
+    working_dir: /workspace
+    command: bash run_integration_tests.sh
+
+volumes:
+  # Cache for the ~12 GB test flight, BEV DEM tiles and generated DEM mesh.
+  # Downloaded once on the first integration run, reused afterwards.
+  bambi-test-data:

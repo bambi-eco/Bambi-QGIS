@@ -663,9 +663,13 @@ class BambiProcessor:
             from bambi.video.calibrated_video_frame_accessor import CalibratedVideoFrameAccessor
             from bambi.webgl.timed_pose_extractor import TimedPoseExtractor
             from bambi.domain.camera import Camera
+            from dateutil import tz as _dateutil_tz
 
             thermal_video_paths = config["thermal_video_paths"]
             thermal_srt_paths = config["thermal_srt_paths"]
+
+            _tz_offset_hours = config.get("timezone_offset_hours", 1.0)
+            _video_tz = _dateutil_tz.tzoffset(None, int(_tz_offset_hours * 3600))
 
             calibration_res = config.get("thermal_calibration_data")
             if calibration_res is None:
@@ -693,6 +697,7 @@ class BambiProcessor:
                     skip=config.get("extract_skip", 0),
                     limit=config.get("extract_limit"),
                     sampling_rate=config.get("extract_sampling_rate") or 0,
+                    timezone=_video_tz,
                 )
 
         # Move poses.json written into frames_folder to target folder with suffix
@@ -814,6 +819,17 @@ class BambiProcessor:
                 )
             if log_fn:
                 log_fn(f"Photo mode: processing images in {config['rgb_photo_dir']}")
+                # Monkey-patch per-image progress logging onto this instance
+                # only — the class method is never touched.
+                _orig_undistort = extractor._undistort_and_save
+                _img_counter = [0]
+
+                def _logged_undistort(source_path, filename, output_dir):
+                    _img_counter[0] += 1
+                    log_fn(f"  [{_img_counter[0]}] {filename}")
+                    return _orig_undistort(source_path, filename, output_dir)
+
+                extractor._undistort_and_save = _logged_undistort
 
             extractor.extract(
                 photo_dir=config["rgb_photo_dir"],

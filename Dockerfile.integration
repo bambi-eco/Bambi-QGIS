@@ -1,0 +1,44 @@
+FROM python:3.11-slim
+
+WORKDIR /workspace
+
+# System dependencies:
+#  - git: pip install from GitHub
+#  - xvfb + mesa GL stack: headless OpenGL for alfspy/moderngl rendering
+#    (same approach as the alfs_py Dockerfile)
+#  - libglib2.0-0 / libsm6 / libxext6 / libxrender1: opencv-python runtime
+RUN apt-get update -qq && \
+    apt-get install -y --no-install-recommends \
+    git \
+    xvfb \
+    libgl1 \
+    libglx-mesa0 \
+    libgl1-mesa-dri \
+    libegl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
+    libgomp1 && \
+    rm -rf /var/lib/apt/lists/*
+
+# CPU-only torch/torchvision first (bambi_detection pins these versions; the
+# default PyPI build would pull multi-GB CUDA libraries we don't need).
+RUN pip install --no-cache-dir \
+    torch==2.5.1 torchvision==0.20.1 \
+    --index-url https://download.pytorch.org/whl/cpu
+
+# The two BAMBI framework packages, same sources as the plugin's
+# Dependency Manager uses.
+RUN pip install --no-cache-dir "git+https://github.com/bambi-eco/alfs_py.git" && \
+    pip install --no-cache-dir "git+https://github.com/bambi-eco/bambi_detection.git"
+
+RUN pip install --no-cache-dir pytest requests scipy
+
+# moderngl renders through Xvfb (started by run_integration_tests.sh).
+ENV DISPLAY=:99
+# Cache location for the test flight + DEM (docker volume in compose).
+ENV BAMBI_TEST_DATA_DIR=/data
+
+# Code is mounted at runtime via docker-compose volume — no COPY needed.
+CMD ["bash", "run_integration_tests.sh"]
