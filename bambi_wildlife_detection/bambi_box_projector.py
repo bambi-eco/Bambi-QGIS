@@ -27,47 +27,19 @@ this worker subtracts it before calling ``world_to_pixel_coord``.
 
 import os
 import json
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from qgis.PyQt.QtCore import QThread, pyqtSignal
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _read_correction(target_folder: str, correction_path: str) -> dict:
-    """Load correction.json, return dict with translation/rotation/additional."""
-    path = ""
-    if correction_path and os.path.isfile(correction_path):
-        path = correction_path
-    else:
-        fallback = os.path.join(target_folder, "correction.json")
-        if os.path.isfile(fallback):
-            path = fallback
-
-    if path:
-        try:
-            with open(path, "r", encoding="utf-8") as fh:
-                return json.load(fh)
-        except Exception:  # nosec B110
-            pass
-    return {}
-
-
-def _correction_for_frame(frame_idx: int, corr: dict) -> Tuple[dict, dict]:
-    """Return (translation_dict, rotation_dict) for *frame_idx*."""
-    default_t = corr.get("translation", {"x": 0.0, "y": 0.0, "z": 0.0})
-    default_r = corr.get("rotation", {"x": 0.0, "y": 0.0, "z": 0.0})
-    for entry in corr.get("additional", []):
-        s = entry.get("start", 0)
-        e = entry.get("end", float("inf"))
-        if s <= frame_idx <= e:
-            return (
-                entry.get("translation", default_t),
-                entry.get("rotation", default_r),
-            )
-    return default_t, default_r
+# Correction handling and world→pixel projection moved to core (shared with
+# the click tool, labelling tool and correction wizard); re-exported under
+# their old names for compatibility.
+from .core.camera_pose import build_camera
+from .core.camera_pose import world_to_pixel as _world_to_pixel  # noqa: F401
+from .core.corrections import (  # noqa: F401 — re-exported API
+    correction_for_frame as _correction_for_frame,
+    read_correction as _read_correction,
+)
 
 
 def _load_georef(target_folder: str, src_modality: str) -> List[dict]:
@@ -128,47 +100,6 @@ def _match_boxes_to_georef(
                 matched.append(g)
                 break
     return matched
-
-
-def _world_to_pixel(
-    corners: Any,
-    img_width: int,
-    img_height: int,
-    camera,
-) -> "Tuple[Any, Any]":
-    """Project world-space coordinates to pixel space.
-
-    Reimplements the math of ``alfspy.core.convert.world_to_pixel_coord``
-    directly to avoid a broadcasting bug in that function when more than one
-    point is passed at a time (``ndc[:, 3]`` produces shape ``(N,)`` which
-    cannot broadcast against ``ndc`` of shape ``(N, 4)``).
-
-    Returns ``(pixel_xs, pixel_ys)`` arrays of the same length as *corners*.
-    """
-    import numpy as np
-
-    coords = np.reshape(corners, (-1, 3)).astype(np.float64)
-    n = len(coords)
-
-    # Homogeneous coordinates (N, 4)
-    homo = np.ones((n, 4), dtype=np.float64)
-    homo[:, :3] = coords
-
-    # View and projection (use float64 throughout)
-    view = np.array(camera.get_view(), dtype=np.float64)
-    proj = np.array(camera.get_proj(), dtype=np.float64)
-
-    cam_coords = homo @ view  # (N, 4)
-    ndc = cam_coords @ proj  # (N, 4)
-
-    # Perspective divide — use column slice [:,3:4] so shape stays (N,1)
-    w = ndc[:, 3:4]
-    ndc_norm = ndc / w  # (N, 4)
-
-    pixel_xs = (ndc_norm[:, 0] + 1.0) * img_width / 2.0
-    pixel_ys = img_height - (ndc_norm[:, 1] + 1.0) * img_height / 2.0
-
-    return pixel_xs, pixel_ys
 
 
 def _project_georef_box_to_pixels(
@@ -274,11 +205,8 @@ class BoxProjectionWorker(QThread):
     # ------------------------------------------------------------------
 
     def _project(self) -> dict:
-        import numpy as np
-        from pyrr import Vector3, Quaternion
-
         try:
-            from alfspy.core.rendering import Camera
+            from alfspy.core.rendering import Camera  # noqa: F401 — probe
         except ImportError as exc:
             raise RuntimeError(
                 "alfspy is not available — cannot project bounding boxes.\n"
@@ -405,32 +333,11 @@ class BoxProjectionWorker(QThread):
                 results[i] = {"green": [], "blue": []}
                 continue
 
-            # Camera pose for this frame in the destination modality
-            meta = images[frame_idx]
-            fovy = meta.get("fovy", [50])
-            if isinstance(fovy, list):
-                fovy = fovy[0]
-
-            position = Vector3(meta["location"])
-            rot_vals = meta["rotation"]
-
-            # Apply correction (same correction as used for geo-referencing)
+            # Camera pose for this frame in the destination modality, with
+            # the same correction as used for geo-referencing (1× rule).
             t_corr, r_corr = _correction_for_frame(frame_idx, corr)
-            cor_t = Vector3([t_corr.get("x", 0), t_corr.get("y", 0), t_corr.get("z", 0)], dtype="f4")
-            cor_r = Vector3([r_corr.get("x", 0), r_corr.get("y", 0), r_corr.get("z", 0)], dtype="f4")
-
-            rotation_eulers = (
-                Vector3([np.deg2rad(v % 360.0) for v in rot_vals]) - cor_r
-            ) * -1
-            position = position + cor_t
-            rotation_quat = Quaternion.from_eulers(rotation_eulers)
-
-            camera = Camera(
-                fovy=fovy,
-                aspect_ratio=1.0,
-                position=position,
-                rotation=rotation_quat,
-            )
+            camera = build_camera(
+                images[frame_idx], t_corr, r_corr, aspect_ratio=1.0)
 
             # Match viewer boxes to geo-referenced entries
             on_frame = georef_by_frame.get(frame_idx, [])

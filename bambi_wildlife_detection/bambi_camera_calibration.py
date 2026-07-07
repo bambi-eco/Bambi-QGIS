@@ -18,30 +18,16 @@ preset system.
 """
 
 import json
-import math
 import os
-import shutil
 import tempfile
 from typing import List, Optional, Tuple
 
 try:
     import cv2
-    import numpy as np
+    import numpy as np  # noqa: F401 — used in type annotations
     _HAS_CV2 = True
 except ImportError:
     _HAS_CV2 = False
-
-try:
-    from scipy.optimize import minimize as scipy_minimize
-    _HAS_SCIPY = True
-except ImportError:
-    _HAS_SCIPY = False
-
-try:
-    import pycolmap
-    _HAS_PYCOLMAP = True
-except ImportError:
-    _HAS_PYCOLMAP = False
 
 from qgis.PyQt.QtCore import Qt, QThread, QObject, pyqtSignal, QTimer, QRect
 from qgis.PyQt.QtWidgets import (
@@ -59,11 +45,20 @@ from qgis.PyQt.QtGui import (
 # Constants
 # ---------------------------------------------------------------------------
 
-_IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff'}
-_VIDEO_EXTS = {'.mp4', '.avi', '.mov', '.mkv', '.wmv', '.m4v', '.mpg', '.mpeg'}
-_MIN_SFM_IMAGES = 3
-_MIN_STEREO_POINTS = 4
-_DEFAULT_SFM_FRAMES = 20
+# Constants and image/intrinsics helpers moved to core.camera_calibration;
+# re-exported under their old names.
+from .core.camera_calibration import (  # noqa: F401 — re-exported API
+    _DEFAULT_SFM_FRAMES,
+    _IMAGE_EXTS,
+    _MIN_SFM_IMAGES,
+    _MIN_STEREO_POINTS,
+    _VIDEO_EXTS,
+    estimate_intrinsics_from_image as _estimate_intrinsics_from_image,
+    extract_n_frames_to_dir as _extract_n_frames_to_dir,
+    fov_diag_to_mtx as _fov_diag_to_mtx,
+    load_image_or_video_central as _load_image_or_video_central,
+    undistort_img as _undistort_img,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -79,92 +74,6 @@ def _bgr_to_qpixmap(img: "np.ndarray") -> "QPixmap":
         rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format_RGB888)
     return QPixmap.fromImage(qimg.copy())
-
-
-def _load_image_or_video_central(path: str) -> Optional["np.ndarray"]:
-    """Return central frame from video, or full image from image file."""
-    ext = os.path.splitext(path)[1].lower()
-    if ext in _VIDEO_EXTS:
-        cap = cv2.VideoCapture(path)
-        if not cap.isOpened():
-            return None
-        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        if total <= 0:
-            cap.release()
-            return None
-        cap.set(cv2.CAP_PROP_POS_FRAMES, total // 2)
-        ret, frame = cap.read()
-        cap.release()
-        return frame if ret else None
-    else:
-        return cv2.imread(path)
-
-
-def _extract_n_frames_to_dir(video_path: str, out_dir: str, n: int,
-                             progress_cb=None) -> List[str]:
-    """Extract *n* evenly-spaced frames from *video_path* into *out_dir*.
-
-    *progress_cb*, if given, is called as ``progress_cb(frames_done, frames_total)``
-    after each frame is written so callers can update a progress indicator.
-    Returns list of written file paths."""
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        return []
-    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    if total <= 0:
-        cap.release()
-        return []
-    n = min(n, total)
-    indices = sorted({int(i * (total - 1) / max(1, n - 1)) for i in range(n)})
-    paths = []
-    stem = os.path.splitext(os.path.basename(video_path))[0]
-    for done, idx in enumerate(indices):
-        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-        ret, frame = cap.read()
-        if ret and frame is not None:
-            out = os.path.join(out_dir, f"{stem}_frame{idx:06d}.jpg")
-            cv2.imwrite(out, frame)
-            paths.append(out)
-        if progress_cb is not None:
-            progress_cb(done + 1, len(indices))
-    cap.release()
-    return paths
-
-
-def _fov_diag_to_mtx(fov_diag_deg: float, w: int, h: int) -> list:
-    """Compute a 3×3 camera matrix from a diagonal FoV (degrees) and image size.
-
-    DJI specs report the diagonal FoV.  The focal length is derived as:
-        f = (diagonal_px / 2) / tan(fov_diag / 2)
-    with the principal point placed at the image centre.
-    """
-    fov_rad = math.radians(fov_diag_deg)
-    d = math.sqrt(w * w + h * h)
-    f = (d / 2.0) / math.tan(fov_rad / 2.0)
-    return [[f, 0.0, w / 2.0], [0.0, f, h / 2.0], [0.0, 0.0, 1.0]]
-
-
-def _undistort_img(img: "np.ndarray", calib: dict) -> "np.ndarray":
-    """Return undistorted copy of *img* using calibration *calib* {mtx/K, dist}.
-    Falls back to the original image if anything goes wrong."""
-    try:
-        mtx = np.array(calib.get("mtx") or calib.get("K"), dtype=np.float64)
-        dist = np.array(calib["dist"], dtype=np.float64).flatten()
-        return cv2.undistort(img, mtx, dist)
-    except Exception:
-        return img
-
-
-def _estimate_intrinsics_from_image(img: "np.ndarray") -> dict:
-    """Rough estimate of camera matrix from image dimensions."""
-    h, w = img.shape[:2]
-    f = max(w, h) * 1.2
-    return {
-        "ret": None,
-        "mtx": [[f, 0.0, w / 2.0], [0.0, f, h / 2.0], [0.0, 0.0, 1.0]],
-        "dist": [0.0, 0.0, 0.0, 0.0, 0.0],
-        "name": "Camera",
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -429,296 +338,20 @@ class _CalibWorker(QObject):
         self._cancelled = True
 
     def run(self) -> None:
+        from .core.camera_calibration import (
+            run_single_calibration, run_stereo_calibration)
+        runner = (run_single_calibration if self._mode == "single"
+                  else run_stereo_calibration)
         try:
-            result = self._run_single() if self._mode == "single" else self._run_stereo()
+            result = runner(
+                self._params, log_fn=self.log.emit,
+                progress_fn=self.progress.emit,
+                cancel_check=lambda: self._cancelled)
             if not self._cancelled:
                 self.finished.emit(result)
         except Exception as exc:
             if not self._cancelled:
                 self.error.emit(str(exc))
-
-    # ------------------------------------------------------------------
-    # Single-camera SfM via pycolmap
-    # ------------------------------------------------------------------
-
-    def _run_single(self) -> dict:
-        if not _HAS_CV2:
-            raise RuntimeError("opencv-python (cv2) is required but not installed.")
-        if not _HAS_PYCOLMAP:
-            raise RuntimeError(
-                "pycolmap is required for single-camera SfM calibration.\n\n"
-                "Install it with:\n  pip install pycolmap"
-            )
-
-        image_paths: List[str] = self._params["image_paths"]
-        camera_name: str = self._params.get("camera_name", "Camera")
-
-        if len(image_paths) < _MIN_SFM_IMAGES:
-            raise RuntimeError(
-                f"SfM calibration requires at least {_MIN_SFM_IMAGES} images, "
-                f"got {len(image_paths)}.\nAdd more images or extract more frames from the video."
-            )
-
-        self.log.emit(f"Preparing {len(image_paths)} images…")
-        self.progress.emit(5)
-
-        tmpdir = tempfile.mkdtemp(prefix="bambi_calib_")
-        try:
-            img_dir = os.path.join(tmpdir, "images")
-            os.makedirs(img_dir)
-            for i, src in enumerate(image_paths):
-                ext = os.path.splitext(src)[1].lower() or ".jpg"
-                dst = os.path.join(img_dir, f"img_{i:04d}{ext}")
-                shutil.copy2(src, dst)
-                if self._cancelled:
-                    return {}
-
-            db_path = os.path.join(tmpdir, "database.db")
-            out_dir = os.path.join(tmpdir, "sparse")
-            os.makedirs(out_dir)
-
-            self.log.emit("Extracting image features (SIFT)…")
-            self.progress.emit(15)
-
-            reader_opts = pycolmap.ImageReaderOptions()
-            reader_opts.camera_model = "OPENCV"
-
-            fov_diag = self._params.get("fov_diag", 0.0)
-            if fov_diag > 0:
-                first_img = cv2.imread(image_paths[0])
-                if first_img is not None:
-                    h, w = first_img.shape[:2]
-                    f = (math.sqrt(w * w + h * h) / 2.0) / math.tan(math.radians(fov_diag) / 2.0)
-                    reader_opts.camera_params = f"{f},{f},{w / 2.0},{h / 2.0},0,0,0,0"
-                    self.log.emit(
-                        f"FoV prior: {fov_diag}° diagonal → f ≈ {f:.1f} px "
-                        f"(vert. FoV ≈ {math.degrees(2 * math.atan(h / (2 * f))):.1f}°)"
-                    )
-
-            pycolmap.extract_features(
-                database_path=db_path,
-                image_path=img_dir,
-                camera_mode=pycolmap.CameraMode.SINGLE,
-                reader_options=reader_opts,
-            )
-            if self._cancelled:
-                return {}
-
-            self.log.emit("Matching features between image pairs…")
-            self.progress.emit(35)
-            pycolmap.match_exhaustive(database_path=db_path)
-            if self._cancelled:
-                return {}
-
-            self.log.emit("Running incremental SfM reconstruction…")
-            self.progress.emit(50)
-            maps = pycolmap.incremental_mapping(
-                database_path=db_path,
-                image_path=img_dir,
-                output_path=out_dir,
-            )
-            if self._cancelled:
-                return {}
-
-            if not maps:
-                raise RuntimeError(
-                    "SfM reconstruction failed — no valid reconstruction found.\n\n"
-                    "Tips:\n"
-                    "• Images need significant overlap (≥60%)\n"
-                    "• Images must have rich, distinct features\n"
-                    "• Try adding more images or adjusting the viewpoint"
-                )
-
-            best_rec = max(maps.values(), key=lambda r: len(r.images))
-            self.log.emit(
-                f"Reconstruction: {len(best_rec.images)} registered images, "
-                f"{len(best_rec.points3D)} 3D points"
-            )
-            self.progress.emit(85)
-
-            cam = next(iter(best_rec.cameras.values()))
-            params = cam.params
-            model = cam.model_name.upper()
-
-            if "OPENCV" in model:
-                fx, fy = float(params[0]), float(params[1])
-                cx, cy = float(params[2]), float(params[3])
-                k1 = float(params[4]) if len(params) > 4 else 0.0
-                k2 = float(params[5]) if len(params) > 5 else 0.0
-                p1 = float(params[6]) if len(params) > 6 else 0.0
-                p2 = float(params[7]) if len(params) > 7 else 0.0
-                k3 = float(params[8]) if len(params) > 8 else 0.0
-            elif "RADIAL" in model or "FISHEYE" in model:
-                fx = fy = float(params[0])
-                cx, cy = float(params[1]), float(params[2])
-                k1 = float(params[3]) if len(params) > 3 else 0.0
-                k2 = float(params[4]) if len(params) > 4 else 0.0
-                p1 = p2 = k3 = 0.0
-            else:
-                if len(params) >= 4:
-                    fx, fy, cx, cy = float(params[0]), float(params[1]), float(params[2]), float(params[3])
-                elif len(params) >= 3:
-                    fx = fy = float(params[0])
-                    cx, cy = float(params[1]), float(params[2])
-                else:
-                    raise RuntimeError(f"Unsupported COLMAP camera model: {model}")
-                k1 = k2 = p1 = p2 = k3 = 0.0
-
-            errors = [pt.error for pt in best_rec.points3D.values()]
-            ret = float(np.mean(errors)) if errors else None
-
-            self.progress.emit(100)
-            self.log.emit("SfM calibration complete.")
-
-            return {
-                "mode": "single",
-                "camera_name": camera_name,
-                "ret": ret,
-                "mtx": [[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]],
-                "dist": [k1, k2, p1, p2, k3],
-                "n_images": len(best_rec.images),
-                "n_points3d": len(best_rec.points3D),
-            }
-
-        finally:
-            shutil.rmtree(tmpdir, ignore_errors=True)
-
-    # ------------------------------------------------------------------
-    # Stereo calibration: homography + Nelder-Mead
-    # ------------------------------------------------------------------
-
-    def _run_stereo(self) -> dict:
-        if not _HAS_CV2:
-            raise RuntimeError("opencv-python (cv2) is required but not installed.")
-        if not _HAS_SCIPY:
-            raise RuntimeError(
-                "scipy is required for stereo calibration.\n\n"
-                "Install it with:\n  pip install scipy"
-            )
-
-        T_pts_list: List[List[float]] = self._params["T_points"]
-        W_pts_list: List[List[float]] = self._params["W_points"]
-        initial_calib: dict = self._params["initial_calibration"]
-
-        n = len(T_pts_list)
-        if n < _MIN_STEREO_POINTS:
-            raise RuntimeError(
-                f"Need at least {_MIN_STEREO_POINTS} point correspondences, got {n}."
-            )
-
-        self.log.emit(f"Computing homography from {n} point correspondences…")
-        self.progress.emit(10)
-
-        T_pts = np.array(T_pts_list, dtype=np.float64).reshape(-1, 1, 2)
-        W_pts = np.array(W_pts_list, dtype=np.float64).reshape(-1, 1, 2)
-
-        M, mask = cv2.findHomography(W_pts, T_pts, cv2.RANSAC, 15)
-        if M is None:
-            raise RuntimeError(
-                "Homography computation failed.\n"
-                "Add more point correspondences spread across the image."
-            )
-
-        W_warped = cv2.perspectiveTransform(W_pts, M)
-        hom_mse = float(np.sum((W_warped - T_pts) ** 2) / n)
-        n_inliers = int(mask.sum())
-        self.log.emit(f"Homography MSE: {hom_mse:.4f}  ({n_inliers}/{n} inliers)")
-        self.progress.emit(25)
-
-        if self._cancelled:
-            return {}
-
-        # Parse initial calibration
-        rgb_data = (
-            initial_calib.get("Wide") or initial_calib.get("RGB") or  # noqa: W503, W504
-            initial_calib.get("wide") or initial_calib.get("rgb")
-        )
-        th_data = initial_calib.get("Thermal") or initial_calib.get("thermal")
-        if rgb_data is None or th_data is None:
-            raise RuntimeError(
-                "Initial calibration must contain both 'Wide'/'RGB' and 'Thermal' sections."
-            )
-
-        rgb_mtx = np.array(rgb_data.get("mtx") or rgb_data.get("K"), dtype=np.float64)
-        rgb_dist = np.array(rgb_data["dist"], dtype=np.float64).flatten()
-        th_mtx = np.array(th_data.get("mtx") or th_data.get("K"), dtype=np.float64)
-        th_dist = np.array(th_data["dist"], dtype=np.float64).flatten()
-
-        # Pad distortion to 5 elements
-        def _pad5(d):
-            d = np.array(d, dtype=np.float64).flatten()
-            if len(d) < 5:
-                d = np.concatenate([d, np.zeros(5 - len(d))])
-            return d[:5]
-
-        th_dist5 = _pad5(th_dist)
-        rgb_dist5 = _pad5(rgb_dist)
-        new_cm = rgb_mtx.copy()
-
-        # When annotation images were pre-undistorted the placed points are
-        # already in undistorted pixel space, so skip undistortPoints for that
-        # side.  The saved output still uses the original (non-zeroed) distortion.
-        rgb_pre_undist = self._params.get("rgb_pre_undistorted", False)
-        th_pre_undist = self._params.get("th_pre_undistorted", False)
-        rgb_dist_warp = np.zeros(5) if rgb_pre_undist else rgb_dist5
-        th_dist_x0 = np.zeros(5) if th_pre_undist else th_dist5
-
-        def _warp(pts, cm, dc):
-            p = np.array(pts, dtype=np.float32).reshape(-1, 1, 2)
-            return cv2.undistortPoints(p, cm, dc.reshape(1, -1), P=new_cm).reshape(-1, 1, 2)
-
-        def mse_func(x):
-            th_fx, th_fy, th_cx, th_cy = x[0], x[1], x[2], x[3]
-            th_d = np.array(x[4:9])
-            th_cm = np.array([[th_fx, 0.0, th_cx], [0.0, th_fy, th_cy], [0.0, 0.0, 1.0]])
-            w_w = _warp(W_pts, rgb_mtx, rgb_dist_warp)
-            t_w = _warp(T_pts, th_cm, th_d)
-            stacked = np.concatenate([w_w, t_w], axis=1)
-            return float(np.sum(np.diff(stacked, axis=1) ** 2, axis=2).mean())
-
-        x0 = [th_mtx[0, 0], th_mtx[1, 1], th_mtx[0, 2], th_mtx[1, 2]] + th_dist_x0.tolist()
-
-        self.log.emit("Optimising thermal intrinsics (Nelder-Mead, 10 iterations)…")
-        n_iters = 10
-        res = None
-        for i in range(n_iters):
-            if self._cancelled:
-                return {}
-            self.progress.emit(30 + int(60 * i / n_iters))
-            res = scipy_minimize(
-                mse_func, x0, method="Nelder-Mead",
-                options={"maxiter": 50000, "disp": False}, tol=1e-4,
-            )
-            x0 = res.x.tolist()
-
-        opt_mse = float(res.fun)
-        self.log.emit(f"Optimisation complete.  MSE: {opt_mse:.6f}")
-        self.progress.emit(100)
-
-        opt_th_mtx = [
-            [res.x[0], 0.0, res.x[2]],
-            [0.0, res.x[1], res.x[3]],
-            [0.0, 0.0, 1.0],
-        ]
-        opt_th_dist = res.x[4:9].tolist()
-
-        return {
-            "mode": "stereo",
-            "homography_mse": hom_mse,
-            "optimized_mse": opt_mse,
-            "Thermal": {
-                "ret": opt_mse,
-                "mtx": opt_th_mtx,
-                "dist": opt_th_dist,
-                "name": "Thermal",
-            },
-            "Wide": {
-                "ret": rgb_data.get("ret"),
-                "mtx": rgb_mtx.tolist(),
-                "dist": rgb_dist5.tolist(),
-                "name": "Wide",
-            },
-        }
 
 
 # ---------------------------------------------------------------------------

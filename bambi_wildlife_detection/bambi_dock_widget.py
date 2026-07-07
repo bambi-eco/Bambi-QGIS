@@ -4586,32 +4586,10 @@ class BambiDockWidget(QDockWidget):
     def get_correction_for_frame(frame_idx: int, config: Dict[str, Any]) -> Dict[str, Any]:
         """Get the appropriate correction factors for a given frame index.
 
-        This method checks if there's a frame-range specific correction that
-        applies to the given frame index. If found, returns that correction;
-        otherwise returns the default correction.
-
-        :param frame_idx: The frame index to get correction for
-        :param config: The configuration dictionary containing correction factors
-        :return: Dictionary with 'translation' and 'rotation' keys
+        Single source: :func:`core.corrections.correction_for_frame_config`.
         """
-        # Get default correction
-        default_correction = {
-            "translation": config.get("translation", {"x": 0, "y": 0, "z": 0}),
-            "rotation": config.get("rotation", {"x": 0, "y": 0, "z": 0})
-        }
-
-        # Check additional corrections
-        additional = config.get("additional_corrections", [])
-        for add_corr in additional:
-            start = add_corr.get("start", 0)
-            end = add_corr.get("end", float('inf'))
-            if start <= frame_idx <= end:
-                return {
-                    "translation": add_corr.get("translation", {"x": 0, "y": 0, "z": 0}),
-                    "rotation": add_corr.get("rotation", {"x": 0, "y": 0, "z": 0})
-                }
-
-        return default_correction
+        from .core.corrections import correction_for_frame_config
+        return correction_for_frame_config(frame_idx, config)
 
     def browse_target_folder(self):
         folder = QFileDialog.getExistingDirectory(
@@ -6759,49 +6737,9 @@ class BambiDockWidget(QDockWidget):
             self.log(f"Note: Could not apply default styling: {e}")
 
     def load_tracks_from_csv(self, csv_path: str) -> Dict[int, list]:
-        """Load tracks from a CSV file."""
-        tracks = {}
-
-        try:
-            with open(csv_path, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith('#'):
-                        continue
-
-                    parts = line.split(',')
-                    if len(parts) >= 10:
-                        try:
-                            frame = int(parts[0])
-                            track_id = int(parts[1])
-                            x1 = float(parts[2])
-                            y1 = float(parts[3])
-                            z1 = float(parts[4])
-                            x2 = float(parts[5])
-                            y2 = float(parts[6])
-                            z2 = float(parts[7])
-                            conf = float(parts[8])
-                            cls = int(parts[9])
-                            interpolated = int(parts[10]) if len(parts) > 10 else 0
-
-                            if track_id not in tracks:
-                                tracks[track_id] = []
-
-                            tracks[track_id].append({
-                                'frame': frame,
-                                'x1': x1, 'y1': y1, 'z1': z1,
-                                'x2': x2, 'y2': y2, 'z2': z2,
-                                'confidence': conf,
-                                'class_id': cls,
-                                'interpolated': interpolated
-                            })
-                        except (ValueError, IndexError):
-                            continue
-
-        except Exception as e:
-            self.log(f"Error reading {csv_path}: {str(e)}")
-
-        return tracks
+        """Load tracks from a CSV file (core.pipeline_outputs)."""
+        from .core.pipeline_outputs import load_geo_tracks_by_id
+        return load_geo_tracks_by_id(csv_path, log_fn=self.log)
 
     def add_fov_to_qgis(self):
         """Add Field of View polygons as QGIS layers."""
@@ -7121,47 +7059,13 @@ class BambiDockWidget(QDockWidget):
             QMessageBox.critical(self, "Error", f"Failed to create merged FoV layer: {str(e)}")
 
     def load_fov_polygons(self, fov_file: str) -> Dict[int, list]:
-        """Load FoV polygons from file.
+        """Load FoV polygons from file (core.pipeline_outputs).
 
         :param fov_file: Path to FoV polygons file
         :return: Dictionary mapping frame index to list of (x, y, z) points
         """
-        polygons = {}
-
-        try:
-            with open(fov_file, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith('#'):
-                        continue
-
-                    parts = line.split()
-                    if len(parts) < 2:
-                        continue
-
-                    frame_idx = int(parts[0])
-                    num_points = int(parts[1])
-
-                    if num_points == 0:
-                        continue
-
-                    # Parse points (x y z triplets)
-                    points = []
-                    for i in range(num_points):
-                        idx = 2 + i * 3
-                        if idx + 2 < len(parts):
-                            x = float(parts[idx])
-                            y = float(parts[idx + 1])
-                            z = float(parts[idx + 2])
-                            points.append((x, y, z))
-
-                    if points:
-                        polygons[frame_idx] = points
-
-        except Exception as e:
-            self.log(f"Error reading FoV file: {str(e)}")
-
-        return polygons
+        from .core.pipeline_outputs import load_fov_polygons_3d
+        return load_fov_polygons_3d(fov_file, log_fn=self.log)
 
     def add_frame_detections_to_qgis(self):
         """Add geo-referenced detections as QGIS layers (one layer per frame)."""
@@ -7365,55 +7269,13 @@ class BambiDockWidget(QDockWidget):
         QgsProject.instance().addMapLayer(layer)
 
     def load_detections_by_frame(self, georef_file: str) -> Dict[int, list]:
-        """Load geo-referenced detections grouped by frame.
+        """Load geo-referenced detections grouped by frame (core.pipeline_outputs).
 
         :param georef_file: Path to georeferenced detections file
         :return: Dictionary mapping frame index to list of detections
         """
-        from collections import defaultdict
-
-        frame_detections = defaultdict(list)
-
-        try:
-            with open(georef_file, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith('#'):
-                        continue
-
-                    parts = line.split()
-                    if len(parts) >= 10:
-                        try:
-                            idx = int(parts[0])
-                            frame = int(parts[1])
-                            x1 = float(parts[2])
-                            y1 = float(parts[3])
-                            z1 = float(parts[4])
-                            x2 = float(parts[5])
-                            y2 = float(parts[6])
-                            z2 = float(parts[7])
-                            conf = float(parts[8])
-                            cls = int(parts[9])
-
-                            # Skip invalid detections
-                            if x1 < 0 or y1 < 0:
-                                continue
-
-                            frame_detections[frame].append({
-                                'idx': idx,
-                                'frame': frame,
-                                'x1': x1, 'y1': y1, 'z1': z1,
-                                'x2': x2, 'y2': y2, 'z2': z2,
-                                'confidence': conf,
-                                'class_id': cls
-                            })
-                        except (ValueError, IndexError):
-                            continue
-
-        except Exception as e:
-            self.log(f"Error reading georeferenced file: {str(e)}")
-
-        return dict(frame_detections)
+        from .core.pipeline_outputs import load_georef_detections_by_frame
+        return load_georef_detections_by_frame(georef_file, log_fn=self.log)
 
     def add_alfs_to_qgis(self):
         """Add all GeoTIFFs in the alfs folder to QGIS as raster layers."""

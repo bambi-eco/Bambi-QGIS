@@ -351,32 +351,10 @@ class BambiProcessor:
     def get_correction_for_frame(frame_idx: int, config: Dict[str, Any]) -> Dict[str, Any]:
         """Get the appropriate correction factors for a given frame index.
 
-        This method checks if there's a frame-range specific correction that
-        applies to the given frame index. If found, returns that correction;
-        otherwise returns the default correction.
-
-        :param frame_idx: The frame index to get correction for
-        :param config: The configuration dictionary containing correction factors
-        :return: Dictionary with 'translation' and 'rotation' keys
+        Single source: :func:`core.corrections.correction_for_frame_config`.
         """
-        # Get default correction
-        default_correction = {
-            "translation": config.get("translation", {"x": 0, "y": 0, "z": 0}),
-            "rotation": config.get("rotation", {"x": 0, "y": 0, "z": 0})
-        }
-
-        # Check additional corrections
-        additional = config.get("additional_corrections", [])
-        for add_corr in additional:
-            start = add_corr.get("start", 0)
-            end = add_corr.get("end", float('inf'))
-            if start <= frame_idx <= end:
-                return {
-                    "translation": add_corr.get("translation", {"x": 0, "y": 0, "z": 0}),
-                    "rotation": add_corr.get("rotation", {"x": 0, "y": 0, "z": 0})
-                }
-
-        return default_correction
+        from .core.corrections import correction_for_frame_config
+        return correction_for_frame_config(frame_idx, config)
 
     def download_default_model(self, log_fn=None) -> str:
         """Download the default detection model from HuggingFace to the shared
