@@ -465,6 +465,34 @@ class _FrameMatcher:
 # Geo-referenced box propagation
 # ---------------------------------------------------------------------------
 
+#: Pixel-space bounding box ``(x1, y1, x2, y2)``.
+Box = Tuple[float, float, float, float]
+
+
+def propagation_frames(src_frame: int, dst_frame: int,
+                       step: int = 0) -> List[int]:
+    """Frames that get a key frame when propagating *src_frame* -> *dst_frame*.
+
+    With ``step <= 0`` only the target frame is returned.  With a positive
+    *step* additional intermediate frames are sampled every *step* frames
+    between source and target, so the linear interpolation between the key
+    frames never has to bridge more than *step* frames of drone ego-motion.
+    The target frame is always the last entry; the source frame is never
+    included.
+    """
+    if dst_frame == src_frame:
+        return []
+    sign = 1 if dst_frame > src_frame else -1
+    frames: List[int] = []
+    if step > 0:
+        frame = src_frame + sign * step
+        while (dst_frame - frame) * sign > 0:
+            frames.append(frame)
+            frame += sign * step
+    frames.append(dst_frame)
+    return frames
+
+
 class _GeoPropagator:
     """Projects a pixel-space box from one frame to another via the DEM.
 
@@ -536,6 +564,37 @@ class _GeoPropagator:
             box, src_frame, images, img_width, img_height,
             dst_frame, images, img_width, img_height)
 
+    def propagate_series(self, box: Tuple[float, float, float, float],
+                         src_frame: int, dst_frame: int, images: List[dict],
+                         img_width: int, img_height: int, step: int = 0,
+                         ) -> Tuple[List[Tuple[int, Box]],
+                                    List[Tuple[int, str]]]:
+        """Propagate *box* to the target frame and to intermediate samples.
+
+        The source box is ray-cast onto the DEM once and back-projected into
+        every frame from :func:`propagation_frames`, so projection errors do
+        not accumulate along the series.  Returns ``(boxes, failures)`` where
+        *boxes* is a list of ``(frame, box)`` in propagation order and
+        *failures* a list of ``(frame, message)`` for frames the box could not
+        be projected into (outside the frame, frame outside the poses range).
+
+        Raises ``RuntimeError`` if the source box itself cannot be ray-cast
+        onto the DEM — that failure applies to the whole series.
+        """
+        frames = propagation_frames(src_frame, dst_frame, step)
+        world = self._box_to_world(
+            box, src_frame, images, img_width, img_height)
+
+        boxes: List[Tuple[int, Box]] = []
+        failures: List[Tuple[int, str]] = []
+        for frame in frames:
+            try:
+                boxes.append((frame, self._world_to_box(
+                    world, frame, images, img_width, img_height)))
+            except RuntimeError as exc:
+                failures.append((frame, str(exc)))
+        return boxes, failures
+
     def propagate_between(self, box: Tuple[float, float, float, float],
                           src_frame: int, src_images: List[dict],
                           src_width: int, src_height: int,
@@ -553,7 +612,15 @@ class _GeoPropagator:
 
         Raises ``RuntimeError`` with a human-readable message on failure.
         """
-        import numpy as np
+        world = self._box_to_world(
+            box, src_frame, src_images, src_width, src_height)
+        return self._world_to_box(
+            world, dst_frame, dst_images, dst_width, dst_height)
+
+    def _box_to_world(self, box: Tuple[float, float, float, float],
+                      src_frame: int, src_images: List[dict],
+                      src_width: int, src_height: int):
+        """Ray-cast the four box corners onto the DEM with the source camera."""
         try:
             from alfspy.core.rendering import Resolution
             from bambi.util.projection_util import label_to_world_coordinates
@@ -562,20 +629,14 @@ class _GeoPropagator:
                 "alfspy / bambi packages are not available — cannot "
                 f"geo-reference bounding boxes.\n({exc})"
             )
-        from .camera_pose import world_to_pixel
 
         if not self.is_loaded:
             self.load()
-
         if not (0 <= src_frame < len(src_images)):
             raise RuntimeError("Source frame index outside the poses range.")
-        if not (0 <= dst_frame < len(dst_images)):
-            raise RuntimeError("Target frame index outside the poses range.")
 
         x1, y1, x2, y2 = box
         label_coords = [x1, y1, x2, y1, x2, y2, x1, y2]
-
-        # ---- forward: pixel -> local world (DEM ray-cast) -----------------
         cam_src = self._build_camera(src_images, src_frame, src_width, src_height)
         world = label_to_world_coordinates(
             label_coords, Resolution(src_width, src_height),
@@ -585,8 +646,18 @@ class _GeoPropagator:
                 "The bounding box could not be ray-cast onto the DEM "
                 "(no mesh intersection)."
             )
+        return world
 
-        # ---- reverse: local world -> pixel of the target frame -----------
+    def _world_to_box(self, world, dst_frame: int, dst_images: List[dict],
+                      dst_width: int, dst_height: int,
+                      ) -> Tuple[float, float, float, float]:
+        """Project local world points into the target frame's image plane."""
+        import numpy as np
+        from .camera_pose import world_to_pixel
+
+        if not (0 <= dst_frame < len(dst_images)):
+            raise RuntimeError("Target frame index outside the poses range.")
+
         cam_dst = self._build_camera(dst_images, dst_frame, dst_width, dst_height)
         pxs, pys = world_to_pixel(
             np.asarray(world, dtype=np.float64), dst_width, dst_height, cam_dst)

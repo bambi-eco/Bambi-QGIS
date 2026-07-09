@@ -25,7 +25,10 @@ Features
 * Geo-referenced propagation: the current bounding box is ray-cast onto the
   DEM (pixel → world) with the camera pose of the current frame and
   back-projected (world → pixel) with the pose of an offset frame — the
-  result usually only needs small size adaptions.
+  result usually only needs small size adaptions.  A sampling rate adds
+  intermediate key frames on the way to the target frame, so the linear
+  interpolation between key frames never has to bridge a long span of curved
+  drone ego-motion.
 * Cross-modality copy: the label tracks of the other modality (RGB ↔
   thermal) are projected onto this modality's frames — frames are matched by
   capture time, each box is ray-cast onto the DEM with the source camera and
@@ -80,6 +83,7 @@ from .core.labelling import (  # noqa: F401 — re-exported API
     _load_detections_by_frame,
     _load_pixel_tracks,
     _pose_epochs,
+    propagation_frames,
     track_color_rgb,
 )
 
@@ -731,13 +735,32 @@ class LabellingToolDialog(QDialog):
         self.prop_offset_spin = QSpinBox()
         self.prop_offset_spin.setRange(-5000, 5000)
         self.prop_offset_spin.setValue(10)
+        self.prop_offset_spin.setToolTip(
+            "Frames between the current frame and the propagation target "
+            "(negative propagates backwards).")
         prop_row.addWidget(self.prop_offset_spin)
         pg.addLayout(prop_row)
+        sample_row = QHBoxLayout()
+        sample_row.addWidget(QLabel("Sample every:"))
+        self.prop_sample_spin = QSpinBox()
+        self.prop_sample_spin.setRange(0, 5000)
+        self.prop_sample_spin.setValue(10)
+        self.prop_sample_spin.setSuffix(" frames")
+        self.prop_sample_spin.setSpecialValueText("off (target only)")
+        self.prop_sample_spin.setToolTip(
+            "Also create intermediate key frames at this spacing between the "
+            "current frame and the target. Boxes are interpolated linearly "
+            "between key frames, which only holds while the drone flies "
+            "straight — sampling shortens the interpolated spans so curved "
+            "ego-motion is followed. 0 propagates to the target frame only.")
+        sample_row.addWidget(self.prop_sample_spin)
+        pg.addLayout(sample_row)
         self.propagate_btn = QPushButton("Propagate box (geo)")
         self.propagate_btn.setToolTip(
             "Ray-cast the current box onto the DEM and back-project it into "
-            "the offset frame; a key frame is created there. Usually only "
-            "small size adaptions are needed afterwards.")
+            "the offset frame — and, if sampling is enabled, into the "
+            "intermediate frames; a key frame is created at each. Usually "
+            "only small size adaptions are needed afterwards.")
         self.propagate_btn.clicked.connect(self._on_propagate)
         pg.addWidget(self.propagate_btn)
         prop_hint = QLabel(
@@ -1676,19 +1699,36 @@ class LabellingToolDialog(QDialog):
 
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            new_box = self._propagator.propagate(
+            boxes, failures = self._propagator.propagate_series(
                 res[0], self._current_frame, dst_frame, self._images,
-                self._img_size[0], self._img_size[1])
+                self._img_size[0], self._img_size[1],
+                step=self.prop_sample_spin.value())
         except Exception as exc:
             QApplication.restoreOverrideCursor()
             QMessageBox.warning(self, "Propagation Failed", str(exc))
             return
         QApplication.restoreOverrideCursor()
 
-        track.set_keyframe(dst_frame, new_box, occlusion=res[2])
+        if not boxes:
+            QMessageBox.warning(
+                self, "Propagation Failed",
+                failures[0][1] if failures else
+                "No frames to propagate to.")
+            return
+
+        for frame, new_box in boxes:
+            track.set_keyframe(frame, new_box, occlusion=res[2])
         self._mark_dirty()
         self._refresh_track_list()
-        self._goto_frame(dst_frame, force=True)
+        self._goto_frame(boxes[-1][0], force=True)
+
+        if failures:
+            skipped = ", ".join(str(f) for f, _ in failures)
+            QMessageBox.information(
+                self, "BAMBI Labelling Tool",
+                f"Created {len(boxes)} key frame(s).\n\n"
+                f"Skipped frame(s) {skipped}: the projected box lies outside "
+                "the frame.")
 
     # ------------------------------------------------------------------
     # Persistence

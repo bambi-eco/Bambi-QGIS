@@ -20,6 +20,7 @@ from bambi_wildlife_detection.core.labelling import (
     _load_detections_by_frame,
     _load_pixel_tracks,
     _pose_epochs,
+    propagation_frames,
     track_color_rgb,
 )
 from tests.fakes import install_fake_render_stack, make_module
@@ -301,6 +302,26 @@ def _images(n=3):
              "fovy": [50.0]} for _ in range(n)]
 
 
+class TestPropagationFrames:
+    def test_no_sampling_returns_target_only(self):
+        assert propagation_frames(0, 25, 0) == [25]
+
+    def test_samples_forward_and_ends_on_target(self):
+        assert propagation_frames(0, 25, 10) == [10, 20, 25]
+
+    def test_samples_backward(self):
+        assert propagation_frames(25, 0, 10) == [15, 5, 0]
+
+    def test_target_on_the_grid_is_not_duplicated(self):
+        assert propagation_frames(0, 20, 10) == [10, 20]
+
+    def test_step_larger_than_offset_yields_target_only(self):
+        assert propagation_frames(0, 5, 10) == [5]
+
+    def test_same_frame_yields_nothing(self):
+        assert propagation_frames(7, 7, 10) == []
+
+
 class TestGeoPropagator:
     def _propagator(self, tmp_path, with_dem=True):
         dem = tmp_path / "dem.glb"
@@ -332,6 +353,51 @@ class TestGeoPropagator:
             (10, 10, 20, 20), 0, _images(2), 1280, 1024,
             1, _images(4), 640, 512)
         assert result == pytest.approx((160.0, 192.0, 480.0, 320.0))
+
+    def test_propagate_series_samples_intermediate_frames(
+            self, fake_geo_stack, tmp_path):
+        prop = self._propagator(tmp_path)
+        boxes, failures = prop.propagate_series(
+            (10, 10, 20, 20), 0, 25, _images(30), 640, 512, step=10)
+        assert [f for f, _ in boxes] == [10, 20, 25]
+        assert failures == []
+        for _, box in boxes:
+            assert box == pytest.approx((160.0, 192.0, 480.0, 320.0))
+
+    def test_propagate_series_without_sampling_hits_target_only(
+            self, fake_geo_stack, tmp_path):
+        prop = self._propagator(tmp_path)
+        boxes, _ = prop.propagate_series(
+            (10, 10, 20, 20), 0, 25, _images(30), 640, 512, step=0)
+        assert [f for f, _ in boxes] == [25]
+
+    def test_propagate_series_reports_unprojectable_frames(
+            self, fake_geo_stack, tmp_path, monkeypatch):
+        prop = self._propagator(tmp_path)
+        real = prop._world_to_box
+
+        def fail_on_frame_10(world, dst_frame, *args, **kwargs):
+            if dst_frame == 10:
+                raise RuntimeError("outside frame 10")
+            return real(world, dst_frame, *args, **kwargs)
+
+        monkeypatch.setattr(prop, "_world_to_box", fail_on_frame_10)
+        boxes, failures = prop.propagate_series(
+            (10, 10, 20, 20), 0, 25, _images(30), 640, 512, step=10)
+        assert [f for f, _ in boxes] == [20, 25]
+        assert [f for f, _ in failures] == [10]
+
+    def test_propagate_series_raises_when_source_misses_dem(
+            self, fake_geo_stack, tmp_path, monkeypatch):
+        import sys as _sys
+        monkeypatch.setattr(
+            _sys.modules["bambi.util.projection_util"],
+            "label_to_world_coordinates",
+            lambda *a, **k: [])
+        prop = self._propagator(tmp_path)
+        with pytest.raises(RuntimeError, match="no mesh intersection"):
+            prop.propagate_series(
+                (10, 10, 20, 20), 0, 25, _images(30), 640, 512, step=10)
 
     def test_correction_json_is_loaded(self, fake_geo_stack, tmp_path):
         (tmp_path / "correction.json").write_text(json.dumps({
