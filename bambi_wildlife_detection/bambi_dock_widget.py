@@ -681,6 +681,44 @@ class BambiDockWidget(QDockWidget):
 
         input_layout.addWidget(common_group)
 
+        # Output configuration
+        output_group = QGroupBox("Output Configuration")
+        output_layout = QFormLayout(output_group)
+
+        self.target_folder_edit = QLineEdit()
+        self.target_folder_edit.setPlaceholderText("Target folder for all outputs")
+        self.target_folder_edit.editingFinished.connect(self._on_target_folder_changed)
+        target_browse_btn = QPushButton("Browse...")
+        target_browse_btn.clicked.connect(self.browse_target_folder)
+        target_row = QHBoxLayout()
+        target_row.addWidget(self.target_folder_edit)
+        target_row.addWidget(target_browse_btn)
+        output_layout.addRow("Target Folder:", target_row)
+
+        self.target_crs_edit = QLineEdit()
+        self.target_crs_edit.setPlaceholderText("EPSG:32633 (UTM CRS required)")
+        self.target_crs_edit.setText("EPSG:32633")
+        self.target_crs_edit.setToolTip(
+            "Enter a UTM CRS (e.g., EPSG:32632, EPSG:32633).\n"
+            "UTM zones 01-60 for Northern (EPSG:32601-32660) or Southern (EPSG:32701-32760) hemisphere.\n"
+            "Click 'Auto' to detect from DEM metadata or AirData GPS coordinates."
+        )
+        self.target_crs_edit.editingFinished.connect(self._validate_crs_input)
+
+        self.target_crs_auto_btn = QPushButton("Auto")
+        self.target_crs_auto_btn.setToolTip(
+            "Auto-detect CRS from DEM metadata (dem.json) or AirData CSV GPS coordinates"
+        )
+        self.target_crs_auto_btn.setFixedWidth(50)
+        self.target_crs_auto_btn.clicked.connect(self._auto_detect_crs)
+
+        crs_row = QHBoxLayout()
+        crs_row.addWidget(self.target_crs_edit)
+        crs_row.addWidget(self.target_crs_auto_btn)
+        output_layout.addRow("Target CRS:", crs_row)
+
+        input_layout.addWidget(output_group)
+
         # Geo-referencing data with tabs for different input methods
         geo_group = QGroupBox("Geo-referencing Data")
         geo_main_layout = QVBoxLayout(geo_group)
@@ -880,44 +918,6 @@ class BambiDockWidget(QDockWidget):
         self.geo_input_tabs.addTab(flat_surface_tab, "Flat Surface")
 
         input_layout.addWidget(geo_group)
-
-        # Output configuration
-        output_group = QGroupBox("Output Configuration")
-        output_layout = QFormLayout(output_group)
-
-        self.target_folder_edit = QLineEdit()
-        self.target_folder_edit.setPlaceholderText("Target folder for all outputs")
-        self.target_folder_edit.editingFinished.connect(self._on_target_folder_changed)
-        target_browse_btn = QPushButton("Browse...")
-        target_browse_btn.clicked.connect(self.browse_target_folder)
-        target_row = QHBoxLayout()
-        target_row.addWidget(self.target_folder_edit)
-        target_row.addWidget(target_browse_btn)
-        output_layout.addRow("Target Folder:", target_row)
-
-        self.target_crs_edit = QLineEdit()
-        self.target_crs_edit.setPlaceholderText("EPSG:32633 (UTM CRS required)")
-        self.target_crs_edit.setText("EPSG:32633")
-        self.target_crs_edit.setToolTip(
-            "Enter a UTM CRS (e.g., EPSG:32632, EPSG:32633).\n"
-            "UTM zones 01-60 for Northern (EPSG:32601-32660) or Southern (EPSG:32701-32760) hemisphere.\n"
-            "Click 'Auto' to detect from DEM metadata or AirData GPS coordinates."
-        )
-        self.target_crs_edit.editingFinished.connect(self._validate_crs_input)
-
-        self.target_crs_auto_btn = QPushButton("Auto")
-        self.target_crs_auto_btn.setToolTip(
-            "Auto-detect CRS from DEM metadata (dem.json) or AirData CSV GPS coordinates"
-        )
-        self.target_crs_auto_btn.setFixedWidth(50)
-        self.target_crs_auto_btn.clicked.connect(self._auto_detect_crs)
-
-        crs_row = QHBoxLayout()
-        crs_row.addWidget(self.target_crs_edit)
-        crs_row.addWidget(self.target_crs_auto_btn)
-        output_layout.addRow("Target CRS:", crs_row)
-
-        input_layout.addWidget(output_group)
         input_layout.addStretch()
 
         # =====================================================================
