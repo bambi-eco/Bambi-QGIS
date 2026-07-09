@@ -9,8 +9,6 @@ This module contains the main dock widget UI for the plugin.
 import os
 import json
 import math
-import csv
-import subprocess  # nosec B404
 import tempfile
 from typing import Optional, Dict, Any, List
 from qgis.PyQt.QtCore import Qt, QThread
@@ -3097,73 +3095,48 @@ class BambiDockWidget(QDockWidget):
             self._auto_detect_common_files(video_folder)
 
     def _auto_detect_common_files(self, video_folder: str):
-        """Auto-detect common input files from video folder.
+        """Auto-detect common input files from video folder (core.flight_files).
 
         :param video_folder: Folder containing video files
         """
-        # Get list of all files in folder for auto-detection
-        try:
-            folder_files = os.listdir(video_folder)
-        except Exception as e:
-            self.log(f"Warning: Could not list folder contents: {e}")
-            folder_files = []
+        from .core.flight_files import detect_common_files
+        found = detect_common_files(video_folder, log_fn=self.log)
 
         # Auto-detect AirData CSV (first CSV in folder)
-        if not self.airdata_path_edit.text():
-            csv_files = [f for f in folder_files if f.lower().endswith('.csv')]
-            if csv_files:
-                csv_path = os.path.join(video_folder, csv_files[0])
-                self.airdata_path_edit.setText(csv_path)
-                self.log(f"Auto-detected AirData CSV: {csv_files[0]}")
+        if not self.airdata_path_edit.text() and "airdata" in found:
+            self.airdata_path_edit.setText(found["airdata"])
+            self.log(f"Auto-detected AirData CSV: {os.path.basename(found['airdata'])}")
 
-        # Auto-detect DEM GLTF/GLB (first GLTF or GLB in folder)
-        if not self.dem_path_edit.text():
-            dem_files = [f for f in folder_files if f.lower().endswith(('.gltf', '.glb'))]
-            if dem_files:
-                dem_path = os.path.join(video_folder, dem_files[0])
-                self.dem_path_edit.setText(dem_path)
-                self.log(f"Auto-detected DEM: {dem_files[0]}")
-
-                # Also auto-detect DEM metadata JSON (same name with .json suffix)
-                dem_base = os.path.splitext(dem_files[0])[0]
-                json_name = dem_base + ".json"
-                json_path = os.path.join(video_folder, json_name)
-                if os.path.exists(json_path):
-                    self.dem_metadata_path_edit.setText(json_path)
-                    self.log(f"Auto-detected DEM metadata: {json_name}")
-                else:
-                    # Try common naming patterns
-                    for suffix in ["_mesh.json", "_dem.json", "_metadata.json"]:
-                        alt_path = os.path.join(video_folder, dem_base + suffix)
-                        if os.path.exists(alt_path):
-                            self.dem_metadata_path_edit.setText(alt_path)
-                            self.log(f"Auto-detected DEM metadata: {dem_base + suffix}")
-                            break
+        # Auto-detect DEM GLTF/GLB (+ metadata JSON with matching name)
+        if not self.dem_path_edit.text() and "dem" in found:
+            self.dem_path_edit.setText(found["dem"])
+            self.log(f"Auto-detected DEM: {os.path.basename(found['dem'])}")
+            if "dem_metadata" in found:
+                self.dem_metadata_path_edit.setText(found["dem_metadata"])
+                self.log(
+                    "Auto-detected DEM metadata: "
+                    f"{os.path.basename(found['dem_metadata'])}")
 
         # Auto-detect thermal calibration if not set (only in custom file mode)
         if (self.thermal_calib_preset_combo.currentIndex() == 0 and not self.thermal_calibration_path_edit.text()):
-            t_calib_path = os.path.join(video_folder, "T_calib.json")
-            if os.path.exists(t_calib_path):
-                self.thermal_calibration_path_edit.setText(t_calib_path)
+            if "thermal_calibration" in found:
+                self.thermal_calibration_path_edit.setText(found["thermal_calibration"])
                 self.log("Auto-detected thermal calibration: T_calib.json")
 
         # Auto-detect RGB calibration if not set (only in custom file mode)
         if (self.rgb_calib_preset_combo.currentIndex() == 0 and not self.rgb_calibration_path_edit.text()):
-            w_calib_path = os.path.join(video_folder, "W_calib.json")
-            if os.path.exists(w_calib_path):
-                self.rgb_calibration_path_edit.setText(w_calib_path)
+            if "rgb_calibration" in found:
+                self.rgb_calibration_path_edit.setText(found["rgb_calibration"])
                 self.log("Auto-detected RGB calibration: W_calib.json")
 
         # Auto-detect correction.json and load values
-        if not self.correction_path_edit.text():
-            correction_path = os.path.join(video_folder, "correction.json")
-            if os.path.exists(correction_path):
-                self.correction_path_edit.setText(correction_path)
-                self.load_correction_values(correction_path)
+        if not self.correction_path_edit.text() and "correction" in found:
+            self.correction_path_edit.setText(found["correction"])
+            self.load_correction_values(found["correction"])
 
         # Auto-set target folder to "qgis" subfolder
         if not self.target_folder_edit.text():
-            qgis_folder = os.path.join(video_folder, "qgis")
+            qgis_folder = found["target_folder"]
             self.target_folder_edit.setText(qgis_folder)
             self.log("Auto-set target folder: qgis/")
             # Create the folder if it doesn't exist
@@ -3181,48 +3154,15 @@ class BambiDockWidget(QDockWidget):
         self._try_auto_detect_crs_silent()
 
     def _resolve_embedded_srts(self, video_paths: List[str]) -> List[str]:
-        """Extract embedded SRT subtitle streams from video files using ffmpeg.
+        """Extract embedded SRT streams via ffmpeg (core.flight_files).
 
-        Uses a temp directory as a persistent cache — if a .srt file for a video
-        already exists there it is reused without re-running ffmpeg.
-        Returns a list of extracted .srt paths (one per video that succeeded).
+        Uses a temp directory as a persistent cache — if a .srt file for a
+        video already exists there it is reused without re-running ffmpeg.
         """
-        try:
-            import imageio_ffmpeg
-            ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-        except Exception:
-            self.log("ERROR: imageio-ffmpeg not available — cannot extract embedded SRT.")
-            return []
-
+        from .core.flight_files import extract_embedded_srts
         if not hasattr(self, "_srt_tmpdir") or not os.path.isdir(self._srt_tmpdir):
             self._srt_tmpdir = tempfile.mkdtemp(prefix="bambi_srt_")
-
-        extracted = []
-        for vpath in video_paths:
-            stem = os.path.splitext(os.path.basename(vpath))[0]
-            out_srt = os.path.join(self._srt_tmpdir, stem + ".srt")
-            if os.path.exists(out_srt) and os.path.getsize(out_srt) > 0:
-                extracted.append(out_srt)
-                continue
-            try:
-                result = subprocess.run(  # nosec B603
-                    [ffmpeg_exe, "-i", vpath, "-map", "0:s:0", "-y", out_srt],
-                    capture_output=True, text=True, timeout=60
-                )
-                if os.path.exists(out_srt) and os.path.getsize(out_srt) > 0:
-                    extracted.append(out_srt)
-                    self.log(f"Extracted embedded SRT from {os.path.basename(vpath)}")
-                else:
-                    self.log(
-                        f"WARNING: No subtitle stream found in {os.path.basename(vpath)}. "
-                        f"ffmpeg stderr: {result.stderr.strip()[-200:]}"
-                    )
-            except subprocess.TimeoutExpired:
-                self.log(f"ERROR: SRT extraction timed out for {os.path.basename(vpath)}")
-            except Exception as exc:
-                self.log(f"ERROR: SRT extraction failed for {os.path.basename(vpath)}: {exc}")
-
-        return extracted
+        return extract_embedded_srts(video_paths, self._srt_tmpdir, log_fn=self.log)
 
     def browse_thermal_srts(self):
         """Browse for thermal SRT files."""
@@ -3241,22 +3181,8 @@ class BambiDockWidget(QDockWidget):
     @staticmethod
     def _compute_timezone_offset(tz_name: str) -> Optional[float]:
         """Return the current UTC offset in hours for a given IANA timezone name."""
-        try:
-            import datetime
-            from zoneinfo import ZoneInfo
-            now = datetime.datetime.now(ZoneInfo(tz_name))
-            return now.utcoffset().total_seconds() / 3600
-        except Exception:
-            try:
-                import datetime
-                from dateutil import tz as dateutil_tz
-                zone = dateutil_tz.gettz(tz_name)
-                if zone is None:
-                    return None
-                now = datetime.datetime.now(zone)
-                return now.utcoffset().total_seconds() / 3600
-            except Exception:
-                return None
+        from .core.timezone_detection import timezone_offset_hours
+        return timezone_offset_hours(tz_name)
 
     def _update_timezone_offset_label(self):
         """Update the UTC offset label next to the manual timezone combo."""
@@ -3311,129 +3237,22 @@ class BambiDockWidget(QDockWidget):
 
     def _compute_auto_tz_from_srt(self) -> Optional[float]:
         """Match SRT local timestamps against AirData isVideo UTC timestamps."""
-        import re
-        from datetime import datetime
-
-        # Collect SRT timestamps (local time, no tz)
+        from .core.timezone_detection import offset_from_srt
         srt_text = self.rgb_srt_paths_edit.text().strip()
-        if not srt_text:
-            return None
         srt_paths = [p.strip() for p in srt_text.split(",") if p.strip()]
-        if not srt_paths:
-            return None
-
-        srt_hours: list = []
-        _dt_re = re.compile(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})')
-        for srt_path in srt_paths:
-            try:
-                with open(srt_path, "r", encoding="utf-8", errors="ignore") as f:
-                    for line in f:
-                        m = _dt_re.search(line)
-                        if m:
-                            dt = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")
-                            srt_hours.append(dt.hour + dt.minute / 60.0 + dt.second / 3600.0)
-            except Exception:  # nosec B112
-                continue
-        if not srt_hours:
-            return None
-
-        # Collect AirData isVideo UTC timestamps
-        airdata_hours = self._collect_airdata_hours("isvideo")
-        if not airdata_hours:
-            return None
-
-        offset = round(sum(srt_hours) / len(srt_hours) - sum(airdata_hours) / len(airdata_hours))
-        return float(offset)
+        return offset_from_srt(srt_paths, self.airdata_path_edit.text().strip())
 
     def _compute_auto_tz_from_exif(self) -> Optional[float]:
         """Match photo EXIF timestamps against AirData isPhoto UTC timestamps."""
-        import glob as glob_mod
-        from datetime import datetime
-
+        from .core.timezone_detection import offset_from_exif
         photo_dir = (self.thermal_photo_dir_edit.text().strip() or self.rgb_photo_dir_edit.text().strip())
-        if not photo_dir or not os.path.isdir(photo_dir):
-            return None
-
-        image_paths: list = []
-        for ext in ("*.jpg", "*.jpeg", "*.tiff", "*.tif", "*.png",
-                    "*.JPG", "*.JPEG", "*.TIFF", "*.TIF", "*.PNG"):
-            image_paths.extend(glob_mod.glob(os.path.join(photo_dir, ext)))
-        if not image_paths:
-            return None
-
-        try:
-            from PIL import Image
-        except ImportError:
-            return None
-
-        photo_hours: list = []
-        for p in image_paths:
-            try:
-                with Image.open(p) as img:
-                    exif = img._getexif()
-                    if exif is None:
-                        continue
-                    dt_str = exif.get(36867)  # DateTimeOriginal
-                    if not dt_str:
-                        continue
-                    dt = datetime.strptime(dt_str, "%Y:%m:%d %H:%M:%S")
-                    photo_hours.append(dt.hour + dt.minute / 60.0 + dt.second / 3600.0)
-            except Exception:  # nosec B112
-                continue
-        if not photo_hours:
-            return None
-
-        airdata_hours = self._collect_airdata_hours("isphoto")
-        if not airdata_hours:
-            return None
-
-        offset = round(sum(photo_hours) / len(photo_hours) - sum(airdata_hours) / len(airdata_hours))
-        return float(offset)
+        return offset_from_exif(photo_dir, self.airdata_path_edit.text().strip())
 
     def _collect_airdata_hours(self, flag_column_lower: str) -> Optional[list]:
-        """Read UTC hours from AirData rows where the given flag column (lowercased) is truthy."""
-        import csv
-        from datetime import datetime
-
-        airdata_path = self.airdata_path_edit.text().strip()
-        if not airdata_path or not os.path.exists(airdata_path):
-            return None
-
-        hours: list = []
-        try:
-            with open(airdata_path, "r", encoding="utf-8-sig") as f:
-                reader = csv.DictReader(f)
-                headers = reader.fieldnames or []
-
-                flag_col = next(
-                    (h for h in headers if h.strip().lower() == flag_column_lower), None)
-                datetime_col = next(
-                    (h for h in headers if "datetime" in h.lower() and "utc" in h.lower()),
-                    None)
-                if datetime_col is None:
-                    datetime_col = next(
-                        (h for h in headers if "datetime" in h.lower()), None)
-                if not flag_col or not datetime_col:
-                    return None
-
-                for row in reader:
-                    val = row.get(flag_col, "").strip()
-                    if not val or val == "0" or val.lower() == "false":
-                        continue
-                    dt_str = row.get(datetime_col, "").strip()
-                    for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ",
-                                "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S",
-                                "%Y-%m-%d %H:%M:%S.%f"):
-                        try:
-                            dt = datetime.strptime(dt_str, fmt)
-                            hours.append(dt.hour + dt.minute / 60.0 + dt.second / 3600.0)
-                            break
-                        except ValueError:
-                            continue
-        except Exception:
-            return None
-
-        return hours if hours else None
+        """Read UTC hours from AirData rows where the flag column is truthy."""
+        from .core.timezone_detection import airdata_utc_hours
+        return airdata_utc_hours(
+            self.airdata_path_edit.text().strip(), flag_column_lower)
 
     def _on_input_mode_changed(self, state: int):
         """Toggle between video and photo input panels."""
@@ -4031,52 +3850,14 @@ class BambiDockWidget(QDockWidget):
     # =========================================================================
 
     def _is_valid_utm_crs(self, crs_text: str) -> bool:
-        """
-        Check if the given CRS string is a valid UTM CRS.
-
-        Valid UTM EPSG codes:
-        - Northern Hemisphere: EPSG:32601 to EPSG:32660 (zones 1-60)
-        - Southern Hemisphere: EPSG:32701 to EPSG:32760 (zones 1-60)
-
-        :param crs_text: CRS string like "EPSG:32633" or "32633"
-        :return: True if valid UTM CRS
-        """
-        try:
-            epsg = self._parse_epsg_from_text(crs_text)
-            if epsg is None:
-                return False
-
-            # Check if in UTM range
-            is_northern = 32601 <= epsg <= 32660
-            is_southern = 32701 <= epsg <= 32760
-
-            return is_northern or is_southern
-        except Exception:
-            return False
+        """True when *crs_text* is a UTM EPSG code (core.crs_utils)."""
+        from .core.crs_utils import is_valid_utm_crs
+        return is_valid_utm_crs(crs_text)
 
     def _parse_epsg_from_text(self, crs_text: str) -> Optional[int]:
-        """
-        Parse EPSG code from text input.
-
-        Handles formats like:
-        - "EPSG:32633"
-        - "epsg:32633"
-        - "32633"
-
-        :param crs_text: CRS string
-        :return: EPSG code as integer, or None if invalid
-        """
-        try:
-            crs_text = crs_text.strip().upper()
-
-            if crs_text.startswith("EPSG:"):
-                code_str = crs_text[5:].strip()
-            else:
-                code_str = crs_text
-
-            return int(code_str)
-        except (ValueError, AttributeError):
-            return None
+        """Parse an EPSG code from text input (core.crs_utils)."""
+        from .core.crs_utils import parse_epsg_from_text
+        return parse_epsg_from_text(crs_text)
 
     def _validate_crs_input(self):
         """Validate the CRS text input and show warning if invalid."""
@@ -4214,76 +3995,9 @@ class BambiDockWidget(QDockWidget):
             self.log(f"Auto-detected CRS: {detected_crs} (from {source})")
 
     def _detect_utm_from_airdata(self, csv_path: str) -> Optional[str]:
-        """
-        Detect appropriate UTM zone from GPS coordinates in AirData CSV.
-
-        Uses the first valid GPS position to determine the UTM zone.
-
-        :param csv_path: Path to AirData CSV file
-        :return: CRS string like "EPSG:32633" or None
-        """
-        try:
-            with open(csv_path, 'r', encoding='utf-8') as f:
-                reader = csv.DictReader(f)
-
-                # Find latitude/longitude columns
-                lat_col = None
-                lon_col = None
-
-                fieldnames = reader.fieldnames
-                if fieldnames is None:
-                    return None
-
-                for col in fieldnames:
-                    col_lower = col.lower().strip()
-                    if lat_col is None and any(x in col_lower for x in ['latitude', 'lat']):
-                        lat_col = col
-                    if lon_col is None and any(x in col_lower for x in ['longitude', 'lon', 'lng']):
-                        lon_col = col
-
-                if lat_col is None or lon_col is None:
-                    self.log(f"Could not find lat/lon columns in {os.path.basename(csv_path)}")
-                    return None
-
-                # Get first valid GPS position
-                for row in reader:
-                    try:
-                        lat = float(row[lat_col])
-                        lon = float(row[lon_col])
-
-                        # Skip invalid values
-                        if lat == 0 and lon == 0:
-                            continue
-                        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
-                            continue
-
-                        # Calculate UTM zone from longitude
-                        # UTM zones are 6 degrees wide, zone 1 starts at -180°
-                        utm_zone = int((lon + 180) / 6) + 1
-
-                        # Clamp to valid range 1-60
-                        utm_zone = max(1, min(60, utm_zone))
-
-                        # Determine hemisphere
-                        if lat >= 0:
-                            epsg = 32600 + utm_zone  # Northern hemisphere
-                        else:
-                            epsg = 32700 + utm_zone  # Southern hemisphere
-
-                        self.log(f"Detected UTM zone {utm_zone}{'N' if lat >= 0 else 'S'} "
-                                 f"from GPS: ({lat:.4f}, {lon:.4f})")
-
-                        return f"EPSG:{epsg}"
-
-                    except (ValueError, KeyError):
-                        continue
-
-                self.log(f"No valid GPS coordinates found in {os.path.basename(csv_path)}")
-                return None
-
-        except Exception as e:
-            self.log(f"Error reading AirData CSV for CRS detection: {e}")
-            return None
+        """Detect the UTM zone from the AirData GPS track (core.crs_utils)."""
+        from .core.crs_utils import detect_utm_from_airdata
+        return detect_utm_from_airdata(csv_path, log_fn=self.log)
 
     def cancel_dem_download(self):
         """Cancel ongoing DEM download."""
@@ -4635,93 +4349,48 @@ class BambiDockWidget(QDockWidget):
         self.start_worker("trex_import")
 
     def _check_existing_outputs(self, target_folder: str):
-        """Check for existing output subfolders and update status labels accordingly.
+        """Check for existing output subfolders and update status labels.
 
         Each camera-selectable step is checked against the camera currently
-        selected in its combo box, so the status always reflects the selected
-        modality's outputs.
+        selected in its combo box (core.output_inventory does the folder
+        checks), so the status always reflects the selected modality.
 
         :param target_folder: Path to the target folder
         """
+        from .core.output_inventory import (
+            FOLDER_STATUS_STEPS, PERPENDICULAR_STEPS, check_existing_outputs)
+
         if not target_folder or not os.path.isdir(target_folder):
             return
 
         # Reset all folder-based statuses before re-checking so that deleted
         # outputs are correctly reflected as "Not started" after a refresh.
-        for step in ("extract_thermal_frames", "extract_rgb_frames", "detection",
-                     "georeference", "tracking", "calculate_fov", "flight_route",
-                     "alfs", "export_geotiffs", "orthomosaic", "sam3_segmentation",
-                     "sam3_georeference", "trex_import"):
+        for step in FOLDER_STATUS_STEPS:
             self.update_status(step, "⚪ Not started")
-        for step in ("perpendicular", "track_perpendicular"):
+        for step in PERPENDICULAR_STEPS:
             self.update_status(step, "⚪")
-
-        completed_count = 0
 
         def combo_suffix(camera_combo) -> str:
             return "_t" if camera_combo.currentIndex() == 0 else "_w"
 
-        # Check frame extraction for the camera selected in the step's combo
-        suffix = combo_suffix(self.extract_camera_combo)
-        frames_path = os.path.join(target_folder, "frames" + suffix)
-        poses_path = os.path.join(target_folder, f"poses{suffix}.json")
+        cameras = {
+            "extract": combo_suffix(self.extract_camera_combo),
+            "flight_route": combo_suffix(self.flight_route_camera_combo),
+            "detection": combo_suffix(self.detection_camera_combo),
+            "tracking": combo_suffix(self.tracking_camera_combo),
+            "fov": combo_suffix(self.fov_camera_combo),
+            "alfs": combo_suffix(self.alfs_camera_combo),
+            "geotiff": combo_suffix(self.geotiff_camera_combo),
+            "ortho": combo_suffix(self.ortho_camera_combo),
+            "sam3": combo_suffix(self.sam3_camera_combo),
+        }
 
-        if os.path.isdir(frames_path) and os.listdir(frames_path) and os.path.isfile(poses_path):
-            self.update_status(
-                "extract_thermal_frames" if suffix == "_t" else "extract_rgb_frames",
-                "🟢 Completed")
-            completed_count += 1
+        completed = check_existing_outputs(target_folder, cameras)
+        for step in completed:
+            self.update_status(step, "🟢 Completed")
 
-        # Define the mapping between subfolder base names and their corresponding status
-        # updates. Each base name is checked with the suffix of the camera currently
-        # selected in the step's combo box.
-        # Format: (subfolder_base, status_step_key, additional_check_file, camera_combo)
-        folder_status_mapping = [
-            ("flight_route", "flight_route", None, self.flight_route_camera_combo),
-            ("detections", "detection", None, self.detection_camera_combo),
-            ("georeferenced", "georeference", None, self.detection_camera_combo),
-            ("tracks", "tracking", None, self.tracking_camera_combo),
-            ("fov", "calculate_fov", None, self.fov_camera_combo),
-            ("alfs", "alfs", None, self.alfs_camera_combo),
-            ("geotiffs", "export_geotiffs", None, self.geotiff_camera_combo),
-            ("orthomosaic", "orthomosaic", None, self.ortho_camera_combo),
-            ("segmentation", "sam3_segmentation", "segmentation_pixel.json", self.sam3_camera_combo),
-            ("segmentation", "sam3_georeference", "segmentation_georef.json", self.sam3_camera_combo),
-            ("tracks_pixel", "trex_import", None, self.tracking_camera_combo),
-        ]
-
-        for subfolder_base, status_key, check_file, combo in folder_status_mapping:
-            subfolder_path = os.path.join(target_folder, subfolder_base + combo_suffix(combo))
-
-            if not os.path.isdir(subfolder_path):
-                continue
-
-            if check_file:
-                check_path_subfolder = os.path.join(subfolder_path, check_file)
-                check_path_target = os.path.join(target_folder, check_file)
-                if not os.path.isfile(check_path_subfolder) and not os.path.isfile(check_path_target):
-                    continue
-
-            if os.listdir(subfolder_path):
-                self.update_status(status_key, "🟢 Completed")
-                completed_count += 1
-
-        # Perpendicular results live in the selected flight-route camera's folder
-        # and are suffixed with the camera of the detections/tracks they were
-        # computed for.
-        route_folder = os.path.join(
-            target_folder, "flight_route" + combo_suffix(self.flight_route_camera_combo))
-        for status_key, filename in (
-                ("perpendicular",
-                 f"perpendicular{combo_suffix(self.detection_camera_combo)}.json"),
-                ("track_perpendicular",
-                 f"perpendicular_tracks{combo_suffix(self.tracking_camera_combo)}.json")):
-            if os.path.isfile(os.path.join(route_folder, filename)):
-                self.update_status(status_key, "🟢 Completed")
-                completed_count += 1
-
-        if completed_count > 0:
-            self.log(f"Detected {completed_count} completed processing step(s) in target folder")
+        if completed:
+            self.log(f"Detected {len(completed)} completed processing step(s) in target folder")
 
         # Also check for existing QGIS layers
         self._check_existing_qgis_layers()
@@ -8395,135 +8064,70 @@ class BambiDockWidget(QDockWidget):
 
         self.log("Configuration reset to defaults")
 
+    def _config_widget_value(self, attr: str, role: str):
+        """Read a config value from the bound widget (core.config_schema role)."""
+        widget = getattr(self, attr)
+        if role in ("line", "crs"):
+            return widget.text()
+        if role == "text":
+            return widget.toPlainText()
+        if role == "check":
+            return widget.isChecked()
+        if role == "spin":
+            return widget.value()
+        if role in ("combo_text", "combo_text_editable"):
+            return widget.currentText()
+        if role == "combo_index":
+            return widget.currentIndex()
+        raise ValueError(f"Unknown config role {role!r}")
+
+    def _apply_config_value(self, attr: str, role: str, value) -> None:
+        """Apply a loaded config value to the bound widget (config_schema role)."""
+        widget = getattr(self, attr)
+        if role == "line":
+            widget.setText(value)
+        elif role == "crs":
+            widget.setText(value if value else "EPSG:32633")
+        elif role == "text":
+            widget.setPlainText(value)
+        elif role == "check":
+            widget.setChecked(value)
+        elif role == "spin":
+            widget.setValue(value)
+        elif role == "combo_text":
+            idx = widget.findText(value)
+            if idx >= 0:
+                widget.setCurrentIndex(idx)
+        elif role == "combo_text_editable":
+            if value:
+                idx = widget.findText(value)
+                if idx >= 0:
+                    widget.setCurrentIndex(idx)
+                else:
+                    widget.setCurrentText(value)
+        elif role == "combo_index":
+            if 0 <= value < widget.count():
+                widget.setCurrentIndex(value)
+        else:
+            raise ValueError(f"Unknown config role {role!r}")
+
     def save_config_to_project(self):
-        """Save all configuration to the QGIS project."""
+        """Save all configuration to the QGIS project (core.config_schema)."""
+        from .core.config_schema import WIDGET_BINDINGS, save_config_entries
         project = QgsProject.instance()
 
-        # ===== Input Mode =====
-        project.writeEntry(PLUGIN_SCOPE, "Input/VideoMode",
-                           "1" if self.video_mode_check.isChecked() else "0")
-        project.writeEntry(PLUGIN_SCOPE, "Input/EmbeddedSrt",
-                           "1" if self.embedded_srt_check.isChecked() else "0")
+        values = {key: self._config_widget_value(attr, role)
+                  for key, (attr, role) in WIDGET_BINDINGS.items()}
+        save_config_entries(
+            values,
+            lambda k, v: project.writeEntry(PLUGIN_SCOPE, k, v),
+            lambda k, v: project.writeEntryDouble(PLUGIN_SCOPE, k, v),
+            lambda k, v: project.writeEntryBool(PLUGIN_SCOPE, k, v),
+        )
 
-        # ===== Video Input Paths =====
-        project.writeEntry(PLUGIN_SCOPE, "Input/ThermalVideoPaths",
-                           self.thermal_video_paths_edit.text())
-        project.writeEntry(PLUGIN_SCOPE, "Input/ThermalSrtPaths",
-                           self.thermal_srt_paths_edit.text())
-        project.writeEntry(PLUGIN_SCOPE, "Input/ThermalCalibrationPath",
-                           self.thermal_calibration_path_edit.text())
-        project.writeEntry(PLUGIN_SCOPE, "Input/ThermalCalibrationPreset",
-                           self.thermal_calib_preset_combo.currentText())
-        project.writeEntry(PLUGIN_SCOPE, "Input/RgbVideoPaths",
-                           self.rgb_video_paths_edit.text())
-        project.writeEntry(PLUGIN_SCOPE, "Input/RgbSrtPaths",
-                           self.rgb_srt_paths_edit.text())
-        project.writeEntry(PLUGIN_SCOPE, "Input/RgbCalibrationPath",
-                           self.rgb_calibration_path_edit.text())
-        project.writeEntry(PLUGIN_SCOPE, "Input/RgbCalibrationPreset",
-                           self.rgb_calib_preset_combo.currentText())
-        project.writeEntry(PLUGIN_SCOPE, "Config/Timezone",
-                           self.timezone_combo.currentText())
-        project.writeEntry(PLUGIN_SCOPE, "Config/TimezoneAuto",
-                           "1" if self.tz_auto_check.isChecked() else "0")
-
-        # ===== Photo Input Paths =====
-        project.writeEntry(PLUGIN_SCOPE, "Input/ThermalPhotoDir",
-                           self.thermal_photo_dir_edit.text())
-        project.writeEntry(PLUGIN_SCOPE, "Input/ThermalPhotoCalibrationPath",
-                           self.thermal_photo_calibration_path_edit.text())
-        project.writeEntry(PLUGIN_SCOPE, "Input/ThermalPhotoCalibrationPreset",
-                           self.thermal_photo_calib_preset_combo.currentText())
-        project.writeEntry(PLUGIN_SCOPE, "Input/RgbPhotoDir",
-                           self.rgb_photo_dir_edit.text())
-        project.writeEntry(PLUGIN_SCOPE, "Input/RgbPhotoCalibrationPath",
-                           self.rgb_photo_calibration_path_edit.text())
-        project.writeEntry(PLUGIN_SCOPE, "Input/RgbPhotoCalibrationPreset",
-                           self.rgb_photo_calib_preset_combo.currentText())
-        project.writeEntry(PLUGIN_SCOPE, "Input/ThermalPhotoFilter",
-                           "1" if self.thermal_photo_filter_check.isChecked() else "0")
-        project.writeEntry(PLUGIN_SCOPE, "Input/RgbPhotoFilter",
-                           "1" if self.rgb_photo_filter_check.isChecked() else "0")
-        project.writeEntry(PLUGIN_SCOPE, "Input/ThermalVisColormap",
-                           self.thermal_vis_cmap_combo.currentText())
-        project.writeEntry(PLUGIN_SCOPE, "Input/ThermalVisLoEnable",
-                           "1" if self.thermal_vis_lo_check.isChecked() else "0")
-        project.writeEntryDouble(PLUGIN_SCOPE, "Input/ThermalVisLoValue",
-                                 self.thermal_vis_lo_spin.value())
-        project.writeEntry(PLUGIN_SCOPE, "Input/ThermalVisHiEnable",
-                           "1" if self.thermal_vis_hi_check.isChecked() else "0")
-        project.writeEntryDouble(PLUGIN_SCOPE, "Input/ThermalVisHiValue",
-                                 self.thermal_vis_hi_spin.value())
-        project.writeEntry(PLUGIN_SCOPE, "Extraction/Skip",
-                           str(self.extract_skip_spin.value()))
-        project.writeEntry(PLUGIN_SCOPE, "Extraction/LimitEnable",
-                           "1" if self.extract_limit_check.isChecked() else "0")
-        project.writeEntry(PLUGIN_SCOPE, "Extraction/LimitValue",
-                           str(self.extract_limit_spin.value()))
-        project.writeEntry(PLUGIN_SCOPE, "Extraction/SamplingRateEnable",
-                           "1" if self.extract_sampling_rate_check.isChecked() else "0")
-        project.writeEntry(PLUGIN_SCOPE, "Extraction/SamplingRate",
-                           str(self.extract_sampling_rate_spin.value()))
-        project.writeEntry(PLUGIN_SCOPE, "Extraction/PreserveAspectRatio",
-                           "1" if self.preserve_aspect_ratio_check.isChecked() else "0")
-        project.writeEntry(PLUGIN_SCOPE, "Extraction/UseGimbalHeading",
-                           "1" if self.use_gimbal_heading_check.isChecked() else "0")
-        project.writeEntry(PLUGIN_SCOPE, "Input/AirdataPath",
-                           self.airdata_path_edit.text())
-        project.writeEntry(PLUGIN_SCOPE, "Input/DemPath",
-                           self.dem_path_edit.text())
-        project.writeEntry(PLUGIN_SCOPE, "Input/DemMetadataPath",
-                           self.dem_metadata_path_edit.text())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Input/DemPadding",
-                                 self.dem_padding_spin.value())
-        project.writeEntry(PLUGIN_SCOPE, "Input/GeotiffInputPath",
-                           self.geotiff_input_path_edit.text())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Input/GeotiffSimplifyFactor",
-                                 self.geotiff_simplify_spin.value())
-        project.writeEntry(PLUGIN_SCOPE, "Input/CorrectionPath",
-                           self.correction_path_edit.text())
-        project.writeEntry(PLUGIN_SCOPE, "Input/TargetFolder",
-                           self.target_folder_edit.text())
-        project.writeEntry(PLUGIN_SCOPE, "Input/TargetCrs",
-                           self.target_crs_edit.text())
-
-        # ===== Detection Settings =====
-        project.writeEntry(PLUGIN_SCOPE, "Detection/ModelPath",
-                           self.model_path_edit.text())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Detection/Confidence",
-                                 self.confidence_spin.value())
-        project.writeEntryBool(PLUGIN_SCOPE, "Detection/AllFrames",
-                               self.detect_all_frames_check.isChecked())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Detection/StartFrame",
-                                 self.detect_start_frame_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Detection/EndFrame",
-                                 self.detect_end_frame_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Detection/SampleRate",
-                                 self.detect_sample_rate_spin.value())
-
-        # ===== TRex Settings =====
-        project.writeEntry(PLUGIN_SCOPE, "TRex/NpzDir",
-                           self.trex_npz_dir_edit.text())
-        project.writeEntryBool(PLUGIN_SCOPE, "TRex/AlreadyUndistorted",
-                               self.trex_undistorted_check.isChecked())
-
-        # ===== Correction Settings =====
-        project.writeEntryDouble(PLUGIN_SCOPE, "Correction/RotationUnit",
-                                 self.rotation_unit_combo.currentIndex())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Correction/TransX",
-                                 self.trans_x_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Correction/TransY",
-                                 self.trans_y_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Correction/TransZ",
-                                 self.trans_z_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Correction/RotX",
-                                 self.rot_x_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Correction/RotY",
-                                 self.rot_y_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Correction/RotZ",
-                                 self.rot_z_spin.value())
-
-        # Save additional corrections as JSON
+        # Additional corrections are bound to a list widget, not a value
+        # widget, so they are saved separately. The SAM3 API key is
+        # intentionally never saved.
         corrections_data = []
         for i in range(self.additional_corrections_list.count()):
             item = self.additional_corrections_list.item(i)
@@ -8533,131 +8137,16 @@ class BambiDockWidget(QDockWidget):
         project.writeEntry(PLUGIN_SCOPE, "Correction/AdditionalCorrections",
                            json.dumps(corrections_data))
 
-        # ===== Tracking Settings =====
-        project.writeEntryDouble(PLUGIN_SCOPE, "Tracking/TrackerType",
-                                 self.tracker_backend_combo.currentIndex())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Tracking/ReidModel",
-                                 self.reid_model_combo.currentIndex())
-        project.writeEntry(PLUGIN_SCOPE, "Tracking/CustomReidPath",
-                           self.custom_reid_path_edit.text())
-        project.writeEntry(PLUGIN_SCOPE, "Tracking/TrackerParams",
-                           self.tracker_params_edit.toPlainText())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Tracking/IouThreshold",
-                                 self.iou_threshold_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Tracking/MaxAge",
-                                 self.max_age_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Tracking/MaxCenterDist",
-                                 self.max_center_dist_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Tracking/TrackerMode",
-                                 self.tracker_mode_combo.currentIndex())
-        project.writeEntryBool(PLUGIN_SCOPE, "Tracking/ClassAware",
-                               self.class_aware_check.isChecked())
-        project.writeEntryBool(PLUGIN_SCOPE, "Tracking/Interpolate",
-                               self.interpolate_check.isChecked())
-
-        # ===== Field of View Settings =====
-        project.writeEntryBool(PLUGIN_SCOPE, "FoV/UseMask",
-                               self.use_fov_mask_check.isChecked())
-        project.writeEntry(PLUGIN_SCOPE, "FoV/MaskPath",
-                           self.fov_mask_path_edit.text())
-        project.writeEntryDouble(PLUGIN_SCOPE, "FoV/MaskSimplify",
-                                 self.mask_simplify_spin.value())
-        project.writeEntryBool(PLUGIN_SCOPE, "FoV/AllFrames",
-                               self.fov_all_frames_check.isChecked())
-        project.writeEntryDouble(PLUGIN_SCOPE, "FoV/StartFrame",
-                                 self.fov_start_frame_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "FoV/EndFrame",
-                                 self.fov_end_frame_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "FoV/SampleRate",
-                                 self.fov_sample_rate_spin.value())
-
-        # ===== ALFS Settings =====
-        project.writeEntryDouble(PLUGIN_SCOPE, "ALFS/Resolution",
-                                 self.alfs_resolution_spin.value())
-        project.writeEntryBool(PLUGIN_SCOPE, "ALFS/AllFrames",
-                               self.alfs_all_frames_check.isChecked())
-        project.writeEntryDouble(PLUGIN_SCOPE, "ALFS/StartFrame",
-                                 self.alfs_start_frame_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "ALFS/EndFrame",
-                                 self.alfs_end_frame_spin.value())
-        project.writeEntryBool(PLUGIN_SCOPE, "ALFS/Crop",
-                               self.alfs_crop_check.isChecked())
-        project.writeEntryBool(PLUGIN_SCOPE, "ALFS/Overviews",
-                               self.alfs_overviews_check.isChecked())
-        project.writeEntryDouble(PLUGIN_SCOPE, "ALFS/TileSize",
-                                 self.alfs_tile_size_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "ALFS/FrameStep",
-                                 self.alfs_frame_step_spin.value())
-        project.writeEntryBool(PLUGIN_SCOPE, "ALFS/SamplingMode",
-                               self.alfs_sampling_check.isChecked())
-        project.writeEntryDouble(PLUGIN_SCOPE, "ALFS/SamplingRate",
-                                 self.alfs_sampling_rate_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "ALFS/SamplingRange",
-                                 self.alfs_sampling_range_spin.value())
-
-        # ===== Orthomosaic Settings =====
-        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/Method",
-                                 self.ortho_method_combo.currentIndex())
-        project.writeEntryBool(PLUGIN_SCOPE, "Ortho/AllFrames",
-                               self.ortho_all_frames_check.isChecked())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/StartFrame",
-                                 self.ortho_start_frame_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "Ortho/EndFrame",
-                                 self.ortho_end_frame_spin.value())
-
-        # ===== SAM3 Settings =====
-        # Note: API key is intentionally NOT saved for security
-        project.writeEntry(PLUGIN_SCOPE, "SAM3/Prompts",
-                           self.sam3_prompts_edit.toPlainText())
-        project.writeEntryDouble(PLUGIN_SCOPE, "SAM3/Confidence",
-                                 self.sam3_confidence_spin.value())
-        project.writeEntryBool(PLUGIN_SCOPE, "SAM3/AllFrames",
-                               self.sam3_all_frames_check.isChecked())
-        project.writeEntryDouble(PLUGIN_SCOPE, "SAM3/StartFrame",
-                                 self.sam3_start_frame_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "SAM3/EndFrame",
-                                 self.sam3_end_frame_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "SAM3/FrameStep",
-                                 self.sam3_step_spin.value())
-
-        # ===== Flight Route Settings =====
-        project.writeEntryBool(PLUGIN_SCOPE, "FlightRoute/FrameMarkersEnabled",
-                               self.frame_markers_enabled_check.isChecked())
-        project.writeEntryDouble(PLUGIN_SCOPE, "FlightRoute/FrameMarkerInterval",
-                                 self.frame_marker_interval_spin.value())
-        project.writeEntryBool(PLUGIN_SCOPE, "FlightRoute/IncludeFrameZero",
-                               self.frame_marker_include_zero_check.isChecked())
-        project.writeEntryBool(PLUGIN_SCOPE, "FlightRoute/ImageLabelsEnabled",
-                               self.image_labels_enabled_check.isChecked())
-        project.writeEntryDouble(PLUGIN_SCOPE, "FlightRoute/ImageLabelInterval",
-                                 self.image_label_interval_spin.value())
-        project.writeEntryBool(PLUGIN_SCOPE, "FlightRoute/DistanceMarkersEnabled",
-                               self.distance_markers_enabled_check.isChecked())
-        project.writeEntryDouble(PLUGIN_SCOPE, "FlightRoute/DistanceMarkerInterval",
-                                 self.distance_marker_interval_spin.value())
-        project.writeEntryBool(PLUGIN_SCOPE, "FlightRoute/IncludeDistanceStart",
-                               self.distance_marker_include_start_check.isChecked())
-        project.writeEntryBool(PLUGIN_SCOPE, "FlightRoute/TimeMarkersEnabled",
-                               self.time_markers_enabled_check.isChecked())
-        project.writeEntryDouble(PLUGIN_SCOPE, "FlightRoute/TimeMarkerInterval",
-                                 self.time_marker_interval_spin.value())
-        project.writeEntryDouble(PLUGIN_SCOPE, "FlightRoute/TimeMarkerTypeIndex",
-                                 self.time_marker_type_combo.currentIndex())
-        project.writeEntryBool(PLUGIN_SCOPE, "FlightRoute/IncludeTimeStart",
-                               self.time_marker_include_start_check.isChecked())
-        project.writeEntryDouble(PLUGIN_SCOPE, "FlightRoute/CameraComboIndex",
-                                 self.flight_route_camera_combo.currentIndex())
-
         # Mark project as modified so user is prompted to save
         project.setDirty(True)
 
         self.log("Configuration saved to project")
 
     def load_config_from_project(self):
-        """Load all configuration from the QGIS project."""
+        """Load all configuration from the QGIS project (core.config_schema)."""
+        from .core.config_schema import WIDGET_BINDINGS, load_config_entries
         project = QgsProject.instance()
 
-        # Helper functions
         def read_str(key: str, default: str = "") -> str:
             value, ok = project.readEntry(PLUGIN_SCOPE, key, default)
             return value if ok else default
@@ -8670,128 +8159,17 @@ class BambiDockWidget(QDockWidget):
             value, ok = project.readBoolEntry(PLUGIN_SCOPE, key, default)
             return value if ok else default
 
-        def read_int(key: str, default: int = 0) -> int:
-            return int(read_double(key, float(default)))
-
         # Check if there's any saved config
-        test_value, has_config = project.readEntry(PLUGIN_SCOPE, "Input/TargetFolder", "")
+        _test_value, has_config = project.readEntry(
+            PLUGIN_SCOPE, "Input/TargetFolder", "")
         if not has_config:
             return  # No saved config in this project
 
-        # ===== Input Mode =====
-        video_mode_val = read_str("Input/VideoMode")
-        if video_mode_val != "":
-            self.video_mode_check.setChecked(video_mode_val != "0")
-        embedded_srt_val = read_str("Input/EmbeddedSrt")
-        if embedded_srt_val != "":
-            self.embedded_srt_check.setChecked(embedded_srt_val != "0")
+        for key, value in load_config_entries(read_str, read_double, read_bool):
+            attr, role = WIDGET_BINDINGS[key]
+            self._apply_config_value(attr, role, value)
 
-        # ===== Video Input Paths =====
-        self.thermal_video_paths_edit.setText(read_str("Input/ThermalVideoPaths"))
-        self.thermal_srt_paths_edit.setText(read_str("Input/ThermalSrtPaths"))
-        self.thermal_calibration_path_edit.setText(read_str("Input/ThermalCalibrationPath"))
-        thermal_preset = read_str("Input/ThermalCalibrationPreset")
-        t_idx = self.thermal_calib_preset_combo.findText(thermal_preset)
-        if t_idx >= 0:
-            self.thermal_calib_preset_combo.setCurrentIndex(t_idx)
-        self.rgb_video_paths_edit.setText(read_str("Input/RgbVideoPaths"))
-        self.rgb_srt_paths_edit.setText(read_str("Input/RgbSrtPaths"))
-        self.rgb_calibration_path_edit.setText(read_str("Input/RgbCalibrationPath"))
-        rgb_preset = read_str("Input/RgbCalibrationPreset")
-        r_idx = self.rgb_calib_preset_combo.findText(rgb_preset)
-        if r_idx >= 0:
-            self.rgb_calib_preset_combo.setCurrentIndex(r_idx)
-        # ===== Photo Input Paths =====
-        self.thermal_photo_dir_edit.setText(read_str("Input/ThermalPhotoDir"))
-        self.thermal_photo_calibration_path_edit.setText(
-            read_str("Input/ThermalPhotoCalibrationPath"))
-        tp_preset = read_str("Input/ThermalPhotoCalibrationPreset")
-        tp_idx = self.thermal_photo_calib_preset_combo.findText(tp_preset)
-        if tp_idx >= 0:
-            self.thermal_photo_calib_preset_combo.setCurrentIndex(tp_idx)
-        self.rgb_photo_dir_edit.setText(read_str("Input/RgbPhotoDir"))
-        self.rgb_photo_calibration_path_edit.setText(
-            read_str("Input/RgbPhotoCalibrationPath"))
-        rp_preset = read_str("Input/RgbPhotoCalibrationPreset")
-        rp_idx = self.rgb_photo_calib_preset_combo.findText(rp_preset)
-        if rp_idx >= 0:
-            self.rgb_photo_calib_preset_combo.setCurrentIndex(rp_idx)
-        self.thermal_photo_filter_check.setChecked(
-            read_str("Input/ThermalPhotoFilter") == "1")
-        self.rgb_photo_filter_check.setChecked(
-            read_str("Input/RgbPhotoFilter") == "1")
-        saved_tz = read_str("Config/Timezone")
-        if saved_tz:
-            tz_idx = self.timezone_combo.findText(saved_tz)
-            if tz_idx >= 0:
-                self.timezone_combo.setCurrentIndex(tz_idx)
-            else:
-                self.timezone_combo.setCurrentText(saved_tz)
-        self.tz_auto_check.setChecked(read_str("Config/TimezoneAuto") != "0")
-        saved_cmap = read_str("Input/ThermalVisColormap")
-        cmap_idx = self.thermal_vis_cmap_combo.findText(saved_cmap)
-        if cmap_idx >= 0:
-            self.thermal_vis_cmap_combo.setCurrentIndex(cmap_idx)
-        self.thermal_vis_lo_check.setChecked(
-            read_str("Input/ThermalVisLoEnable") == "1")
-        self.thermal_vis_lo_spin.setValue(
-            read_double("Input/ThermalVisLoValue", 0.0))
-        self.thermal_vis_hi_check.setChecked(
-            read_str("Input/ThermalVisHiEnable") == "1")
-        self.thermal_vis_hi_spin.setValue(
-            read_double("Input/ThermalVisHiValue", 100.0))
-        self.extract_skip_spin.setValue(read_int("Extraction/Skip", 0))
-        self.extract_limit_check.setChecked(
-            read_str("Extraction/LimitEnable") == "1")
-        self.extract_limit_spin.setValue(read_int("Extraction/LimitValue", 100))
-        self.extract_sampling_rate_check.setChecked(
-            read_str("Extraction/SamplingRateEnable") == "1")
-        self.extract_sampling_rate_spin.setValue(
-            read_int("Extraction/SamplingRate", 5))
-        self.preserve_aspect_ratio_check.setChecked(
-            read_str("Extraction/PreserveAspectRatio") == "1")
-        self.use_gimbal_heading_check.setChecked(
-            read_str("Extraction/UseGimbalHeading") == "1")
-        self.airdata_path_edit.setText(read_str("Input/AirdataPath"))
-        self.dem_path_edit.setText(read_str("Input/DemPath"))
-        self.dem_metadata_path_edit.setText(read_str("Input/DemMetadataPath"))
-        self.dem_padding_spin.setValue(read_int("Input/DemPadding", 30))
-        self.geotiff_input_path_edit.setText(read_str("Input/GeotiffInputPath"))
-        self.geotiff_simplify_spin.setValue(read_int("Input/GeotiffSimplifyFactor", 2))
-        self.correction_path_edit.setText(read_str("Input/CorrectionPath"))
-        self.target_folder_edit.setText(read_str("Input/TargetFolder"))
-
-        target_crs = read_str("Input/TargetCrs")
-        if target_crs:
-            self.target_crs_edit.setText(target_crs)
-        else:
-            self.target_crs_edit.setText("EPSG:32633")  # Default
-
-        # ===== Detection Settings =====
-        self.model_path_edit.setText(read_str("Detection/ModelPath"))
-        self.confidence_spin.setValue(read_double("Detection/Confidence", 0.5))
-        self.detect_all_frames_check.setChecked(read_bool("Detection/AllFrames", True))
-        self.detect_start_frame_spin.setValue(read_int("Detection/StartFrame", 0))
-        self.detect_end_frame_spin.setValue(read_int("Detection/EndFrame", 999999))
-        self.detect_sample_rate_spin.setValue(read_int("Detection/SampleRate", 1))
-
-        # ===== TRex Settings =====
-        self.trex_npz_dir_edit.setText(read_str("TRex/NpzDir"))
-        self.trex_undistorted_check.setChecked(read_bool("TRex/AlreadyUndistorted", False))
-
-        # ===== Correction Settings =====
-        rot_unit_idx = read_int("Correction/RotationUnit", 0)
-        if 0 <= rot_unit_idx < self.rotation_unit_combo.count():
-            self.rotation_unit_combo.setCurrentIndex(rot_unit_idx)
-
-        self.trans_x_spin.setValue(read_double("Correction/TransX", 0.0))
-        self.trans_y_spin.setValue(read_double("Correction/TransY", 0.0))
-        self.trans_z_spin.setValue(read_double("Correction/TransZ", 0.0))
-        self.rot_x_spin.setValue(read_double("Correction/RotX", 0.0))
-        self.rot_y_spin.setValue(read_double("Correction/RotY", 0.0))
-        self.rot_z_spin.setValue(read_double("Correction/RotZ", 0.0))
-
-        # Load additional corrections
+        # Additional corrections (bound to a list widget, loaded separately)
         corrections_json = read_str("Correction/AdditionalCorrections", "[]")
         try:
             corrections_data = json.loads(corrections_json)
@@ -8801,87 +8179,6 @@ class BambiDockWidget(QDockWidget):
                 self._add_correction_to_list(corr)
         except json.JSONDecodeError:
             pass
-
-        # ===== Tracking Settings =====
-        tracker_idx = read_int("Tracking/TrackerType", 0)
-        if 0 <= tracker_idx < self.tracker_backend_combo.count():
-            self.tracker_backend_combo.setCurrentIndex(tracker_idx)
-
-        reid_model_idx = read_int("Tracking/ReidModel", 0)
-        if 0 <= reid_model_idx < self.reid_model_combo.count():
-            self.reid_model_combo.setCurrentIndex(reid_model_idx)
-
-        self.custom_reid_path_edit.setText(read_str("Tracking/CustomReidPath"))
-        self.tracker_params_edit.setPlainText(read_str("Tracking/TrackerParams"))
-        self.iou_threshold_spin.setValue(read_double("Tracking/IouThreshold", 0.3))
-        self.max_age_spin.setValue(read_int("Tracking/MaxAge", -1))
-        self.max_center_dist_spin.setValue(read_double("Tracking/MaxCenterDist", 0.2))
-
-        tracker_mode_idx = read_int("Tracking/TrackerMode", 1)
-        if 0 <= tracker_mode_idx < self.tracker_mode_combo.count():
-            self.tracker_mode_combo.setCurrentIndex(tracker_mode_idx)
-
-        self.class_aware_check.setChecked(read_bool("Tracking/ClassAware", True))
-        self.interpolate_check.setChecked(read_bool("Tracking/Interpolate", True))
-
-        # ===== Field of View Settings =====
-        self.use_fov_mask_check.setChecked(read_bool("FoV/UseMask", False))
-        self.fov_mask_path_edit.setText(read_str("FoV/MaskPath"))
-        self.mask_simplify_spin.setValue(read_double("FoV/MaskSimplify", 2.0))
-        self.fov_all_frames_check.setChecked(read_bool("FoV/AllFrames", True))
-        self.fov_start_frame_spin.setValue(read_int("FoV/StartFrame", 0))
-        self.fov_end_frame_spin.setValue(read_int("FoV/EndFrame", 999999))
-        self.fov_sample_rate_spin.setValue(read_int("FoV/SampleRate", 1))
-
-        # ===== ALFS Settings =====
-        self.alfs_resolution_spin.setValue(read_double("ALFS/Resolution", 0.05))
-
-        self.alfs_all_frames_check.setChecked(read_bool("ALFS/AllFrames", True))
-        self.alfs_start_frame_spin.setValue(read_int("ALFS/StartFrame", 0))
-        self.alfs_end_frame_spin.setValue(read_int("ALFS/EndFrame", 999999))
-        self.alfs_crop_check.setChecked(read_bool("ALFS/Crop", True))
-        self.alfs_overviews_check.setChecked(read_bool("ALFS/Overviews", True))
-        self.alfs_tile_size_spin.setValue(read_int("ALFS/TileSize", 8192))
-        self.alfs_frame_step_spin.setValue(read_int("ALFS/FrameStep", 1))
-        self.alfs_sampling_check.setChecked(read_bool("ALFS/SamplingMode", False))
-        self.alfs_sampling_rate_spin.setValue(read_int("ALFS/SamplingRate", 10))
-        self.alfs_sampling_range_spin.setValue(read_int("ALFS/SamplingRange", 5))
-
-        # ===== Orthomosaic Settings =====
-        ortho_method_idx = read_int("Ortho/Method", 0)
-        if 0 <= ortho_method_idx < self.ortho_method_combo.count():
-            self.ortho_method_combo.setCurrentIndex(ortho_method_idx)
-        self.ortho_all_frames_check.setChecked(read_bool("Ortho/AllFrames", True))
-        self.ortho_start_frame_spin.setValue(read_int("Ortho/StartFrame", 0))
-        self.ortho_end_frame_spin.setValue(read_int("Ortho/EndFrame", 999999))
-
-        # ===== SAM3 Settings =====
-        self.sam3_prompts_edit.setPlainText(read_str("SAM3/Prompts"))
-        self.sam3_confidence_spin.setValue(read_double("SAM3/Confidence", 0.5))
-        self.sam3_all_frames_check.setChecked(read_bool("SAM3/AllFrames", True))
-        self.sam3_start_frame_spin.setValue(read_int("SAM3/StartFrame", 0))
-        self.sam3_end_frame_spin.setValue(read_int("SAM3/EndFrame", 999999))
-        self.sam3_step_spin.setValue(read_int("SAM3/FrameStep", 1))
-
-        # ===== Flight Route Settings =====
-        self.frame_markers_enabled_check.setChecked(read_bool("FlightRoute/FrameMarkersEnabled", True))
-        self.frame_marker_interval_spin.setValue(read_int("FlightRoute/FrameMarkerInterval", 100))
-        self.frame_marker_include_zero_check.setChecked(read_bool("FlightRoute/IncludeFrameZero", False))
-        self.image_labels_enabled_check.setChecked(read_bool("FlightRoute/ImageLabelsEnabled", False))
-        self.image_label_interval_spin.setValue(read_int("FlightRoute/ImageLabelInterval", 100))
-        self.distance_markers_enabled_check.setChecked(read_bool("FlightRoute/DistanceMarkersEnabled", False))
-        self.distance_marker_interval_spin.setValue(read_int("FlightRoute/DistanceMarkerInterval", 100))
-        self.distance_marker_include_start_check.setChecked(read_bool("FlightRoute/IncludeDistanceStart", False))
-        self.time_markers_enabled_check.setChecked(read_bool("FlightRoute/TimeMarkersEnabled", False))
-        self.time_marker_interval_spin.setValue(read_int("FlightRoute/TimeMarkerInterval", 10))
-        time_type_idx = read_int("FlightRoute/TimeMarkerTypeIndex", 0)
-        if 0 <= time_type_idx < self.time_marker_type_combo.count():
-            self.time_marker_type_combo.setCurrentIndex(time_type_idx)
-        self.time_marker_include_start_check.setChecked(read_bool("FlightRoute/IncludeTimeStart", False))
-
-        camera_combo_idx = read_int("FlightRoute/CameraComboIndex", 0)
-        if 0 <= camera_combo_idx < self.flight_route_camera_combo.count():
-            self.flight_route_camera_combo.setCurrentIndex(camera_combo_idx)
 
         self.log("Configuration loaded from project")
 

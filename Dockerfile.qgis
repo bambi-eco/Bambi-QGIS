@@ -1,0 +1,26 @@
+# Real-QGIS smoke-test image.
+#
+# Runs a headless (offscreen) QGIS so the plugin's Qt widgets can be
+# instantiated for real — catching the renamed-attribute / dead-signal class
+# of breakage that the QGIS-free unit suite cannot see. This is a separate
+# service from the unit and integration images and is not part of the normal
+# test loop (it pulls the multi-GB qgis/qgis base).
+#
+# Heavy pipeline dependencies (torch, alfspy, cv2, rasterio, bambi) are
+# imported lazily by the processing code and are NOT needed to construct the
+# widgets, so they are intentionally omitted to keep this image lean.
+FROM qgis/qgis:release-3_34
+
+# numpy / scipy / pyproj / gdal ship with the QGIS image. Only pytest and
+# requests (imported at module load by tracker_manager) are added.
+# --break-system-packages is required on the newer (PEP 668) base; the
+# fallback covers older bases where the flag is unknown.
+RUN pip3 install --no-cache-dir --break-system-packages pytest pytest-cov requests \
+    || pip3 install --no-cache-dir pytest pytest-cov requests
+
+# Offscreen Qt platform: no X server needed.
+ENV QT_QPA_PLATFORM=offscreen
+ENV PYTHONPATH=/workspace
+
+# Code is mounted at runtime via docker-compose volume — no COPY needed.
+CMD ["bash", "run_qgis_tests.sh"]

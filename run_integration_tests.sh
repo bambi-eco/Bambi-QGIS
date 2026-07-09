@@ -6,8 +6,11 @@
 # volume; later runs reuse the cache and are much faster.
 
 REPORTS_DIR="reports"
-mkdir -p "$REPORTS_DIR"
+mkdir -p "$REPORTS_DIR/coverage/integration"
 RUN_TS=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+
+# Own coverage subdir for the combined report (see run_coverage_combine.sh).
+export COVERAGE_FILE="${COVERAGE_FILE:-$REPORTS_DIR/coverage/integration/.coverage}"
 
 echo "============================================"
 echo " BAMBI Plugin — Integration Tests"

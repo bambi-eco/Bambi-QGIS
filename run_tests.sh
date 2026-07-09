@@ -6,8 +6,14 @@
 # typically inside the Docker image: docker compose run --rm tests
 
 REPORTS_DIR="reports"
-mkdir -p "$REPORTS_DIR"
+mkdir -p "$REPORTS_DIR/coverage/unit"
 RUN_TS=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+
+# Each tier keeps its coverage data in its own subdirectory (a plain
+# `.coverage`, NOT `.coverage.<tier>` — that collides with coverage's
+# parallel-file naming and pytest-cov's erase would wipe the siblings).
+# run_coverage_combine.sh merges the per-tier files into an overall figure.
+export COVERAGE_FILE="${COVERAGE_FILE:-$REPORTS_DIR/coverage/unit/.coverage}"
 
 echo "============================================"
 echo " BAMBI Plugin — Unit Tests"
@@ -20,6 +26,6 @@ pytest tests \
     --junitxml="$REPORTS_DIR/pytest.xml" \
     --cov=bambi_wildlife_detection \
     --cov-report=term \
-    --cov-fail-under=17 \
+    --cov-fail-under=20 \
     2>&1 | tee "$REPORTS_DIR/pytest.txt"
 exit "${PIPESTATUS[0]}"

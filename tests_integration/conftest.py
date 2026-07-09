@@ -19,6 +19,7 @@ suite is skipped.
 import json
 import os
 import re
+import shutil
 import sys
 import zipfile
 from pathlib import Path
@@ -32,6 +33,34 @@ if str(REPO_ROOT) not in sys.path:
 from tests.qgis_stub import install_qgis_stubs  # noqa: E402
 
 install_qgis_stubs()
+
+
+# ---------------------------------------------------------------------------
+# Optional output persistence
+# ---------------------------------------------------------------------------
+# By default the pipeline outputs go to an ephemeral pytest tmp dir and are
+# deleted with the container. Set BAMBI_TEST_KEEP_OUTPUT=1 (or point
+# BAMBI_TEST_OUTPUT_DIR at a path) to keep them for manual/visual inspection.
+# The default kept location lives under the repo (bind-mounted at /workspace),
+# so the frames / GeoTIFFs / orthomosaic / ALFS renders appear on the host.
+
+def _persistent_output_dir() -> "str | None":
+    """Return the directory to keep pipeline outputs in, or None (ephemeral)."""
+    explicit = os.environ.get("BAMBI_TEST_OUTPUT_DIR", "").strip()
+    if explicit:
+        return explicit
+    if os.environ.get("BAMBI_TEST_KEEP_OUTPUT", "").strip().lower() in (
+            "1", "true", "yes", "on"):
+        return str(REPO_ROOT / "reports" / "integration_output")
+    return None
+
+
+def pytest_report_header(config):
+    keep = _persistent_output_dir()
+    if keep:
+        return f"integration outputs: KEPT at {os.path.join(keep, 'pipeline_out')}"
+    return ("integration outputs: ephemeral "
+            "(set BAMBI_TEST_KEEP_OUTPUT=1 to keep them for inspection)")
 
 # ---------------------------------------------------------------------------
 # Test flight selection (raw BAMBI dataset)
@@ -243,8 +272,24 @@ def dem_files(flight_files):
 
 @pytest.fixture(scope="session")
 def target_folder(tmp_path_factory):
-    """Fresh pipeline output folder shared by all stages of the session."""
-    return str(tmp_path_factory.mktemp("pipeline_out"))
+    """Fresh pipeline output folder shared by all stages of the session.
+
+    Ephemeral by default. When BAMBI_TEST_KEEP_OUTPUT / BAMBI_TEST_OUTPUT_DIR
+    request persistence, the folder is created under a host-visible path and
+    NOT deleted after the run, so the frames / GeoTIFFs / orthomosaic / ALFS
+    renders can be inspected manually.
+    """
+    keep = _persistent_output_dir()
+    if not keep:
+        return str(tmp_path_factory.mktemp("pipeline_out"))
+
+    folder = os.path.join(keep, "pipeline_out")
+    # Start from a clean slate so stale outputs from a previous run cannot
+    # mask a regression; do NOT remove it on teardown.
+    if os.path.isdir(folder):
+        shutil.rmtree(folder, ignore_errors=True)
+    os.makedirs(folder, exist_ok=True)
+    return folder
 
 
 @pytest.fixture(scope="session")

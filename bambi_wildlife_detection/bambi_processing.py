@@ -3838,112 +3838,9 @@ class BambiProcessor:
 
         No-op when a pixel tracks file already exists (advanced backend).
         """
-        from collections import defaultdict
-
-        target_folder = config["target_folder"]
-        tracks_folder = os.path.join(target_folder, f"tracks_{camera_suffix}")
-        pixel_file = os.path.join(tracks_folder, "tracks_pixel.csv")
-        if os.path.exists(pixel_file):
-            return  # already produced by the tracker backend
-
-        det_file = os.path.join(target_folder, f"detections_{camera_suffix}", "detections.txt")
-        georef_file = os.path.join(target_folder, f"georeferenced_{camera_suffix}", "georeferenced.txt")
-        tracks_file = os.path.join(tracks_folder, "tracks.csv")
-        if not (os.path.exists(det_file) and os.path.exists(georef_file) and os.path.exists(tracks_file)):
-            return
-
-        def _key(vals):
-            return tuple(round(v, 3) for v in vals)
-
-        # Pixel detections grouped by frame, in file order.
-        det_by_frame = defaultdict(list)
-        with open(det_file, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                p = line.split()
-                if len(p) < 5:
-                    continue
-                try:
-                    det_by_frame[int(p[0])].append((
-                        float(p[1]), float(p[2]), float(p[3]), float(p[4]),
-                        float(p[5]) if len(p) > 5 else 1.0,
-                        int(p[6]) if len(p) > 6 else 0))
-                except ValueError:
-                    continue
-
-        # Geo detections grouped by frame, in file order (same order as detections).
-        geo_by_frame = defaultdict(list)
-        with open(georef_file, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                p = line.split()
-                if len(p) < 8:
-                    continue
-                try:
-                    geo_by_frame[int(p[1])].append(
-                        (float(p[2]), float(p[3]), float(p[5]), float(p[6])))
-                except (ValueError, IndexError):
-                    continue
-
-        # Track id keyed by (frame, rounded geo box); skip interpolated rows.
-        trk_lookup = {}
-        with open(tracks_file, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                p = line.split(",")
-                if len(p) < 7:
-                    continue
-                try:
-                    if len(p) > 10 and int(float(p[10])):
-                        continue
-                    frame = int(float(p[0]))
-                    tid = int(float(p[1]))
-                    key = (frame, _key((float(p[2]), float(p[3]),
-                                        float(p[5]), float(p[6]))))
-                except (ValueError, IndexError):
-                    continue
-                trk_lookup.setdefault(key, tid)
-
-        if not trk_lookup:
-            return
-
-        rows = []
-        skipped_frames = 0
-        for frame, boxes in det_by_frame.items():
-            geos = geo_by_frame.get(frame, [])
-            if len(geos) != len(boxes):
-                skipped_frames += 1  # dropped detections break positional alignment
-                continue
-            for box, geo in zip(boxes, geos):
-                tid = trk_lookup.get((frame, _key(geo)))
-                if tid is None:
-                    continue
-                x1, y1, x2, y2, conf, cls = box
-                rows.append((frame, tid, x1, y1, x2, y2, conf, cls))
-
-        if not rows:
-            return
-
-        rows.sort(key=lambda r: (r[0], r[1]))
-        os.makedirs(tracks_folder, exist_ok=True)
-        with open(pixel_file, "w", encoding="utf-8") as f:
-            f.write("# frame,track_id,x1,y1,x2,y2,conf,cls,interpolated\n")
-            for (frame, tid, x1, y1, x2, y2, conf, cls) in rows:
-                f.write(f"{frame},{tid},{x1:.2f},{y1:.2f},{x2:.2f},{y2:.2f},"
-                        f"{conf:.4f},{cls},0\n")
-
-        if log_fn:
-            msg = f"Wrote pixel-space tracks: {pixel_file} ({len(rows)} rows)"
-            if skipped_frames:
-                msg += (f"; {skipped_frames} frame(s) skipped "
-                        "(detection/geo count mismatch)")
-            log_fn(msg)
+        from .core.track_export import write_pixel_tracks_from_geo
+        write_pixel_tracks_from_geo(
+            config["target_folder"], camera_suffix, log_fn=log_fn)
 
     def _run_builtin_tracking(self, config: Dict[str, Any], progress_fn=None, log_fn=None):
         """Run the built-in Hungarian IoU tracker.
@@ -4998,33 +4895,11 @@ class BambiProcessor:
 
     def _create_tile_camera(self, global_camera, global_bounds, global_res,
                             tx, ty, tw, th, Vector3, Camera):
-        """Helper to create a sub-camera for tiling."""
-        min_x, min_y, max_x, max_y = global_bounds
-
-        pixel_to_world_x = (max_x - min_x) / global_res.width
-        pixel_to_world_y = (max_y - min_y) / global_res.height
-
-        # Tile bounds
-        tile_min_x = min_x + tx * pixel_to_world_x
-        tile_max_x = min_x + (tx + tw) * pixel_to_world_x
-        tile_max_y = max_y - ty * pixel_to_world_y
-        tile_min_y = max_y - (ty + th) * pixel_to_world_y
-
-        tile_center_x = (tile_min_x + tile_max_x) / 2.0
-        tile_center_y = (tile_min_y + tile_max_y) / 2.0
-        tile_ortho_width = tile_max_x - tile_min_x
-        tile_ortho_height = tile_max_y - tile_min_y  # Note: height logic might vary, usually safe to keep relative sign
-
-        return Camera(
-            orthogonal=True,
-            orthogonal_size=(tile_ortho_width, tile_ortho_height),
-            position=Vector3([
-                tile_center_x, tile_center_y, global_camera.transform.position.z
-            ], dtype='f4'),
-            rotation=global_camera.transform.rotation,
-            near=global_camera.near,
-            far=global_camera.far
-        )
+        """Create a sub-camera for tiling (core.ortho_tiling)."""
+        from .core.ortho_tiling import create_tile_camera
+        return create_tile_camera(
+            global_camera, global_bounds, global_res,
+            tx, ty, tw, th, Vector3, Camera)
 
     def _run_alfs_sampling(
             self, config, all_images, dem_path, mask_path,
@@ -5306,43 +5181,10 @@ class BambiProcessor:
             pass
 
     def _filter_shots_for_tile(self, shots, tile_geo_bounds, log_fn=None, fov_default=50.0):
-        """Return the subset of shots whose ground footprint overlaps tile_geo_bounds.
-
-        Uses circle-AABB intersection: the camera footprint is approximated as a
-        circle centred on the ground projection of the shot, with radius derived from
-        altitude and vertical FoV.  A generous 2.5× multiplier accounts for oblique
-        cameras and imprecise altitude values.
-
-        Falls back to the full shot list when no shot passes the filter (so tiles on
-        the boundary of the flight area still receive at least one shot).
-        """
-        import math
-        min_x, min_y, max_x, max_y = tile_geo_bounds
-        relevant = []
-        for shot in shots:
-            pos = shot.camera.transform.position
-            sx, sy, sz = float(pos.x), float(pos.y), float(pos.z)
-            altitude = abs(sz)
-            if altitude < 1.0:
-                # No meaningful altitude — include unconditionally
-                relevant.append(shot)
-                continue
-            try:
-                fov_y = shot.camera.fovy or fov_default
-            except Exception:
-                fov_y = fov_default
-            radius = altitude * math.tan(math.radians(fov_y / 2)) * 2.5
-            # Nearest point on the AABB to the shot position
-            near_x = max(min_x, min(sx, max_x))
-            near_y = max(min_y, min(sy, max_y))
-            dist_sq = (sx - near_x) ** 2 + (sy - near_y) ** 2
-            if dist_sq <= radius * radius:
-                relevant.append(shot)
-        if not relevant:
-            return shots
-        if log_fn and len(relevant) < len(shots):
-            log_fn(f"  Shot filter: {len(relevant)}/{len(shots)} shots relevant for this tile")
-        return relevant
+        """Cull shots to those overlapping a tile (core.ortho_tiling)."""
+        from .core.ortho_tiling import filter_shots_for_tile
+        return filter_shots_for_tile(
+            shots, tile_geo_bounds, log_fn=log_fn, fov_default=fov_default)
 
     def _run_alfs_alfspy(
             self, config, images, poses, dem_path, mask_path,
@@ -5878,35 +5720,9 @@ class BambiProcessor:
             progress_fn(95)
 
     def _crop_to_content(self, image, bounds):
-        """Crop image to minimal bounding box containing non-empty pixels."""
-        import numpy as np
-
-        min_x, min_y, max_x, max_y = bounds
-        height, width = image.shape[:2]
-
-        alpha = image[:, :, 3]
-        non_empty = alpha > 0
-
-        if not np.any(non_empty):
-            return image, bounds
-
-        rows = np.any(non_empty, axis=1)
-        cols = np.any(non_empty, axis=0)
-
-        row_min, row_max = np.where(rows)[0][[0, -1]]
-        col_min, col_max = np.where(cols)[0][[0, -1]]
-
-        cropped = image[row_min:row_max + 1, col_min:col_max + 1]
-
-        pixel_size_x = (max_x - min_x) / width
-        pixel_size_y = (max_y - min_y) / height
-
-        new_min_x = min_x + col_min * pixel_size_x
-        new_max_x = min_x + (col_max + 1) * pixel_size_x
-        new_max_y = max_y - row_min * pixel_size_y
-        new_min_y = max_y - (row_max + 1) * pixel_size_y
-
-        return cropped, (new_min_x, new_min_y, new_max_x, new_max_y)
+        """Crop image to the non-empty bounding box (core.ortho_tiling)."""
+        from .core.ortho_tiling import crop_to_content
+        return crop_to_content(image, bounds)
 
     def _save_alfs(
             self, image, output_file, bounds, crs_epsg,
@@ -6258,53 +6074,9 @@ class BambiProcessor:
             progress_fn(100)
 
     def _merge_orthomosaic_average(self, datasets, nodata, rio_merge):
-        """Merge datasets by averaging overlapping valid pixels.
-
-        ``rasterio.merge`` has no built-in "average" method, so we accumulate a
-        per-pixel sum (in a float64 buffer to avoid uint8 overflow) together with
-        a per-pixel count of valid contributors, then divide.
-
-        A cheap first pass with the built-in ``first`` method establishes the
-        exact output grid (shape + transform); the averaging pass then reuses the
-        same inputs/parameters, so rasterio produces an identically aligned grid
-        and the per-source ``roff``/``coff`` offsets index our count array
-        correctly.
-
-        :returns: (mosaic ndarray of the sources' dtype, output affine transform)
-        """
-        import numpy as np
-
-        src_dtype = datasets[0].dtypes[0]
-
-        # First pass: determine the exact output grid rasterio will use.
-        base, out_transform = rio_merge(datasets, method="first", nodata=nodata)
-        out_height, out_width = base.shape[1], base.shape[2]
-        del base
-
-        count = np.zeros((out_height, out_width), dtype=np.float64)
-
-        def _sum_valid(merged_data, new_data, merged_mask, new_mask,
-                       index=None, roff=0, coff=0, **kwargs):
-            # Masks are True where data is *invalid* (nodata); ~mask == valid.
-            valid = ~new_mask
-            np.add(merged_data, new_data, out=merged_data, where=valid,
-                   casting="unsafe")
-            band0 = valid[0] if valid.ndim == 3 else valid
-            h, w = band0.shape
-            count[roff:roff + h, coff:coff + w] += band0
-            if merged_mask.shape == valid.shape:
-                merged_mask[valid] = False
-
-        # Second pass: accumulate the sum in a float64 buffer.
-        summed, _ = rio_merge(
-            datasets, method=_sum_valid, nodata=nodata, dtype="float64"
-        )
-
-        count_b = count[np.newaxis, :, :]
-        with np.errstate(invalid="ignore", divide="ignore"):
-            avg = np.where(count_b > 0, summed / count_b, nodata)
-        avg = np.rint(avg).astype(src_dtype)
-        return avg, out_transform
+        """Merge datasets by averaging overlapping pixels (core.ortho_tiling)."""
+        from .core.ortho_tiling import merge_orthomosaic_average
+        return merge_orthomosaic_average(datasets, nodata, rio_merge)
 
     def run_export_geotiffs(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Export each frame as an individual GeoTIFF.

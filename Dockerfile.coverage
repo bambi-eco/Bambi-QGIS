@@ -1,0 +1,12 @@
+# Tiny image that merges the per-tier coverage data files (unit +
+# integration + qgis) into one combined report. The three tiers run in
+# their own (incompatible) environments, so their coverage is collected
+# separately and combined here — see run_all_tests.sh.
+FROM python:3.11-slim
+
+# coverage.py 7.x reads data files written by any 7.x version, across Python
+# 3.10/3.11, as long as the measured source paths match (all tiers mount the
+# repo at /workspace, so they do).
+RUN pip install --no-cache-dir "coverage>=7,<8"
+
+CMD ["bash", "run_coverage_combine.sh"]

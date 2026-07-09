@@ -23,7 +23,33 @@ services:
       - .:/workspace
       - bambi-test-data:/data
     working_dir: /workspace
+    # Pass these through from the host environment (if set) so pipeline
+    # outputs can be kept for inspection — see tests_integration/conftest.py.
+    # BAMBI_TEST_KEEP_OUTPUT=1 keeps them under reports/integration_output/.
+    environment:
+      - BAMBI_TEST_KEEP_OUTPUT
+      - BAMBI_TEST_OUTPUT_DIR
     command: bash run_integration_tests.sh
+
+  qgis-tests:
+    build:
+      context: .
+      dockerfile: Dockerfile.qgis
+    volumes:
+      - .:/workspace
+    working_dir: /workspace
+    command: bash run_qgis_tests.sh
+
+  # Merges the per-tier coverage data files into one combined report. Run at
+  # the end of run_all_tests.sh, or standalone after the tiers have run.
+  coverage-combine:
+    build:
+      context: .
+      dockerfile: Dockerfile.coverage
+    volumes:
+      - .:/workspace
+    working_dir: /workspace
+    command: bash run_coverage_combine.sh
 
 volumes:
   # Cache for the ~12 GB test flight, BEV DEM tiles and generated DEM mesh.

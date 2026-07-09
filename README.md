@@ -60,6 +60,23 @@ What you need as input: MP4 videos + SRT subtitle files (video mode) *or* a fold
 
 ## Development
 
+### Running everything (combined coverage)
+
+The three test tiers below run in separate images (they need mutually
+incompatible environments), so a combined coverage figure is produced by
+running each and merging the results with `coverage combine`:
+
+```bash
+bash run_all_tests.sh
+```
+
+This runs the unit, integration and real-QGIS smoke tiers in turn, then
+prints one combined report (also written to `reports/coverage/`, with an
+HTML view under `reports/coverage/html/`). Each tier still runs on its own
+via the individual commands below when you only want one part. The smoke
+tier contributes coverage of the GUI modules the QGIS-free unit suite cannot
+reach, so the combined figure is substantially higher than any single tier.
+
 ### Unit tests
 
 The repository ships a QGIS-free unit test suite (`tests/`) covering the pure
@@ -100,6 +117,35 @@ re-execute the pipeline. The image installs the BAMBI Detection Framework
 and ALFS-PY from GitHub (CPU-only torch) and renders through Xvfb/Mesa —
 no GPU or QGIS required. To reclaim the cache: `docker volume rm
 bambi-qgis_bambi-test-data`.
+
+By default the pipeline outputs (extracted frames, geo-referenced GeoTIFFs,
+orthomosaic, ALFS renders) live in an ephemeral tmp dir and vanish with the
+container. To keep them for manual/visual inspection, set
+`BAMBI_TEST_KEEP_OUTPUT=1` — they are written under
+`reports/integration_output/pipeline_out/` on the host (the repo is
+bind-mounted at `/workspace`):
+
+```bash
+docker compose run --rm -e BAMBI_TEST_KEEP_OUTPUT=1 integration
+```
+
+Point `BAMBI_TEST_OUTPUT_DIR` at a path to keep them somewhere else. The
+folder is wiped clean at the start of each kept run (so stale outputs never
+mask a regression) but is not deleted afterwards.
+
+### Real-QGIS smoke tests
+
+`tests_qgis/` constructs the plugin's Qt widgets inside a headless QGIS
+(`Dockerfile.qgis`, `QT_QPA_PLATFORM=offscreen`): the dock widget and every
+dialog are instantiated, and the project configuration is round-tripped
+through a real `QgsProject` (save → reset → load). This catches the
+renamed-attribute / dead-signal breakage the QGIS-free unit suite cannot
+see. The image is based on `qgis/qgis` (multi-GB); the tests need no GPU,
+no plugin data, and no heavy pipeline dependencies.
+
+```bash
+docker compose run --rm qgis-tests
+```
 
 ### Linting & security checks
 
