@@ -11,17 +11,23 @@ import sys
 import pytest
 
 from bambi_wildlife_detection.core.labelling import (
+    CustomField,
     LabelStore,
     LabelTrack,
     SPECIES_CLASSES,
     TRACK_COLORS_RGB,
     _FrameMatcher,
     _GeoPropagator,
+    coerce_attributes,
+    custom_fields_from_dicts,
     _load_detections_by_frame,
     _load_pixel_tracks,
     _pose_epochs,
     propagation_frames,
+    read_custom_fields,
     track_color_rgb,
+    validate_custom_fields,
+    write_custom_fields,
 )
 from tests.fakes import install_fake_render_stack, make_module
 
@@ -180,6 +186,299 @@ class TestLabelStore:
         assert content.count(LabelStore.DETECTIONS_MARKER) == 1
         assert "0.8000 1" in content            # detector line preserved
         assert "# class_id mapping:" in content
+
+
+class TestCustomField:
+    def test_rejects_empty_reserved_and_unknown(self):
+        with pytest.raises(ValueError, match="needs a name"):
+            CustomField("  ")
+        with pytest.raises(ValueError, match="reserved"):
+            CustomField("Species")          # reserved, case-insensitive
+        with pytest.raises(ValueError, match="type"):
+            CustomField("weight", "decimal")
+        with pytest.raises(ValueError, match="scope"):
+            CustomField("weight", "float", "video")
+
+    def test_name_is_stripped(self):
+        assert CustomField(" weight ", "float").name == "weight"
+
+    @pytest.mark.parametrize("type_, raw, expected", [
+        ("int", "42", 42),
+        ("int", "3.0", 3),
+        ("int", True, 1),
+        ("float", "1.5", 1.5),
+        ("string", 12, "12"),
+        ("bool", "yes", True),
+        ("bool", "0", False),
+        ("bool", "", False),
+        ("datetime", "2023-09-20T10:00:00", "2023-09-20T10:00:00"),
+        ("datetime", "", ""),
+    ])
+    def test_coerce(self, type_, raw, expected):
+        assert CustomField("f", type_).coerce(raw) == expected
+
+    @pytest.mark.parametrize("type_, raw", [
+        ("int", "abc"), ("float", "abc"), ("bool", "maybe"),
+        ("datetime", "not-a-date"), ("int", None),
+    ])
+    def test_coerce_rejects_bad_values(self, type_, raw):
+        with pytest.raises(ValueError):
+            CustomField("f", type_).coerce(raw)
+
+    def test_coerce_accepts_datetime_objects(self):
+        from datetime import datetime
+        value = CustomField("f", "datetime").coerce(datetime(2023, 9, 20))
+        assert value == "2023-09-20T00:00:00"
+
+    def test_defaults_per_type(self):
+        assert [CustomField("f", t).default
+                for t in ("int", "float", "string", "bool", "datetime")] == \
+            [0, 0.0, "", False, ""]
+
+    def test_dict_round_trip_and_equality(self):
+        field = CustomField("weight", "float", "keyframe")
+        assert CustomField.from_dict(field.to_dict()) == field
+        assert field != CustomField("weight", "float", "track")
+
+    def test_from_dicts_skips_invalid_and_duplicates(self):
+        fields = custom_fields_from_dicts([
+            {"name": "weight", "type": "float", "scope": "track"},
+            {"name": "weight", "type": "int", "scope": "track"},   # duplicate
+            {"name": "species", "type": "string"},                 # reserved
+            {"name": "", "type": "string"},                        # unnamed
+            {"name": "note", "type": "bogus"},                     # bad type
+        ])
+        assert [f.name for f in fields] == ["weight"]
+
+    def test_validate_rejects_case_insensitive_duplicates(self):
+        with pytest.raises(ValueError, match="Duplicate"):
+            validate_custom_fields([CustomField("Note"), CustomField("note")])
+
+    def test_coerce_attributes_drops_unknown_and_unfitting(self):
+        fields = [CustomField("count", "int"), CustomField("note", "string")]
+        result = coerce_attributes(
+            {"count": "7", "note": "hi", "gone": 1, }, fields)
+        assert result == {"count": 7, "note": "hi"}
+        # a value that does not fit the (re)typed field is dropped
+        assert coerce_attributes({"count": "abc"}, fields) == {}
+
+
+class TestCustomFieldSharing:
+    """Export / import of the field schema as a standalone JSON file."""
+
+    SCHEMA = [CustomField("weight", "float", "track"),
+              CustomField("blurry", "bool", "keyframe")]
+
+    def test_round_trip(self, tmp_path):
+        path = str(tmp_path / "fields.json")
+        write_custom_fields(path, self.SCHEMA)
+        assert read_custom_fields(path) == self.SCHEMA
+
+    def test_exported_file_is_self_describing(self, tmp_path):
+        path = tmp_path / "fields.json"
+        write_custom_fields(str(path), self.SCHEMA)
+        data = json.loads(path.read_text())
+        assert data["format"] == "bambi-labelling-fields"
+        assert data["version"] == 1
+        assert [f["name"] for f in data["custom_fields"]] == ["weight", "blurry"]
+
+    def test_empty_schema_round_trips(self, tmp_path):
+        path = str(tmp_path / "fields.json")
+        write_custom_fields(path, [])
+        assert read_custom_fields(path) == []
+
+    def test_reads_a_flight_labels_json(self, tmp_path):
+        """A colleague's labels.json is a valid import source."""
+        store = LabelStore(str(tmp_path), "t")
+        store.set_custom_fields(self.SCHEMA)
+        store.save()
+        assert read_custom_fields(store.json_path) == self.SCHEMA
+
+    def test_reads_a_bare_list(self, tmp_path):
+        path = tmp_path / "fields.json"
+        path.write_text(json.dumps([{"name": "weight", "type": "float",
+                                     "scope": "track"}]))
+        assert [f.name for f in read_custom_fields(str(path))] == ["weight"]
+
+    @pytest.mark.parametrize("content, message", [
+        ("{ not json", "valid JSON"),
+        ('{"format": "something-else"}', "Unknown file format"),
+        ('{"format": "bambi-labelling-fields", "version": 99, '
+         '"custom_fields": []}', "newer version"),
+        ('{"format": "bambi-labelling-fields", "version": "x", '
+         '"custom_fields": []}', "Invalid file version"),
+        ('{"modality": "t", "tracks": []}', "no 'custom_fields'"),
+        ('"a string"', "no custom field definitions"),
+        ('{"custom_fields": {"weight": "float"}}', "must be a list"),
+        ('{"custom_fields": ["weight"]}', "Field 1 is not a field definition"),
+        ('{"custom_fields": [{"name": "species"}]}', "Field 1: .*reserved"),
+        ('{"custom_fields": [{"name": "a"}, {"name": "A"}]}', "Duplicate"),
+    ])
+    def test_rejects_bad_files(self, tmp_path, content, message):
+        path = tmp_path / "fields.json"
+        path.write_text(content)
+        with pytest.raises(ValueError, match=message):
+            read_custom_fields(str(path))
+
+    def test_missing_file_raises_oserror(self, tmp_path):
+        with pytest.raises(OSError):
+            read_custom_fields(str(tmp_path / "nope.json"))
+
+    def test_import_is_strict_where_settings_seeding_is_lenient(self, tmp_path):
+        """A bad field fails the import instead of being silently dropped."""
+        entries = [{"name": "weight", "type": "float"},
+                   {"name": "note", "type": "bogus"}]
+        path = tmp_path / "fields.json"
+        path.write_text(json.dumps({"custom_fields": entries}))
+        with pytest.raises(ValueError, match="Field 2"):
+            read_custom_fields(str(path))
+        # the lenient path (QSettings seeding) keeps the usable field
+        assert [f.name for f in custom_fields_from_dicts(entries)] == ["weight"]
+
+
+class TestCustomFieldValues:
+    def test_track_attributes_round_trip(self):
+        track = LabelTrack(1, attributes={"weight": 12.5})
+        clone = LabelTrack.from_dict(json.loads(json.dumps(track.to_dict())))
+        assert clone.attributes == {"weight": 12.5}
+
+    def test_empty_attributes_are_not_serialised(self):
+        track = LabelTrack(1)
+        track.set_keyframe(0, (0, 0, 1, 1))
+        assert "attributes" not in track.to_dict()
+        assert "attributes" not in track.keyframes[0]
+
+    def test_keyframe_attributes_round_trip(self):
+        track = LabelTrack(1)
+        track.set_keyframe(0, (0, 0, 1, 1), attributes={"blurry": True})
+        clone = LabelTrack.from_dict(json.loads(json.dumps(track.to_dict())))
+        assert clone.keyframes[0]["attributes"] == {"blurry": True}
+
+    def test_interpolated_frames_inherit_previous_keyframe(self):
+        track = LabelTrack(1)
+        track.set_keyframe(0, (0, 0, 1, 1), attributes={"blurry": True})
+        track.set_keyframe(10, (0, 0, 1, 1), attributes={"blurry": False})
+        assert track.attributes_at(5) == {"blurry": True}
+        assert track.attributes_at(10) == {"blurry": False}
+
+    def test_attributes_at_returns_none_without_a_box(self):
+        track = LabelTrack(1)
+        track.set_keyframe(0, (0, 0, 1, 1), stop=True)
+        track.set_keyframe(10, (0, 0, 1, 1))
+        assert track.attributes_at(5) is None     # gap after the stop frame
+        assert track.attributes_at(20) is None    # outside the range
+
+    def test_new_keyframe_inherits_interpolated_attributes(self):
+        track = LabelTrack(1)
+        track.set_keyframe(0, (0, 0, 1, 1), attributes={"blurry": True})
+        track.set_keyframe(10, (0, 0, 1, 1), attributes={"blurry": False})
+        track.set_keyframe(5, (2, 2, 3, 3))      # box-only
+        assert track.keyframes[5]["attributes"] == {"blurry": True}
+
+    def test_box_update_preserves_attributes(self):
+        track = LabelTrack(1)
+        track.set_keyframe(4, (0, 0, 1, 1), attributes={"blurry": True})
+        track.set_keyframe(4, (9, 9, 10, 10))
+        assert track.keyframes[4]["attributes"] == {"blurry": True}
+
+
+class TestLabelStoreCustomFields:
+    @pytest.fixture
+    def store(self, tmp_path):
+        return LabelStore(str(tmp_path), "t")
+
+    def _track_with_values(self, store):
+        track = LabelTrack(1, attributes={"weight": 12.5})
+        track.set_keyframe(0, (0, 0, 1, 1), attributes={"blurry": True})
+        track.set_keyframe(2, (0, 0, 1, 1), attributes={"blurry": False})
+        store.tracks[1] = track
+        return track
+
+    def _schema(self):
+        return [CustomField("weight", "float", "track"),
+                CustomField("blurry", "bool", "keyframe")]
+
+    def test_schema_and_values_round_trip(self, store, tmp_path):
+        store.set_custom_fields(self._schema())
+        self._track_with_values(store)
+        store.save()
+
+        reloaded = LabelStore(str(tmp_path), "t")
+        reloaded.load()
+        assert reloaded.schema_defined
+        assert reloaded.custom_fields == self._schema()
+        assert reloaded.tracks[1].attributes == {"weight": 12.5}
+        assert reloaded.tracks[1].keyframes[0]["attributes"] == {"blurry": True}
+
+    def test_schema_defined_false_for_legacy_file(self, store, tmp_path):
+        (tmp_path / "labels_t").mkdir()
+        (tmp_path / "labels_t" / "labels.json").write_text(
+            json.dumps({"modality": "t", "tracks": []}))
+        store.load()
+        assert store.schema_defined is False
+        assert store.custom_fields == []
+
+    def test_load_drops_values_without_a_matching_field(self, store, tmp_path):
+        store.set_custom_fields(self._schema())
+        self._track_with_values(store)
+        store.save()
+        # hand-edit the file: schema shrinks, values stay behind
+        data = json.loads((tmp_path / "labels_t" / "labels.json").read_text())
+        data["custom_fields"] = [{"name": "weight", "type": "float",
+                                  "scope": "track"}]
+        (tmp_path / "labels_t" / "labels.json").write_text(json.dumps(data))
+
+        reloaded = LabelStore(str(tmp_path), "t")
+        reloaded.load()
+        assert reloaded.tracks[1].attributes == {"weight": 12.5}
+        assert "attributes" not in reloaded.tracks[1].keyframes[0]
+
+    def test_set_custom_fields_removes_dropped_values(self, store):
+        store.set_custom_fields(self._schema())
+        track = self._track_with_values(store)
+        store.set_custom_fields([CustomField("weight", "float", "track")])
+        assert track.attributes == {"weight": 12.5}
+        assert "attributes" not in track.keyframes[0]
+
+    def test_set_custom_fields_converts_retyped_values(self, store):
+        store.set_custom_fields([CustomField("weight", "float", "track")])
+        store.tracks[1] = LabelTrack(1, attributes={"weight": 12.5})
+        store.set_custom_fields([CustomField("weight", "int", "track")])
+        assert store.tracks[1].attributes == {"weight": 12}
+
+    def test_set_custom_fields_drops_values_on_scope_change(self, store):
+        store.set_custom_fields(self._schema())
+        track = self._track_with_values(store)
+        store.set_custom_fields([CustomField("weight", "float", "keyframe")])
+        assert track.attributes == {}
+
+    def test_set_custom_fields_rejects_duplicates(self, store):
+        with pytest.raises(ValueError, match="Duplicate"):
+            store.set_custom_fields([CustomField("a"), CustomField("a")])
+
+    def test_count_values(self, store):
+        store.set_custom_fields(self._schema())
+        self._track_with_values(store)
+        weight, blurry = self._schema()
+        assert store.count_values(weight) == 1
+        assert store.count_values(blurry) == 2       # one per key frame
+        assert store.count_values(CustomField("nope", "int")) == 0
+
+    def test_fields_for_scope(self, store):
+        store.set_custom_fields(self._schema())
+        assert [f.name for f in store.fields_for("track")] == ["weight"]
+        assert [f.name for f in store.fields_for("keyframe")] == ["blurry"]
+
+    def test_csv_and_detections_exports_ignore_custom_fields(self, store):
+        store.set_custom_fields(self._schema())
+        track = self._track_with_values(store)
+        track.species = "red deer"
+        store.save()
+        header, *rows = open(store.csv_path, encoding="utf-8").readlines()
+        assert header.strip().endswith("occlusion,keyframe")
+        assert all(len(r.strip().split(",")) == 11 for r in rows)
+        _det_file, count = store.export_to_detections()
+        assert count == 3
 
 
 class TestPoseEpochs:

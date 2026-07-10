@@ -61,6 +61,20 @@ class TestDialogsConstruct:
         assert isinstance(dlg, QDialog)
         _close(dlg)
 
+    def test_custom_fields_settings(self):
+        from bambi_wildlife_detection.bambi_labelling_tool import (
+            CustomField, _CustomFieldsDialog)
+        fields = [CustomField("weight", "float", "track"),
+                  CustomField("blurry", "bool", "keyframe")]
+        dlg = _CustomFieldsDialog(fields)
+        assert isinstance(dlg, QDialog)
+        # the table round-trips the schema it was given
+        assert dlg.fields() == fields
+        # … and the one a shared schema file is imported into
+        dlg.set_fields([CustomField("tag", "string", "track")])
+        assert [f.name for f in dlg.fields()] == ["tag"]
+        _close(dlg)
+
     def test_correction_wizard_invalid_config_rejects_cleanly(self, iface):
         # With an empty config the wizard validates, schedules a deferred
         # rejection and returns from __init__ without building the UI or
@@ -71,3 +85,34 @@ class TestDialogsConstruct:
         dlg = BambiCorrectionWizard(iface, {})
         assert isinstance(dlg, QDialog)
         _close(dlg)
+
+
+class TestCustomFieldWidgets:
+    """The custom-field editors must survive a value → widget → value trip."""
+
+    @pytest.mark.parametrize("type_, value", [
+        ("int", 42),
+        ("float", 1.5),
+        ("string", "roe deer"),
+        ("bool", True),
+        ("datetime", "2023-09-20T10:00:00"),
+    ])
+    def test_value_round_trip(self, type_, value):
+        from bambi_wildlife_detection.bambi_labelling_tool import (
+            CustomField, _field_widget_value, _make_field_widget,
+            _set_field_widget_value)
+        field = CustomField("f", type_)
+        widget = _make_field_widget(field, lambda *a: None)
+        _set_field_widget_value(field, widget, value)
+        assert _field_widget_value(field, widget) == value
+        widget.deleteLater()
+
+    def test_unparseable_value_falls_back_to_the_default(self):
+        from bambi_wildlife_detection.bambi_labelling_tool import (
+            CustomField, _field_widget_value, _make_field_widget,
+            _set_field_widget_value)
+        field = CustomField("f", "int")
+        widget = _make_field_widget(field, lambda *a: None)
+        _set_field_widget_value(field, widget, "not a number")
+        assert _field_widget_value(field, widget) == 0
+        widget.deleteLater()

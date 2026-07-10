@@ -7,6 +7,8 @@ the labelling workflow. Contains:
 
 * the class taxonomies and track colour palette (as RGB tuples — the GUI
   wraps them in ``QColor``),
+* :class:`CustomField` — user-defined extra attributes (per track or per
+  key frame) that only round-trip through ``labels.json``,
 * :class:`LabelTrack` / :class:`LabelStore` — key-frame storage,
   interpolation, stop frames, JSON/CSV persistence and the
   ``detections.txt`` export,
@@ -18,7 +20,7 @@ the labelling workflow. Contains:
 
 import os
 import json
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # Class taxonomies
@@ -46,24 +48,262 @@ def track_color_rgb(track_id: int) -> Tuple[int, int, int]:
 
 
 # ---------------------------------------------------------------------------
+# User-defined attributes
+# ---------------------------------------------------------------------------
+
+#: Value types a custom field can hold.  ``datetime`` values are kept as
+#: ISO-8601 strings so they survive a JSON round trip unchanged.
+FIELD_TYPES = ("int", "float", "string", "bool", "datetime")
+
+#: ``track``  — one value per label track (like species / sex / age)
+#: ``keyframe`` — one value per key frame (like occlusion), inherited by the
+#: interpolated frames that follow it.
+FIELD_SCOPES = ("track", "keyframe")
+
+#: Keys the built-in model already occupies in ``labels.json``; a custom
+#: field may not shadow them.
+RESERVED_FIELD_NAMES = frozenset({
+    "track_id", "species", "sex", "age", "keyframes", "attributes",
+    "frame", "x1", "y1", "x2", "y2", "occlusion", "stop",
+})
+
+_FIELD_DEFAULTS = {
+    "int": 0, "float": 0.0, "string": "", "bool": False, "datetime": "",
+}
+
+_TRUE_STRINGS = {"true", "yes", "1", "on"}
+_FALSE_STRINGS = {"false", "no", "0", "off", ""}
+
+
+class CustomField:
+    """A user-defined attribute: a *name*, a value *type* and a *scope*.
+
+    Fields are configured in the labelling tool's settings dialog, stored in
+    ``labels.json`` alongside the tracks and rendered as extra input widgets.
+    They are deliberately **not** written to ``labels.csv`` or
+    ``detections.txt``, whose column layouts are consumed by the rest of the
+    pipeline and must stay stable.
+    """
+
+    def __init__(self, name: str, type: str = "string", scope: str = "track"):
+        name = (name or "").strip()
+        if not name:
+            raise ValueError("A custom field needs a name.")
+        if name.lower() in RESERVED_FIELD_NAMES:
+            raise ValueError(f"'{name}' is a reserved field name.")
+        if type not in FIELD_TYPES:
+            raise ValueError(f"Unknown field type '{type}'.")
+        if scope not in FIELD_SCOPES:
+            raise ValueError(f"Unknown field scope '{scope}'.")
+        self.name = name
+        self.type = type
+        self.scope = scope
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, CustomField):
+            return NotImplemented
+        return (self.name, self.type, self.scope) == \
+            (other.name, other.type, other.scope)
+
+    def __repr__(self) -> str:  # pragma: no cover — debugging aid
+        return f"CustomField({self.name!r}, {self.type!r}, {self.scope!r})"
+
+    @property
+    def default(self) -> Any:
+        return _FIELD_DEFAULTS[self.type]
+
+    def coerce(self, value: Any) -> Any:
+        """Return *value* as this field's type.
+
+        Raises ``ValueError`` when the value cannot be converted — callers
+        (schema changes, JSON loading) drop such values instead of failing.
+        """
+        if value is None:
+            raise ValueError("None is not a valid field value.")
+        if self.type == "int":
+            if isinstance(value, bool):
+                return int(value)
+            if isinstance(value, str):
+                return int(float(value.strip()))
+            return int(value)
+        if self.type == "float":
+            if isinstance(value, str):
+                return float(value.strip())
+            return float(value)
+        if self.type == "string":
+            return value if isinstance(value, str) else str(value)
+        if self.type == "bool":
+            if isinstance(value, str):
+                text = value.strip().lower()
+                if text in _TRUE_STRINGS:
+                    return True
+                if text in _FALSE_STRINGS:
+                    return False
+                raise ValueError(f"'{value}' is not a boolean.")
+            return bool(value)
+        # datetime — kept as an ISO-8601 string ('' means unset)
+        if hasattr(value, "isoformat"):
+            return value.isoformat()
+        text = str(value).strip()
+        if not text:
+            return ""
+        from datetime import datetime
+        datetime.fromisoformat(text)  # validate, keep the original spelling
+        return text
+
+    def to_dict(self) -> dict:
+        return {"name": self.name, "type": self.type, "scope": self.scope}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "CustomField":
+        return cls(d.get("name", ""), d.get("type", "string"),
+                   d.get("scope", "track"))
+
+
+def custom_fields_from_dicts(dicts: Iterable[dict]) -> List["CustomField"]:
+    """Build a field list from JSON/QSettings dicts, skipping invalid ones."""
+    fields: List[CustomField] = []
+    seen = set()
+    for d in dicts or []:
+        try:
+            field = CustomField.from_dict(d)
+        except (ValueError, AttributeError):
+            continue
+        if field.name.lower() in seen:
+            continue
+        seen.add(field.name.lower())
+        fields.append(field)
+    return fields
+
+
+def validate_custom_fields(fields: List["CustomField"]) -> None:
+    """Raise ``ValueError`` when two fields share a (case-insensitive) name."""
+    seen = set()
+    for field in fields:
+        key = field.name.lower()
+        if key in seen:
+            raise ValueError(f"Duplicate field name '{field.name}'.")
+        seen.add(key)
+
+
+# Marker + version of the standalone schema file written by
+# :func:`write_custom_fields`, so a wrong file picked in the import dialog is
+# rejected with a clear message instead of silently yielding no fields.
+FIELD_SCHEMA_FORMAT = "bambi-labelling-fields"
+FIELD_SCHEMA_VERSION = 1
+
+
+def write_custom_fields(path: str, fields: List["CustomField"]) -> None:
+    """Write *fields* to a shareable schema file (``*.json``)."""
+    data = {
+        "format": FIELD_SCHEMA_FORMAT,
+        "version": FIELD_SCHEMA_VERSION,
+        "custom_fields": [f.to_dict() for f in fields],
+    }
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2)
+
+
+def read_custom_fields(path: str) -> List["CustomField"]:
+    """Read a schema written by :func:`write_custom_fields`.
+
+    A flight's ``labels.json`` and a bare list of field dicts are accepted
+    too, so a colleague's label folder can be used as the source directly.
+    Unlike :func:`custom_fields_from_dicts` this is strict: an unusable file
+    or a single bad field raises ``ValueError`` with a readable message
+    rather than silently importing a partial schema.
+    """
+    with open(path, "r", encoding="utf-8") as fh:
+        try:
+            data = json.load(fh)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Not a valid JSON file: {exc}")
+
+    if isinstance(data, list):
+        entries = data
+    elif isinstance(data, dict):
+        fmt = data.get("format")
+        if fmt not in (None, FIELD_SCHEMA_FORMAT):
+            raise ValueError(f"Unknown file format '{fmt}'.")
+        raw_version = data.get("version", FIELD_SCHEMA_VERSION)
+        try:
+            version = int(raw_version)
+        except (TypeError, ValueError):
+            raise ValueError(f"Invalid file version '{raw_version}'.")
+        if version > FIELD_SCHEMA_VERSION:
+            raise ValueError(
+                f"The file was written by a newer version of the plugin "
+                f"(version {version}, this one reads up to "
+                f"{FIELD_SCHEMA_VERSION}).")
+        if "custom_fields" not in data:
+            raise ValueError(
+                "The file contains no 'custom_fields' — expected a schema "
+                "export or a flight's labels.json.")
+        entries = data["custom_fields"]
+    else:
+        raise ValueError("The file contains no custom field definitions.")
+
+    if not isinstance(entries, list):
+        raise ValueError("'custom_fields' must be a list of field definitions.")
+
+    fields: List[CustomField] = []
+    for i, entry in enumerate(entries, start=1):
+        if not isinstance(entry, dict):
+            raise ValueError(f"Field {i} is not a field definition.")
+        try:
+            fields.append(CustomField.from_dict(entry))
+        except ValueError as exc:
+            raise ValueError(f"Field {i}: {exc}")
+    validate_custom_fields(fields)
+    return fields
+
+
+def coerce_attributes(attributes: Dict[str, Any],
+                      fields: List["CustomField"]) -> Dict[str, Any]:
+    """Keep only values that belong to *fields* and convert them to its type.
+
+    Values of removed fields are dropped and values that no longer fit a
+    retyped field are discarded, so a schema change never leaves unreadable
+    entries behind in ``labels.json``.
+    """
+    result: Dict[str, Any] = {}
+    for field in fields:
+        if field.name not in attributes:
+            continue
+        try:
+            result[field.name] = field.coerce(attributes[field.name])
+        except (ValueError, TypeError):
+            continue
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Data model
 # ---------------------------------------------------------------------------
 
 class LabelTrack:
     """A single annotated track made of key frames.
 
-    Key frames map ``frame -> {"x1","y1","x2","y2","occlusion"[,"stop"]}``;
-    boxes on frames between two key frames are linearly interpolated —
-    except after a key frame flagged ``stop`` (the animal disappeared):
-    frames between a stop frame and the next key frame have no box.
+    Key frames map ``frame -> {"x1","y1","x2","y2","occlusion"[,"stop"]
+    [,"attributes"]}``; boxes on frames between two key frames are linearly
+    interpolated — except after a key frame flagged ``stop`` (the animal
+    disappeared): frames between a stop frame and the next key frame have no
+    box.
+
+    ``attributes`` holds the values of the user-defined :class:`CustomField`
+    of the matching scope: track-scope values live on ``self.attributes``,
+    key-frame-scope values inside each key frame entry (and are inherited by
+    the interpolated frames that follow it, like ``occlusion``).
     """
 
     def __init__(self, track_id: int, species: str = "unknown",
-                 sex: str = "unknown", age: str = "unknown"):
+                 sex: str = "unknown", age: str = "unknown",
+                 attributes: Optional[Dict[str, Any]] = None):
         self.track_id = track_id
         self.species = species
         self.sex = sex
         self.age = age
+        self.attributes: Dict[str, Any] = dict(attributes or {})
         self.keyframes: Dict[int, dict] = {}
 
     # -- key frame access ------------------------------------------------
@@ -79,15 +319,15 @@ class LabelTrack:
 
     def set_keyframe(self, frame: int, box: Tuple[float, float, float, float],
                      occlusion: Optional[str] = None,
-                     stop: Optional[bool] = None) -> None:
+                     stop: Optional[bool] = None,
+                     attributes: Optional[Dict[str, Any]] = None) -> None:
         prev = self.keyframes.get(frame)
+        source = prev if prev is not None else self._effective_entry(frame)
         if occlusion is None:
-            if prev is not None:
-                occlusion = prev.get("occlusion", "none")
-            else:
-                # inherit from the interpolation state at this frame
-                interp = self.box_at(frame)
-                occlusion = interp[2] if interp else "none"
+            occlusion = source.get("occlusion", "none") if source else "none"
+        if attributes is None:
+            # inherit the key-frame attributes in force at this frame
+            attributes = dict(source.get("attributes", {})) if source else {}
         if stop is None:
             # preserve an existing stop flag when only the box is updated
             stop = bool(prev.get("stop", False)) if prev else False
@@ -98,6 +338,8 @@ class LabelTrack:
         }
         if stop:
             entry["stop"] = True
+        if attributes:
+            entry["attributes"] = dict(attributes)
         self.keyframes[frame] = entry
 
     def is_stop(self, frame: int) -> bool:
@@ -123,6 +365,34 @@ class LabelTrack:
 
     def remove_keyframe(self, frame: int) -> bool:
         return self.keyframes.pop(frame, None) is not None
+
+    def _effective_entry(self, frame: int) -> Optional[dict]:
+        """The key-frame entry whose per-key-frame state applies at *frame*.
+
+        That is the key frame itself, or the preceding one for interpolated
+        frames.  ``None`` when the track has no box at *frame* (outside its
+        range or in a gap after a stop frame).
+        """
+        if not self.keyframes:
+            return None
+        if frame in self.keyframes:
+            return self.keyframes[frame]
+        fs = self.frames()
+        if frame < fs[0] or frame > fs[-1]:
+            return None
+        prev = self.keyframes[max(f for f in fs if f < frame)]
+        return None if prev.get("stop") else prev
+
+    def attributes_at(self, frame: int) -> Optional[Dict[str, Any]]:
+        """Key-frame-scope custom attributes in force at *frame*.
+
+        Interpolated frames inherit the previous key frame's values; returns
+        ``None`` where the track has no box.
+        """
+        entry = self._effective_entry(frame)
+        if entry is None:
+            return None
+        return dict(entry.get("attributes", {}))
 
     def box_at(self, frame: int) -> Optional[Tuple[tuple, bool, str]]:
         """Return ``((x1,y1,x2,y2), is_keyframe, occlusion)`` or ``None``.
@@ -155,13 +425,16 @@ class LabelTrack:
     # -- (de)serialisation -------------------------------------------------
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "track_id": self.track_id,
             "species": self.species,
             "sex": self.sex,
             "age": self.age,
             "keyframes": {str(f): kf for f, kf in self.keyframes.items()},
         }
+        if self.attributes:
+            d["attributes"] = dict(self.attributes)
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "LabelTrack":
@@ -170,6 +443,7 @@ class LabelTrack:
             d.get("species", "unknown"),
             d.get("sex", "unknown"),
             d.get("age", "unknown"),
+            attributes=d.get("attributes") or {},
         )
         for f, kf in d.get("keyframes", {}).items():
             entry = {
@@ -179,6 +453,8 @@ class LabelTrack:
             }
             if kf.get("stop"):
                 entry["stop"] = True
+            if kf.get("attributes"):
+                entry["attributes"] = dict(kf["attributes"])
             track.keyframes[int(f)] = entry
         return track
 
@@ -190,6 +466,11 @@ class LabelStore:
         self.target_folder = target_folder
         self.modality = modality
         self.tracks: Dict[int, LabelTrack] = {}
+        self.custom_fields: List[CustomField] = []
+        #: True once a ``custom_fields`` key was seen in ``labels.json`` —
+        #: lets the GUI tell "no schema configured yet" (seed it from the
+        #: user's defaults) from "schema deliberately empty".
+        self.schema_defined = False
 
     @property
     def folder(self) -> str:
@@ -208,24 +489,80 @@ class LabelStore:
 
     def load(self) -> None:
         self.tracks = {}
+        self.custom_fields = []
+        self.schema_defined = False
         if not os.path.isfile(self.json_path):
             return
         with open(self.json_path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
+        if "custom_fields" in data:
+            self.schema_defined = True
+            self.custom_fields = custom_fields_from_dicts(
+                data.get("custom_fields") or [])
         for td in data.get("tracks", []):
             track = LabelTrack.from_dict(td)
             self.tracks[track.track_id] = track
+        self._prune_to_schema()
 
     def save(self) -> None:
         os.makedirs(self.folder, exist_ok=True)
         data = {
             "modality": self.modality,
+            "custom_fields": [f.to_dict() for f in self.custom_fields],
             "tracks": [t.to_dict() for t in sorted(
                 self.tracks.values(), key=lambda t: t.track_id)],
         }
         with open(self.json_path, "w", encoding="utf-8") as fh:
             json.dump(data, fh, indent=2)
+        self.schema_defined = True
         self._export_csv()
+
+    # -- custom field schema ---------------------------------------------
+
+    def fields_for(self, scope: str) -> List[CustomField]:
+        return [f for f in self.custom_fields if f.scope == scope]
+
+    def set_custom_fields(self, fields: List[CustomField]) -> None:
+        """Install a new schema and bring the stored values in line with it.
+
+        Values of dropped fields are removed and values of retyped fields are
+        converted (or dropped when they do not fit the new type), so
+        ``labels.json`` never carries attributes the schema cannot describe.
+        """
+        validate_custom_fields(fields)
+        self.custom_fields = list(fields)
+        self.schema_defined = True
+        self._prune_to_schema()
+
+    def count_values(self, field: CustomField) -> int:
+        """How many stored values *field* currently has (tracks or key frames).
+
+        The settings dialog uses this to warn before a removal or a retype
+        discards data.
+        """
+        count = 0
+        for track in self.tracks.values():
+            if field.scope == "track":
+                if field.name in track.attributes:
+                    count += 1
+            else:
+                for entry in track.keyframes.values():
+                    if field.name in entry.get("attributes", {}):
+                        count += 1
+        return count
+
+    def _prune_to_schema(self) -> None:
+        track_fields = self.fields_for("track")
+        kf_fields = self.fields_for("keyframe")
+        for track in self.tracks.values():
+            track.attributes = coerce_attributes(track.attributes, track_fields)
+            for entry in track.keyframes.values():
+                attrs = coerce_attributes(
+                    entry.get("attributes", {}), kf_fields)
+                if attrs:
+                    entry["attributes"] = attrs
+                else:
+                    entry.pop("attributes", None)
 
     # Marker line that delimits the label-tool block in detections.txt so a
     # re-export replaces the previous block instead of duplicating it.
@@ -307,7 +644,12 @@ class LabelStore:
         return det_file, len(rows)
 
     def _export_csv(self) -> None:
-        """Write the per-frame interpolated CSV export."""
+        """Write the per-frame interpolated CSV export.
+
+        The column layout is fixed: user-defined :class:`CustomField` values
+        stay in ``labels.json`` only, because downstream consumers of this
+        file (and of ``detections.txt``) parse it positionally.
+        """
         with open(self.csv_path, "w", encoding="utf-8") as fh:
             fh.write(
                 "# frame,track_id,x1,y1,x2,y2,species,sex,age,occlusion,keyframe\n"

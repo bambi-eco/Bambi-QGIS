@@ -19,6 +19,12 @@ Features
   key frame (where the track resumes), leaving a gap in the track.
 * New tracks are drawn as bounding boxes and carry a species class, sex
   class, age class (per track) and an occlusion level (per key frame).
+* Custom fields: the settings dialog (gear button) defines additional
+  attributes — a name, a data type (int / float / string / bool / datetime)
+  and a scope (per track, like species, or per key frame, like occlusion).
+  Each one adds an input widget to the side panel and is stored in
+  ``labels.json`` only (see below).  The configuration can be exported to a
+  standalone JSON file and imported again, so a labelling setup can be shared.
 * Existing label boxes can be moved/resized (which writes a key frame at the
   current frame) and their classes edited at any time.
 * Existing pipeline tracks can be imported as editable label tracks.
@@ -37,9 +43,14 @@ Features
 
 Files written (relative to *target_folder*, ``{m}`` = ``t`` / ``w``)
 --------------------------------------------------------------------
-``labels_{m}/labels.json``  — key-frame source of truth
+``labels_{m}/labels.json``  — key-frame source of truth, including the custom
+    field schema (``custom_fields``) and their values (``attributes``)
 ``labels_{m}/labels.csv``   — per-frame interpolated export
     format: ``frame,track_id,x1,y1,x2,y2,species,sex,age,occlusion,keyframe``
+
+Custom field values live in ``labels.json`` alone: the CSV export and
+``detections.txt`` keep their fixed column layouts because the rest of the
+pipeline parses them positionally.
 
 "Add detections to project" additionally merges the interpolated label boxes
 into ``detections_{m}/detections.txt`` in the exact format of the "Detect
@@ -50,16 +61,21 @@ is delimited by a marker comment and replaced on re-export.
 
 import os
 import json
-from typing import Dict, List, Optional, Tuple
+from functools import partial
+from typing import Any, Dict, List, Optional, Tuple
 
-from qgis.PyQt.QtCore import Qt, QRectF, QPointF, QSettings, QTimer, pyqtSignal
+from qgis.PyQt.QtCore import (
+    Qt, QRectF, QPointF, QDateTime, QSettings, QTimer, pyqtSignal,
+)
 from qgis.PyQt.QtGui import (
     QColor, QPen, QFont, QPixmap, QPainter, QCursor, QPainterPath,
 )
 from qgis.PyQt.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
-    QComboBox, QSpinBox, QCheckBox, QSlider, QWidget, QGroupBox,
-    QListWidget, QListWidgetItem, QFileDialog, QMessageBox, QApplication,
+    QComboBox, QSpinBox, QDoubleSpinBox, QDateTimeEdit, QCheckBox, QSlider,
+    QWidget, QGroupBox, QFormLayout, QListWidget, QListWidgetItem,
+    QTableWidget, QTableWidgetItem, QHeaderView, QDialogButtonBox,
+    QFileDialog, QMessageBox, QApplication,
     QGraphicsView, QGraphicsScene, QGraphicsRectItem, QGraphicsPixmapItem,
     QGraphicsSimpleTextItem, QSizePolicy,
 )
@@ -72,9 +88,13 @@ from qgis.PyQt.QtWidgets import (
 
 from .core.labelling import (  # noqa: F401 — re-exported API
     AGE_CLASSES,
+    FIELD_SCOPES,
+    FIELD_TYPES,
+    CustomField,
     LabelStore,
     LabelTrack,
     OCCLUSION_LEVELS,
+    RESERVED_FIELD_NAMES,
     SEX_CLASSES,
     SPECIES_CLASSES,
     TRACK_COLORS_RGB,
@@ -83,9 +103,22 @@ from .core.labelling import (  # noqa: F401 — re-exported API
     _load_detections_by_frame,
     _load_pixel_tracks,
     _pose_epochs,
+    custom_fields_from_dicts,
     propagation_frames,
+    read_custom_fields,
     track_color_rgb,
+    validate_custom_fields,
+    write_custom_fields,
 )
+
+#: Where the last configured field schema is remembered, so a newly labelled
+#: flight (or the other modality) starts out with the same extra fields.
+_FIELDS_SETTING = "bambi/labelling_tool/custom_fields"
+
+#: Folder the import/export file dialogs open in (last one used).
+_FIELDS_DIR_SETTING = "bambi/labelling_tool/custom_fields_dir"
+
+_FIELDS_FILE_FILTER = "Labelling field schema (*.json);;All files (*)"
 
 # Distinct colours cycled per label track id
 _TRACK_COLORS = [QColor(*rgb) for rgb in TRACK_COLORS_RGB]
@@ -424,6 +457,284 @@ class _TimelineWidget(QWidget):
 
 
 # ---------------------------------------------------------------------------
+# Custom field widgets & settings dialog
+# ---------------------------------------------------------------------------
+
+#: ISO-8601 spelling used by the datetime editor, matching ``Qt.ISODate`` and
+#: :meth:`CustomField.coerce`'s ``datetime.fromisoformat`` validation.
+_DATETIME_FORMAT = "yyyy-MM-ddTHH:mm:ss"
+
+#: Human-readable scope names for the settings table.
+_SCOPE_LABELS = {"track": "Track", "keyframe": "Key frame"}
+
+
+def _make_field_widget(field: CustomField, on_changed) -> QWidget:
+    """Build the input widget for *field* and wire it to *on_changed*."""
+    if field.type == "int":
+        widget = QSpinBox()
+        widget.setRange(-2_147_483_648, 2_147_483_647)
+        widget.valueChanged.connect(on_changed)
+    elif field.type == "float":
+        widget = QDoubleSpinBox()
+        widget.setDecimals(6)
+        widget.setRange(-1e12, 1e12)
+        widget.valueChanged.connect(on_changed)
+    elif field.type == "bool":
+        widget = QCheckBox()
+        widget.toggled.connect(on_changed)
+    elif field.type == "datetime":
+        widget = QDateTimeEdit()
+        widget.setDisplayFormat(_DATETIME_FORMAT)
+        widget.setCalendarPopup(True)
+        widget.dateTimeChanged.connect(on_changed)
+    else:  # string
+        widget = QLineEdit()
+        widget.textChanged.connect(on_changed)
+    widget.setToolTip(
+        f"Custom {_SCOPE_LABELS[field.scope].lower()} field "
+        f"'{field.name}' ({field.type}). Stored in labels.json only.")
+    return widget
+
+
+def _field_widget_value(field: CustomField, widget: QWidget) -> Any:
+    if field.type in ("int", "float"):
+        return widget.value()
+    if field.type == "bool":
+        return widget.isChecked()
+    if field.type == "datetime":
+        return widget.dateTime().toString(Qt.ISODate)
+    return widget.text()
+
+
+def _set_field_widget_value(field: CustomField, widget: QWidget,
+                            value: Any) -> None:
+    """Show *value* in *widget* without disturbing an in-progress edit.
+
+    Every setter is guarded by an equality check: re-rendering the frame
+    refreshes the whole side panel after each keystroke, and re-setting a
+    line edit's text would move the caret back to the end.
+    """
+    try:
+        value = field.coerce(value)
+    except (ValueError, TypeError):
+        value = field.default
+    if field.type in ("int", "float"):
+        if widget.value() != value:
+            widget.setValue(value)
+    elif field.type == "bool":
+        if widget.isChecked() != value:
+            widget.setChecked(value)
+    elif field.type == "datetime":
+        stamp = QDateTime.fromString(value, Qt.ISODate)
+        if not stamp.isValid():
+            stamp = QDateTime.currentDateTime()
+        if widget.dateTime() != stamp:
+            widget.setDateTime(stamp)
+    else:
+        if widget.text() != value:
+            widget.setText(value)
+
+
+class _CustomFieldsDialog(QDialog):
+    """Editor for the user-defined attribute schema (name / type / scope).
+
+    The schema can be written to a standalone JSON file and read back, so a
+    labelling setup can be shared with colleagues working on other flights.
+    """
+
+    _COLUMNS = ("Name", "Data type", "Scope")
+
+    def __init__(self, fields: List[CustomField], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Labelling Tool Settings")
+        self.resize(560, 400)
+
+        layout = QVBoxLayout(self)
+        intro = QLabel(
+            "Additional label attributes. <b>Track</b> fields hold one value "
+            "per label track (like species); <b>key frame</b> fields hold one "
+            "value per key frame (like occlusion) and are inherited by the "
+            "interpolated frames that follow.<br><br>"
+            "Values are stored in <code>labels.json</code> only — the CSV "
+            "export and <code>detections.txt</code> keep their fixed columns "
+            "so the rest of the pipeline can still read them.<br><br>"
+            "<b>Export</b> writes this configuration to a JSON file you can "
+            "pass on; <b>Import</b> reads such a file (or a colleague's "
+            "<code>labels.json</code>) back.")
+        intro.setWordWrap(True)
+        intro.setTextFormat(Qt.RichText)
+        intro.setStyleSheet("color: #888;")
+        layout.addWidget(intro)
+
+        self.table = QTableWidget(0, len(self._COLUMNS))
+        self.table.setHorizontalHeaderLabels(self._COLUMNS)
+        self.table.verticalHeader().setVisible(False)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        layout.addWidget(self.table, 1)
+
+        for field in fields:
+            self._append_row(field)
+
+        btn_row = QHBoxLayout()
+        add_btn = QPushButton("Add field")
+        add_btn.clicked.connect(lambda: self._append_row(None))
+        self.remove_btn = QPushButton("Remove field")
+        self.remove_btn.clicked.connect(self._on_remove_row)
+        self.import_btn = QPushButton("Import…")
+        self.import_btn.setToolTip(
+            "Replace the configuration below with the one from a schema file "
+            "(or a labels.json).")
+        self.import_btn.clicked.connect(self._on_import)
+        self.export_btn = QPushButton("Export…")
+        self.export_btn.setToolTip(
+            "Write the configuration below to a JSON file that can be shared "
+            "and imported elsewhere.")
+        self.export_btn.clicked.connect(self._on_export)
+        btn_row.addWidget(add_btn)
+        btn_row.addWidget(self.remove_btn)
+        btn_row.addStretch()
+        btn_row.addWidget(self.import_btn)
+        btn_row.addWidget(self.export_btn)
+        layout.addLayout(btn_row)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self._on_accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _append_row(self, field: Optional[CustomField]) -> None:
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        self.table.setItem(
+            row, 0, QTableWidgetItem(field.name if field else ""))
+
+        type_combo = QComboBox()
+        type_combo.addItems(FIELD_TYPES)
+        if field:
+            type_combo.setCurrentText(field.type)
+        self.table.setCellWidget(row, 1, type_combo)
+
+        scope_combo = QComboBox()
+        for scope in FIELD_SCOPES:
+            scope_combo.addItem(_SCOPE_LABELS[scope], scope)
+        if field:
+            scope_combo.setCurrentIndex(FIELD_SCOPES.index(field.scope))
+        self.table.setCellWidget(row, 2, scope_combo)
+
+        if field is None:
+            self.table.setCurrentCell(row, 0)
+            self.table.editItem(self.table.item(row, 0))
+
+    def _on_remove_row(self) -> None:
+        row = self.table.currentRow()
+        if row >= 0:
+            self.table.removeRow(row)
+
+    def set_fields(self, fields: List[CustomField]) -> None:
+        """Replace the table's contents with *fields*."""
+        self.table.setRowCount(0)
+        for field in fields:
+            self._append_row(field)
+
+    # -- sharing ---------------------------------------------------------
+
+    @staticmethod
+    def _last_dir() -> str:
+        return QSettings().value(_FIELDS_DIR_SETTING, "", type=str)
+
+    @staticmethod
+    def _remember_dir(path: str) -> None:
+        QSettings().setValue(_FIELDS_DIR_SETTING, os.path.dirname(path))
+
+    def _on_import(self):
+        path, _filter = QFileDialog.getOpenFileName(
+            self, "Import label field configuration",
+            self._last_dir(), _FIELDS_FILE_FILTER)
+        if not path:
+            return
+        try:
+            fields = read_custom_fields(path)
+        except (ValueError, OSError) as exc:
+            QMessageBox.warning(
+                self, "Import Failed",
+                f"Could not read the field configuration:\n\n{exc}")
+            return
+
+        if self.table.rowCount():
+            reply = QMessageBox.question(
+                self, "Import Fields",
+                f"Replace the current {self.table.rowCount()} field(s) with "
+                f"the {len(fields)} field(s) from this file?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+            if reply != QMessageBox.Yes:
+                return
+
+        self._remember_dir(path)
+        self.set_fields(fields)
+        # Nothing is applied to the labels yet — OK still has to be pressed,
+        # which is where the data-loss check for the new schema runs.
+        QMessageBox.information(
+            self, "Import Fields",
+            f"Imported {len(fields)} field(s). Press OK to apply them.")
+
+    def _on_export(self):
+        try:
+            fields = self.fields()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid Field", str(exc))
+            return
+        if not fields:
+            QMessageBox.information(
+                self, "Export Fields", "There are no fields to export.")
+            return
+
+        path, _filter = QFileDialog.getSaveFileName(
+            self, "Export label field configuration",
+            os.path.join(self._last_dir(), "labelling_fields.json"),
+            _FIELDS_FILE_FILTER)
+        if not path:
+            return
+        if not os.path.splitext(path)[1]:
+            path += ".json"
+        try:
+            write_custom_fields(path, fields)
+        except OSError as exc:
+            QMessageBox.warning(
+                self, "Export Failed",
+                f"Could not write the field configuration:\n\n{exc}")
+            return
+        self._remember_dir(path)
+        QMessageBox.information(
+            self, "Export Fields",
+            f"Wrote {len(fields)} field(s) to:\n{path}")
+
+    def fields(self) -> List[CustomField]:
+        """Return the edited schema. Raises ``ValueError`` when invalid."""
+        result: List[CustomField] = []
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 0)
+            result.append(CustomField(
+                item.text() if item else "",
+                self.table.cellWidget(row, 1).currentText(),
+                self.table.cellWidget(row, 2).currentData(),
+            ))
+        validate_custom_fields(result)
+        return result
+
+    def _on_accept(self) -> None:
+        try:
+            self.fields()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid Field", str(exc))
+            return
+        self.accept()
+
+
+# ---------------------------------------------------------------------------
 # Main dialog
 # ---------------------------------------------------------------------------
 
@@ -458,6 +769,11 @@ class LabellingToolDialog(QDialog):
         self._selected_track: Optional[int] = None
         self._dirty = False
         self._updating_ui = False
+
+        # Custom field editors, rebuilt whenever the schema changes
+        self._fields_by_name: Dict[str, CustomField] = {}
+        self._track_field_widgets: Dict[str, QWidget] = {}
+        self._kf_field_widgets: Dict[str, QWidget] = {}
 
         # Autosave debounce: rapid edits (dragging, typing a species name)
         # collapse into one save shortly after the last change.
@@ -510,6 +826,14 @@ class LabellingToolDialog(QDialog):
         self.save_btn = QPushButton("Save Labels")
         self.save_btn.clicked.connect(self._on_save)
         top.addWidget(self.save_btn)
+
+        self.settings_btn = QPushButton("⚙")
+        self.settings_btn.setFixedWidth(30)
+        self.settings_btn.setToolTip(
+            "Settings: configure additional label attributes (per track or "
+            "per key frame).")
+        self.settings_btn.clicked.connect(self._on_open_settings)
+        top.addWidget(self.settings_btn)
         layout.addLayout(top)
 
         # ---- center: canvas + side panel ----------------------------------
@@ -671,6 +995,11 @@ class LabellingToolDialog(QDialog):
         self.age_combo.addItems(AGE_CLASSES)
         self.age_combo.currentTextChanged.connect(self._on_attributes_changed)
         combo_row("Age:", self.age_combo)
+
+        # Rows for the user-defined track-scope fields (see the gear button)
+        self.track_fields_form = QFormLayout()
+        self.track_fields_form.setContentsMargins(0, 0, 0, 0)
+        ag.addLayout(self.track_fields_form)
         vbox.addWidget(attr_group)
 
         # Key frames
@@ -725,6 +1054,13 @@ class LabellingToolDialog(QDialog):
             "timeline.")
         self.stop_check.toggled.connect(self._on_stop_toggled)
         kg.addWidget(self.stop_check)
+
+        # Rows for the user-defined key-frame-scope fields (see the gear
+        # button); like occlusion they promote an interpolated frame to a key
+        # frame when edited.
+        self.kf_fields_form = QFormLayout()
+        self.kf_fields_form.setContentsMargins(0, 0, 0, 0)
+        kg.addLayout(self.kf_fields_form)
         vbox.addWidget(kf_group)
 
         # Geo propagation
@@ -789,6 +1125,146 @@ class LabellingToolDialog(QDialog):
         fit_btn.clicked.connect(self.canvas.fit)
         vbox.addWidget(fit_btn)
         return panel
+
+    # ------------------------------------------------------------------
+    # Custom fields (settings)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _default_custom_fields() -> List[CustomField]:
+        """The last configured schema, used for stores that have none yet."""
+        raw = QSettings().value(_FIELDS_SETTING, "", type=str)
+        if not raw:
+            return []
+        try:
+            return custom_fields_from_dicts(json.loads(raw))
+        except (ValueError, TypeError):
+            return []
+
+    def _on_open_settings(self):
+        if self._store is None:
+            QMessageBox.information(
+                self, "BAMBI Labelling Tool",
+                "Load a target folder first — custom fields are stored in the "
+                "flight's labels.json.")
+            return
+
+        dialog = _CustomFieldsDialog(self._store.custom_fields, self)
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        fields = dialog.fields()
+        if fields == self._store.custom_fields:
+            return
+
+        losses = self._describe_data_loss(fields)
+        if losses:
+            details = "\n".join(f"• {msg}" for msg in losses)
+            reply = QMessageBox.question(
+                self, "Change Custom Fields",
+                "The new configuration affects labels you already have:\n\n"
+                f"{details}\n\nApply anyway?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if reply != QMessageBox.Yes:
+                return
+
+        self._store.set_custom_fields(fields)
+        QSettings().setValue(
+            _FIELDS_SETTING, json.dumps([f.to_dict() for f in fields]))
+        self._rebuild_custom_field_widgets()
+        self._mark_dirty()
+        self._render_frame()
+
+    def _describe_data_loss(self, fields: List[CustomField]) -> List[str]:
+        """Warn about stored values the new schema *fields* would discard."""
+        if self._store is None:
+            return []
+        by_name = {f.name: f for f in fields}
+        messages: List[str] = []
+        for old in self._store.custom_fields:
+            count = self._store.count_values(old)
+            if not count:
+                continue
+            new = by_name.get(old.name)
+            if new is None:
+                messages.append(
+                    f"'{old.name}' is removed — its {count} stored value(s) "
+                    "will be deleted.")
+            elif new.scope != old.scope:
+                messages.append(
+                    f"'{old.name}' moves from {_SCOPE_LABELS[old.scope]} to "
+                    f"{_SCOPE_LABELS[new.scope]} scope — its {count} stored "
+                    "value(s) will be deleted.")
+            elif new.type != old.type:
+                messages.append(
+                    f"'{old.name}' becomes a {new.type} — its {count} stored "
+                    f"{old.type} value(s) will be converted where possible "
+                    "and deleted otherwise.")
+        return messages
+
+    def _rebuild_custom_field_widgets(self):
+        """Recreate the side-panel editors for the current field schema."""
+        self._updating_ui = True
+        self._fields_by_name = {}
+        self._track_field_widgets = {}
+        self._kf_field_widgets = {}
+        for form in (self.track_fields_form, self.kf_fields_form):
+            while form.rowCount():
+                form.removeRow(0)
+
+        for field in (self._store.custom_fields if self._store else []):
+            self._fields_by_name[field.name] = field
+            if field.scope == "track":
+                widget = _make_field_widget(
+                    field, partial(self._on_custom_track_changed, field.name))
+                self._track_field_widgets[field.name] = widget
+                self.track_fields_form.addRow(f"{field.name}:", widget)
+            else:
+                widget = _make_field_widget(
+                    field, partial(self._on_custom_kf_changed, field.name))
+                self._kf_field_widgets[field.name] = widget
+                self.kf_fields_form.addRow(f"{field.name}:", widget)
+        self._updating_ui = False
+
+    def _on_custom_track_changed(self, name: str, *_args):
+        """A track-scope custom field was edited — store it on the track.
+
+        Only the edited field is written, so fields the user never touched
+        keep their "unset" state instead of picking up a widget default.
+        """
+        if self._updating_ui:
+            return
+        track = self._current_track()
+        field = self._fields_by_name.get(name)
+        if track is None or field is None:
+            return
+        track.attributes[name] = _field_widget_value(
+            field, self._track_field_widgets[name])
+        self._mark_dirty()
+        self._update_status()
+
+    def _on_custom_kf_changed(self, name: str, *_args):
+        """A key-frame-scope custom field was edited.
+
+        Like occlusion the value lives on a key frame, so editing it on an
+        interpolated frame promotes that frame to a key frame.
+        """
+        if self._updating_ui:
+            return
+        track = self._current_track()
+        field = self._fields_by_name.get(name)
+        if track is None or field is None:
+            return
+        res = track.box_at(self._current_frame)
+        if res is None:
+            return
+        attributes = track.attributes_at(self._current_frame) or {}
+        attributes[name] = _field_widget_value(
+            field, self._kf_field_widgets[name])
+        track.set_keyframe(self._current_frame, res[0], occlusion=res[2],
+                           attributes=attributes)
+        self._mark_dirty()
+        self._refresh_track_list()
+        self._render_frame()
 
     def keyPressEvent(self, event):
         """Frame navigation / labelling shortcuts.
@@ -954,6 +1430,11 @@ class LabellingToolDialog(QDialog):
             QMessageBox.warning(
                 self, "BAMBI Labelling Tool",
                 f"Could not load existing labels:\n{exc}")
+        if not self._store.schema_defined:
+            # Labels written before / without a schema: start from the fields
+            # the user configured last instead of showing none.
+            self._store.set_custom_fields(self._default_custom_fields())
+        self._rebuild_custom_field_widgets()
         self._dirty = False
         self._propagator = None  # modality-specific, rebuild lazily
         self._img_size = None
@@ -1132,11 +1613,17 @@ class LabellingToolDialog(QDialog):
         enabled = track is not None
         for w in (self.species_combo, self.sex_combo, self.age_combo):
             w.setEnabled(enabled)
+        for w in self._track_field_widgets.values():
+            w.setEnabled(enabled)
 
         if track is not None:
             self.species_combo.setCurrentText(track.species)
             self.sex_combo.setCurrentText(track.sex)
             self.age_combo.setCurrentText(track.age)
+            for name, widget in self._track_field_widgets.items():
+                field = self._fields_by_name[name]
+                _set_field_widget_value(
+                    field, widget, track.attributes.get(name, field.default))
             # … while occlusion and the stop flag are per key frame: they
             # need a box on the current frame.
             res = track.box_at(self._current_frame)
@@ -1145,6 +1632,12 @@ class LabellingToolDialog(QDialog):
             self.occlusion_combo.setEnabled(res is not None)
             self.stop_check.setEnabled(res is not None)
             self.stop_check.setChecked(track.is_stop(self._current_frame))
+            kf_attributes = track.attributes_at(self._current_frame) or {}
+            for name, widget in self._kf_field_widgets.items():
+                field = self._fields_by_name[name]
+                widget.setEnabled(res is not None)
+                _set_field_widget_value(
+                    field, widget, kf_attributes.get(name, field.default))
             kfs = track.frames()
 
             def _kf_anchor(f: int) -> str:
@@ -1180,6 +1673,8 @@ class LabellingToolDialog(QDialog):
             self.occlusion_combo.setEnabled(False)
             self.stop_check.setEnabled(False)
             self.stop_check.setChecked(False)
+            for widget in self._kf_field_widgets.values():
+                widget.setEnabled(False)
         self._updating_ui = False
 
     def _refresh_track_list(self):
@@ -1484,7 +1979,8 @@ class LabellingToolDialog(QDialog):
             for src in sorted(src_tracks, key=lambda t: t.track_id):
                 new_track = LabelTrack(
                     self._store.next_track_id(),
-                    species=src.species, sex=src.sex, age=src.age)
+                    species=src.species, sex=src.sex, age=src.age,
+                    attributes=dict(src.attributes))
                 for sf in src.frames():
                     kf = src.keyframes[sf]
                     m = matcher.match(sf)
@@ -1503,13 +1999,17 @@ class LabellingToolDialog(QDialog):
                     new_track.set_keyframe(
                         dst_frame, new_box,
                         occlusion=kf.get("occlusion", "none"),
-                        stop=bool(kf.get("stop", False)))
+                        stop=bool(kf.get("stop", False)),
+                        attributes=dict(kf.get("attributes", {})))
                     added_keyframes += 1
                     if first_new_frame is None:
                         first_new_frame = dst_frame
                 if new_track.keyframes:
                     self._store.tracks[new_track.track_id] = new_track
                     added_tracks += 1
+            # The source modality may define other custom fields — keep only
+            # the values this modality's schema knows about.
+            self._store.set_custom_fields(self._store.custom_fields)
         finally:
             QApplication.restoreOverrideCursor()
 
@@ -1837,6 +2337,9 @@ class LabellingToolDialog(QDialog):
                 self._store.load()
             except Exception:  # nosec B110
                 self._store.tracks = {}
+            if not self._store.schema_defined:
+                self._store.set_custom_fields(self._default_custom_fields())
+            self._rebuild_custom_field_widgets()
             self._refresh_track_list()
             self._render_frame()
         return True
