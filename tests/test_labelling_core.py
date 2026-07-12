@@ -20,6 +20,7 @@ from bambi_wildlife_detection.core.labelling import (
     _GeoPropagator,
     coerce_attributes,
     custom_fields_from_dicts,
+    keyframe_window,
     _load_detections_by_frame,
     _load_pixel_tracks,
     _pose_epochs,
@@ -619,6 +620,48 @@ class TestPropagationFrames:
 
     def test_same_frame_yields_nothing(self):
         assert propagation_frames(7, 7, 10) == []
+
+
+class TestKeyframeWindow:
+    def test_short_lists_are_shown_in_full(self):
+        frames = [0, 5, 10]
+        assert keyframe_window(frames, 5, max_shown=12) == frames
+
+    def test_a_full_list_is_not_elided(self):
+        frames = list(range(12))
+        assert keyframe_window(frames, 0, max_shown=12) == frames
+
+    def test_the_window_follows_the_current_frame(self):
+        frames = list(range(0, 200, 10))  # 20 key frames
+        # first + last, and the 10 remaining slots centred on frame 100
+        assert keyframe_window(frames, 100, max_shown=12) == [
+            0, None, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, None, 190]
+
+    def test_first_and_last_are_always_kept(self):
+        frames = list(range(0, 200, 10))
+        for current in (0, 55, 100, 190, 500):
+            window = keyframe_window(frames, current, max_shown=12)
+            assert window[0] == frames[0]
+            assert window[-1] == frames[-1]
+
+    def test_no_leading_gap_when_the_window_starts_at_the_front(self):
+        frames = list(range(0, 200, 10))
+        window = keyframe_window(frames, 0, max_shown=12)
+        assert window[:3] == [0, 10, 20]
+        assert window[-2:] == [None, 190]
+
+    def test_no_trailing_gap_when_the_window_reaches_the_end(self):
+        frames = list(range(0, 200, 10))
+        window = keyframe_window(frames, 190, max_shown=12)
+        assert window[:2] == [0, None]
+        assert window[-3:] == [170, 180, 190]
+
+    def test_no_key_frame_is_listed_twice(self):
+        frames = list(range(0, 200, 10))
+        for current in (0, 30, 100, 190):
+            shown = [f for f in keyframe_window(frames, current, max_shown=12)
+                     if f is not None]
+            assert len(shown) == len(set(shown))
 
 
 class TestGeoPropagator:

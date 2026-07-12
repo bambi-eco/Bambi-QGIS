@@ -35,6 +35,7 @@ from qgis.core import (
 )
 
 
+from .gui_utils import fit_to_screen
 from .core.tile_math import latlon_to_tile, tile_to_latlon
 # Track colours and all data loaders moved to core.video_export;
 # re-exported under their old names for compatibility.
@@ -181,8 +182,8 @@ class VideoCreatorDialog(QDialog):
         self._cancel = False
         self._rendering = False
         self.setWindowTitle("BAMBI Video Creator")
-        self.resize(640, 820)
         self._build_ui()
+        fit_to_screen(self, 640, 820)
         self.apply_dock_defaults()
         self._update_enabled_state()
 
@@ -352,7 +353,7 @@ class VideoCreatorDialog(QDialog):
         self._map_fov = QCheckBox("Current field of view")
         self._map_det = QCheckBox("Detections")
         self._map_trk = QCheckBox("Tracks")
-        self._map_perp = QCheckBox("Perpendicular distances")
+        self._map_perp = QCheckBox("Perpendicular distances (detections)")
         self._map_merged_bg = QCheckBox("Merged FoV as background")
         self._map_accumulate = QCheckBox("Accumulate FoV frame-by-frame (monitored area)")
         self._map_satellite = QCheckBox("Satellite / OSM background (needs internet)")

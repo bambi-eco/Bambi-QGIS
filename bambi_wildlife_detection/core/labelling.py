@@ -835,6 +835,34 @@ def propagation_frames(src_frame: int, dst_frame: int,
     return frames
 
 
+def keyframe_window(frames: List[int], current: int,
+                    max_shown: int = 12) -> List[Optional[int]]:
+    """The key frames to list for a track, elided around *current*.
+
+    Long tracks have more key frames than fit the side panel, so only a window
+    of them is listed.  The first and last are always kept — they bound the
+    track, which is what the user needs to navigate it — and the remaining
+    slots follow *current*.  ``None`` marks a gap where key frames were left
+    out, to be rendered as an ellipsis.
+    """
+    if len(frames) <= max_shown:
+        return list(frames)
+
+    inner = max_shown - 2  # first and last take a slot each
+    nearest = min(range(len(frames)),
+                  key=lambda i: abs(frames[i] - current))
+    start = max(1, min(nearest - inner // 2, len(frames) - 1 - inner))
+
+    window: List[Optional[int]] = [frames[0]]
+    if start > 1:
+        window.append(None)
+    window.extend(frames[start:start + inner])
+    if start + inner < len(frames) - 1:
+        window.append(None)
+    window.append(frames[-1])
+    return window
+
+
 class _GeoPropagator:
     """Projects a pixel-space box from one frame to another via the DEM.
 

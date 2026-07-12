@@ -77,7 +77,7 @@ from qgis.PyQt.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QDialogButtonBox,
     QFileDialog, QMessageBox, QApplication,
     QGraphicsView, QGraphicsScene, QGraphicsRectItem, QGraphicsPixmapItem,
-    QGraphicsSimpleTextItem, QSizePolicy,
+    QGraphicsSimpleTextItem, QSizePolicy, QScrollArea, QFrame,
 )
 
 
@@ -85,6 +85,8 @@ from qgis.PyQt.QtWidgets import (
 # Headless data model & geometry — moved to core.labelling; re-exported here
 # so existing imports keep working.
 # ---------------------------------------------------------------------------
+
+from .gui_utils import fit_to_screen
 
 from .core.labelling import (  # noqa: F401 — re-exported API
     AGE_CLASSES,
@@ -104,6 +106,7 @@ from .core.labelling import (  # noqa: F401 — re-exported API
     _load_pixel_tracks,
     _pose_epochs,
     custom_fields_from_dicts,
+    keyframe_window,
     propagation_frames,
     read_custom_fields,
     track_color_rgb,
@@ -117,6 +120,9 @@ _FIELDS_SETTING = "bambi/labelling_tool/custom_fields"
 
 #: Folder the import/export file dialogs open in (last one used).
 _FIELDS_DIR_SETTING = "bambi/labelling_tool/custom_fields_dir"
+
+#: Width of the controls next to the canvas (the scroll area adds the bar).
+_SIDE_PANEL_WIDTH = 300
 
 _FIELDS_FILE_FILTER = "Labelling field schema (*.json);;All files (*)"
 
@@ -750,7 +756,6 @@ class LabellingToolDialog(QDialog):
         flags = Qt.Window | Qt.WindowCloseButtonHint
         flags |= Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint
         self.setWindowFlags(flags)
-        self.resize(1200, 800)
 
         # Project state
         self._target_folder = ""
@@ -783,6 +788,7 @@ class LabellingToolDialog(QDialog):
         self._autosave_timer.timeout.connect(self._autosave_now)
 
         self._setup_ui()
+        fit_to_screen(self, 1200, 800)
         self.apply_dock_defaults()
 
     # ------------------------------------------------------------------
@@ -894,7 +900,7 @@ class LabellingToolDialog(QDialog):
 
     def _build_side_panel(self) -> QWidget:
         panel = QWidget()
-        panel.setFixedWidth(300)
+        panel.setFixedWidth(_SIDE_PANEL_WIDTH)
         vbox = QVBoxLayout(panel)
         vbox.setContentsMargins(0, 0, 0, 0)
 
@@ -1124,7 +1130,19 @@ class LabellingToolDialog(QDialog):
         fit_btn = QPushButton("Fit view")
         fit_btn.clicked.connect(self.canvas.fit)
         vbox.addWidget(fit_btn)
-        return panel
+
+        # The panel is taller than the dialog on small screens, so it scrolls
+        # instead of forcing a minimum height on the whole window.
+        scroll = QScrollArea()
+        scroll.setWidget(panel)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        # Reserve the scrollbar width so the controls keep their width whether
+        # or not the bar is shown.
+        scroll.setFixedWidth(
+            _SIDE_PANEL_WIDTH + scroll.verticalScrollBar().sizeHint().width())
+        return scroll
 
     # ------------------------------------------------------------------
     # Custom fields (settings)
@@ -1651,23 +1669,12 @@ class LabellingToolDialog(QDialog):
                     text = f"<b>{text}</b>"
                 return f'<a href="{f}">{text}</a>'
 
-            # Long lists: show a window of anchors around the current frame
-            # instead of always the first few.
-            max_shown = 12
-            if len(kfs) > max_shown:
-                nearest_i = min(
-                    range(len(kfs)),
-                    key=lambda i: abs(kfs[i] - self._current_frame))
-                start = max(
-                    0, min(nearest_i - max_shown // 2, len(kfs) - max_shown))
-                shown = kfs[start:start + max_shown]
-                prefix = "… " if start > 0 else ""
-                suffix = " …" if start + max_shown < len(kfs) else ""
-            else:
-                shown, prefix, suffix = kfs, "", ""
-            kf_list = ", ".join(_kf_anchor(f) for f in shown)
-            self.kf_info_label.setText(
-                f"{len(kfs)} key frame(s): {prefix}{kf_list}{suffix}")
+            # Long lists are elided around the current frame, keeping the
+            # track's first and last key frame anchored.
+            kf_list = ", ".join(
+                "…" if f is None else _kf_anchor(f)
+                for f in keyframe_window(kfs, self._current_frame))
+            self.kf_info_label.setText(f"{len(kfs)} key frame(s): {kf_list}")
         else:
             self.kf_info_label.setText("–")
             self.occlusion_combo.setEnabled(False)

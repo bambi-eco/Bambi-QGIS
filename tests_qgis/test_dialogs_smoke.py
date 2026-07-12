@@ -87,6 +87,33 @@ class TestDialogsConstruct:
         _close(dlg)
 
 
+class TestDialogGeometry:
+    """The big dialogs must open inside the screen, however small it is."""
+
+    def _make_labelling_tool(self, iface, dock):
+        from bambi_wildlife_detection.bambi_labelling_tool import (
+            LabellingToolDialog)
+        return LabellingToolDialog(iface, dock)
+
+    def _make_video_creator(self, iface, dock):
+        from bambi_wildlife_detection.bambi_video_creator import (
+            VideoCreatorDialog)
+        return VideoCreatorDialog(iface, dock)
+
+    @pytest.mark.parametrize("factory", ["_make_labelling_tool",
+                                         "_make_video_creator"])
+    def test_fits_on_the_available_screen(self, factory, iface, dock):
+        from qgis.PyQt.QtWidgets import QApplication
+        avail = QApplication.primaryScreen().availableGeometry()
+        dlg = getattr(self, factory)(iface, dock)
+        assert dlg.width() <= avail.width()
+        assert dlg.height() <= avail.height()
+        # Their content scrolls, so no layout minimum forces the window back
+        # above the screen height.
+        assert dlg.minimumSizeHint().height() <= avail.height()
+        _close(dlg)
+
+
 class TestCustomFieldWidgets:
     """The custom-field editors must survive a value → widget → value trip."""
 
