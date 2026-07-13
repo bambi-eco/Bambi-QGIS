@@ -55,6 +55,14 @@ from qgis.PyQt.QtGui import (
     QPen, QPixmap,
 )
 
+# Angle wrapping and circle-intersection helpers moved to
+# core.correction_solver; re-exported under their old names.
+from .core.correction_solver import (  # noqa: F401 — re-exported API
+    circles_intersect as _circles_intersect,
+    wrap_deg as _wrap_deg,
+    wrap_rad as _wrap_rad,
+)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -70,15 +78,6 @@ def _bgr_to_qpixmap(img: "np.ndarray") -> QPixmap:
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         qimg = QImage(img_rgb.data, w, h, 3 * w, QImage.Format_RGB888)
     return QPixmap.fromImage(qimg.copy())
-
-
-# Angle wrapping and circle-intersection helpers moved to
-# core.correction_solver; re-exported under their old names.
-from .core.correction_solver import (  # noqa: F401 — re-exported API
-    circles_intersect as _circles_intersect,
-    wrap_deg as _wrap_deg,
-    wrap_rad as _wrap_rad,
-)
 
 
 # ---------------------------------------------------------------------------

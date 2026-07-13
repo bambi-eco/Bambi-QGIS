@@ -33,13 +33,12 @@ from qgis.PyQt.QtCore import QVariant
 from .bambi_processing import BambiProcessor, ProcessingWorker
 from .austria_dem_downloader import DEMDownloadWorker, GeoTIFFConversionWorker
 from .bambi_click_tool import BambiClickTool
-
-# Plugin scope for project settings storage
-PLUGIN_SCOPE = "BambiWildlifeDetection"
-
 # Built-in calibration presets live in bambi_calibrations.py (Qt-free module
 # so they are importable without QGIS, e.g. by the integration tests).
 from .bambi_calibrations import THERMAL_CALIBRATIONS, RGB_CALIBRATIONS  # noqa: F401
+
+# Plugin scope for project settings storage
+PLUGIN_SCOPE = "BambiWildlifeDetection"
 
 
 class CorrectionRangeDialog(QDialog):

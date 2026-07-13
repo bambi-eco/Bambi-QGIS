@@ -269,7 +269,9 @@ class BambiProcessor:
         ub = uvs.tobytes()
         ib = indices.flatten().tobytes()
 
-        def _align4(n): return (4 - n % 4) % 4
+        def _align4(n):
+            return (4 - n % 4) % 4
+
         u_off = len(vb) + _align4(len(vb))
         i_off = u_off + len(ub) + _align4(len(ub))
         total = i_off + len(ib) + _align4(len(ib))

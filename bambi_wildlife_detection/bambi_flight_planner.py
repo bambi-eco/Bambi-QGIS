@@ -60,7 +60,7 @@ from qgis.core import (  # noqa: E402
 )
 
 
-from .core.flight_plan_io import (  # noqa: F401 — re-exported API
+from .core.flight_plan_io import (  # noqa: E402,F401 — re-exported API
     _DEFAULTS,
     _FlightPlanWorker,
     _SETTINGS_PREFIX,
