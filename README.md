@@ -157,6 +157,16 @@ the unit tests use `Dockerfile.unit`, the integration tests
 docker compose run --rm checks
 ```
 
+### Qt6 / QGIS 4 compatibility check
+
+The same `pyqt5_to_pyqt6.py` dry run that plugins.qgis.org applies to every
+uploaded plugin version, using the official
+[`pyqgis4-checker`](https://github.com/qgis/pyqgis4-checker) image:
+
+```bash
+docker compose run --rm qt6-check
+```
+
 ## Citation
 
 If you use this plugin in your research, please cite:

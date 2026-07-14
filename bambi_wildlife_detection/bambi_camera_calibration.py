@@ -68,11 +68,11 @@ from .core.camera_calibration import (  # noqa: F401 — re-exported API
 def _bgr_to_qpixmap(img: "np.ndarray") -> "QPixmap":
     if img.ndim == 2:
         h, w = img.shape
-        qimg = QImage(img.data, w, h, w, QImage.Format_Grayscale8)
+        qimg = QImage(img.data, w, h, w, QImage.Format.Format_Grayscale8)
     else:
         h, w = img.shape[:2]
         rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format_RGB888)
+        qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888)
     return QPixmap.fromImage(qimg.copy())
 
 
@@ -113,8 +113,8 @@ class _AnnotImageLabel(QLabel):
         self._mag_pos = None            # QPoint under cursor, or None
         self.setMouseTracking(True)
         self.setMinimumSize(280, 200)
-        self.setAlignment(Qt.AlignCenter)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setStyleSheet("background: #1a1a1a; border: 1px solid #444;")
 
     # ---- Public API -------------------------------------------------------
@@ -127,7 +127,7 @@ class _AnnotImageLabel(QLabel):
 
     def set_accepting(self, v: bool) -> None:
         self._accepting = v
-        self.setCursor(Qt.CrossCursor if v else Qt.ArrowCursor)
+        self.setCursor(Qt.CursorShape.CrossCursor if v else Qt.CursorShape.ArrowCursor)
         border = "2px solid #00aaff" if v else "1px solid #444"
         self.setStyleSheet(f"background: #1a1a1a; border: {border};")
 
@@ -173,7 +173,7 @@ class _AnnotImageLabel(QLabel):
             self.update()
 
     def mousePressEvent(self, event):
-        if not self._accepting or event.button() != Qt.LeftButton:
+        if not self._accepting or event.button() != Qt.MouseButton.LeftButton:
             super().mousePressEvent(event)
             return
         if self._orig_pixmap is None:
@@ -214,7 +214,7 @@ class _AnnotImageLabel(QLabel):
             dw = int(self._orig_w * scale)
             dh = int(self._orig_h * scale)
             scaled = self._orig_pixmap.scaled(
-                dw, dh, Qt.KeepAspectRatio, Qt.SmoothTransformation
+                dw, dh, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
             )
             ox = (lw - dw) // 2
             oy = (lh - dh) // 2
@@ -235,7 +235,7 @@ class _AnnotImageLabel(QLabel):
                 painter.drawLine(sx - r - 3, sy, sx + r + 3, sy)
                 painter.drawLine(sx, sy - r - 3, sx, sy + r + 3)
                 # Shadow + label
-                painter.setPen(QPen(Qt.black, 1))
+                painter.setPen(QPen(Qt.GlobalColor.black, 1))
                 painter.drawText(sx + r + 2, sy - r + 2, str(i + 1))
                 painter.setPen(pen)
                 painter.drawText(sx + r + 1, sy - r + 1, str(i + 1))
@@ -285,8 +285,8 @@ class _AnnotImageLabel(QLabel):
 
         r = self._MAG_RADIUS
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setRenderHint(QPainter.SmoothPixmapTransform)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
         clip = QPainterPath()
         clip.addEllipse(mx - r, my - r, 2 * r, 2 * r)
@@ -303,7 +303,7 @@ class _AnnotImageLabel(QLabel):
         painter.drawLine(mx - half_hair, my, mx + half_hair, my)
         painter.drawLine(mx, my - half_hair, mx, my + half_hair)
         painter.setPen(QPen(QColor(220, 220, 220, 220), 2))
-        painter.setBrush(Qt.NoBrush)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawEllipse(mx - r, my - r, 2 * r, 2 * r)
         painter.end()
 
@@ -415,7 +415,7 @@ class CameraCalibrationWizard(QDialog):
 
         # Step header
         self._step_lbl = QLabel()
-        self._step_lbl.setAlignment(Qt.AlignCenter)
+        self._step_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         hdr_font = QFont()
         hdr_font.setBold(True)
         hdr_font.setPointSize(hdr_font.pointSize() + 1)
@@ -500,7 +500,7 @@ class CameraCalibrationWizard(QDialog):
         radio_col.addWidget(self._rb_stereo)
         radio_row.addLayout(radio_col)
         radio_row.addStretch()
-        radio_row.addWidget(self._calib_mode_info_btn, alignment=Qt.AlignTop)
+        radio_row.addWidget(self._calib_mode_info_btn, alignment=Qt.AlignmentFlag.AlignTop)
         mode_lay.addLayout(radio_row)
         layout.addWidget(mode_grp)
 
@@ -568,7 +568,7 @@ class CameraCalibrationWizard(QDialog):
         photo_lay.setContentsMargins(0, 0, 0, 0)
         photo_lay.addWidget(QLabel("Image files (multiple views of the same scene):"))
         self._single_photo_list = QListWidget()
-        self._single_photo_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self._single_photo_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._single_photo_list.setMaximumHeight(130)
         photo_lay.addWidget(self._single_photo_list)
         ph_btn_row = QHBoxLayout()
@@ -588,7 +588,7 @@ class CameraCalibrationWizard(QDialog):
         video_lay.setContentsMargins(0, 0, 0, 0)
         video_lay.addWidget(QLabel("Video file(s) — frames are extracted evenly:"))
         self._single_video_list = QListWidget()
-        self._single_video_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self._single_video_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._single_video_list.setMaximumHeight(110)
         video_lay.addWidget(self._single_video_list)
         vid_btn_row = QHBoxLayout()
@@ -628,8 +628,8 @@ class CameraCalibrationWizard(QDialog):
 
         # --- Diagonal FoV from specs ---
         sep_s = QLabel()
-        sep_s.setFrameShape(QLabel.HLine)
-        sep_s.setFrameShadow(QLabel.Sunken)
+        sep_s.setFrameShape(QLabel.Shape.HLine)
+        sep_s.setFrameShadow(QLabel.Shadow.Sunken)
         outer_lay.addWidget(sep_s)
 
         fov_note_s = QLabel(
@@ -686,12 +686,12 @@ class CameraCalibrationWizard(QDialog):
         sp_lay = QVBoxLayout(self._stereo_photo_widget)
         sp_lay.setContentsMargins(0, 0, 0, 0)
 
-        splitter_ph = QSplitter(Qt.Horizontal)
+        splitter_ph = QSplitter(Qt.Orientation.Horizontal)
 
         rgb_ph_grp = QGroupBox("RGB / Wide Camera")
         rgb_ph_lay = QVBoxLayout(rgb_ph_grp)
         self._rgb_photo_list = QListWidget()
-        self._rgb_photo_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self._rgb_photo_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._rgb_photo_list.setMaximumHeight(110)
         rgb_ph_lay.addWidget(self._rgb_photo_list)
         rp_row = QHBoxLayout()
@@ -708,7 +708,7 @@ class CameraCalibrationWizard(QDialog):
         th_ph_grp = QGroupBox("Thermal Camera")
         th_ph_lay = QVBoxLayout(th_ph_grp)
         self._th_photo_list = QListWidget()
-        self._th_photo_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self._th_photo_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._th_photo_list.setMaximumHeight(110)
         th_ph_lay.addWidget(self._th_photo_list)
         tp_row = QHBoxLayout()
@@ -730,12 +730,12 @@ class CameraCalibrationWizard(QDialog):
         sv_lay = QVBoxLayout(self._stereo_video_widget)
         sv_lay.setContentsMargins(0, 0, 0, 0)
 
-        splitter_vid = QSplitter(Qt.Horizontal)
+        splitter_vid = QSplitter(Qt.Orientation.Horizontal)
 
         rgb_vid_grp = QGroupBox("RGB / Wide Camera")
         rgb_vid_grp_lay = QVBoxLayout(rgb_vid_grp)
         self._rgb_video_list = QListWidget()
-        self._rgb_video_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self._rgb_video_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._rgb_video_list.setMaximumHeight(110)
         rgb_vid_grp_lay.addWidget(self._rgb_video_list)
         rv_btn_row = QHBoxLayout()
@@ -752,7 +752,7 @@ class CameraCalibrationWizard(QDialog):
         th_vid_grp = QGroupBox("Thermal Camera")
         th_vid_grp_lay = QVBoxLayout(th_vid_grp)
         self._th_video_list = QListWidget()
-        self._th_video_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self._th_video_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._th_video_list.setMaximumHeight(110)
         th_vid_grp_lay.addWidget(self._th_video_list)
         tv_btn_row = QHBoxLayout()
@@ -776,8 +776,8 @@ class CameraCalibrationWizard(QDialog):
 
         # --- Initial calibration (common to both input types) ---
         sep = QLabel()
-        sep.setFrameShape(QLabel.HLine)
-        sep.setFrameShadow(QLabel.Sunken)
+        sep.setFrameShape(QLabel.Shape.HLine)
+        sep.setFrameShadow(QLabel.Shadow.Sunken)
         outer_lay.addWidget(sep)
 
         outer_lay.addWidget(QLabel(
@@ -812,8 +812,8 @@ class CameraCalibrationWizard(QDialog):
 
         # --- Diagonal FoV from specs ---
         sep2 = QLabel()
-        sep2.setFrameShape(QLabel.HLine)
-        sep2.setFrameShadow(QLabel.Sunken)
+        sep2.setFrameShape(QLabel.Shape.HLine)
+        sep2.setFrameShadow(QLabel.Shadow.Sunken)
         outer_lay.addWidget(sep2)
 
         fov_note = QLabel(
@@ -909,14 +909,14 @@ class CameraCalibrationWizard(QDialog):
 
         # Instruction label
         self._annot_instr = QLabel()
-        self._annot_instr.setAlignment(Qt.AlignCenter)
+        self._annot_instr.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._annot_instr.setStyleSheet(
             "background: #2a3a4a; color: #aaddff; padding: 4px; border-radius: 3px;"
         )
         lay.addWidget(self._annot_instr)
 
         # Image panels
-        splitter = QSplitter(Qt.Horizontal)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
 
         rgb_widget = QWidget()
         rgb_lay = QVBoxLayout(rgb_widget)
@@ -1018,7 +1018,7 @@ class CameraCalibrationWizard(QDialog):
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         page_lay.addWidget(scroll)
 
         inner = QWidget()
@@ -1049,17 +1049,17 @@ class CameraCalibrationWizard(QDialog):
         left_col = QVBoxLayout()
         right_col = QVBoxLayout()
         lbl_orig_title = QLabel("Original (distorted)")
-        lbl_orig_title.setAlignment(Qt.AlignCenter)
+        lbl_orig_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl_undist_title = QLabel("Undistorted")
-        lbl_undist_title.setAlignment(Qt.AlignCenter)
+        lbl_undist_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._preview_orig_lbl = QLabel()
-        self._preview_orig_lbl.setAlignment(Qt.AlignCenter)
+        self._preview_orig_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._preview_orig_lbl.setMinimumHeight(180)
-        self._preview_orig_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._preview_orig_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._preview_undist_lbl = QLabel()
-        self._preview_undist_lbl.setAlignment(Qt.AlignCenter)
+        self._preview_undist_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._preview_undist_lbl.setMinimumHeight(180)
-        self._preview_undist_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._preview_undist_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         left_col.addWidget(lbl_orig_title)
         left_col.addWidget(self._preview_orig_lbl, 1)
         right_col.addWidget(lbl_undist_title)
@@ -1075,11 +1075,11 @@ class CameraCalibrationWizard(QDialog):
         lbl_overlay_title = QLabel(
             "Edge overlay — RGB Canny edges (green) on undistorted thermal"
         )
-        lbl_overlay_title.setAlignment(Qt.AlignCenter)
+        lbl_overlay_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._preview_overlay_lbl = QLabel()
-        self._preview_overlay_lbl.setAlignment(Qt.AlignCenter)
+        self._preview_overlay_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._preview_overlay_lbl.setMinimumHeight(200)
-        self._preview_overlay_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._preview_overlay_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         stereo_preview_lay.addWidget(lbl_overlay_title)
         stereo_preview_lay.addWidget(self._preview_overlay_lbl, 1)
         preview_lay.addWidget(self._preview_stereo_widget)
@@ -1092,11 +1092,11 @@ class CameraCalibrationWizard(QDialog):
         heatmap_grp_lay = QVBoxLayout(self._heatmap_grp)
         heatmap_grp_lay.setSpacing(4)
         self._heatmap_lbl = QLabel()
-        self._heatmap_lbl.setAlignment(Qt.AlignCenter)
+        self._heatmap_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._heatmap_lbl.setMinimumHeight(120)
-        self._heatmap_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self._heatmap_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self._heatmap_subtitle = QLabel()
-        self._heatmap_subtitle.setAlignment(Qt.AlignCenter)
+        self._heatmap_subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._heatmap_subtitle.setStyleSheet("color: palette(mid); font-size: 11px;")
         heatmap_grp_lay.addWidget(self._heatmap_lbl)
         heatmap_grp_lay.addWidget(self._heatmap_subtitle)
@@ -1269,7 +1269,7 @@ class CameraCalibrationWizard(QDialog):
         )
         lbl.setWordWrap(True)
         lbl.setOpenExternalLinks(True)
-        lbl.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
         lay.addWidget(lbl)
 
         close_btn = QPushButton("Close")
@@ -1279,7 +1279,7 @@ class CameraCalibrationWizard(QDialog):
         btn_row.addWidget(close_btn)
         lay.addLayout(btn_row)
 
-        dlg.exec_()
+        dlg.exec()
 
     def _show_calib_mode_info(self) -> None:
         """Show an info popup describing the currently selected calibration mode."""
@@ -1323,8 +1323,8 @@ class CameraCalibrationWizard(QDialog):
         msg = QMessageBox(self)
         msg.setWindowTitle(title)
         msg.setText(text)
-        msg.setIcon(QMessageBox.Information)
-        msg.exec_()
+        msg.setIcon(QMessageBox.Icon.Information)
+        msg.exec()
 
     def _on_mode_toggled(self) -> None:
         self._mode = "single" if self._rb_single.isChecked() else "stereo"
@@ -1347,9 +1347,9 @@ class CameraCalibrationWizard(QDialog):
                 self, "Clear current selection",
                 "Switching the input type will clear all currently selected files.\n\n"
                 "Continue?",
-                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
-            if ans != QMessageBox.Yes:
+            if ans != QMessageBox.StandardButton.Yes:
                 # Revert radio buttons without triggering signal again
                 self._rb_photo.blockSignals(True)
                 self._rb_video.blockSignals(True)
@@ -1563,7 +1563,7 @@ class CameraCalibrationWizard(QDialog):
 
                 prog = QProgressDialog("Extracting video frames…", None, 0, total_frames, self)
                 prog.setWindowTitle("Frame Extraction")
-                prog.setWindowModality(Qt.WindowModal)
+                prog.setWindowModality(Qt.WindowModality.WindowModal)
                 prog.setMinimumDuration(0)
                 prog.setValue(0)
 
@@ -1610,9 +1610,9 @@ class CameraCalibrationWizard(QDialog):
                     self, "Too few images",
                     f"SfM calibration typically needs ≥{_MIN_SFM_IMAGES} images "
                     f"(you have {n}).\n\nContinue anyway?",
-                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 )
-                if ans != QMessageBox.Yes:
+                if ans != QMessageBox.StandardButton.Yes:
                     return False
 
         else:  # stereo
@@ -1782,9 +1782,9 @@ class CameraCalibrationWizard(QDialog):
                 f"{n_annot} pair(s).\n\n"
                 f"Points will be loaded for the first "
                 f"{min(n_file, n_annot)} pair(s).  Continue?",
-                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
-            if ans != QMessageBox.Yes:
+            if ans != QMessageBox.StandardButton.Yes:
                 return
 
         # Warn if filenames differ (informational only — load by position)
@@ -1799,9 +1799,9 @@ class CameraCalibrationWizard(QDialog):
                 self, "Filename mismatch",
                 f"Pair(s) {mismatches} have different filenames than expected.\n\n"
                 "Points will still be loaded by position.  Continue?",
-                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
-            if ans != QMessageBox.Yes:
+            if ans != QMessageBox.StandardButton.Yes:
                 return
 
         # Restore points
@@ -2293,7 +2293,7 @@ class CameraCalibrationWizard(QDialog):
         pm = self._render_coverage_heatmap(counts)
         w = self._heatmap_lbl.width() if self._heatmap_lbl.width() > 10 else 600
         self._heatmap_lbl.setPixmap(
-            pm.scaled(w, 9999, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            pm.scaled(w, 9999, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
         )
         self._heatmap_subtitle.setText(subtitle)
 
@@ -2312,7 +2312,7 @@ class CameraCalibrationWizard(QDialog):
         max_count = max(1, int(counts.max()))
 
         painter = QPainter(pm)
-        painter.setRenderHint(QPainter.Antialiasing, False)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
         cell_font = painter.font()
         cell_font.setPointSize(9)
@@ -2335,7 +2335,7 @@ class CameraCalibrationWizard(QDialog):
                 # Count label
                 text_color = QColor(255, 255, 255) if count > 0 else QColor(100, 100, 100)
                 painter.setPen(text_color)
-                painter.drawText(x, y, cell_w - 1, cell_h - 1, Qt.AlignCenter, str(count))
+                painter.drawText(x, y, cell_w - 1, cell_h - 1, Qt.AlignmentFlag.AlignCenter, str(count))
 
         # Grid lines
         painter.setPen(QPen(QColor(60, 60, 60), 1))
@@ -2355,7 +2355,7 @@ class CameraCalibrationWizard(QDialog):
         pm = _bgr_to_qpixmap(img)
         w = label.width() if label.width() > 10 else 480
         h = label.height() if label.height() > 10 else 300
-        label.setPixmap(pm.scaled(w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        label.setPixmap(pm.scaled(w, h, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
 
     # ------------------------------------------------------------------
     # Write helpers — each saves one file and notifies on success/error

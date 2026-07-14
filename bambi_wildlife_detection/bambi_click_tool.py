@@ -67,7 +67,7 @@ class BambiClickTool(QgsMapToolIdentify):
         super().__init__(iface.mapCanvas())
         self.iface = iface
         self.mode = mode
-        self.setCursor(QCursor(Qt.CrossCursor))
+        self.setCursor(QCursor(Qt.CursorShape.CrossCursor))
         # DEM mesh cache: keyed by absolute mesh path so repeated FoV clicks
         # on the same DEM don't reload and re-build the BVH every time.
         self._dem_mesh_cache: Dict[str, object] = {}
@@ -77,7 +77,7 @@ class BambiClickTool(QgsMapToolIdentify):
     # ------------------------------------------------------------------
 
     def canvasReleaseEvent(self, event):
-        if event.button() != Qt.LeftButton:
+        if event.button() != Qt.MouseButton.LeftButton:
             return
 
         bambi_layers = self._get_bambi_layers()
@@ -105,7 +105,7 @@ class BambiClickTool(QgsMapToolIdentify):
             event.x(),
             event.y(),
             bambi_layers,
-            QgsMapToolIdentify.TopDownAll,
+            QgsMapToolIdentify.IdentifyMode.TopDownAll,
         )
         if not results:
             return
@@ -126,10 +126,10 @@ class BambiClickTool(QgsMapToolIdentify):
                             "The geo-referenced FoV inspector needs to load the "
                             "digital elevation model.\n\n"
                             "This may take some time on the first click. Continue?",
-                            QMessageBox.Yes | QMessageBox.No,
-                            QMessageBox.Yes,
+                            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                            QMessageBox.StandardButton.Yes,
                         )
-                        if reply != QMessageBox.Yes:
+                        if reply != QMessageBox.StandardButton.Yes:
                             return
                     # Convert canvas pixel → map coordinate for click projection.
                     map_pt = self.canvas().getCoordinateTransform().toMapCoordinates(
@@ -185,7 +185,7 @@ class BambiClickTool(QgsMapToolIdentify):
 
     def deactivate(self):
         super().deactivate()
-        self.iface.mapCanvas().setCursor(Qt.ArrowCursor)
+        self.iface.mapCanvas().setCursor(Qt.CursorShape.ArrowCursor)
 
     # ------------------------------------------------------------------
     # Click handlers
@@ -451,7 +451,7 @@ class BambiClickTool(QgsMapToolIdentify):
     def _qgis_log(self, message: str, level: str = "info") -> None:
         QgsMessageLog.logMessage(
             message, "BAMBI",
-            Qgis.Warning if level == "warning" else Qgis.Info)
+            Qgis.MessageLevel.Warning if level == "warning" else Qgis.MessageLevel.Info)
 
     def _project_map_point(
         self,

@@ -156,7 +156,7 @@ class CorrectionRangeDialog(QDialog):
 
         # Buttons
         button_box = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
@@ -236,7 +236,7 @@ class FrameRangeDialog(QDialog):
         layout = QVBoxLayout(self)
 
         info = QLabel(f"Available: {item_label} {min_idx}–{max_idx}  ({total} total)")
-        info.setAlignment(Qt.AlignCenter)
+        info.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(info)
 
         self._all_radio = QRadioButton("All frames")
@@ -272,7 +272,7 @@ class FrameRangeDialog(QDialog):
             )
         )
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -299,7 +299,7 @@ class BambiDockWidget(QDockWidget):
         """
         super().__init__("Bambi - QGIS Integration", parent)
         self.iface = iface
-        self.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        self.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
 
         # Processing state
         self.processor = BambiProcessor()
@@ -1110,7 +1110,7 @@ class BambiDockWidget(QDockWidget):
         sdk_row = QHBoxLayout()
         self._thermal_sdk_info_label = QLabel()
         self._thermal_sdk_info_label.setWordWrap(True)
-        self._thermal_sdk_info_label.setTextFormat(Qt.RichText)
+        self._thermal_sdk_info_label.setTextFormat(Qt.TextFormat.RichText)
         sdk_row.addWidget(self._thermal_sdk_info_label)
         thermal_vis_layout.addRow(sdk_row)
 
@@ -1578,8 +1578,8 @@ class BambiDockWidget(QDockWidget):
 
         # Separator
         separator = QFrame()
-        separator.setFrameShape(QFrame.HLine)
-        separator.setFrameShadow(QFrame.Sunken)
+        separator.setFrameShape(QFrame.Shape.HLine)
+        separator.setFrameShadow(QFrame.Shadow.Sunken)
         tracking_layout.addRow(separator)
 
         # Built-in tracker parameters
@@ -1924,7 +1924,7 @@ class BambiDockWidget(QDockWidget):
         sam3_api_layout = QFormLayout(sam3_api_group)
 
         self.sam3_api_key_edit = QLineEdit()
-        self.sam3_api_key_edit.setEchoMode(QLineEdit.Password)
+        self.sam3_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.sam3_api_key_edit.setPlaceholderText("Enter your Roboflow API key")
         self.sam3_api_key_edit.setToolTip("Your Roboflow API key for SAM3 inference")
         sam3_api_layout.addRow("API Key:", self.sam3_api_key_edit)
@@ -2063,8 +2063,8 @@ class BambiDockWidget(QDockWidget):
 
         # Separator after extraction
         separator1 = QFrame()
-        separator1.setFrameShape(QFrame.HLine)
-        separator1.setFrameShadow(QFrame.Sunken)
+        separator1.setFrameShape(QFrame.Shape.HLine)
+        separator1.setFrameShadow(QFrame.Shadow.Sunken)
         steps_btn_layout.addWidget(separator1)
 
         # ----- Step 2: Generate Flight Route -----
@@ -3489,14 +3489,14 @@ class BambiDockWidget(QDockWidget):
         msg = QMessageBox(self)
         msg.setWindowTitle(title)
         msg.setText(text)
-        msg.setIcon(QMessageBox.Information)
-        msg.exec_()
+        msg.setIcon(QMessageBox.Icon.Information)
+        msg.exec()
 
     def _show_processing_info(self):
         """Show an info popup describing the processing pipeline."""
         msg = QMessageBox(self)
         msg.setWindowTitle("Processing Pipeline")
-        msg.setIcon(QMessageBox.Information)
+        msg.setIcon(QMessageBox.Icon.Information)
         msg.setText(
             "<b>Processing Pipeline</b><br><br>"
             "Execute the steps below in order. Each step builds on the outputs of the "
@@ -3545,7 +3545,7 @@ class BambiDockWidget(QDockWidget):
             "layers of interest, export them as 'Layer Definition File' and import "
             "it again to QGIS."
         )
-        msg.exec_()
+        msg.exec()
 
     def _on_thermal_calib_preset_changed(self, index: int):
         """Show/hide custom file row depending on combo selection."""
@@ -3779,11 +3779,11 @@ class BambiDockWidget(QDockWidget):
             f"Output folder: {output_folder}\n\n"
             "This will download the Austria-wide 1m ALS-DTM dataset.\n"
             "Large areas may take several minutes.",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes
         )
 
-        if reply != QMessageBox.Yes:
+        if reply != QMessageBox.StandardButton.Yes:
             return
 
         # Disable button during download
@@ -3942,11 +3942,11 @@ class BambiDockWidget(QDockWidget):
             f"Input: {os.path.basename(geotiff_path)}\n"
             f"Output folder: {output_folder}\n"
             f"Simplification: {simplify_factor}x{crs_info}",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes
         )
 
-        if reply != QMessageBox.Yes:
+        if reply != QMessageBox.StandardButton.Yes:
             return
 
         # Disable button during conversion
@@ -4408,13 +4408,13 @@ class BambiDockWidget(QDockWidget):
             item_text = f"Frames {start}-{end}: {trans_str} {rot_str}"
 
             item = QListWidgetItem(item_text)
-            item.setData(Qt.UserRole, i)  # Store index
+            item.setData(Qt.ItemDataRole.UserRole, i)  # Store index
             self.additional_corrections_list.addItem(item)
 
     def _add_additional_correction(self):
         """Show dialog to add a new frame-range specific correction."""
         dialog = CorrectionRangeDialog(self, use_degrees=self._is_using_degrees())
-        if dialog.exec_() == QDialog.Accepted:
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             correction_data = dialog.get_correction_data()
             self._add_correction_to_list(correction_data)
             self.log(f"Added correction for frames {correction_data['start']}-{correction_data['end']}")
@@ -4424,11 +4424,11 @@ class BambiDockWidget(QDockWidget):
 
         :param item: The list item that was double-clicked
         """
-        index = item.data(Qt.UserRole)
+        index = item.data(Qt.ItemDataRole.UserRole)
         if index is not None and 0 <= index < len(self._additional_corrections):
             correction_data = self._additional_corrections[index]
             dialog = CorrectionRangeDialog(self, correction_data, use_degrees=self._is_using_degrees())
-            if dialog.exec_() == QDialog.Accepted:
+            if dialog.exec() == QDialog.DialogCode.Accepted:
                 self._additional_corrections[index] = dialog.get_correction_data()
                 self._update_corrections_list_ui()
                 self.log(f"Updated correction at index {index}")
@@ -4454,7 +4454,7 @@ class BambiDockWidget(QDockWidget):
             )
             return
 
-        index = selected_items[0].data(Qt.UserRole)
+        index = selected_items[0].data(Qt.ItemDataRole.UserRole)
         if index is not None and 0 <= index < len(self._additional_corrections):
             removed = self._additional_corrections.pop(index)
             self._update_corrections_list_ui()
@@ -4630,7 +4630,7 @@ class BambiDockWidget(QDockWidget):
         config = self.get_config()
         wizard = BambiCorrectionWizard(self.iface, config, parent=self)
         wizard.correctionFileSaved.connect(self.load_correction_values)
-        wizard.exec_()
+        wizard.exec()
 
     def _refresh_thermal_sdk_status(self):
         """Re-check DJI Thermal SDK availability and update the Thermal Visualisation group."""
@@ -4815,9 +4815,9 @@ class BambiDockWidget(QDockWidget):
     def _toggle_api_key_visibility(self, state):
         """Toggle visibility of SAM3 API key."""
         if state:
-            self.sam3_api_key_edit.setEchoMode(QLineEdit.Normal)
+            self.sam3_api_key_edit.setEchoMode(QLineEdit.EchoMode.Normal)
         else:
-            self.sam3_api_key_edit.setEchoMode(QLineEdit.Password)
+            self.sam3_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
 
     def _toggle_frame_marker_interval(self, state):
         """Toggle the frame marker interval spinbox based on checkbox state."""
@@ -5310,7 +5310,7 @@ class BambiDockWidget(QDockWidget):
             dlg = FrameRangeDialog(
                 self, frame_indices[0], frame_indices[-1], len(frame_indices), "frames"
             )
-            if dlg.exec_() != QDialog.Accepted:
+            if dlg.exec() != QDialog.DialogCode.Accepted:
                 self.update_status("add_sam3", "⚪ Cancelled")
                 return
 
@@ -5350,10 +5350,10 @@ class BambiDockWidget(QDockWidget):
                     f"Selected range contains {len(georef_results)} frames with segmentation.\n"
                     "Creating individual layer groups for each may slow down QGIS.\n\n"
                     "Continue with individual frame groups?",
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.Yes
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes
                 )
-                if reply == QMessageBox.No:
+                if reply == QMessageBox.StandardButton.No:
                     self.update_status("add_sam3", "⚪ Cancelled")
                     return
 
@@ -5583,7 +5583,7 @@ class BambiDockWidget(QDockWidget):
                 vmax = vmin + 1.0
 
             ramp = QgsColorRampShader(vmin, vmax)
-            ramp.setColorRampType(QgsColorRampShader.Interpolated)
+            ramp.setColorRampType(QgsColorRampShader.Type.Interpolated)
             steps = [
                 (0.0, QColor(44, 123, 182)),
                 (0.25, QColor(171, 217, 233)),
@@ -5758,10 +5758,10 @@ class BambiDockWidget(QDockWidget):
         text.setReadOnly(True)
         text.setHtml(html)
         layout.addWidget(text)
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
         buttons.accepted.connect(dlg.accept)
         layout.addWidget(buttons)
-        dlg.exec_()
+        dlg.exec()
 
     def run_population_estimation(self):
         """Run the transect-based population estimation step."""
@@ -5927,10 +5927,10 @@ class BambiDockWidget(QDockWidget):
         text.setReadOnly(True)
         text.setHtml(html)
         layout.addWidget(text)
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
         buttons.accepted.connect(dlg.accept)
         layout.addWidget(buttons)
-        dlg.exec_()
+        dlg.exec()
 
     def add_transect_areas_to_qgis(self):
         """Add one layer group per transect, holding its route and its FoV area.
@@ -6270,7 +6270,7 @@ class BambiDockWidget(QDockWidget):
             )
             settings = QgsPalLayerSettings()
             settings.fieldName = "track_id"
-            settings.placement = QgsPalLayerSettings.AroundPoint
+            settings.placement = QgsPalLayerSettings.Placement.AroundPoint
             text_format = QgsTextFormat()
             text_format.setSize(8)
             settings.setFormat(text_format)
@@ -6461,7 +6461,7 @@ class BambiDockWidget(QDockWidget):
             settings = QgsPalLayerSettings()
             settings.fieldName = '"name" || \' (\' || "count" || \')\''
             settings.isExpression = True
-            settings.placement = QgsPalLayerSettings.OverPoint
+            settings.placement = QgsPalLayerSettings.Placement.OverPoint
             text_format = QgsTextFormat()
             text_format.setSize(9)
             settings.setFormat(text_format)
@@ -6728,7 +6728,7 @@ class BambiDockWidget(QDockWidget):
             dlg = FrameRangeDialog(
                 self, frame_vals[0], frame_vals[-1], len(set(frame_vals)), "frames"
             )
-            if dlg.exec_() != QDialog.Accepted:
+            if dlg.exec() != QDialog.DialogCode.Accepted:
                 self.update_status("add_perpendicular", "⚪ Cancelled")
                 return
 
@@ -6746,9 +6746,9 @@ class BambiDockWidget(QDockWidget):
                     "Many Lines",
                     f"Selected range contains {len(perpendiculas)} perpendicular lines.\n"
                     "Loading all may slow down QGIS.\n\nContinue?",
-                    QMessageBox.Yes | QMessageBox.Cancel
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel
                 )
-                if reply != QMessageBox.Yes:
+                if reply != QMessageBox.StandardButton.Yes:
                     self.update_status("add_perpendicular", "⚪ Cancelled")
                     return
 
@@ -6883,7 +6883,7 @@ class BambiDockWidget(QDockWidget):
             dlg = FrameRangeDialog(
                 self, frame_vals[0], frame_vals[-1], len(set(frame_vals)), "frames"
             )
-            if dlg.exec_() != QDialog.Accepted:
+            if dlg.exec() != QDialog.DialogCode.Accepted:
                 self.update_status("add_track_perpendicular", "⚪ Cancelled")
                 return
 
@@ -6901,9 +6901,9 @@ class BambiDockWidget(QDockWidget):
                     "Many Lines",
                     f"Selected range contains {len(track_entries)} track perpendicular lines.\n"
                     "Loading all may slow down QGIS.\n\nContinue?",
-                    QMessageBox.Yes | QMessageBox.Cancel
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel
                 )
-                if reply != QMessageBox.Yes:
+                if reply != QMessageBox.StandardButton.Yes:
                     self.update_status("add_track_perpendicular", "⚪ Cancelled")
                     return
 
@@ -7044,10 +7044,10 @@ class BambiDockWidget(QDockWidget):
                     "Many Tracks",
                     f"Found {num_tracks} tracks. Creating individual layers for each may slow down QGIS.\n\n"
                     "Continue with individual layers?",
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.Yes
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes
                 )
-                if reply == QMessageBox.No:
+                if reply == QMessageBox.StandardButton.No:
                     self.update_status("add_layers", "⚪ Cancelled")
                     return
 
@@ -7325,7 +7325,7 @@ class BambiDockWidget(QDockWidget):
             dlg = FrameRangeDialog(
                 self, frame_keys[0], frame_keys[-1], len(frame_keys), "frames"
             )
-            if dlg.exec_() != QDialog.Accepted:
+            if dlg.exec() != QDialog.DialogCode.Accepted:
                 self.update_status("add_fov", "⚪ Cancelled")
                 return
 
@@ -7345,12 +7345,12 @@ class BambiDockWidget(QDockWidget):
                     f"Selected range contains {num_frames} frames.\n\n"
                     "- Yes: one layer per frame (separate)\n"
                     "- No: all polygons in a single combined layer",
-                    QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel
                 )
-                if reply == QMessageBox.Cancel:
+                if reply == QMessageBox.StandardButton.Cancel:
                     self.update_status("add_fov", "⚪ Cancelled")
                     return
-                elif reply == QMessageBox.Yes:
+                elif reply == QMessageBox.StandardButton.Yes:
                     self._add_fov_separate_layers(fov_polygons, target_crs, camera_label)
                 else:
                     self._add_fov_combined_layer(fov_polygons, target_crs, camera_label)
@@ -7651,7 +7651,7 @@ class BambiDockWidget(QDockWidget):
             dlg = FrameRangeDialog(
                 self, frame_keys[0], frame_keys[-1], len(frame_keys), "frames"
             )
-            if dlg.exec_() != QDialog.Accepted:
+            if dlg.exec() != QDialog.DialogCode.Accepted:
                 self.update_status("add_frame_detections", "⚪ Cancelled")
                 return
 
@@ -7671,12 +7671,12 @@ class BambiDockWidget(QDockWidget):
                     f"Selected range contains {num_frames} frames.\n\n"
                     "- Yes: one layer per frame (separate)\n"
                     "- No: all detections in a single combined layer",
-                    QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel
                 )
-                if reply == QMessageBox.Cancel:
+                if reply == QMessageBox.StandardButton.Cancel:
                     self.update_status("add_frame_detections", "⚪ Cancelled")
                     return
-                elif reply == QMessageBox.Yes:
+                elif reply == QMessageBox.StandardButton.Yes:
                     self._add_detections_separate_layers(frame_detections, target_crs, camera_label)
                 else:
                     self._add_detections_combined_layer(frame_detections, target_crs, camera_label)
@@ -7934,7 +7934,7 @@ class BambiDockWidget(QDockWidget):
             dlg = FrameRangeDialog(
                 self, min_idx, max_idx, len(geotiff_files), "frames"
             )
-            if dlg.exec_() != QDialog.Accepted:
+            if dlg.exec() != QDialog.DialogCode.Accepted:
                 self.update_status("add_geotiffs", "⚪ Cancelled")
                 return
 
@@ -7952,9 +7952,9 @@ class BambiDockWidget(QDockWidget):
                     "Many Files",
                     f"Selected range contains {len(geotiff_files)} GeoTIFF files.\n"
                     "Loading all may slow down QGIS.\n\nContinue?",
-                    QMessageBox.Yes | QMessageBox.Cancel
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel
                 )
-                if reply != QMessageBox.Yes:
+                if reply != QMessageBox.StandardButton.Yes:
                     self.update_status("add_geotiffs", "⚪ Cancelled")
                     return
 
@@ -8213,7 +8213,7 @@ class BambiDockWidget(QDockWidget):
 
             # Text format
             text_format = QgsTextFormat()
-            text_format.setFont(QFont("Arial", 10, QFont.Bold))
+            text_format.setFont(QFont("Arial", 10, QFont.Weight.Bold))
             text_format.setSize(10)
             text_format.setColor(QColor('#000000'))
 
@@ -8227,8 +8227,8 @@ class BambiDockWidget(QDockWidget):
             label_settings.setFormat(text_format)
 
             # Position labels above the marker
-            label_settings.placement = QgsPalLayerSettings.OverPoint
-            label_settings.quadOffset = QgsPalLayerSettings.QuadrantAbove
+            label_settings.placement = QgsPalLayerSettings.Placement.OverPoint
+            label_settings.quadOffset = QgsPalLayerSettings.QuadrantPosition.QuadrantAbove
 
             # Apply labeling to layer
             labeling = QgsVectorLayerSimpleLabeling(label_settings)
@@ -8381,7 +8381,7 @@ class BambiDockWidget(QDockWidget):
 
             # Text format
             text_format = QgsTextFormat()
-            text_format.setFont(QFont("Arial", 9, QFont.Bold))
+            text_format.setFont(QFont("Arial", 9, QFont.Weight.Bold))
             text_format.setSize(9)
             text_format.setColor(QColor('#1a5e1a'))  # Dark green
 
@@ -8395,8 +8395,8 @@ class BambiDockWidget(QDockWidget):
             label_settings.setFormat(text_format)
 
             # Position labels above the marker
-            label_settings.placement = QgsPalLayerSettings.OverPoint
-            label_settings.quadOffset = QgsPalLayerSettings.QuadrantAbove
+            label_settings.placement = QgsPalLayerSettings.Placement.OverPoint
+            label_settings.quadOffset = QgsPalLayerSettings.QuadrantPosition.QuadrantAbove
 
             # Apply labeling to layer
             labeling = QgsVectorLayerSimpleLabeling(label_settings)
@@ -8630,7 +8630,7 @@ class BambiDockWidget(QDockWidget):
             label_settings.enabled = True
 
             text_format = QgsTextFormat()
-            text_format.setFont(QFont("Arial", 9, QFont.Bold))
+            text_format.setFont(QFont("Arial", 9, QFont.Weight.Bold))
             text_format.setSize(9)
             text_format.setColor(QColor('#6c3483'))  # Dark purple
 
@@ -8641,8 +8641,8 @@ class BambiDockWidget(QDockWidget):
             text_format.setBuffer(buffer_settings)
 
             label_settings.setFormat(text_format)
-            label_settings.placement = QgsPalLayerSettings.OverPoint
-            label_settings.quadOffset = QgsPalLayerSettings.QuadrantAbove
+            label_settings.placement = QgsPalLayerSettings.Placement.OverPoint
+            label_settings.quadOffset = QgsPalLayerSettings.QuadrantPosition.QuadrantAbove
 
             layer.setLabelsEnabled(True)
             layer.setLabeling(QgsVectorLayerSimpleLabeling(label_settings))
@@ -8741,8 +8741,8 @@ class BambiDockWidget(QDockWidget):
             text_format.setBuffer(buffer_settings)
 
             label_settings.setFormat(text_format)
-            label_settings.placement = QgsPalLayerSettings.OverPoint
-            label_settings.quadOffset = QgsPalLayerSettings.QuadrantBelow
+            label_settings.placement = QgsPalLayerSettings.Placement.OverPoint
+            label_settings.quadOffset = QgsPalLayerSettings.QuadrantPosition.QuadrantBelow
 
             layer.setLabelsEnabled(True)
             layer.setLabeling(QgsVectorLayerSimpleLabeling(label_settings))
@@ -8773,7 +8773,7 @@ class BambiDockWidget(QDockWidget):
 
             # Text format
             text_format = QgsTextFormat()
-            text_format.setFont(QFont("Arial", 10, QFont.Bold))
+            text_format.setFont(QFont("Arial", 10, QFont.Weight.Bold))
             text_format.setSize(10)
             text_format.setColor(QColor('#000000'))
 
@@ -8787,8 +8787,8 @@ class BambiDockWidget(QDockWidget):
             label_settings.setFormat(text_format)
 
             # Position labels above the marker
-            label_settings.placement = QgsPalLayerSettings.OverPoint
-            label_settings.quadOffset = QgsPalLayerSettings.QuadrantAbove
+            label_settings.placement = QgsPalLayerSettings.Placement.OverPoint
+            label_settings.quadOffset = QgsPalLayerSettings.QuadrantPosition.QuadrantAbove
 
             # Apply labeling to layer
             labeling = QgsVectorLayerSimpleLabeling(label_settings)
@@ -8820,7 +8820,7 @@ class BambiDockWidget(QDockWidget):
 
             # Text format
             text_format = QgsTextFormat()
-            text_format.setFont(QFont("Arial", 9, QFont.Bold))
+            text_format.setFont(QFont("Arial", 9, QFont.Weight.Bold))
             text_format.setSize(9)
             text_format.setColor(QColor('#1a5e1a'))  # Dark green
 
@@ -8834,8 +8834,8 @@ class BambiDockWidget(QDockWidget):
             label_settings.setFormat(text_format)
 
             # Position labels above the marker
-            label_settings.placement = QgsPalLayerSettings.OverPoint
-            label_settings.quadOffset = QgsPalLayerSettings.QuadrantAbove
+            label_settings.placement = QgsPalLayerSettings.Placement.OverPoint
+            label_settings.quadOffset = QgsPalLayerSettings.QuadrantPosition.QuadrantAbove
 
             # Apply labeling to layer
             labeling = QgsVectorLayerSimpleLabeling(label_settings)
@@ -9012,7 +9012,7 @@ class BambiDockWidget(QDockWidget):
         corrections_data = []
         for i in range(self.additional_corrections_list.count()):
             item = self.additional_corrections_list.item(i)
-            data = item.data(Qt.UserRole)
+            data = item.data(Qt.ItemDataRole.UserRole)
             if data:
                 corrections_data.append(data)
         project.writeEntry(PLUGIN_SCOPE, "Correction/AdditionalCorrections",
@@ -9165,7 +9165,7 @@ class BambiDockWidget(QDockWidget):
             options.layerName = safe_name
             if exists:
                 options.actionOnExistingFile = (
-                    QgsVectorFileWriter.CreateOrOverwriteLayer)
+                    QgsVectorFileWriter.ActionOnExistingFile.CreateOrOverwriteLayer)
 
             error = QgsVectorFileWriter.writeAsVectorFormatV3(
                 mem_layer,
@@ -9174,7 +9174,7 @@ class BambiDockWidget(QDockWidget):
                 options
             )
 
-            if error[0] != QgsVectorFileWriter.NoError:
+            if error[0] != QgsVectorFileWriter.WriterError.NoError:
                 self.log(f"Warning: Could not save layer '{display_name}' to GeoPackage: {error[1]}")
                 return mem_layer
 

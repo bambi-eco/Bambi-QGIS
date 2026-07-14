@@ -86,7 +86,7 @@ class DependencyManagerDialog(QDialog):
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
         content = QWidget()
         vbox = QVBoxLayout(content)
         vbox.setSpacing(10)
@@ -181,7 +181,7 @@ class DependencyManagerDialog(QDialog):
             'may cause pip to downgrade them back to CPU-only builds.'
         )
         warn.setWordWrap(True)
-        warn.setTextFormat(Qt.RichText)
+        warn.setTextFormat(Qt.TextFormat.RichText)
         warn.setStyleSheet(
             'background:#fff3cd; border:1px solid #ffc107; '
             'border-radius:4px; padding:6px;'
@@ -209,7 +209,7 @@ class DependencyManagerDialog(QDialog):
             'to activate the newly installed packages.</b>'
         )
         restart_label.setWordWrap(True)
-        restart_label.setTextFormat(Qt.RichText)
+        restart_label.setTextFormat(Qt.TextFormat.RichText)
         restart_label.setStyleSheet(
             'background:#e8f0fe; border:1px solid #a8c7fa; '
             'border-radius:4px; padding:6px;'
@@ -232,8 +232,8 @@ class DependencyManagerDialog(QDialog):
             layout.addLayout(self._make_row(**dep))
             if i < len(deps) - 1:
                 sep = QFrame()
-                sep.setFrameShape(QFrame.HLine)
-                sep.setFrameShadow(QFrame.Sunken)
+                sep.setFrameShape(QFrame.Shape.HLine)
+                sep.setFrameShadow(QFrame.Shadow.Sunken)
                 layout.addWidget(sep)
         return group
 
@@ -255,10 +255,10 @@ class DependencyManagerDialog(QDialog):
         self._button_labels[key] = btn_label
 
         name_lbl = QLabel(f'<b>{label}</b>')
-        name_lbl.setTextFormat(Qt.RichText)
+        name_lbl.setTextFormat(Qt.TextFormat.RichText)
         desc_lbl = QLabel(f'<span style="color:#555;">{desc}</span>')
         desc_lbl.setWordWrap(True)
-        desc_lbl.setTextFormat(Qt.RichText)
+        desc_lbl.setTextFormat(Qt.TextFormat.RichText)
 
         text_col = QVBoxLayout()
         text_col.setSpacing(2)
@@ -277,8 +277,8 @@ class DependencyManagerDialog(QDialog):
                 lbl = QLabel()
                 # wide enough for e.g. "torchvision: ✔ v0.20.1+cu121"
                 lbl.setFixedWidth(200)
-                lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-                lbl.setTextFormat(Qt.RichText)
+                lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                lbl.setTextFormat(Qt.TextFormat.RichText)
                 ver, status = _get_version_status(dn, self._plugins_dir)
                 self._apply_status_label(lbl, dn, ver, status, prefix=display_name)
                 status_layout_v.addWidget(lbl)
@@ -292,8 +292,8 @@ class DependencyManagerDialog(QDialog):
             self._dist_names[key] = dist_name
             status_lbl = QLabel()
             status_lbl.setFixedWidth(130)
-            status_lbl.setAlignment(Qt.AlignCenter)
-            status_lbl.setTextFormat(Qt.RichText)
+            status_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            status_lbl.setTextFormat(Qt.TextFormat.RichText)
             if dist_name:
                 ver, status = _get_version_status(dist_name, self._plugins_dir)
                 self._apply_status_label(status_lbl, dist_name, ver, status)

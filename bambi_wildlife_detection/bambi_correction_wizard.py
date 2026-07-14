@@ -72,11 +72,11 @@ def _bgr_to_qpixmap(img: "np.ndarray") -> QPixmap:
     """Convert a BGR (or grayscale) numpy array to QPixmap."""
     if img.ndim == 2:
         h, w = img.shape
-        qimg = QImage(img.data, w, h, w, QImage.Format_Grayscale8)
+        qimg = QImage(img.data, w, h, w, QImage.Format.Format_Grayscale8)
     else:
         h, w = img.shape[:2]
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        qimg = QImage(img_rgb.data, w, h, 3 * w, QImage.Format_RGB888)
+        qimg = QImage(img_rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888)
     return QPixmap.fromImage(qimg.copy())
 
 
@@ -105,8 +105,8 @@ class ClickableImageLabel(QLabel):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setAlignment(Qt.AlignCenter)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMinimumSize(280, 200)
         self.setStyleSheet("border: 1px solid #555; background: #12122a;")
         self.setMouseTracking(True)
@@ -166,7 +166,7 @@ class ClickableImageLabel(QLabel):
             self._img_rect = None
             return
         scaled = self._src_pixmap.scaled(
-            self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
+            self.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
         )
         x = (self.width() - scaled.width()) // 2
         y = (self.height() - scaled.height()) // 2
@@ -187,7 +187,7 @@ class ClickableImageLabel(QLabel):
             self.update()
 
     def mousePressEvent(self, event):
-        if event.button() != Qt.LeftButton:
+        if event.button() != Qt.MouseButton.LeftButton:
             return
         if self._img_rect is None or self._src_pixmap is None:
             return
@@ -211,7 +211,7 @@ class ClickableImageLabel(QLabel):
         painter.fillRect(self.rect(), QColor(18, 18, 42))
         if self._src_pixmap and self._img_rect:
             scaled = self._src_pixmap.scaled(
-                self._img_rect.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
+                self._img_rect.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
             )
             painter.drawPixmap(self._img_rect.topLeft(), scaled)
 
@@ -219,7 +219,7 @@ class ClickableImageLabel(QLabel):
         if self._ref_points and self._img_rect:
             ref_col = QColor(200, 180, 80)
             painter.setPen(QPen(ref_col, 1))
-            painter.setBrush(Qt.NoBrush)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
             for (rx, ry) in self._ref_points:
                 rpx = self._img_rect.left() + rx * self._img_rect.width()
                 rpy = self._img_rect.top() + ry * self._img_rect.height()
@@ -242,7 +242,7 @@ class ClickableImageLabel(QLabel):
             arm = 14
             painter.drawLine(int(px - arm), int(py), int(px + arm), int(py))
             painter.drawLine(int(px), int(py - arm), int(px), int(py + arm))
-            painter.setBrush(Qt.NoBrush)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawEllipse(QPointF(px, py), 6.0, 6.0)
 
         # Magnifier loupe
@@ -268,8 +268,8 @@ class ClickableImageLabel(QLabel):
                 if not src_rect.isEmpty():
                     r = self._MAG_RADIUS
                     cx, cy = mx, my
-                    painter.setRenderHint(QPainter.Antialiasing)
-                    painter.setRenderHint(QPainter.SmoothPixmapTransform)
+                    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
                     clip = QPainterPath()
                     clip.addEllipse(cx - r, cy - r, 2 * r, 2 * r)
                     painter.setClipPath(clip)
@@ -284,7 +284,7 @@ class ClickableImageLabel(QLabel):
                     painter.drawLine(cx - half_hair, cy, cx + half_hair, cy)
                     painter.drawLine(cx, cy - half_hair, cx, cy + half_hair)
                     painter.setPen(QPen(QColor(220, 220, 220, 220), 2))
-                    painter.setBrush(Qt.NoBrush)
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
                     painter.drawEllipse(cx - r, cy - r, 2 * r, 2 * r)
 
         painter.end()
@@ -406,8 +406,8 @@ class MagnifierLabel(QLabel):
         cy = my
 
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setRenderHint(QPainter.SmoothPixmapTransform)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
         # Clip subsequent drawing to the loupe circle
         clip = QPainterPath()
@@ -432,7 +432,7 @@ class MagnifierLabel(QLabel):
         # Loupe border ring
         border_pen = QPen(QColor(220, 220, 220, 220), 2)
         painter.setPen(border_pen)
-        painter.setBrush(Qt.NoBrush)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawEllipse(cx - r, cy - r, 2 * r, 2 * r)
 
         painter.end()
@@ -467,7 +467,7 @@ class CirclePlotWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumSize(280, 260)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setStyleSheet("background: #12122a; border: 1px solid #555;")
         self._d: Optional[dict] = None
 
@@ -634,7 +634,7 @@ class CirclePlotWidget(QWidget):
     # ------------------------------------------------------------------
 
     def mousePressEvent(self, event):
-        if event.button() != Qt.LeftButton:
+        if event.button() != Qt.MouseButton.LeftButton:
             super().mousePressEvent(event)
             return
         side = self._near_point(event.x(), event.y())
@@ -651,7 +651,7 @@ class CirclePlotWidget(QWidget):
         self._d_at_drag_start = dict(self._d)   # snapshot for delta base
         self._d_drag_preview = None
         # _tf is already set from the last paintEvent; lock it for the drag
-        self.setCursor(Qt.CrossCursor)
+        self.setCursor(Qt.CursorShape.CrossCursor)
         event.accept()
 
     def mouseMoveEvent(self, event):
@@ -664,10 +664,10 @@ class CirclePlotWidget(QWidget):
             return
         # Hover cursor feedback
         side = self._near_point(event.x(), event.y())
-        self.setCursor(Qt.OpenHandCursor if side is not None else Qt.ArrowCursor)
+        self.setCursor(Qt.CursorShape.OpenHandCursor if side is not None else Qt.CursorShape.ArrowCursor)
 
     def mouseReleaseEvent(self, event):
-        if event.button() != Qt.LeftButton or self._drag_side is None:
+        if event.button() != Qt.MouseButton.LeftButton or self._drag_side is None:
             super().mouseReleaseEvent(event)
             return
         cx, cy = self._drag_center_world
@@ -697,7 +697,7 @@ class CirclePlotWidget(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.fillRect(self.rect(), QColor(18, 18, 42))
 
         # During a drag show the live approximation; otherwise show exact data.
@@ -705,7 +705,7 @@ class CirclePlotWidget(QWidget):
 
         if d_draw is None:
             painter.setPen(QColor(140, 140, 160))
-            painter.drawText(self.rect(), Qt.AlignCenter,
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
                              "Run the probe to see the circles.")
             painter.end()
             return
@@ -761,7 +761,7 @@ class CirclePlotWidget(QWidget):
         circle_colors = [QColor(80, 140, 255), QColor(255, 140, 80)]
         point_colors = [QColor(80, 220, 80), QColor(220, 220, 60)]
         intersects = d['intersects']
-        line_style = Qt.SolidLine if intersects else Qt.DashLine
+        line_style = Qt.PenStyle.SolidLine if intersects else Qt.PenStyle.DashLine
 
         for (c, r, col) in [
             (d['c1'], d['r1'], circle_colors[0]),
@@ -771,10 +771,10 @@ class CirclePlotWidget(QWidget):
             rs = sr(r)
             pen = QPen(col, 2, line_style)
             painter.setPen(pen)
-            painter.setBrush(Qt.NoBrush)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawEllipse(QPointF(cxs, cys), rs, rs)
             painter.setBrush(QBrush(col))
-            painter.setPen(Qt.NoPen)
+            painter.setPen(Qt.PenStyle.NoPen)
             painter.drawEllipse(QPointF(cxs, cys), 4.0, 4.0)
 
         for side, (p, col) in enumerate(
@@ -787,13 +787,13 @@ class CirclePlotWidget(QWidget):
             draw_col = col.lighter(160) if is_active else col
             arm = 9 if is_active else 7
             painter.setPen(QPen(draw_col, 2))
-            painter.setBrush(Qt.NoBrush)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawLine(int(pxs - arm), int(pys - arm),
                              int(pxs + arm), int(pys + arm))
             painter.drawLine(int(pxs + arm), int(pys - arm),
                              int(pxs - arm), int(pys + arm))
             # Dotted ring signals the point is draggable; solid when active
-            ring_style = Qt.SolidLine if is_active else Qt.DotLine
+            ring_style = Qt.PenStyle.SolidLine if is_active else Qt.PenStyle.DotLine
             painter.setPen(QPen(draw_col, 1, ring_style))
             painter.drawEllipse(QPointF(pxs, pys),
                                 float(self._HIT_RADIUS_PX),
@@ -804,7 +804,7 @@ class CirclePlotWidget(QWidget):
         ref_colors = [QColor(50, 90, 180), QColor(180, 95, 40)]
         for rps, col in zip((d.get('rp1', []), d.get('rp2', [])), ref_colors):
             painter.setPen(QPen(col, 1))
-            painter.setBrush(Qt.NoBrush)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
             for rp in rps:
                 rpxs, rpys = sx(rp[0]), sy(rp[1])
                 r = 5.0
@@ -1317,7 +1317,7 @@ class BambiCorrectionWizard(QDialog):
 
         # Step header row (label centred, info button pinned to the right)
         self._step_label = QLabel()
-        self._step_label.setAlignment(Qt.AlignCenter)
+        self._step_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         hdr_font = QFont()
         hdr_font.setBold(True)
         hdr_font.setPointSize(hdr_font.pointSize() + 1)
@@ -1406,7 +1406,7 @@ class BambiCorrectionWizard(QDialog):
         layout = QVBoxLayout(w)
         layout.setSpacing(6)
 
-        splitter = QSplitter(Qt.Horizontal)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
         self._side_widgets: List[dict] = []
 
@@ -1601,7 +1601,7 @@ class BambiCorrectionWizard(QDialog):
         layout.addWidget(probe_grp)
 
         # Three-panel splitter: circle plot | form | light field
-        mid = QSplitter(Qt.Horizontal)
+        mid = QSplitter(Qt.Orientation.Horizontal)
 
         # Left: circle visualization
         plot_grp = QGroupBox("Circle Visualization")
@@ -1611,21 +1611,21 @@ class BambiCorrectionWizard(QDialog):
         pp.addWidget(self._circle_plot)
         self._compute_status = QLabel()
         self._compute_status.setStyleSheet("color: #f90; font-style: italic;")
-        self._compute_status.setAlignment(Qt.AlignCenter)
+        self._compute_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         pp.addWidget(self._compute_status)
         drag_hint = QLabel(
             "Drag a point marker (⊕) to adjust:  "
             "distance from centre → tz   |   angle around centre → rz"
         )
         drag_hint.setStyleSheet("color: #888; font-style: italic; font-size: 10px;")
-        drag_hint.setAlignment(Qt.AlignCenter)
+        drag_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         pp.addWidget(drag_hint)
         mid.addWidget(plot_grp)
 
         # Middle: manual fine-tuning form
         self._ctrl_grp = QGroupBox("Step 2 — Manual Fine-Tuning")
         cf = QFormLayout(self._ctrl_grp)
-        cf.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        cf.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
 
         self._rot_unit_combo = QComboBox()
         self._rot_unit_combo.addItem("Radians", "rad")
@@ -1741,10 +1741,10 @@ class BambiCorrectionWizard(QDialog):
         self._render_img_lbl = MagnifierLabel(
             "Press 'Render Light Field' to generate a preview."
         )
-        self._render_img_lbl.setAlignment(Qt.AlignCenter)
+        self._render_img_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._render_img_lbl.setMinimumHeight(200)
         self._render_img_lbl.setSizePolicy(
-            QSizePolicy.Expanding, QSizePolicy.Expanding
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
         self._render_img_lbl.setStyleSheet(
             "border: 1px solid #555; background: #12122a;"
@@ -2323,7 +2323,7 @@ class BambiCorrectionWizard(QDialog):
             ref_arm = max(5, sz // 96)  # slightly smaller diamonds for ref points
 
             painter = QPainter(px)
-            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
             def _world_to_px(wx, wy):
                 return (
@@ -2361,8 +2361,8 @@ class BambiCorrectionWizard(QDialog):
         self._render_img_lbl.set_full_pixmap(px)
         scaled = px.scaled(
             self._render_img_lbl.size(),
-            Qt.KeepAspectRatio,
-            Qt.SmoothTransformation,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
         )
         self._render_img_lbl.setPixmap(scaled)
 
@@ -2492,7 +2492,7 @@ class BambiCorrectionWizard(QDialog):
             "overrides the global default for those frames only."
         )
         lbl.setWordWrap(True)
-        lbl.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
         lay.addWidget(lbl)
 
         close_btn = QPushButton("Close")
@@ -2502,7 +2502,7 @@ class BambiCorrectionWizard(QDialog):
         btn_row.addWidget(close_btn)
         lay.addLayout(btn_row)
 
-        dlg.exec_()
+        dlg.exec()
 
     def closeEvent(self, event) -> None:
         self._plot_timer.stop()

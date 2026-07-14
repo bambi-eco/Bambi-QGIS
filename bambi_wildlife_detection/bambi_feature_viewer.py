@@ -74,10 +74,10 @@ class FeatureViewerDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("BAMBI Feature Viewer")
         self.setWindowFlags(
-            Qt.Window | Qt.WindowCloseButtonHint | Qt.WindowMinimizeButtonHint
+            Qt.WindowType.Window | Qt.WindowType.WindowCloseButtonHint | Qt.WindowType.WindowMinimizeButtonHint
         )
         # Keep the Python object alive even when the user closes the window
-        self.setAttribute(Qt.WA_DeleteOnClose, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
         self.resize(800, 660)
 
         self._frames = []       # list of frame-data dicts
@@ -98,7 +98,7 @@ class FeatureViewerDialog(QDialog):
 
         # Title / description
         self.title_label = QLabel()
-        self.title_label.setAlignment(Qt.AlignCenter)
+        self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         bold = QFont()
         bold.setBold(True)
         self.title_label.setFont(bold)
@@ -106,8 +106,8 @@ class FeatureViewerDialog(QDialog):
 
         # Image area
         self.image_label = QLabel("No image loaded.")
-        self.image_label.setAlignment(Qt.AlignCenter)
-        self.image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.image_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.image_label.setMinimumSize(400, 300)
         self.image_label.setStyleSheet("background-color: #1e1e1e; color: #aaa;")
         layout.addWidget(self.image_label)
@@ -117,7 +117,7 @@ class FeatureViewerDialog(QDialog):
         self.prev_btn = QPushButton("< Prev Frame")
         self.next_btn = QPushButton("Next Frame >")
         self.frame_label = QLabel()
-        self.frame_label.setAlignment(Qt.AlignCenter)
+        self.frame_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.prev_btn.clicked.connect(self._go_prev)
         self.next_btn.clicked.connect(self._go_next)
         nav_layout.addWidget(self.prev_btn)
@@ -167,7 +167,7 @@ class FeatureViewerDialog(QDialog):
             "Projection quality depends on camera calibration accuracy and correction "
             "factors. If either is imprecise, projected boxes will be misaligned."
         )
-        self.proj_info_label.setAlignment(Qt.AlignCenter)
+        self.proj_info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.proj_info_label.setWordWrap(True)
         self.proj_info_label.setStyleSheet(
             "color: #888; font-style: italic; background: #2a2a2a; "
@@ -178,7 +178,7 @@ class FeatureViewerDialog(QDialog):
 
         # Info row (confidence, class, …)
         self.info_label = QLabel()
-        self.info_label.setAlignment(Qt.AlignCenter)
+        self.info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.info_label)
 
     # ------------------------------------------------------------------
@@ -472,8 +472,8 @@ class FeatureViewerDialog(QDialog):
             annotated = self._draw_crosshair(annotated, click_pt[0], click_pt[1])
         scaled = annotated.scaled(
             self.image_label.size(),
-            Qt.KeepAspectRatio,
-            Qt.SmoothTransformation,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
         )
         self.image_label.setPixmap(QPixmap.fromImage(scaled))
 
@@ -504,13 +504,13 @@ class FeatureViewerDialog(QDialog):
         """
         result = img.copy()
         painter = QPainter(result)
-        painter.setRenderHint(QPainter.Antialiasing, False)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
         lw_secondary = max(2, img.width() // 400)
         lw_primary = max(3, img.width() // 280)
 
         def make_pen(color, lw, dashed):
-            pen = QPen(color, lw, Qt.DashLine if dashed else Qt.SolidLine)
+            pen = QPen(color, lw, Qt.PenStyle.DashLine if dashed else Qt.PenStyle.SolidLine)
             return pen
 
         font = QFont("Arial", max(8, img.width() // 80))
@@ -556,13 +556,13 @@ class FeatureViewerDialog(QDialog):
         """
         result = img.copy()
         painter = QPainter(result)
-        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
         arm = max(8, img.width() // 60)
         lw = max(2, img.width() // 300)
 
-        pen = QPen(QColor(255, 220, 0), lw, Qt.SolidLine)   # yellow
-        pen.setCapStyle(Qt.RoundCap)
+        pen = QPen(QColor(255, 220, 0), lw, Qt.PenStyle.SolidLine)   # yellow
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(pen)
 
         cx, cy = int(px), int(py)

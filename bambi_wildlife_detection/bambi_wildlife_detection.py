@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 BAMBI Wildlife Detection - Main Plugin Class
 =============================================
@@ -317,7 +317,7 @@ class BambiWildlifeDetection:
         """Create and register the dock widget if it does not yet exist."""
         if self.dock_widget is None:
             self.dock_widget = BambiDockWidget(self.iface)
-            self.iface.addDockWidget(Qt.RightDockWidgetArea, self.dock_widget)
+            self.iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dock_widget)
             # addDockWidget shows the widget by default; keep it hidden until
             # the user explicitly opens it via the main toolbar button.
             self.dock_widget.hide()
@@ -364,7 +364,7 @@ class BambiWildlifeDetection:
         """Toolbar action: open the camera calibration wizard."""
         from .bambi_camera_calibration import CameraCalibrationWizard
         dlg = CameraCalibrationWizard(self.iface.mainWindow())
-        dlg.exec_()
+        dlg.exec()
 
     def _on_thermal_viewer(self):
         """Toolbar action: open the thermal image viewer (non-modal)."""

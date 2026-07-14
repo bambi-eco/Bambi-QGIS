@@ -6,6 +6,20 @@ services:
     working_dir: /workspace
     command: bash run_checks.sh
 
+  # Qt6 / QGIS 4 compatibility check — the same pyqt5_to_pyqt6.py dry run
+  # that plugins.qgis.org applies to every uploaded version, via the
+  # official checker image (no local Dockerfile needed).
+  qt6-check:
+    image: ghcr.io/qgis/pyqgis4-checker:main-ubuntu
+    pull_policy: always
+    # The image defaults to its own non-root user, which cannot write into
+    # the root-owned reports/ dir the other services create — align with them.
+    user: root
+    volumes:
+      - .:/workspace
+    working_dir: /workspace
+    command: bash run_qt6_check.sh
+
   tests:
     build:
       context: .

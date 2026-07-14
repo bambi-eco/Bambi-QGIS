@@ -163,7 +163,7 @@ class _BoxItem(QGraphicsRectItem):
         self._drag = None  # (zone, press_pos, press_rect)
 
         pen = QPen(color, 3 if emphasized else 2,
-                   Qt.DashLine if dashed else Qt.SolidLine)
+                   Qt.PenStyle.DashLine if dashed else Qt.PenStyle.SolidLine)
         pen.setCosmetic(True)
         self.setPen(pen)
 
@@ -178,9 +178,9 @@ class _BoxItem(QGraphicsRectItem):
 
         self.setAcceptHoverEvents(editable)
         if editable or on_clicked is not None:
-            self.setAcceptedMouseButtons(Qt.LeftButton)
+            self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
         else:
-            self.setAcceptedMouseButtons(Qt.NoButton)
+            self.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
 
     # -- geometry helpers --------------------------------------------------
 
@@ -232,16 +232,16 @@ class _BoxItem(QGraphicsRectItem):
     # -- interaction --------------------------------------------------------
 
     _CURSORS = {
-        "move": Qt.SizeAllCursor,
-        "t": Qt.SizeVerCursor, "b": Qt.SizeVerCursor,
-        "l": Qt.SizeHorCursor, "r": Qt.SizeHorCursor,
-        "tl": Qt.SizeFDiagCursor, "br": Qt.SizeFDiagCursor,
-        "tr": Qt.SizeBDiagCursor, "bl": Qt.SizeBDiagCursor,
+        "move": Qt.CursorShape.SizeAllCursor,
+        "t": Qt.CursorShape.SizeVerCursor, "b": Qt.CursorShape.SizeVerCursor,
+        "l": Qt.CursorShape.SizeHorCursor, "r": Qt.CursorShape.SizeHorCursor,
+        "tl": Qt.CursorShape.SizeFDiagCursor, "br": Qt.CursorShape.SizeFDiagCursor,
+        "tr": Qt.CursorShape.SizeBDiagCursor, "bl": Qt.CursorShape.SizeBDiagCursor,
     }
 
     def hoverMoveEvent(self, event):
         zone = self._hit_zone(event.pos())
-        self.setCursor(QCursor(self._CURSORS.get(zone, Qt.ArrowCursor)))
+        self.setCursor(QCursor(self._CURSORS.get(zone, Qt.CursorShape.ArrowCursor)))
         super().hoverMoveEvent(event)
 
     def mousePressEvent(self, event):
@@ -293,10 +293,10 @@ class _LabelCanvas(QGraphicsView):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setScene(QGraphicsScene(self))
-        self.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform)
-        self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
+        self.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform)
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setBackgroundBrush(QColor(30, 30, 30))
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         self._pix_item = QGraphicsPixmapItem()
         self._pix_item.setZValue(-1)
@@ -317,7 +317,7 @@ class _LabelCanvas(QGraphicsView):
         self._pix_item.setPixmap(pixmap)
         self.scene().setSceneRect(QRectF(pixmap.rect()))
         if first or not self._fitted:
-            self.fitInView(self._pix_item, Qt.KeepAspectRatio)
+            self.fitInView(self._pix_item, Qt.AspectRatioMode.KeepAspectRatio)
             self._fitted = True
 
     def clear_boxes(self) -> None:
@@ -332,11 +332,11 @@ class _LabelCanvas(QGraphicsView):
     def set_draw_mode(self, enabled: bool) -> None:
         self._draw_mode = enabled
         self.viewport().setCursor(
-            Qt.CrossCursor if enabled else Qt.ArrowCursor)
+            Qt.CursorShape.CrossCursor if enabled else Qt.CursorShape.ArrowCursor)
 
     def fit(self) -> None:
         if not self._pix_item.pixmap().isNull():
-            self.fitInView(self._pix_item, Qt.KeepAspectRatio)
+            self.fitInView(self._pix_item, Qt.AspectRatioMode.KeepAspectRatio)
 
     # -- interaction -----------------------------------------------------------
 
@@ -345,16 +345,16 @@ class _LabelCanvas(QGraphicsView):
         self.scale(factor, factor)
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.MiddleButton:
+        if event.button() == Qt.MouseButton.MiddleButton:
             self._pan_last = event.pos()
-            self.viewport().setCursor(Qt.ClosedHandCursor)
+            self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
             event.accept()
             return
-        if self._draw_mode and event.button() == Qt.LeftButton:
+        if self._draw_mode and event.button() == Qt.MouseButton.LeftButton:
             self._rubber_start = self.mapToScene(event.pos())
             self._rubber_item = QGraphicsRectItem(
                 QRectF(self._rubber_start, self._rubber_start))
-            pen = QPen(QColor(255, 255, 255), 1, Qt.DashLine)
+            pen = QPen(QColor(255, 255, 255), 1, Qt.PenStyle.DashLine)
             pen.setCosmetic(True)
             self._rubber_item.setPen(pen)
             self.scene().addItem(self._rubber_item)
@@ -381,13 +381,13 @@ class _LabelCanvas(QGraphicsView):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MiddleButton and self._pan_last is not None:
+        if event.button() == Qt.MouseButton.MiddleButton and self._pan_last is not None:
             self._pan_last = None
             self.viewport().setCursor(
-                Qt.CrossCursor if self._draw_mode else Qt.ArrowCursor)
+                Qt.CursorShape.CrossCursor if self._draw_mode else Qt.CursorShape.ArrowCursor)
             event.accept()
             return
-        if self._rubber_item is not None and event.button() == Qt.LeftButton:
+        if self._rubber_item is not None and event.button() == Qt.MouseButton.LeftButton:
             rect = self._rubber_item.rect().normalized()
             self.scene().removeItem(self._rubber_item)
             self._rubber_item = None
@@ -510,7 +510,7 @@ def _field_widget_value(field: CustomField, widget: QWidget) -> Any:
     if field.type == "bool":
         return widget.isChecked()
     if field.type == "datetime":
-        return widget.dateTime().toString(Qt.ISODate)
+        return widget.dateTime().toString(Qt.DateFormat.ISODate)
     return widget.text()
 
 
@@ -533,7 +533,7 @@ def _set_field_widget_value(field: CustomField, widget: QWidget,
         if widget.isChecked() != value:
             widget.setChecked(value)
     elif field.type == "datetime":
-        stamp = QDateTime.fromString(value, Qt.ISODate)
+        stamp = QDateTime.fromString(value, Qt.DateFormat.ISODate)
         if not stamp.isValid():
             stamp = QDateTime.currentDateTime()
         if widget.dateTime() != stamp:
@@ -570,7 +570,7 @@ class _CustomFieldsDialog(QDialog):
             "pass on; <b>Import</b> reads such a file (or a colleague's "
             "<code>labels.json</code>) back.")
         intro.setWordWrap(True)
-        intro.setTextFormat(Qt.RichText)
+        intro.setTextFormat(Qt.TextFormat.RichText)
         intro.setStyleSheet("color: #888;")
         layout.addWidget(intro)
 
@@ -578,9 +578,9 @@ class _CustomFieldsDialog(QDialog):
         self.table.setHorizontalHeaderLabels(self._COLUMNS)
         self.table.verticalHeader().setVisible(False)
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         layout.addWidget(self.table, 1)
 
         for field in fields:
@@ -609,7 +609,7 @@ class _CustomFieldsDialog(QDialog):
         layout.addLayout(btn_row)
 
         buttons = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self._on_accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -677,8 +677,8 @@ class _CustomFieldsDialog(QDialog):
                 self, "Import Fields",
                 f"Replace the current {self.table.rowCount()} field(s) with "
                 f"the {len(fields)} field(s) from this file?",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
-            if reply != QMessageBox.Yes:
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes)
+            if reply != QMessageBox.StandardButton.Yes:
                 return
 
         self._remember_dir(path)
@@ -755,8 +755,8 @@ class LabellingToolDialog(QDialog):
         self._dock_widget = dock_widget
 
         self.setWindowTitle("BAMBI Labelling Tool")
-        flags = Qt.Window | Qt.WindowCloseButtonHint
-        flags |= Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint
+        flags = Qt.WindowType.Window | Qt.WindowType.WindowCloseButtonHint
+        flags |= Qt.WindowType.WindowMinimizeButtonHint | Qt.WindowType.WindowMaximizeButtonHint
         self.setWindowFlags(flags)
 
         # Project state
@@ -850,7 +850,7 @@ class LabellingToolDialog(QDialog):
         self.canvas = _LabelCanvas()
         # NoFocus so arrow keys reach the dialog's keyPressEvent for frame
         # navigation instead of scrolling the graphics view.
-        self.canvas.setFocusPolicy(Qt.NoFocus)
+        self.canvas.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.canvas.boxDrawn.connect(self._on_box_drawn)
         center.addWidget(self.canvas, 1)
 
@@ -878,7 +878,7 @@ class LabellingToolDialog(QDialog):
         self.frame_spin.setRange(0, 0)
         self.frame_spin.valueChanged.connect(self._on_frame_spin)
 
-        self.frame_slider = QSlider(Qt.Horizontal)
+        self.frame_slider = QSlider(Qt.Orientation.Horizontal)
         self.frame_slider.setRange(0, 0)
         self.frame_slider.valueChanged.connect(self._on_frame_slider)
 
@@ -1015,7 +1015,7 @@ class LabellingToolDialog(QDialog):
         kg = QVBoxLayout(kf_group)
         self.kf_info_label = QLabel("–")
         self.kf_info_label.setWordWrap(True)
-        self.kf_info_label.setTextFormat(Qt.RichText)
+        self.kf_info_label.setTextFormat(Qt.TextFormat.RichText)
         self.kf_info_label.setToolTip(
             "Click a frame number to jump to that key frame.")
         self.kf_info_label.linkActivated.connect(self._on_kf_link_clicked)
@@ -1146,8 +1146,8 @@ class LabellingToolDialog(QDialog):
         scroll = QScrollArea()
         scroll.setWidget(panel)
         scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         # Reserve the scrollbar width so the controls keep their width whether
         # or not the bar is shown.
         scroll.setFixedWidth(
@@ -1178,7 +1178,7 @@ class LabellingToolDialog(QDialog):
             return
 
         dialog = _CustomFieldsDialog(self._store.custom_fields, self)
-        if dialog.exec_() != QDialog.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         fields = dialog.fields()
         if fields == self._store.custom_fields:
@@ -1191,8 +1191,8 @@ class LabellingToolDialog(QDialog):
                 self, "Change Custom Fields",
                 "The new configuration affects labels you already have:\n\n"
                 f"{details}\n\nApply anyway?",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-            if reply != QMessageBox.Yes:
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+            if reply != QMessageBox.StandardButton.Yes:
                 return
 
         self._store.set_custom_fields(fields)
@@ -1304,26 +1304,26 @@ class LabellingToolDialog(QDialog):
         of scrolling the view.
         """
         key = event.key()
-        if key == Qt.Key_Right:
+        if key == Qt.Key.Key_Right:
             self._go_relative(1)
-        elif key == Qt.Key_Left:
+        elif key == Qt.Key.Key_Left:
             self._go_relative(-1)
-        elif key == Qt.Key_PageUp:
+        elif key == Qt.Key.Key_PageUp:
             self._go_relative(self.nav_step_spin.value())
-        elif key == Qt.Key_PageDown:
+        elif key == Qt.Key.Key_PageDown:
             self._go_relative(-self.nav_step_spin.value())
-        elif key == Qt.Key_N:
+        elif key == Qt.Key.Key_N:
             self.new_track_btn.toggle()
-        elif key == Qt.Key_B:
+        elif key == Qt.Key.Key_B:
             self.draw_kf_btn.toggle()
-        elif key == Qt.Key_K:
+        elif key == Qt.Key.Key_K:
             self._on_add_keyframe()
-        elif key == Qt.Key_S:
+        elif key == Qt.Key.Key_S:
             if self.stop_check.isEnabled():
                 self.stop_check.toggle()
-        elif key == Qt.Key_Delete:
+        elif key == Qt.Key.Key_Delete:
             self._on_delete_keyframe()
-        elif key == Qt.Key_Escape:
+        elif key == Qt.Key.Key_Escape:
             # Do not close the dialog on Escape — just cancel draw modes.
             if self.new_track_btn.isChecked():
                 self.new_track_btn.setChecked(False)
@@ -1704,7 +1704,7 @@ class LabellingToolDialog(QDialog):
                 rng_str = f"{rng[0]}–{rng[1]}" if rng else "empty"
                 item = QListWidgetItem(
                     f"L{track.track_id}  {track.species}  [{rng_str}]")
-                item.setData(Qt.UserRole, track.track_id)
+                item.setData(Qt.ItemDataRole.UserRole, track.track_id)
                 item.setForeground(_track_color(track.track_id))
                 self.track_list.addItem(item)
                 if track.track_id == self._selected_track:
@@ -1729,7 +1729,7 @@ class LabellingToolDialog(QDialog):
     def _on_track_list_selection(self, current, _previous):
         if self._updating_ui or current is None:
             return
-        tid = current.data(Qt.UserRole)
+        tid = current.data(Qt.ItemDataRole.UserRole)
         if tid != self._selected_track:
             self._selected_track = tid
             # Jump into the track's range so the user sees the box
@@ -1810,8 +1810,8 @@ class LabellingToolDialog(QDialog):
             self, "Delete Track",
             f"Delete label track L{track.track_id} "
             f"({len(track.keyframes)} key frame(s))?",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-        if reply != QMessageBox.Yes:
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+        if reply != QMessageBox.StandardButton.Yes:
             return
         del self._store.tracks[track.track_id]
         self._selected_track = None
@@ -1969,8 +1969,8 @@ class LabellingToolDialog(QDialog):
                 self, "Load Digital Elevation Model",
                 f"Copying labels from {other_name} needs to load the DEM "
                 "mesh.\n\nThis may take some time on the first use. Continue?",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
-            if reply != QMessageBox.Yes:
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes)
+            if reply != QMessageBox.StandardButton.Yes:
                 return
 
         # ---- project every source key frame -------------------------------
@@ -1981,7 +1981,7 @@ class LabellingToolDialog(QDialog):
         skipped_keyframes = 0
         first_new_frame: Optional[int] = None
 
-        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             if not self._propagator.is_loaded:
                 self._propagator.load()
@@ -2215,8 +2215,8 @@ class LabellingToolDialog(QDialog):
                 self, "Load Digital Elevation Model",
                 "Geo-referenced propagation needs to load the DEM mesh.\n\n"
                 "This may take some time on the first use. Continue?",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
-            if reply != QMessageBox.Yes:
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes)
+            if reply != QMessageBox.StandardButton.Yes:
                 return
 
         if self._img_size is None:
@@ -2225,7 +2225,7 @@ class LabellingToolDialog(QDialog):
                 "Frame image size unknown — cannot project.")
             return
 
-        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             boxes, failures = self._propagator.propagate_series(
                 res[0], self._current_frame, dst_frame, self._images,
@@ -2350,11 +2350,11 @@ class LabellingToolDialog(QDialog):
         reply = QMessageBox.question(
             self, "Unsaved Labels",
             "There are unsaved label changes. Save them now?",
-            QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
-            QMessageBox.Save)
-        if reply == QMessageBox.Cancel:
+            QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save)
+        if reply == QMessageBox.StandardButton.Cancel:
             return False
-        if reply == QMessageBox.Save:
+        if reply == QMessageBox.StandardButton.Save:
             self._on_save()
         else:
             # Discard: restore the on-disk state so the in-memory store does

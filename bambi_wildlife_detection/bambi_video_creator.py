@@ -545,8 +545,8 @@ class VideoCreatorDialog(QDialog):
                    + "\n\nCreate the video anyway?")  # noqa: W503, W504
             if QMessageBox.warning(
                     self, "Missing Data", msg,
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.Yes) != QMessageBox.Yes:
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes) != QMessageBox.StandardButton.Yes:
                 return
 
         self._rendering = True

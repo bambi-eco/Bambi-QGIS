@@ -88,7 +88,7 @@ def _enable_transect_labels(layer, color_hex):
 
     settings = QgsPalLayerSettings()
     settings.fieldName = "transect_no"
-    settings.placement = QgsPalLayerSettings.Line
+    settings.placement = QgsPalLayerSettings.Placement.Line
     settings.setFormat(fmt)
 
     labeling = QgsVectorLayerSimpleLabeling(settings)
@@ -360,7 +360,7 @@ class FlightPlannerDialog(QDialog):
         lr = QHBoxLayout()
         lr.setContentsMargins(0, 0, 0, 0)
         combo = QComboBox()
-        combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         refresh_btn = QPushButton("↻")
         refresh_btn.setFixedWidth(26)
         refresh_btn.setToolTip("Refresh layer list")
@@ -391,9 +391,9 @@ class FlightPlannerDialog(QDialog):
             if not isinstance(layer, QgsVectorLayer):
                 continue
             gt = layer.geometryType()
-            if geom_type == "Polygon" and gt == QgsWkbTypes.PolygonGeometry:
+            if geom_type == "Polygon" and gt == QgsWkbTypes.GeometryType.PolygonGeometry:
                 combo.addItem(layer.name(), lid)
-            elif geom_type == "Point" and gt == QgsWkbTypes.PointGeometry:
+            elif geom_type == "Point" and gt == QgsWkbTypes.GeometryType.PointGeometry:
                 combo.addItem(layer.name(), lid)
 
     def _browse_geo_file(self, edit):
@@ -455,7 +455,7 @@ class FlightPlannerDialog(QDialog):
         )
         error_code = result[0]
         error_msg = result[1] if len(result) > 1 else ""
-        if error_code != QgsVectorFileWriter.NoError:
+        if error_code != QgsVectorFileWriter.WriterError.NoError:
             raise ValueError(f"Failed to export layer '{layer.name()}': {error_msg}")
         self._temp_files.append(tmp)
         return tmp

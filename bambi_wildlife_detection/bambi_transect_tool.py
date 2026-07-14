@@ -72,12 +72,12 @@ class _FrameView(QGraphicsView):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setScene(QGraphicsScene(self))
-        self.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform)
-        self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
+        self.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform)
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setBackgroundBrush(QColor(30, 30, 30))
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         # Middle-button panning like the labelling canvas; left drag scrolls.
-        self.setDragMode(QGraphicsView.ScrollHandDrag)
+        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
 
         self._pix_item = QGraphicsPixmapItem()
         self.scene().addItem(self._pix_item)
@@ -89,12 +89,12 @@ class _FrameView(QGraphicsView):
         self._pix_item.setPixmap(pixmap)
         self.scene().setSceneRect(QRectF(pixmap.rect()))
         if first or not self._fitted:
-            self.fitInView(self._pix_item, Qt.KeepAspectRatio)
+            self.fitInView(self._pix_item, Qt.AspectRatioMode.KeepAspectRatio)
             self._fitted = True
 
     def fit(self) -> None:
         if not self._pix_item.pixmap().isNull():
-            self.fitInView(self._pix_item, Qt.KeepAspectRatio)
+            self.fitInView(self._pix_item, Qt.AspectRatioMode.KeepAspectRatio)
 
     def wheelEvent(self, event):
         factor = 1.25 if event.angleDelta().y() > 0 else 0.8
@@ -118,7 +118,7 @@ class _FlightMapWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumHeight(220)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._positions: List[Optional[Tuple[float, float]]] = []
         self._current = 0
         self._transects: List[Transect] = []
@@ -215,13 +215,13 @@ class _FlightMapWidget(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.fillRect(self.rect(), QColor(35, 35, 35))
 
         mapping = self._world_to_widget()
         if mapping is None:
             painter.setPen(QColor(150, 150, 150))
-            painter.drawText(self.rect(), Qt.AlignCenter,
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
                              "No flight route\n(poses without positions)")
             painter.end()
             return
@@ -250,7 +250,7 @@ class _FlightMapWidget(QWidget):
                     pt = self._to_point(pos, mapping)
                     painter.setBrush(_transect_color(transect.transect_id))
                     painter.drawEllipse(pt, 4, 4)
-                    painter.setBrush(Qt.NoBrush)
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
                     painter.drawText(QPointF(pt.x() + 5, pt.y() - 5), label)
 
         # Current frame position
@@ -259,7 +259,7 @@ class _FlightMapWidget(QWidget):
             painter.setPen(QPen(_CURRENT_COLOR, 2))
             painter.setBrush(_CURRENT_COLOR)
             painter.drawEllipse(pt, 3, 3)
-            painter.setBrush(Qt.NoBrush)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawEllipse(pt, 7, 7)
 
         # North arrow (mesh-local y axis is north)
@@ -341,8 +341,8 @@ class TransectToolDialog(QDialog):
         self._dock_widget = dock_widget
 
         self.setWindowTitle("BAMBI Transect Splitting Tool")
-        flags = Qt.Window | Qt.WindowCloseButtonHint
-        flags |= Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint
+        flags = Qt.WindowType.Window | Qt.WindowType.WindowCloseButtonHint
+        flags |= Qt.WindowType.WindowMinimizeButtonHint | Qt.WindowType.WindowMaximizeButtonHint
         self.setWindowFlags(flags)
 
         # Project state
@@ -407,7 +407,7 @@ class TransectToolDialog(QDialog):
         self.canvas = _FrameView()
         # NoFocus so arrow keys reach the dialog's keyPressEvent for frame
         # navigation instead of scrolling the graphics view.
-        self.canvas.setFocusPolicy(Qt.NoFocus)
+        self.canvas.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         center.addWidget(self.canvas, 1)
         center.addWidget(self._build_side_panel())
         layout.addLayout(center, 1)
@@ -435,7 +435,7 @@ class TransectToolDialog(QDialog):
         self.frame_spin.setRange(0, 0)
         self.frame_spin.valueChanged.connect(self._on_frame_spin)
 
-        self.frame_slider = QSlider(Qt.Horizontal)
+        self.frame_slider = QSlider(Qt.Orientation.Horizontal)
         self.frame_slider.setRange(0, 0)
         self.frame_slider.valueChanged.connect(self._on_frame_slider)
 
@@ -569,8 +569,8 @@ class TransectToolDialog(QDialog):
         scroll = QScrollArea()
         scroll.setWidget(panel)
         scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setFixedWidth(
             _SIDE_PANEL_WIDTH + scroll.verticalScrollBar().sizeHint().width())
         return scroll
@@ -581,23 +581,23 @@ class TransectToolDialog(QDialog):
 
     def keyPressEvent(self, event):
         key = event.key()
-        if key == Qt.Key_Right:
+        if key == Qt.Key.Key_Right:
             self._go_relative(1)
-        elif key == Qt.Key_Left:
+        elif key == Qt.Key.Key_Left:
             self._go_relative(-1)
-        elif key == Qt.Key_PageUp:
+        elif key == Qt.Key.Key_PageUp:
             self._go_relative(self.nav_step_spin.value())
-        elif key == Qt.Key_PageDown:
+        elif key == Qt.Key.Key_PageDown:
             self._go_relative(-self.nav_step_spin.value())
-        elif key == Qt.Key_N:
+        elif key == Qt.Key.Key_N:
             self._on_new_transect()
-        elif key == Qt.Key_S:
+        elif key == Qt.Key.Key_S:
             self._on_set_start()
-        elif key == Qt.Key_E:
+        elif key == Qt.Key.Key_E:
             self._on_set_end()
-        elif key == Qt.Key_Delete:
+        elif key == Qt.Key.Key_Delete:
             self._on_delete_transect()
-        elif key == Qt.Key_Escape:
+        elif key == Qt.Key.Key_Escape:
             pass  # do not close the dialog on Escape
         else:
             super().keyPressEvent(event)
@@ -845,7 +845,7 @@ class TransectToolDialog(QDialog):
                 f"{transect.display_name}  "
                 f"[{transect.first_frame}–{transect.last_frame}]  "
                 f"{length:.1f} m")
-            item.setData(Qt.UserRole, transect.transect_id)
+            item.setData(Qt.ItemDataRole.UserRole, transect.transect_id)
             item.setForeground(_transect_color(transect.transect_id))
             self.transect_list.addItem(item)
             if transect.transect_id == self._selected_id:
@@ -859,7 +859,7 @@ class TransectToolDialog(QDialog):
     def _on_list_selection(self, item, _prev):
         if self._updating_ui:
             return
-        self._selected_id = item.data(Qt.UserRole) if item else None
+        self._selected_id = item.data(Qt.ItemDataRole.UserRole) if item else None
         self._update_views()
 
     # ------------------------------------------------------------------
@@ -891,8 +891,8 @@ class TransectToolDialog(QDialog):
             self, "Delete Transect",
             f"Delete {transect.display_name} "
             f"(frames {transect.first_frame}–{transect.last_frame})?",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-        if reply != QMessageBox.Yes:
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+        if reply != QMessageBox.StandardButton.Yes:
             return
         self._store.remove(transect.transect_id)
         self._selected_id = None
@@ -976,11 +976,11 @@ class TransectToolDialog(QDialog):
         reply = QMessageBox.question(
             self, "Unsaved Transects",
             "There are unsaved transect changes. Save them now?",
-            QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
-            QMessageBox.Save)
-        if reply == QMessageBox.Cancel:
+            QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save)
+        if reply == QMessageBox.StandardButton.Cancel:
             return False
-        if reply == QMessageBox.Save:
+        if reply == QMessageBox.StandardButton.Save:
             self._on_save()
         else:
             self._dirty = False

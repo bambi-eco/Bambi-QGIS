@@ -79,8 +79,8 @@ class _ThermalLabel(QLabel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMouseTracking(True)
-        self.setAlignment(Qt.AlignCenter)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMinimumSize(400, 300)
         self.setStyleSheet("background-color: #1a1a1a;")
         self._temp_array = None
@@ -131,7 +131,7 @@ class ThermalViewerDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Thermal Image Viewer")
-        flags = Qt.Window | Qt.WindowCloseButtonHint | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint
+        flags = Qt.WindowType.Window | Qt.WindowType.WindowCloseButtonHint | Qt.WindowType.WindowMinimizeButtonHint | Qt.WindowType.WindowMaximizeButtonHint
         self.setWindowFlags(flags)
         self.resize(860, 680)
 
@@ -177,7 +177,7 @@ class ThermalViewerDialog(QDialog):
         self._next_btn = QPushButton("Next  ►")
         self._next_btn.clicked.connect(self._go_next)
         self._nav_label = QLabel("")
-        self._nav_label.setAlignment(Qt.AlignCenter)
+        self._nav_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         nav_layout.addWidget(self._prev_btn)
         nav_layout.addStretch()
         nav_layout.addWidget(self._nav_label)
@@ -239,7 +239,7 @@ class ThermalViewerDialog(QDialog):
         status_row = QHBoxLayout()
         self._info_label = QLabel("Load a DJI thermal JPG to begin.")
         self._cursor_label = QLabel("")
-        self._cursor_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._cursor_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         status_row.addWidget(self._info_label, 1)
         status_row.addWidget(self._cursor_label)
         root.addLayout(status_row)
@@ -412,7 +412,7 @@ class ThermalViewerDialog(QDialog):
         h, w = arr.shape
         # Keep the bytes object alive until QPixmap.fromImage() copies the data
         raw = rgb.tobytes()
-        q_img = QImage(raw, w, h, 3 * w, QImage.Format_RGB888)
+        q_img = QImage(raw, w, h, 3 * w, QImage.Format.Format_RGB888)
         self._full_pixmap = QPixmap.fromImage(q_img)
         del q_img, raw
 
@@ -424,7 +424,7 @@ class ThermalViewerDialog(QDialog):
         if self._full_pixmap is None or self._full_pixmap.isNull():
             return
         scaled = self._full_pixmap.scaled(
-            self._img_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
+            self._img_label.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
         )
         self._img_label.setPixmap(scaled)
 
@@ -467,10 +467,10 @@ class ThermalViewerDialog(QDialog):
 
     def keyPressEvent(self, event):
         if self._image_list:
-            if event.key() == Qt.Key_Left:
+            if event.key() == Qt.Key.Key_Left:
                 self._go_prev()
                 return
-            if event.key() == Qt.Key_Right:
+            if event.key() == Qt.Key.Key_Right:
                 self._go_next()
                 return
         super().keyPressEvent(event)
