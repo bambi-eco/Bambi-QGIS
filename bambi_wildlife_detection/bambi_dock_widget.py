@@ -2581,6 +2581,118 @@ class BambiDockWidget(QDockWidget):
 
         analytics_tab_layout.addWidget(coverage_group)
 
+        # ----- Population Estimation (Transects) -----
+        pop_group = QGroupBox("Population Estimation (Transects)")
+        pop_layout = QVBoxLayout(pop_group)
+
+        pop_desc = QLabel(
+            "Density from the transects of a split flight: each track is assigned "
+            "to the transect nearest in perpendicular distance, and the monitored "
+            "area of a transect is the union of its frames' field-of-view "
+            "footprints. Requires transects (Transect Splitting Tool), "
+            "'Calculate Field of View' and 'Calculate Track Perpendicular'."
+        )
+        pop_desc.setWordWrap(True)
+        pop_desc.setStyleSheet("color: gray; font-size: 10px;")
+        pop_layout.addWidget(pop_desc)
+
+        pop_params_row = QHBoxLayout()
+        pop_params_row.addWidget(QLabel("Camera:"))
+        self.pop_camera_combo = QComboBox()
+        self.pop_camera_combo.addItems(["Thermal", "RGB"])
+        self.pop_camera_combo.setToolTip(
+            "Modality of the transects, FoV footprints and tracks. Frame indices\n"
+            "are modality-specific, so all three must be the same camera.")
+        pop_params_row.addWidget(self.pop_camera_combo)
+        pop_params_row.addWidget(QLabel("Truncation (m):"))
+        self.pop_truncation_spin = QDoubleSpinBox()
+        self.pop_truncation_spin.setRange(0.0, 100000.0)
+        self.pop_truncation_spin.setValue(0.0)
+        self.pop_truncation_spin.setSingleStep(5.0)
+        self.pop_truncation_spin.setSpecialValueText("off (assign all)")
+        self.pop_truncation_spin.setToolTip(
+            "Maximum perpendicular distance between a track and its transect.\n"
+            "Tracks farther from every transect are not counted.\n"
+            "0 = assign every track to its nearest transect.")
+        pop_params_row.addWidget(self.pop_truncation_spin)
+        pop_params_row.addWidget(QLabel("Study area (ha):"))
+        self.pop_study_area_spin = QDoubleSpinBox()
+        self.pop_study_area_spin.setRange(0.0, 10_000_000.0)
+        self.pop_study_area_spin.setValue(0.0)
+        self.pop_study_area_spin.setSingleStep(10.0)
+        self.pop_study_area_spin.setSpecialValueText("off (density only)")
+        self.pop_study_area_spin.setToolTip(
+            "Size of the surveyed study area. When set, every density is\n"
+            "extrapolated to an abundance for an area of this size.")
+        pop_params_row.addWidget(self.pop_study_area_spin)
+        pop_params_row.addStretch()
+        pop_layout.addLayout(pop_params_row)
+
+        pop_methods_row = QHBoxLayout()
+        pop_methods_row.addWidget(QLabel("Methods:"))
+        self.pop_naive_check = QCheckBox("Naive")
+        self.pop_naive_check.setChecked(True)
+        self.pop_naive_check.setToolTip(
+            "Total animals divided by the total monitored area "
+            "(sum(count) / sum(ha) × 100).")
+        self.pop_bootstrap_check = QCheckBox("Bootstrap")
+        self.pop_bootstrap_check.setChecked(True)
+        self.pop_bootstrap_check.setToolTip(
+            "Resample the transects with replacement, recompute the naive\n"
+            "density each time and report its mean, SE and percentile 95% CI.")
+        self.pop_zinb_check = QCheckBox("ZINB")
+        self.pop_zinb_check.setChecked(True)
+        self.pop_zinb_check.setToolTip(
+            "Zero-inflated negative binomial regression (count ~ ha, constant\n"
+            "zero-inflation), for transect counts with many zeros and\n"
+            "overdispersion. Needs at least 4 transects of differing area.")
+        pop_methods_row.addWidget(self.pop_naive_check)
+        pop_methods_row.addWidget(self.pop_bootstrap_check)
+        pop_methods_row.addWidget(self.pop_zinb_check)
+        pop_methods_row.addSpacing(12)
+        pop_methods_row.addWidget(QLabel("Bootstrap iterations:"))
+        self.pop_n_boot_spin = QSpinBox()
+        self.pop_n_boot_spin.setRange(10, 100000)
+        self.pop_n_boot_spin.setValue(999)
+        self.pop_n_boot_spin.setSingleStep(100)
+        self.pop_n_boot_spin.setToolTip("Number of bootstrap resamples.")
+        pop_methods_row.addWidget(self.pop_n_boot_spin)
+        pop_methods_row.addWidget(QLabel("Seed:"))
+        self.pop_seed_spin = QSpinBox()
+        self.pop_seed_spin.setRange(0, 2_147_483_647)
+        self.pop_seed_spin.setValue(42)
+        self.pop_seed_spin.setToolTip(
+            "Random seed of the bootstrap, so a run is reproducible.")
+        pop_methods_row.addWidget(self.pop_seed_spin)
+        pop_methods_row.addStretch()
+        pop_layout.addLayout(pop_methods_row)
+
+        pop_run_row = QHBoxLayout()
+        self.population_btn = QPushButton("→ Estimate Population (Transects)")
+        self.population_btn.clicked.connect(self.run_population_estimation)
+        self.population_btn.setToolTip(
+            "Assign the tracks to the transects, measure each transect's monitored\n"
+            "area from its FoV footprints and estimate the density with the\n"
+            "selected methods."
+        )
+        self.population_status = QLabel("⚪")
+        pop_run_row.addWidget(self.population_btn)
+        pop_run_row.addWidget(self.population_status)
+        pop_layout.addLayout(pop_run_row)
+
+        pop_add_row = QHBoxLayout()
+        self.add_transect_areas_btn = QPushButton("→ Add Transect Areas to QGIS")
+        self.add_transect_areas_btn.clicked.connect(self.add_transect_areas_to_qgis)
+        self.add_transect_areas_btn.setToolTip(
+            "Load the monitored area of every transect (the merged FoV footprint) "
+            "as a labelled polygon layer.")
+        self.add_transect_areas_status = QLabel("⚪")
+        pop_add_row.addWidget(self.add_transect_areas_btn)
+        pop_add_row.addWidget(self.add_transect_areas_status)
+        pop_layout.addLayout(pop_add_row)
+
+        analytics_tab_layout.addWidget(pop_group)
+
         # Progress mirror for analytics runs (main log lives on the Processing tab)
         self.analytics_progress_bar = QProgressBar()
         self.analytics_progress_bar.setRange(0, 100)
@@ -2992,7 +3104,38 @@ class BambiDockWidget(QDockWidget):
             "ds_truncation": (
                 self.ds_truncation_spin.value()
                 if hasattr(self, 'ds_truncation_spin') else 0.0),
+
+            # Survey analytics: transect population estimation
+            "pop_camera": (
+                ("T" if self.pop_camera_combo.currentIndex() == 0 else "W")
+                if hasattr(self, 'pop_camera_combo') else "T"),
+            "pop_truncation": (
+                self.pop_truncation_spin.value()
+                if hasattr(self, 'pop_truncation_spin') else 0.0),
+            "pop_study_area_ha": (
+                self.pop_study_area_spin.value()
+                if hasattr(self, 'pop_study_area_spin') else 0.0),
+            "pop_methods": self._selected_population_methods(),
+            "pop_n_boot": (
+                self.pop_n_boot_spin.value()
+                if hasattr(self, 'pop_n_boot_spin') else 999),
+            "pop_seed": (
+                self.pop_seed_spin.value()
+                if hasattr(self, 'pop_seed_spin') else 42),
         }
+
+    def _selected_population_methods(self) -> list:
+        """The population estimators ticked on the Survey Analytics tab."""
+        checks = (
+            ("naive", "pop_naive_check"),
+            ("bootstrap", "pop_bootstrap_check"),
+            ("zinb", "pop_zinb_check"),
+        )
+        methods = [
+            name for name, attr in checks
+            if not hasattr(self, attr) or getattr(self, attr).isChecked()
+        ]
+        return methods
 
     def validate_inputs(self, required_fields: list) -> bool:
         """Validate that required input fields are filled."""
@@ -5598,6 +5741,217 @@ class BambiDockWidget(QDockWidget):
         layout.addWidget(buttons)
         dlg.exec_()
 
+    def run_population_estimation(self):
+        """Run the transect-based population estimation step."""
+        config = self.get_config()
+        target_folder = config.get("target_folder", "")
+        if not target_folder or not os.path.isdir(target_folder):
+            QMessageBox.warning(self, "Missing Target Folder",
+                                "Please set a valid target folder first.")
+            return
+
+        if not config.get("pop_methods"):
+            QMessageBox.warning(
+                self, "No Method Selected",
+                "Please tick at least one estimation method "
+                "(Naive, Bootstrap or ZINB).")
+            return
+
+        suffix = "t" if config.get("pop_camera", "T") == "T" else "w"
+        camera_label = "Thermal" if suffix == "t" else "RGB"
+        fr_suffix = "t" if config.get("flight_route_camera", "T") == "T" else "w"
+
+        missing = []
+        if not os.path.exists(os.path.join(
+                target_folder, f"transects_{suffix}", "transects.json")):
+            missing.append(
+                f"{camera_label} transect definitions "
+                "(define them with the Transect Splitting Tool)")
+        if not os.path.exists(os.path.join(
+                target_folder, f"fov_{suffix}", "fov_polygons.txt")):
+            missing.append(
+                f"{camera_label} FoV footprints (run 'Calculate Field of View')")
+        if not os.path.exists(os.path.join(
+                target_folder, f"flight_route_{fr_suffix}",
+                f"perpendicular_tracks_{suffix}.json")):
+            missing.append(
+                f"{camera_label} track perpendicular distances "
+                "(run 'Calculate Track Perpendicular')")
+
+        if missing:
+            QMessageBox.warning(
+                self, "Missing Prerequisites",
+                "The following are required:\n\n"
+                + "\n".join(f"• {m}" for m in missing))
+            return
+
+        self.start_worker("population_estimation")
+
+    def _show_population_results(self):
+        """Read the population-estimate JSON and show a summary dialog."""
+        config = self.get_config()
+        suffix = "t" if config.get("pop_camera", "T") == "T" else "w"
+        result_file = os.path.join(config["target_folder"], f"analytics_{suffix}",
+                                   "population_estimate.json")
+        if not os.path.exists(result_file):
+            return
+        try:
+            with open(result_file, 'r', encoding='utf-8') as f:
+                r = json.load(f)
+        except Exception as e:
+            self.log(f"Could not read population-estimation results: {e}")
+            return
+
+        study_ha = r.get("study_area_ha", 0) or 0
+        method_labels = {"naive": "Naive", "bootstrap": "Bootstrap", "zinb": "ZINB"}
+        est_rows = ""
+        for key, est in r.get("estimates", {}).items():
+            label = method_labels.get(key, key)
+            density = est.get("density_per_100ha")
+            if density is None:
+                est_rows += (
+                    f"<tr><td>{label}</td><td colspan='3' style='color:#c33'>"
+                    f"failed — {est.get('error', 'unknown error')}</td></tr>")
+                continue
+            ci = est.get("ci95")
+            ci_txt = f"{ci[0]:.2f} – {ci[1]:.2f}" if ci else "–"
+            abundance = est.get("abundance_study_area")
+            ab_txt = f"{abundance:.1f}" if abundance is not None else "–"
+            note = (f"<br><span style='color:#c80'>{est['error']}</span>"
+                    if est.get("error") else "")
+            est_rows += (
+                f"<tr><td>{label}{note}</td>"
+                f"<td align='right'>{density:.2f}</td>"
+                f"<td align='right'>{ci_txt}</td>"
+                f"<td align='right'>{ab_txt}</td></tr>")
+
+        transect_rows = "".join(
+            f"<tr><td>{t['name']}</td>"
+            f"<td align='right'>{t['start_frame']}–{t['end_frame']}</td>"
+            f"<td align='right'>{t['length_m']:.0f}</td>"
+            f"<td align='right'>{t['area_ha']:.2f}</td>"
+            f"<td align='right'>{t['count']}</td></tr>"
+            for t in r.get("transects", [])
+        )
+
+        study_row = (
+            f"<tr><td><b>Study area</b></td><td align='right'>{study_ha:.1f} ha</td></tr>"
+            if study_ha > 0 else "")
+        no_area = r.get("n_transects_without_area", 0)
+        no_area_row = (
+            f"<tr><td><b>Transects without area</b></td>"
+            f"<td align='right' style='color:#c80'>{no_area} (excluded)</td></tr>"
+            if no_area else "")
+
+        html = f"""
+        <h3>Transect Population Estimate ({r.get('camera', '')})</h3>
+        <table cellpadding='4'>
+          <tr><td><b>Transects</b></td>
+              <td align='right'>{r.get('n_transects', 0)}
+              ({r.get('n_zero_transects', 0)} with zero counts)</td></tr>
+          <tr><td><b>Animals (tracks)</b></td>
+              <td align='right'>{int(r.get('total_count', 0))} assigned
+              (of {r.get('n_tracks', 0)})</td></tr>
+          <tr><td><b>Monitored area</b></td>
+              <td align='right'>{r.get('total_ha', 0):.2f} ha</td></tr>
+          <tr><td><b>Truncation</b></td>
+              <td align='right'>{'off' if not r.get('truncation_m') else f"{r['truncation_m']:.1f} m"}</td></tr>
+          {study_row}
+          {no_area_row}
+        </table>
+        <h4>Estimates</h4>
+        <table cellpadding='4'>
+          <tr><th align='left'>Method</th>
+              <th align='right'>Density (/100 ha)</th>
+              <th align='right'>95% CI</th>
+              <th align='right'>{'Abundance' if study_ha > 0 else '—'}</th></tr>
+          {est_rows}
+        </table>
+        <h4>Per transect</h4>
+        <table cellpadding='4'>
+          <tr><th align='left'>Name</th><th align='right'>Frames</th>
+              <th align='right'>Length (m)</th><th align='right'>Area (ha)</th>
+              <th align='right'>Count</th></tr>
+          {transect_rows}
+        </table>
+        <p style='color:gray;font-size:11px'>{r.get('notes', '')}</p>
+        <p style='color:gray;font-size:11px'>Saved to: {result_file}</p>
+        """
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Population-Estimation Results")
+        dlg.setMinimumWidth(560)
+        dlg.setMinimumHeight(520)
+        layout = QVBoxLayout(dlg)
+        text = QTextEdit()
+        text.setReadOnly(True)
+        text.setHtml(html)
+        layout.addWidget(text)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok)
+        buttons.accepted.connect(dlg.accept)
+        layout.addWidget(buttons)
+        dlg.exec_()
+
+    def add_transect_areas_to_qgis(self):
+        """Load the monitored area of every transect as a labelled polygon layer."""
+        config = self.get_config()
+        suffix = "t" if config.get("pop_camera", "T") == "T" else "w"
+        camera_label = "Thermal" if suffix == "t" else "RGB"
+
+        geojson_file = os.path.join(config["target_folder"], f"analytics_{suffix}",
+                                    "transect_areas.geojson")
+        if not os.path.exists(geojson_file):
+            QMessageBox.warning(
+                self, "Missing Data",
+                "The transect areas have not been generated.\n"
+                "Please run 'Estimate Population (Transects)' first."
+            )
+            return
+
+        try:
+            self.update_status("add_transect_areas", "🟡 Loading...")
+            layer_name = f"BAMBI Transect Areas ({camera_label})"
+            layer = QgsVectorLayer(geojson_file, layer_name, "ogr")
+            if not layer.isValid():
+                raise RuntimeError(f"Failed to load layer: {geojson_file}")
+            layer.setCrs(QgsCoordinateReferenceSystem(f"EPSG:{config['target_epsg']}"))
+            self._style_transect_areas(layer)
+            QgsProject.instance().addMapLayer(layer)
+            self.update_status("add_transect_areas", "🟢 Added")
+            self.iface.mapCanvas().refresh()
+            self.log(f"Added transect areas layer: {layer_name}")
+        except Exception as e:
+            self.update_status("add_transect_areas", "🔴 Error")
+            self.log(f"Error adding transect areas: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to add transect areas: {e}")
+
+    def _style_transect_areas(self, layer):
+        """Semi-transparent fill plus a 'name (count)' label per transect."""
+        try:
+            from qgis.core import (
+                QgsFillSymbol, QgsPalLayerSettings, QgsTextFormat,
+                QgsVectorLayerSimpleLabeling,
+            )
+            symbol = QgsFillSymbol.createSimple({
+                'color': '80,160,255,70',
+                'outline_color': '30,90,200,255',
+                'outline_width': '0.5',
+            })
+            layer.renderer().setSymbol(symbol)
+
+            settings = QgsPalLayerSettings()
+            settings.fieldName = '"name" || \' (\' || "count" || \')\''
+            settings.isExpression = True
+            settings.placement = QgsPalLayerSettings.OverPoint
+            text_format = QgsTextFormat()
+            text_format.setSize(9)
+            settings.setFormat(text_format)
+            layer.setLabeling(QgsVectorLayerSimpleLabeling(settings))
+            layer.setLabelsEnabled(True)
+            layer.triggerRepaint()
+        except Exception as e:  # nosec B110
+            self.log(f"Warning: could not style transect areas layer: {e}")
+
     def start_worker(self, step: str):
         """Start a background worker for the given step."""
         if self.worker is not None:
@@ -5649,6 +6003,10 @@ class BambiDockWidget(QDockWidget):
             # Show the distance-sampling summary dialog on completion.
             if step == "distance_sampling":
                 self._show_distance_sampling_results()
+
+            # Show the population-estimation summary dialog on completion.
+            if step == "population_estimation":
+                self._show_population_results()
 
             # In photo mode, warn if 0 images were matched (likely a timezone issue)
             if step in ("extract_thermal_frames", "extract_rgb_frames"):
@@ -5746,6 +6104,8 @@ class BambiDockWidget(QDockWidget):
             "distance_sampling": self.distance_sampling_status,
             "coverage_map": self.coverage_status,
             "add_coverage": self.add_coverage_status,
+            "population_estimation": self.population_status,
+            "add_transect_areas": self.add_transect_areas_status,
         }
         if step in status_map:
             status_map[step].setText(status)
@@ -5784,6 +6144,9 @@ class BambiDockWidget(QDockWidget):
         if hasattr(self, 'coverage_btn'):
             self.coverage_btn.setEnabled(enabled)
             self.add_coverage_btn.setEnabled(enabled)
+        if hasattr(self, 'population_btn'):
+            self.population_btn.setEnabled(enabled)
+            self.add_transect_areas_btn.setEnabled(enabled)
 
     def run_perpendicular(self):
         """Run perpendicular distance calculation step."""

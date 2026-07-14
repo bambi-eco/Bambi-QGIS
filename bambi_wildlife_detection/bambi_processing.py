@@ -6,6 +6,7 @@ BAMBI Wildlife Detection - Processing Module
 This module contains the processing logic for all pipeline steps.
 """
 
+import csv
 import os
 import json
 from typing import Dict, Any, Optional, List
@@ -161,6 +162,10 @@ class ProcessingWorker(QObject):
                 )
             elif self.step == "distance_sampling":
                 self.processor.run_distance_sampling(
+                    self.config, self.progress.emit, self.log.emit, self.is_cancelled
+                )
+            elif self.step == "population_estimation":
+                self.processor.run_population_estimation(
                     self.config, self.progress.emit, self.log.emit, self.is_cancelled
                 )
             else:
@@ -2623,6 +2628,309 @@ class BambiProcessor:
             return [estimate, estimate]
         c = math.exp(z * math.sqrt(math.log(1.0 + cv * cv)))
         return [estimate / c, estimate * c]
+
+    # ------------------------------------------------------------------ #
+    # Survey analytics: transect-based population estimation
+    # ------------------------------------------------------------------ #
+
+    def run_population_estimation(self, config: Dict[str, Any], progress_fn=None,
+                                  log_fn=None, cancel_check=None):
+        """Estimate population density from the transects of a split flight.
+
+        Builds the per-transect count/area table the R analysis of Praschl et
+        al. 2026 works on and runs the naive, bootstrap and ZINB estimators on
+        it (see :mod:`core.population`):
+
+        * **count** — every track is assigned to the transect whose centre
+          line (the flight path between its start and end frame) is nearest in
+          perpendicular distance, optionally truncated at ``pop_truncation``.
+        * **area** — the union of the per-frame field-of-view footprints of
+          the frames inside the transect's frame range, in hectares.
+
+        Prerequisites: the Transect Splitting Tool (``transects_{m}``), the
+        FoV step (``fov_{m}/fov_polygons.txt``) and 'Calculate Track
+        Perpendicular' (``flight_route_{fr}/perpendicular_tracks_{m}.json``).
+
+        :param config: Configuration dictionary. Relevant keys:
+            ``pop_camera`` ("T"|"W"), ``pop_truncation`` (m, 0 = keep all),
+            ``pop_methods`` (list of "naive"/"bootstrap"/"zinb"),
+            ``pop_n_boot``, ``pop_seed``, ``pop_study_area_ha``,
+            ``flight_route_camera``, ``dem_path``, ``target_epsg``.
+        """
+        from .core.pipeline_outputs import load_fov_polygons_3d
+        from .core.population import (
+            assign_tracks, estimate_population, geometry_to_rings,
+            merged_fov_area, transect_centerline,
+        )
+        from .core.transects import TransectStore, cumulative_distances, \
+            flight_positions, path_length
+
+        target_folder = config["target_folder"]
+        target_epsg = config.get("target_epsg", 32633)
+        camera = config.get("pop_camera", "T")
+        suffix = "t" if camera == "T" else "w"
+        fr_suffix = "t" if config.get("flight_route_camera", "T") == "T" else "w"
+        truncation = float(config.get("pop_truncation", 0.0) or 0.0)
+        methods = list(config.get("pop_methods") or ["naive", "bootstrap", "zinb"])
+        n_boot = int(config.get("pop_n_boot", 999) or 999)
+        seed = int(config.get("pop_seed", 42) or 42)
+        study_area_ha = float(config.get("pop_study_area_ha", 0.0) or 0.0)
+
+        if log_fn:
+            log_fn(f"Running transect population estimation "
+                   f"({'Thermal' if suffix == 't' else 'RGB'})...")
+        if progress_fn:
+            progress_fn(5)
+
+        # ---- Transects ---------------------------------------------------- #
+        store = TransectStore(target_folder, suffix)
+        if not store.load():
+            raise FileNotFoundError(
+                f"transects_{suffix}/transects.json not found. Please define "
+                "transects with the Transect Splitting Tool first."
+            )
+        transects = store.ordered()
+        if not transects:
+            raise RuntimeError("The transect definition contains no transects.")
+
+        # ---- Poses (transect centre lines) -------------------------------- #
+        poses_path = os.path.join(target_folder, f"poses_{suffix}.json")
+        if not os.path.exists(poses_path):
+            raise FileNotFoundError(
+                f"poses_{suffix}.json not found. Please run frame extraction first.")
+        with open(poses_path, 'r', encoding='utf-8') as f:
+            images = json.load(f).get("images", [])
+        if not images:
+            raise RuntimeError(f"poses_{suffix}.json contains no frames.")
+        for transect in transects:
+            transect.clamp(len(images))
+
+        # The poses store camera positions mesh-locally; the tracks' geo-referenced
+        # positions are in the world CRS, so shift the centre lines by the DEM origin.
+        x_offset, y_offset = 0.0, 0.0
+        dem_path = config.get("dem_path", "")
+        if dem_path:
+            dem_meta_path = config.get("alfs_dem_metadata_path") or \
+                dem_path.replace(".gltf", ".json").replace(".glb", ".json")
+            if os.path.exists(dem_meta_path):
+                try:
+                    with open(dem_meta_path, 'r', encoding='utf-8') as f:
+                        origin = json.load(f).get("origin", [0, 0, 0])
+                    x_offset, y_offset = float(origin[0]), float(origin[1])
+                except Exception:  # nosec B110
+                    pass
+
+        centerlines = {
+            t.transect_id: transect_centerline(
+                images, t.first_frame, t.last_frame, x_offset, y_offset)
+            for t in transects
+        }
+        if progress_fn:
+            progress_fn(20)
+
+        # ---- Track perpendicular distances -------------------------------- #
+        perp_file = os.path.join(
+            target_folder, f"flight_route_{fr_suffix}",
+            f"perpendicular_tracks_{suffix}.json")
+        if not os.path.exists(perp_file):
+            raise FileNotFoundError(
+                f"{os.path.basename(perp_file)} not found. Please run "
+                "'Calculate Track Perpendicular' first."
+            )
+        with open(perp_file, 'r', encoding='utf-8') as f:
+            tracks = json.load(f).get("tracks", [])
+        if not tracks:
+            raise RuntimeError("No tracks with perpendicular distances found.")
+
+        assignments = assign_tracks(tracks, centerlines, truncation)
+        if progress_fn:
+            progress_fn(40)
+
+        # ---- Monitored area per transect (union of the frame FoVs) --------- #
+        fov_file = os.path.join(target_folder, f"fov_{suffix}", "fov_polygons.txt")
+        if not os.path.exists(fov_file):
+            raise FileNotFoundError(
+                f"fov_{suffix}/fov_polygons.txt not found. Please run "
+                "'Calculate Field of View' first."
+            )
+        fov_polygons = load_fov_polygons_3d(fov_file, log_fn)
+        if not fov_polygons:
+            raise RuntimeError("The FoV file contains no polygons.")
+
+        cum = cumulative_distances(flight_positions(images))
+        counts: Dict[int, int] = {t.transect_id: 0 for t in transects}
+        for a in assignments:
+            if a["transect_id"] is not None:
+                counts[a["transect_id"]] += 1
+
+        rows = []
+        area_features = []
+        for i, transect in enumerate(transects):
+            if cancel_check and cancel_check():
+                raise CancelledException("Population estimation cancelled")
+
+            frames = list(range(transect.first_frame, transect.last_frame + 1))
+            covered = [f for f in frames if f in fov_polygons]
+            area_m2, geometry = merged_fov_area(fov_polygons, frames)
+            rows.append({
+                "id": transect.transect_id,
+                "name": transect.display_name,
+                "start_frame": transect.start_frame,
+                "end_frame": transect.end_frame,
+                "length_m": round(path_length(
+                    cum, transect.first_frame, transect.last_frame), 2),
+                "area_m2": round(area_m2, 2),
+                "area_ha": area_m2 / 10000.0,
+                "count": counts[transect.transect_id],
+                "n_frames": len(frames),
+                "n_frames_with_fov": len(covered),
+            })
+            for ring in geometry_to_rings(geometry):
+                area_features.append({
+                    "type": "Feature",
+                    "geometry": {"type": "Polygon", "coordinates": [ring]},
+                    "properties": {
+                        "transect_id": transect.transect_id,
+                        "name": transect.display_name,
+                        "area_ha": round(area_m2 / 10000.0, 4),
+                        "count": counts[transect.transect_id],
+                    },
+                })
+            if area_m2 <= 0 and log_fn:
+                log_fn(f"Warning: {transect.display_name} has no FoV footprint "
+                       f"(frames {transect.first_frame}-{transect.last_frame}) — "
+                       "it contributes a zero area.")
+            if progress_fn:
+                progress_fn(40 + int((i + 1) / len(transects) * 30))
+
+        usable = [r for r in rows if r["area_ha"] > 0]
+        if not usable:
+            raise RuntimeError(
+                "No transect has a monitored area. Check that the FoV step "
+                "covered the transects' frame ranges.")
+
+        n_assigned = sum(1 for a in assignments if a["transect_id"] is not None)
+        n_truncated = sum(1 for a in assignments if a["truncated"])
+        if log_fn:
+            log_fn(f"{len(transects)} transect(s), {len(assignments)} track(s): "
+                   f"{n_assigned} assigned, {len(assignments) - n_assigned} "
+                   f"unassigned ({n_truncated} beyond the truncation distance)")
+            if len(usable) < len(rows):
+                log_fn(f"Warning: {len(rows) - len(usable)} transect(s) without a "
+                       "monitored area were excluded from the estimation.")
+
+        # ---- Estimate ------------------------------------------------------ #
+        if progress_fn:
+            progress_fn(75)
+        result = estimate_population(
+            usable, methods=methods, n_boot=n_boot, seed=seed,
+            study_area_ha=study_area_ha)
+        result.update({
+            "camera": "Thermal" if suffix == "t" else "RGB",
+            "crs": f"EPSG:{target_epsg}",
+            "truncation_m": truncation,
+            "n_tracks": len(assignments),
+            "n_tracks_assigned": n_assigned,
+            "n_tracks_truncated": n_truncated,
+            "n_transects_without_area": len(rows) - len(usable),
+            "transects": rows,
+            "notes": (
+                "Tracks are assigned to the transect whose flight path is nearest "
+                "in perpendicular distance; the monitored area is the union of the "
+                "frame field-of-view footprints inside the transect's frame range. "
+                "Densities are per 100 ha (= per km²)."
+            ),
+        })
+
+        # ---- Write outputs -------------------------------------------------- #
+        analytics_folder = os.path.join(target_folder, f"analytics_{suffix}")
+        os.makedirs(analytics_folder, exist_ok=True)
+
+        out_file = os.path.join(analytics_folder, "population_estimate.json")
+        with open(out_file, 'w', encoding='utf-8') as f:
+            json.dump(result, f, indent=2)
+
+        transects_csv = os.path.join(analytics_folder, "population_transects.csv")
+        with open(transects_csv, 'w', encoding='utf-8', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(["id", "name", "start_frame", "end_frame", "length_m",
+                             "area_m2", "area_ha", "count", "n_frames",
+                             "n_frames_with_fov"])
+            for r in rows:
+                writer.writerow([
+                    r["id"], r["name"], r["start_frame"], r["end_frame"],
+                    r["length_m"], r["area_m2"], round(r["area_ha"], 4),
+                    r["count"], r["n_frames"], r["n_frames_with_fov"],
+                ])
+
+        names = {t.transect_id: t.display_name for t in transects}
+        ranges = {t.transect_id: (t.first_frame, t.last_frame) for t in transects}
+        tracks_csv = os.path.join(analytics_folder, "population_tracks.csv")
+        with open(tracks_csv, 'w', encoding='utf-8', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(["track_id", "last_frame", "x", "y", "class_id",
+                             "transect_id", "transect_name", "distance_m",
+                             "in_frame_range", "truncated"])
+            for a in assignments:
+                tid = a["transect_id"]
+                rng = ranges.get(tid)
+                in_range = ""
+                if rng is not None and a["last_frame"] is not None:
+                    in_range = int(rng[0] <= a["last_frame"] <= rng[1])
+                writer.writerow([
+                    a["track_id"], a["last_frame"],
+                    round(a["x"], 3), round(a["y"], 3), a["class_id"],
+                    "" if tid is None else tid,
+                    "" if tid is None else names.get(tid, ""),
+                    "" if a["distance_m"] is None else round(a["distance_m"], 3),
+                    in_range, int(a["truncated"]),
+                ])
+
+        areas_geojson = os.path.join(analytics_folder, "transect_areas.geojson")
+        with open(areas_geojson, 'w', encoding='utf-8') as f:
+            json.dump({
+                "type": "FeatureCollection",
+                "crs": {"type": "name",
+                        "properties": {"name": f"EPSG:{target_epsg}"}},
+                "features": area_features,
+            }, f, indent=2)
+
+        # Tracks assigned to a transect they were not filmed in usually mean two
+        # transects run close together — worth surfacing, not worth failing on.
+        mismatched = sum(
+            1 for a in assignments
+            if a["transect_id"] is not None
+            and a["last_frame"] is not None
+            and not (ranges[a["transect_id"]][0] <= a["last_frame"]
+                     <= ranges[a["transect_id"]][1])
+        )
+
+        if log_fn:
+            total_ha = result["total_ha"]
+            log_fn(f"Total: {int(result['total_count'])} animals on "
+                   f"{total_ha:.2f} ha across {result['n_transects']} transect(s) "
+                   f"({result['n_zero_transects']} with zero counts)")
+            if mismatched:
+                log_fn(f"Note: {mismatched} track(s) were assigned to a transect "
+                       "whose frame range does not contain their sighting frame "
+                       "(transects running close together).")
+            for name, est in result["estimates"].items():
+                density = est.get("density_per_100ha")
+                if density is None:
+                    log_fn(f"  {name}: failed — {est.get('error')}")
+                    continue
+                ci = est.get("ci95")
+                ci_txt = (f" (95% CI {ci[0]:.2f}–{ci[1]:.2f})" if ci else "")
+                log_fn(f"  {name}: {density:.2f} animals/100 ha{ci_txt}")
+                if est.get("error"):
+                    log_fn(f"    warning: {est['error']}")
+            log_fn(f"Population estimate saved to: {out_file}")
+            log_fn(f"Per-transect table saved to: {transects_csv}")
+            log_fn(f"Track assignment saved to: {tracks_csv}")
+            log_fn(f"Transect areas saved to: {areas_geojson}")
+
+        if progress_fn:
+            progress_fn(100)
 
     def run_detection(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Run animal detection on extracted frames.
