@@ -10,6 +10,7 @@ import os
 import json
 import math
 import tempfile
+from collections import defaultdict
 from typing import Optional, Dict, Any, List
 from qgis.PyQt.QtCore import Qt, QThread
 from qgis.PyQt.QtWidgets import (
@@ -2615,18 +2616,36 @@ class BambiDockWidget(QDockWidget):
             "Tracks farther from every transect are not counted.\n"
             "0 = assign every track to its nearest transect.")
         pop_params_row.addWidget(self.pop_truncation_spin)
-        pop_params_row.addWidget(QLabel("Study area (ha):"))
+        pop_params_row.addStretch()
+        pop_layout.addLayout(pop_params_row)
+
+        # Study area: the region the density is extrapolated to. It is NOT the
+        # monitored area (the searched strips, i.e. the density's denominator)
+        # — setting it to that just returns the animals already counted.
+        pop_area_row = QHBoxLayout()
+        pop_area_row.addWidget(QLabel("Study area (ha):"))
         self.pop_study_area_spin = QDoubleSpinBox()
         self.pop_study_area_spin.setRange(0.0, 10_000_000.0)
         self.pop_study_area_spin.setValue(0.0)
         self.pop_study_area_spin.setSingleStep(10.0)
         self.pop_study_area_spin.setSpecialValueText("off (density only)")
         self.pop_study_area_spin.setToolTip(
-            "Size of the surveyed study area. When set, every density is\n"
-            "extrapolated to an abundance for an area of this size.")
-        pop_params_row.addWidget(self.pop_study_area_spin)
-        pop_params_row.addStretch()
-        pop_layout.addLayout(pop_params_row)
+            "Size of the region the density is extrapolated to an abundance for.\n"
+            "This is not the monitored area (the searched strips) — extrapolating\n"
+            "to that would just return the animals already counted.\n"
+            "0 = report densities only.")
+        pop_area_row.addWidget(self.pop_study_area_spin)
+        self.pop_study_area_auto_check = QCheckBox("Use flight FoV area")
+        self.pop_study_area_auto_check.setToolTip(
+            "Derive the study area from the flight's total field-of-view coverage:\n"
+            "the union of every frame's footprint. Unlike the summed transect areas\n"
+            "it counts ground seen by two transects only once, and it also includes\n"
+            "frames that belong to no transect.")
+        self.pop_study_area_auto_check.toggled.connect(
+            self.pop_study_area_spin.setDisabled)
+        pop_area_row.addWidget(self.pop_study_area_auto_check)
+        pop_area_row.addStretch()
+        pop_layout.addLayout(pop_area_row)
 
         pop_methods_row = QHBoxLayout()
         pop_methods_row.addWidget(QLabel("Methods:"))
@@ -3115,6 +3134,9 @@ class BambiDockWidget(QDockWidget):
             "pop_study_area_ha": (
                 self.pop_study_area_spin.value()
                 if hasattr(self, 'pop_study_area_spin') else 0.0),
+            "pop_study_area_auto": (
+                self.pop_study_area_auto_check.isChecked()
+                if hasattr(self, 'pop_study_area_auto_check') else False),
             "pop_methods": self._selected_population_methods(),
             "pop_n_boot": (
                 self.pop_n_boot_spin.value()
@@ -5779,10 +5801,10 @@ class BambiDockWidget(QDockWidget):
                 "(run 'Calculate Track Perpendicular')")
 
         if missing:
+            bullets = "\n".join(f"• {m}" for m in missing)
             QMessageBox.warning(
                 self, "Missing Prerequisites",
-                "The following are required:\n\n"
-                + "\n".join(f"• {m}" for m in missing))
+                f"The following are required:\n\n{bullets}")
             return
 
         self.start_worker("population_estimation")
@@ -5834,9 +5856,21 @@ class BambiDockWidget(QDockWidget):
             for t in r.get("transects", [])
         )
 
+        source_labels = {
+            "flight_fov": "from the flight's FoV coverage",
+            "manual": "entered manually",
+        }
+        source = source_labels.get(r.get("study_area_source", ""), "")
         study_row = (
-            f"<tr><td><b>Study area</b></td><td align='right'>{study_ha:.1f} ha</td></tr>"
+            f"<tr><td><b>Study area</b></td>"
+            f"<td align='right'>{study_ha:.1f} ha"
+            f"<span style='color:gray'> ({source})</span></td></tr>"
             if study_ha > 0 else "")
+        flight_ha = r.get("flight_fov_area_ha")
+        flight_row = (
+            f"<tr><td><b>Flight FoV coverage</b></td>"
+            f"<td align='right'>{flight_ha:.2f} ha</td></tr>"
+            if flight_ha else "")
         no_area = r.get("n_transects_without_area", 0)
         no_area_row = (
             f"<tr><td><b>Transects without area</b></td>"
@@ -5850,10 +5884,16 @@ class BambiDockWidget(QDockWidget):
               <td align='right'>{r.get('n_transects', 0)}
               ({r.get('n_zero_transects', 0)} with zero counts)</td></tr>
           <tr><td><b>Animals (tracks)</b></td>
-              <td align='right'>{int(r.get('total_count', 0))} assigned
+              <td align='right'>{int(r.get('total_count', 0))} counted
               (of {r.get('n_tracks', 0)})</td></tr>
+          <tr><td><b>Not counted</b></td>
+              <td align='right'>
+              {r.get('n_tracks_outside_fov', 0)} outside every field of view,
+              {r.get('n_tracks_truncated', 0)} beyond the truncation</td></tr>
           <tr><td><b>Monitored area</b></td>
-              <td align='right'>{r.get('total_ha', 0):.2f} ha</td></tr>
+              <td align='right'>{r.get('total_ha', 0):.2f} ha
+              <span style='color:gray'>(sum of the transects)</span></td></tr>
+          {flight_row}
           <tr><td><b>Truncation</b></td>
               <td align='right'>{'off' if not r.get('truncation_m') else f"{r['truncation_m']:.1f} m"}</td></tr>
           {study_row}
@@ -5893,14 +5933,28 @@ class BambiDockWidget(QDockWidget):
         dlg.exec_()
 
     def add_transect_areas_to_qgis(self):
-        """Load the monitored area of every transect as a labelled polygon layer."""
+        """Add one layer group per transect, holding its route and its FoV area.
+
+        Layer tree::
+
+            BAMBI Transect Areas (Thermal)
+              ├─ North meadow
+              │    ├─ Field of View   (the merged frame footprints)
+              │    └─ Flight Route    (the sub-route, start frame → end frame)
+              └─ Transect 2
+                   └─ …
+
+        Each transect keeps the colour the Transect Splitting Tool gives it, so
+        the map and the tool's overview agree.
+        """
         config = self.get_config()
         suffix = "t" if config.get("pop_camera", "T") == "T" else "w"
         camera_label = "Thermal" if suffix == "t" else "RGB"
+        analytics = os.path.join(config["target_folder"], f"analytics_{suffix}")
 
-        geojson_file = os.path.join(config["target_folder"], f"analytics_{suffix}",
-                                    "transect_areas.geojson")
-        if not os.path.exists(geojson_file):
+        areas_file = os.path.join(analytics, "transect_areas.geojson")
+        routes_file = os.path.join(analytics, "transect_routes.geojson")
+        if not os.path.exists(areas_file):
             QMessageBox.warning(
                 self, "Missing Data",
                 "The transect areas have not been generated.\n"
@@ -5910,35 +5964,500 @@ class BambiDockWidget(QDockWidget):
 
         try:
             self.update_status("add_transect_areas", "🟡 Loading...")
-            layer_name = f"BAMBI Transect Areas ({camera_label})"
-            layer = QgsVectorLayer(geojson_file, layer_name, "ogr")
-            if not layer.isValid():
-                raise RuntimeError(f"Failed to load layer: {geojson_file}")
-            layer.setCrs(QgsCoordinateReferenceSystem(f"EPSG:{config['target_epsg']}"))
-            self._style_transect_areas(layer)
-            QgsProject.instance().addMapLayer(layer)
+            areas = self._read_geojson_features(areas_file)
+            if not areas:
+                raise RuntimeError("The transect areas file holds no features.")
+
+            # A run from before the routes existed wrote no transect_routes.geojson.
+            # The routes are just the poses of each transect's frame range, so
+            # rebuild them rather than making the user re-run the estimation.
+            if os.path.exists(routes_file):
+                routes = self._read_geojson_features(routes_file)
+            else:
+                routes = self._transect_routes_from_poses(config, suffix)
+                if routes:
+                    self.log("transect_routes.geojson not found — the sub-flight "
+                             "routes were rebuilt from the poses and the transect "
+                             "definitions.")
+
+            # The tracks assigned to each transect. Absent when no perpendicular
+            # distances exist — that stage is simply skipped. The footprints are
+            # passed along because a track only counts inside the area that saw it.
+            tracks_by_id = self._transect_tracks(config, suffix, areas)
+
+            target_crs = QgsCoordinateReferenceSystem(f"EPSG:{config['target_epsg']}")
+            group_name = f"BAMBI Transect Areas ({camera_label})"
+            # Drop a previous run's group first: it would otherwise pile up a
+            # duplicate, and its layers keep the GeoPackages open, which stops
+            # them being rewritten on Windows.
+            self._remove_layer_group(group_name)
+            main_group = self._create_layer_group(group_name)
+
+            areas_by_id = defaultdict(list)
+            for feature in areas:
+                areas_by_id[feature["properties"].get("transect_id")].append(feature)
+            routes_by_id = defaultdict(list)
+            for feature in routes:
+                routes_by_id[feature["properties"].get("transect_id")].append(feature)
+
+            # Key off both: a transect whose frame range the FoV step never
+            # covered has no area feature, and it must still appear on the map
+            # (with its route alone) rather than vanish silently.
+            n_added = 0
+            all_ids = sorted(set(areas_by_id) | set(routes_by_id),
+                             key=lambda v: (v is None, v))
+            for transect_id in all_ids:
+                group_features = areas_by_id.get(transect_id, [])
+                route_features = routes_by_id.get(transect_id, [])
+                source = (group_features or route_features)[0]["properties"]
+                name = source.get("name") or f"Transect {transect_id}"
+                color = self._transect_color_str(transect_id)
+                transect_group = main_group.addGroup(name)
+
+                # Added top-down: the layer tree draws its first child on top,
+                # so the points and the line stay visible over the translucent
+                # field-of-view fill.
+                tracks_layer = self._build_transect_tracks_layer(
+                    tracks_by_id.get(transect_id, []), transect_id, name,
+                    target_crs, color, suffix)
+                if tracks_layer is not None:
+                    transect_group.addLayer(tracks_layer)
+
+                route_layer = self._build_transect_route_layer(
+                    route_features, transect_id, name, target_crs, color, suffix)
+                if route_layer is not None:
+                    transect_group.addLayer(route_layer)
+
+                fov_layer = self._build_transect_fov_layer(
+                    group_features, transect_id, name, target_crs, color, suffix)
+                if fov_layer is not None:
+                    transect_group.addLayer(fov_layer)
+                else:
+                    self.log(f"Note: '{name}' has no field-of-view footprint — "
+                             "its group holds no area layer.")
+
+                transect_group.setExpanded(False)
+                n_added += 1
+
+            main_group.setExpanded(True)
             self.update_status("add_transect_areas", "🟢 Added")
             self.iface.mapCanvas().refresh()
-            self.log(f"Added transect areas layer: {layer_name}")
+            self.log(f"Added {n_added} transect group(s) under "
+                     f"'BAMBI Transect Areas ({camera_label})'")
+            if not routes:
+                self.log("Warning: no sub-flight routes could be built — check "
+                         f"that poses_{suffix}.json and transects_{suffix}/"
+                         "transects.json exist. Only the field-of-view areas "
+                         "were added.")
         except Exception as e:
             self.update_status("add_transect_areas", "🔴 Error")
             self.log(f"Error adding transect areas: {e}")
             QMessageBox.critical(self, "Error", f"Failed to add transect areas: {e}")
 
-    def _style_transect_areas(self, layer):
-        """Semi-transparent fill plus a 'name (count)' label per transect."""
+    @staticmethod
+    def _read_geojson_features(path: str) -> list:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f).get("features", [])
+
+    def _transect_tracks(self, config: dict, suffix: str,
+                         area_features: list) -> dict:
+        """The tracks assigned to each transect: ``{transect_id: [track, …]}``.
+
+        Prefers ``population_tracks.csv`` — that is the very assignment the
+        density numbers were computed from, so the map cannot disagree with
+        them. Without it (no estimation run yet) the assignment is recomputed
+        from the track perpendicular distances with the same
+        :func:`core.population.assign_tracks` the step uses, including the
+        containment test against the monitored areas in *area_features*.
+        Returns ``{}`` when no perpendicular distances exist at all, so the
+        caller skips the track layers instead of failing.
+        """
+        target_folder = config.get("target_folder", "")
+        by_id = defaultdict(list)
+
+        tracks_csv = os.path.join(
+            target_folder, f"analytics_{suffix}", "population_tracks.csv")
+        if os.path.isfile(tracks_csv):
+            try:
+                import csv as _csv
+                with open(tracks_csv, 'r', encoding='utf-8', newline='') as f:
+                    for row in _csv.DictReader(f):
+                        # Blank transect_id: unassigned or beyond the truncation
+                        # distance — it was not counted, so it is not shown.
+                        if not row.get("transect_id"):
+                            continue
+                        by_id[int(row["transect_id"])].append({
+                            "track_id": int(row["track_id"]),
+                            "last_frame": int(row["last_frame"] or 0),
+                            "x": float(row["x"]),
+                            "y": float(row["y"]),
+                            "class_id": int(row["class_id"] or 0),
+                            "distance_m": float(row["distance_m"] or 0.0),
+                            "in_frame_range": int(row.get("in_frame_range") or 0),
+                        })
+                return dict(by_id)
+            except (ValueError, KeyError, OSError) as e:
+                self.log(f"Could not read {os.path.basename(tracks_csv)} "
+                         f"({e}) — recomputing the track assignment.")
+                by_id = defaultdict(list)
+
+        return self._assign_tracks_to_transects(config, suffix, area_features)
+
+    def _fov_predicate(self, area_features: list):
+        """``(transect_id, x, y) -> bool``: does that transect's area cover it?
+
+        Built on ``QgsGeometry`` rather than shapely: this runs inside the QGIS
+        process, where QGIS' own geometry engine is always present while
+        shapely is only an optional dependency.
+        """
+        geoms = {}
+        for feature in area_features:
+            rings = feature.get("geometry", {}).get("coordinates", [])
+            if not rings:
+                continue
+            transect_id = feature["properties"].get("transect_id")
+            points = [QgsPointXY(float(x), float(y)) for x, y in rings[0]]
+            geom = QgsGeometry.fromPolygonXY([points])
+            if not geom.isGeosValid():
+                geom = geom.makeValid()
+            # A transect's area can arrive as several rings (a footprint broken
+            # up by gaps in the frame sampling) — all of them count.
+            geoms[transect_id] = (geom if transect_id not in geoms
+                                  else geoms[transect_id].combine(geom))
+
+        def contains(transect_id, x: float, y: float) -> bool:
+            geom = geoms.get(transect_id)
+            if geom is None or geom.isEmpty():
+                return False
+            # intersects() counts a point on the boundary as inside, so a track
+            # sitting right at the edge of the footprint is not lost.
+            return geom.intersects(QgsGeometry.fromPointXY(QgsPointXY(x, y)))
+
+        return contains
+
+    def _assign_tracks_to_transects(self, config: dict, suffix: str,
+                                    area_features: list) -> dict:
+        """Recompute the transect assignment from the perpendicular distances."""
+        from .core.pipeline_outputs import read_dem_origin_xy
+        from .core.population import assign_tracks, transect_centerline
+        from .core.transects import TransectStore
+
+        target_folder = config.get("target_folder", "")
+        fr_suffix = "t" if config.get("flight_route_camera", "T") == "T" else "w"
+        perp_file = os.path.join(
+            target_folder, f"flight_route_{fr_suffix}",
+            f"perpendicular_tracks_{suffix}.json")
+        poses_path = os.path.join(target_folder, f"poses_{suffix}.json")
+        if not os.path.isfile(perp_file) or not os.path.isfile(poses_path):
+            self.log("No track perpendicular distances found — the transect "
+                     "groups are added without their tracks.")
+            return {}
+
+        try:
+            with open(perp_file, 'r', encoding='utf-8') as f:
+                tracks = json.load(f).get("tracks", [])
+            with open(poses_path, 'r', encoding='utf-8') as f:
+                images = json.load(f).get("images", [])
+        except (ValueError, OSError):
+            return {}
+        if not tracks or not images:
+            return {}
+
+        store = TransectStore(target_folder, suffix)
+        try:
+            if not store.load():
+                return {}
+        except (ValueError, OSError):
+            return {}
+
+        x_offset, y_offset = read_dem_origin_xy(
+            config.get("dem_path", ""),
+            config.get("alfs_dem_metadata_path") or "")
+        centerlines = {}
+        for transect in store.ordered():
+            transect.clamp(len(images))
+            centerlines[transect.transect_id] = transect_centerline(
+                images, transect.first_frame, transect.last_frame,
+                x_offset, y_offset)
+
+        ranges = {t.transect_id: (t.first_frame, t.last_frame)
+                  for t in store.ordered()}
+        truncation = float(config.get("pop_truncation", 0.0) or 0.0)
+
+        by_id = defaultdict(list)
+        for a in assign_tracks(tracks, centerlines, truncation,
+                               contains=self._fov_predicate(area_features)):
+            transect_id = a["transect_id"]
+            if transect_id is None:
+                continue
+            lo, hi = ranges[transect_id]
+            frame = a["last_frame"]
+            by_id[transect_id].append({
+                "track_id": a["track_id"],
+                "last_frame": frame if frame is not None else 0,
+                "x": a["x"],
+                "y": a["y"],
+                "class_id": a["class_id"] if a["class_id"] is not None else 0,
+                "distance_m": a["distance_m"],
+                "in_frame_range": int(
+                    frame is not None and lo <= frame <= hi),
+            })
+        self.log("No population_tracks.csv found — the track assignment was "
+                 "recomputed from the perpendicular distances.")
+        return dict(by_id)
+
+    def _build_transect_tracks_layer(self, tracks, transect_id, name, target_crs,
+                                     color, suffix):
+        """Point layer with the tracks assigned to one transect."""
+        from qgis.core import QgsMarkerSymbol, QgsSingleSymbolRenderer
+
+        if not tracks:
+            return None
+
+        layer = QgsVectorLayer(
+            "Point?crs=" + target_crs.authid(), "Tracks", "memory")
+        provider = layer.dataProvider()
+        provider.addAttributes([
+            QgsField("track_id", QVariant.Int),
+            QgsField("transect_id", QVariant.Int),
+            QgsField("transect", QVariant.String),
+            QgsField("last_frame", QVariant.Int),
+            QgsField("class_id", QVariant.Int),
+            QgsField("distance_m", QVariant.Double),
+            QgsField("in_frame_range", QVariant.Int),
+        ])
+        layer.updateFields()
+
+        features = []
+        for track in tracks:
+            feat = QgsFeature()
+            feat.setGeometry(QgsGeometry.fromPointXY(
+                QgsPointXY(float(track["x"]), float(track["y"]))))
+            feat.setAttributes([
+                track["track_id"], transect_id, name, track["last_frame"],
+                track["class_id"],
+                round(float(track["distance_m"] or 0.0), 3),
+                track["in_frame_range"],
+            ])
+            features.append(feat)
+        provider.addFeatures(features)
+        layer.updateExtents()
+
+        def style(target):
+            target.setRenderer(QgsSingleSymbolRenderer(
+                QgsMarkerSymbol.createSimple({
+                    'name': 'circle',
+                    'color': f'{color},255',
+                    'outline_color': '255,255,255,255',
+                    'outline_width': '0.2',
+                    'size': '2.4',
+                })))
+            self._label_transect_tracks(target)
+
+        style(layer)
+        layer = self._persist_memory_layer(
+            layer, f"Transect{transect_id}_Tracks_{suffix}", "transect_layers",
+            display_name="Tracks")
+        style(layer)
+        QgsProject.instance().addMapLayer(layer, False)
+        return layer
+
+    def _label_transect_tracks(self, layer):
+        """Label each track point with its id."""
         try:
             from qgis.core import (
-                QgsFillSymbol, QgsPalLayerSettings, QgsTextFormat,
-                QgsVectorLayerSimpleLabeling,
+                QgsPalLayerSettings, QgsTextFormat, QgsVectorLayerSimpleLabeling,
             )
-            symbol = QgsFillSymbol.createSimple({
-                'color': '80,160,255,70',
-                'outline_color': '30,90,200,255',
-                'outline_width': '0.5',
-            })
-            layer.renderer().setSymbol(symbol)
+            settings = QgsPalLayerSettings()
+            settings.fieldName = "track_id"
+            settings.placement = QgsPalLayerSettings.AroundPoint
+            text_format = QgsTextFormat()
+            text_format.setSize(8)
+            settings.setFormat(text_format)
+            layer.setLabeling(QgsVectorLayerSimpleLabeling(settings))
+            layer.setLabelsEnabled(True)
+            layer.triggerRepaint()
+        except Exception as e:  # nosec B110
+            self.log(f"Warning: could not label transect tracks layer: {e}")
 
+    def _transect_routes_from_poses(self, config: dict, suffix: str) -> list:
+        """Rebuild the transects' sub-flight routes from poses + definitions.
+
+        Same shape as ``transect_routes.geojson`` — used when that file is
+        missing because the estimation was last run before it existed. The
+        route of a transect is nothing but the camera positions of its frame
+        range, so it needs no output of the estimation step.
+        """
+        from .core.pipeline_outputs import read_dem_origin_xy
+        from .core.population import transect_centerline
+        from .core.transects import (
+            TransectStore, cumulative_distances, flight_positions, path_length,
+        )
+
+        target_folder = config.get("target_folder", "")
+        poses_path = os.path.join(target_folder, f"poses_{suffix}.json")
+        if not os.path.isfile(poses_path):
+            return []
+        try:
+            with open(poses_path, 'r', encoding='utf-8') as f:
+                images = json.load(f).get("images", [])
+        except (ValueError, OSError):
+            return []
+        if not images:
+            return []
+
+        store = TransectStore(target_folder, suffix)
+        try:
+            if not store.load():
+                return []
+        except (ValueError, OSError):
+            return []
+
+        x_offset, y_offset = read_dem_origin_xy(
+            config.get("dem_path", ""),
+            config.get("alfs_dem_metadata_path") or "")
+        cum = cumulative_distances(flight_positions(images))
+
+        features = []
+        for transect in store.ordered():
+            transect.clamp(len(images))
+            line = transect_centerline(
+                images, transect.first_frame, transect.last_frame,
+                x_offset, y_offset)
+            if len(line) < 2:
+                continue
+            features.append({
+                "type": "Feature",
+                "geometry": {"type": "LineString",
+                             "coordinates": [[x, y] for x, y in line]},
+                "properties": {
+                    "transect_id": transect.transect_id,
+                    "name": transect.display_name,
+                    "start_frame": transect.start_frame,
+                    "end_frame": transect.end_frame,
+                    "length_m": round(path_length(
+                        cum, transect.first_frame, transect.last_frame), 2),
+                },
+            })
+        return features
+
+    @staticmethod
+    def _transect_color_str(transect_id) -> str:
+        """The colour the Transect Splitting Tool paints this transect with."""
+        from .core.labelling import track_color_rgb
+
+        rgb = track_color_rgb(int(transect_id or 0))
+        return f"{rgb[0]},{rgb[1]},{rgb[2]}"
+
+    def _build_transect_fov_layer(self, features, transect_id, name, target_crs,
+                                  color, suffix):
+        """Polygon layer with the merged FoV footprint(s) of one transect."""
+        from qgis.core import QgsFillSymbol, QgsSingleSymbolRenderer
+
+        layer = QgsVectorLayer(
+            "Polygon?crs=" + target_crs.authid(), "Field of View", "memory")
+        provider = layer.dataProvider()
+        provider.addAttributes([
+            QgsField("transect_id", QVariant.Int),
+            QgsField("name", QVariant.String),
+            QgsField("area_ha", QVariant.Double),
+            QgsField("count", QVariant.Int),
+        ])
+        layer.updateFields()
+
+        qgs_features = []
+        for feature in features:
+            rings = feature.get("geometry", {}).get("coordinates", [])
+            if not rings:
+                continue
+            points = [[QgsPointXY(float(x), float(y)) for x, y in ring]
+                      for ring in rings]
+            props = feature.get("properties", {})
+            feat = QgsFeature()
+            feat.setGeometry(QgsGeometry.fromPolygonXY(points))
+            feat.setAttributes([
+                transect_id, name,
+                props.get("area_ha", 0.0), props.get("count", 0),
+            ])
+            qgs_features.append(feat)
+        if not qgs_features:
+            return None
+
+        provider.addFeatures(qgs_features)
+        layer.updateExtents()
+
+        def style(target):
+            target.setRenderer(QgsSingleSymbolRenderer(
+                QgsFillSymbol.createSimple({
+                    'color': f'{color},60',
+                    'outline_color': f'{color},255',
+                    'outline_width': '0.5',
+                })))
+            self._label_transect_layer(target)
+
+        style(layer)
+        layer = self._persist_memory_layer(
+            layer, f"Transect{transect_id}_FoV_{suffix}", "transect_layers",
+            display_name="Field of View")
+        style(layer)
+        QgsProject.instance().addMapLayer(layer, False)
+        return layer
+
+    def _build_transect_route_layer(self, features, transect_id, name, target_crs,
+                                    color, suffix):
+        """Line layer with the sub-flight route of one transect."""
+        from qgis.core import QgsLineSymbol, QgsSingleSymbolRenderer
+
+        qgs_features = []
+        for feature in features:
+            coords = feature.get("geometry", {}).get("coordinates", [])
+            if len(coords) < 2:
+                continue
+            props = feature.get("properties", {})
+            feat = QgsFeature()
+            feat.setGeometry(QgsGeometry.fromPolylineXY(
+                [QgsPointXY(float(x), float(y)) for x, y in coords]))
+            feat.setAttributes([
+                transect_id, name,
+                props.get("start_frame", 0), props.get("end_frame", 0),
+                props.get("length_m", 0.0),
+            ])
+            qgs_features.append(feat)
+        if not qgs_features:
+            return None
+
+        layer = QgsVectorLayer(
+            "LineString?crs=" + target_crs.authid(), "Flight Route", "memory")
+        provider = layer.dataProvider()
+        provider.addAttributes([
+            QgsField("transect_id", QVariant.Int),
+            QgsField("name", QVariant.String),
+            QgsField("start_frame", QVariant.Int),
+            QgsField("end_frame", QVariant.Int),
+            QgsField("length_m", QVariant.Double),
+        ])
+        layer.updateFields()
+        provider.addFeatures(qgs_features)
+        layer.updateExtents()
+
+        def style(target):
+            target.setRenderer(QgsSingleSymbolRenderer(
+                QgsLineSymbol.createSimple({'color': color, 'width': '0.8'})))
+
+        style(layer)
+        layer = self._persist_memory_layer(
+            layer, f"Transect{transect_id}_Route_{suffix}", "transect_layers",
+            display_name="Flight Route")
+        style(layer)
+        QgsProject.instance().addMapLayer(layer, False)
+        return layer
+
+    def _label_transect_layer(self, layer):
+        """Label the FoV polygon with 'name (count)'."""
+        try:
+            from qgis.core import (
+                QgsPalLayerSettings, QgsTextFormat, QgsVectorLayerSimpleLabeling,
+            )
             settings = QgsPalLayerSettings()
             settings.fieldName = '"name" || \' (\' || "count" || \')\''
             settings.isExpression = True
@@ -5950,7 +6469,7 @@ class BambiDockWidget(QDockWidget):
             layer.setLabelsEnabled(True)
             layer.triggerRepaint()
         except Exception as e:  # nosec B110
-            self.log(f"Warning: could not style transect areas layer: {e}")
+            self.log(f"Warning: could not label transect layer: {e}")
 
     def start_worker(self, step: str):
         """Start a background worker for the given step."""
@@ -8544,6 +9063,24 @@ class BambiDockWidget(QDockWidget):
 
         self.log("Configuration loaded from project")
 
+    def _remove_layer_group(self, group_name: str) -> bool:
+        """Remove a layer group and every layer in it from the project.
+
+        Re-adding a group would otherwise duplicate it, and its layers hold
+        their GeoPackages open — which on Windows blocks rewriting them.
+        """
+        root = QgsProject.instance().layerTreeRoot()
+        group = root.findGroup(group_name)
+        if group is None:
+            return False
+
+        layer_ids = [node.layerId() for node in group.findLayers()
+                     if node.layerId()]
+        if layer_ids:
+            QgsProject.instance().removeMapLayers(layer_ids)
+        root.removeChildNode(group)
+        return True
+
     def _create_layer_group(self, group_name: str, at_top: bool = True) -> QgsLayerTreeGroup:
         """Create a layer group, optionally at the top of the layer tree.
 
@@ -8598,7 +9135,8 @@ class BambiDockWidget(QDockWidget):
 
             # If file already exists, release any QGIS layers holding it open
             # before deleting — on Windows, open file handles cause WinError 32.
-            if os.path.exists(gpkg_path):
+            exists = os.path.exists(gpkg_path)
+            if exists:
                 norm_path = os.path.normcase(os.path.abspath(gpkg_path))
                 layers_to_remove = [
                     lid for lid, lyr in QgsProject.instance().mapLayers().items()
@@ -8607,12 +9145,27 @@ class BambiDockWidget(QDockWidget):
                 ]
                 if layers_to_remove:
                     QgsProject.instance().removeMapLayers(layers_to_remove)
-                os.remove(gpkg_path)
+                try:
+                    os.remove(gpkg_path)
+                    exists = False
+                except OSError as e:
+                    # GDAL pools its datasets, so the handle can outlive the
+                    # layer and Windows then refuses the delete (WinError 32).
+                    # No need to delete: a GeoPackage is SQLite, so the layer
+                    # inside it can be rewritten in place while a reader holds
+                    # the file open.
+                    self.log(f"Note: could not replace "
+                             f"{os.path.basename(gpkg_path)} ({e}); "
+                             "overwriting the layer inside it instead.")
 
             # Write to GeoPackage
             options = QgsVectorFileWriter.SaveVectorOptions()
             options.driverName = "GPKG"
             options.fileEncoding = "UTF-8"
+            options.layerName = safe_name
+            if exists:
+                options.actionOnExistingFile = (
+                    QgsVectorFileWriter.CreateOrOverwriteLayer)
 
             error = QgsVectorFileWriter.writeAsVectorFormatV3(
                 mem_layer,

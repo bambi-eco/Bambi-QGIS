@@ -34,7 +34,7 @@ shapely and scipy are imported lazily inside the functions that need them.
 """
 
 import math
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 #: Densities are reported per 100 ha, which is exactly 1 km² — the unit the R
 #: script predicts on ("posteriores predicten auf 1km2").
@@ -102,18 +102,32 @@ def point_to_polyline_distance(px: float, py: float,
 
 def assign_tracks(tracks: List[dict],
                   centerlines: Dict[int, List[Tuple[float, float]]],
-                  truncation: float = 0.0) -> List[dict]:
-    """Assign every track to the transect nearest in perpendicular distance.
+                  truncation: float = 0.0,
+                  contains: Optional[Callable[[int, float, float], bool]] = None,
+                  ) -> List[dict]:
+    """Assign every track to a transect it was actually monitored by.
+
+    A track only counts towards a transect whose **monitored area contains
+    it** — the same merged field-of-view footprint that forms the density's
+    denominator. Without that constraint an animal seen well outside a
+    transect's footprint would still be counted into it (whichever centre line
+    happened to be nearest), inflating the numerator over ground that was
+    never surveyed. Where several transects' footprints overlap the point, the
+    one whose centre line is nearest in perpendicular distance wins.
 
     :param tracks: entries of ``perpendicular_tracks_{m}.json`` — each needs a
         ``detection_center`` ``[x, y, z]`` (world CRS) and ``last_frame``.
     :param centerlines: ``transect_id -> polyline`` (world CRS)
     :param truncation: maximum perpendicular distance in metres; tracks farther
-        from every transect stay unassigned (``transect_id`` is ``None``).
-        ``0`` (or negative) keeps every track.
-    :return: one dict per track with the assignment, its distance and the
-        distances to all transects (``distances``), so callers can report the
-        runner-up / diagnose ambiguous cases.
+        from their transect stay unassigned. ``0`` (or negative) disables it.
+    :param contains: ``(transect_id, x, y) -> bool``, true when that transect's
+        monitored area covers the point. Passing the test as a predicate keeps
+        this module free of a geometry backend: the pipeline builds it from
+        shapely (:func:`shapely_area_predicate`) while the QGIS layer loader
+        builds it from ``QgsGeometry``, which — unlike shapely — every QGIS
+        install is guaranteed to have. ``None`` skips the containment test.
+    :return: one dict per track. ``transect_id`` is ``None`` when the track was
+        not counted, and ``outside_fov`` / ``truncated`` say why.
     """
     assignments: List[dict] = []
     for track in tracks:
@@ -129,38 +143,61 @@ def assign_tracks(tracks: List[dict],
             if math.isfinite(dist):
                 distances[transect_id] = dist
 
+        # Only transects that actually saw this ground are candidates.
+        if contains is None:
+            candidates = set(distances)
+        else:
+            candidates = {transect_id for transect_id in distances
+                          if contains(transect_id, px, py)}
+        outside_fov = contains is not None and not candidates
+
         best_id: Optional[int] = None
         best_dist = float("inf")
-        for transect_id, dist in distances.items():
-            if dist < best_dist:
-                best_id, best_dist = transect_id, dist
+        for transect_id in candidates:
+            if distances[transect_id] < best_dist:
+                best_id, best_dist = transect_id, distances[transect_id]
 
-        truncated = bool(
-            truncation and truncation > 0 and best_dist > truncation)
-        if best_id is None or truncated:
-            assignments.append({
-                "track_id": track.get("track_id"),
-                "last_frame": track.get("last_frame"),
-                "x": px, "y": py,
-                "class_id": track.get("class_id"),
-                "transect_id": None,
-                "distance_m": None if best_id is None else best_dist,
-                "truncated": truncated,
-                "distances": distances,
-            })
-            continue
+        truncating = bool(truncation and truncation > 0)
+        truncated = bool(best_id is not None and truncating and best_dist > truncation)
+
+        # A track outside every footprint has no assigned transect and hence no
+        # ``distance_m`` — keep the distance to the nearest centre line anyway,
+        # so "how far off was it?" stays answerable when diagnosing exclusions.
+        nearest = min(distances.values()) if distances else None
 
         assignments.append({
             "track_id": track.get("track_id"),
             "last_frame": track.get("last_frame"),
             "x": px, "y": py,
             "class_id": track.get("class_id"),
-            "transect_id": best_id,
-            "distance_m": best_dist,
-            "truncated": False,
+            "transect_id": None if (best_id is None or truncated) else best_id,
+            "distance_m": None if best_id is None else best_dist,
+            "nearest_distance_m": nearest,
+            "truncated": truncated,
+            "outside_fov": outside_fov,
             "distances": distances,
         })
     return assignments
+
+
+def shapely_area_predicate(areas: Dict[int, object],
+                           ) -> Callable[[int, float, float], bool]:
+    """A :func:`assign_tracks` ``contains`` predicate over shapely geometries.
+
+    *areas* maps a transect id to its monitored area (as returned by
+    :func:`merged_fov_area`), or to ``None`` when the FoV step never covered
+    that transect — such a transect can then contain nothing, which is right:
+    it monitored no ground.
+    """
+    from shapely.geometry import Point
+
+    def contains(transect_id: int, x: float, y: float) -> bool:
+        geometry = areas.get(transect_id)
+        # intersects() counts a point on the boundary as inside, so a track
+        # sitting right at the edge of the footprint is not lost.
+        return geometry is not None and geometry.intersects(Point(x, y))
+
+    return contains
 
 
 # ---------------------------------------------------------------------------
@@ -314,10 +351,12 @@ def _zinb_nll(params, y, x):
     log_p = -np.logaddexp(0.0, -gamma)        # log(sigmoid(gamma))
     log_1mp = -np.logaddexp(0.0, gamma)       # log(1 - sigmoid(gamma))
 
-    # NB2 log pmf
-    log_nb = (gammaln(y + theta) - gammaln(theta) - gammaln(y + 1.0)
-              + theta * (np.log(theta) - np.log(theta + mu))
-              + y * (np.log(mu) - np.log(theta + mu)))
+    # NB2 log pmf, term by term (a line break around a binary operator trips
+    # both W503 and W504, which this project enables together)
+    log_binom = gammaln(y + theta) - gammaln(theta) - gammaln(y + 1.0)
+    log_theta_term = theta * (np.log(theta) - np.log(theta + mu))
+    log_mu_term = y * (np.log(mu) - np.log(theta + mu))
+    log_nb = log_binom + log_theta_term + log_mu_term
 
     is_zero = y <= 0
     ll = np.empty_like(mu)

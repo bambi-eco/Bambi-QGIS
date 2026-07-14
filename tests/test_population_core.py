@@ -20,6 +20,7 @@ from bambi_wildlife_detection.core.population import (
     geometry_to_rings,
     merged_fov_area,
     point_to_polyline_distance,
+    shapely_area_predicate,
     transect_centerline,
 )
 
@@ -73,6 +74,8 @@ class TestPointToPolylineDistance:
 
 
 class TestAssignTracks:
+    """Without *areas*: nearest centre line alone (no containment test)."""
+
     def _lines(self):
         # Two parallel transects 100 m apart, both running east
         return {
@@ -120,6 +123,104 @@ class TestAssignTracks:
         out = assign_tracks([self._track(1, 0.0, 0.0)], {})
         assert out[0]["transect_id"] is None
         assert out[0]["distance_m"] is None
+
+
+class TestAssignTracksWithinFieldOfView:
+    """With a ``contains`` predicate: a track counts only inside the footprint
+    that saw it.
+
+    The density's denominator is the monitored area, so counting an animal
+    that fell outside every footprint — just because some centre line happened
+    to be nearest — would inflate the numerator over ground never surveyed.
+    """
+
+    def _lines(self):
+        return {
+            1: [(0.0, 0.0), (100.0, 0.0)],
+            2: [(0.0, 100.0), (100.0, 100.0)],
+        }
+
+    def _areas(self):
+        # A 20 m wide strip around each centre line (y ∈ [-10, 10] / [90, 110])
+        from shapely.geometry import Polygon
+        return {
+            1: Polygon([(0, -10), (100, -10), (100, 10), (0, 10)]),
+            2: Polygon([(0, 90), (100, 90), (100, 110), (0, 110)]),
+        }
+
+    def _contains(self, areas=None):
+        return shapely_area_predicate(areas or self._areas())
+
+    def _track(self, tid, x, y, frame=0):
+        return {"track_id": tid, "last_frame": frame, "class_id": 0,
+                "detection_center": [x, y, 0.0]}
+
+    def test_track_outside_every_footprint_is_not_counted(self):
+        # 30 m north of transect 1's line: nearest to it, but its footprint
+        # only reaches 10 m — and transect 2's does not cover it either.
+        out = assign_tracks([self._track(1, 50.0, 30.0)], self._lines(),
+                            contains=self._contains())
+        assert out[0]["transect_id"] is None
+        assert out[0]["outside_fov"] is True
+        assert out[0]["truncated"] is False
+        # No transect took it, so no distance to one — but the nearest centre
+        # line is still reported, so the exclusion stays diagnosable.
+        assert out[0]["distance_m"] is None
+        assert out[0]["nearest_distance_m"] == pytest.approx(30.0)
+
+    def test_track_inside_a_footprint_is_counted(self):
+        out = assign_tracks([self._track(1, 50.0, 8.0)], self._lines(),
+                            contains=self._contains())
+        assert out[0]["transect_id"] == 1
+        assert out[0]["outside_fov"] is False
+        assert out[0]["distance_m"] == pytest.approx(8.0)
+
+    def test_a_point_on_the_footprint_boundary_still_counts(self):
+        out = assign_tracks([self._track(1, 50.0, 10.0)], self._lines(),
+                            contains=self._contains())
+        assert out[0]["transect_id"] == 1
+
+    def test_overlapping_footprints_go_to_the_nearest_centre_line(self):
+        from shapely.geometry import Polygon
+        # Both footprints cover y ∈ [0, 100]; the point at y = 40 is nearer
+        # transect 1's line (y = 0) than transect 2's (y = 100).
+        areas = {
+            1: Polygon([(0, 0), (100, 0), (100, 100), (0, 100)]),
+            2: Polygon([(0, 0), (100, 0), (100, 100), (0, 100)]),
+        }
+        out = assign_tracks([self._track(1, 50.0, 40.0)], self._lines(),
+                            contains=self._contains(areas))
+        assert out[0]["transect_id"] == 1
+        assert out[0]["outside_fov"] is False
+
+    def test_truncation_still_applies_inside_a_footprint(self):
+        out = assign_tracks([self._track(1, 50.0, 8.0)], self._lines(),
+                            truncation=5.0, contains=self._contains())
+        assert out[0]["transect_id"] is None
+        assert out[0]["truncated"] is True
+        assert out[0]["outside_fov"] is False
+
+    def test_transect_without_a_footprint_counts_nothing(self):
+        areas = dict(self._areas())
+        areas[1] = None                      # the FoV step never covered it
+        out = assign_tracks([self._track(1, 50.0, 8.0)], self._lines(),
+                            contains=self._contains(areas))
+        assert out[0]["transect_id"] is None
+        assert out[0]["outside_fov"] is True
+
+    def test_predicate_keeps_core_free_of_a_geometry_backend(self):
+        # Any callable works — the QGIS loader passes a QgsGeometry-based one,
+        # because shapely is not guaranteed to exist in a QGIS install.
+        calls = []
+
+        def contains(transect_id, x, y):
+            calls.append((transect_id, x, y))
+            return transect_id == 2
+
+        out = assign_tracks([self._track(1, 50.0, 8.0)], self._lines(),
+                            contains=contains)
+        assert out[0]["transect_id"] == 2
+        assert sorted(calls) == [(1, 50.0, 8.0), (2, 50.0, 8.0)]
 
 
 class TestMergedFovArea:

@@ -9,7 +9,7 @@ This module contains the processing logic for all pipeline steps.
 import csv
 import os
 import json
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 
 from qgis.PyQt.QtCore import QObject, pyqtSignal
 
@@ -2647,6 +2647,16 @@ class BambiProcessor:
         * **area** — the union of the per-frame field-of-view footprints of
           the frames inside the transect's frame range, in hectares.
 
+        The optional *study area* is what the densities are extrapolated to an
+        abundance for, and it is a different quantity from the monitored area:
+        the latter is the searched strip (the density's denominator), the
+        former the region the density is assumed to hold over. Setting the
+        study area to the monitored area therefore just returns the counted
+        animals. ``pop_study_area_auto`` fills it with the flight's total FoV
+        coverage — the union of *every* frame's footprint, which unlike the
+        summed transect areas counts ground seen by two transects only once
+        and also includes frames belonging to no transect.
+
         Prerequisites: the Transect Splitting Tool (``transects_{m}``), the
         FoV step (``fov_{m}/fov_polygons.txt``) and 'Calculate Track
         Perpendicular' (``flight_route_{fr}/perpendicular_tracks_{m}.json``).
@@ -2654,13 +2664,14 @@ class BambiProcessor:
         :param config: Configuration dictionary. Relevant keys:
             ``pop_camera`` ("T"|"W"), ``pop_truncation`` (m, 0 = keep all),
             ``pop_methods`` (list of "naive"/"bootstrap"/"zinb"),
-            ``pop_n_boot``, ``pop_seed``, ``pop_study_area_ha``,
+            ``pop_n_boot``, ``pop_seed``, ``pop_study_area_auto`` (bool),
+            ``pop_study_area_ha`` (manual, 0 = no abundance),
             ``flight_route_camera``, ``dem_path``, ``target_epsg``.
         """
-        from .core.pipeline_outputs import load_fov_polygons_3d
+        from .core.pipeline_outputs import load_fov_polygons_3d, read_dem_origin_xy
         from .core.population import (
             assign_tracks, estimate_population, geometry_to_rings,
-            merged_fov_area, transect_centerline,
+            merged_fov_area, shapely_area_predicate, transect_centerline,
         )
         from .core.transects import TransectStore, cumulative_distances, \
             flight_positions, path_length
@@ -2674,6 +2685,7 @@ class BambiProcessor:
         methods = list(config.get("pop_methods") or ["naive", "bootstrap", "zinb"])
         n_boot = int(config.get("pop_n_boot", 999) or 999)
         seed = int(config.get("pop_seed", 42) or 42)
+        study_area_auto = bool(config.get("pop_study_area_auto", False))
         study_area_ha = float(config.get("pop_study_area_ha", 0.0) or 0.0)
 
         if log_fn:
@@ -2707,18 +2719,9 @@ class BambiProcessor:
 
         # The poses store camera positions mesh-locally; the tracks' geo-referenced
         # positions are in the world CRS, so shift the centre lines by the DEM origin.
-        x_offset, y_offset = 0.0, 0.0
-        dem_path = config.get("dem_path", "")
-        if dem_path:
-            dem_meta_path = config.get("alfs_dem_metadata_path") or \
-                dem_path.replace(".gltf", ".json").replace(".glb", ".json")
-            if os.path.exists(dem_meta_path):
-                try:
-                    with open(dem_meta_path, 'r', encoding='utf-8') as f:
-                        origin = json.load(f).get("origin", [0, 0, 0])
-                    x_offset, y_offset = float(origin[0]), float(origin[1])
-                except Exception:  # nosec B110
-                    pass
+        x_offset, y_offset = read_dem_origin_xy(
+            config.get("dem_path", ""),
+            config.get("alfs_dem_metadata_path") or "")
 
         centerlines = {
             t.transect_id: transect_centerline(
@@ -2742,11 +2745,9 @@ class BambiProcessor:
         if not tracks:
             raise RuntimeError("No tracks with perpendicular distances found.")
 
-        assignments = assign_tracks(tracks, centerlines, truncation)
-        if progress_fn:
-            progress_fn(40)
-
         # ---- Monitored area per transect (union of the frame FoVs) --------- #
+        # Computed before the assignment: a track only counts towards a
+        # transect whose footprint contains it, so the areas are needed first.
         fov_file = os.path.join(target_folder, f"fov_{suffix}", "fov_polygons.txt")
         if not os.path.exists(fov_file):
             raise FileNotFoundError(
@@ -2758,20 +2759,42 @@ class BambiProcessor:
             raise RuntimeError("The FoV file contains no polygons.")
 
         cum = cumulative_distances(flight_positions(images))
-        counts: Dict[int, int] = {t.transect_id: 0 for t in transects}
-        for a in assignments:
-            if a["transect_id"] is not None:
-                counts[a["transect_id"]] += 1
-
-        rows = []
-        area_features = []
+        areas: Dict[int, object] = {}
+        area_m2_by_id: Dict[int, float] = {}
+        frames_by_id: Dict[int, Tuple[int, int]] = {}
         for i, transect in enumerate(transects):
             if cancel_check and cancel_check():
                 raise CancelledException("Population estimation cancelled")
 
             frames = list(range(transect.first_frame, transect.last_frame + 1))
-            covered = [f for f in frames if f in fov_polygons]
             area_m2, geometry = merged_fov_area(fov_polygons, frames)
+            areas[transect.transect_id] = geometry
+            area_m2_by_id[transect.transect_id] = area_m2
+            frames_by_id[transect.transect_id] = (
+                len(frames), sum(1 for f in frames if f in fov_polygons))
+            if area_m2 <= 0 and log_fn:
+                log_fn(f"Warning: {transect.display_name} has no FoV footprint "
+                       f"(frames {transect.first_frame}-{transect.last_frame}) — "
+                       "it contributes a zero area.")
+            if progress_fn:
+                progress_fn(25 + int((i + 1) / len(transects) * 25))
+
+        # ---- Assign the tracks --------------------------------------------- #
+        assignments = assign_tracks(
+            tracks, centerlines, truncation,
+            contains=shapely_area_predicate(areas))
+        counts: Dict[int, int] = {t.transect_id: 0 for t in transects}
+        for a in assignments:
+            if a["transect_id"] is not None:
+                counts[a["transect_id"]] += 1
+        if progress_fn:
+            progress_fn(60)
+
+        rows = []
+        area_features = []
+        for transect in transects:
+            area_m2 = area_m2_by_id[transect.transect_id]
+            n_frames, n_with_fov = frames_by_id[transect.transect_id]
             rows.append({
                 "id": transect.transect_id,
                 "name": transect.display_name,
@@ -2782,10 +2805,10 @@ class BambiProcessor:
                 "area_m2": round(area_m2, 2),
                 "area_ha": area_m2 / 10000.0,
                 "count": counts[transect.transect_id],
-                "n_frames": len(frames),
-                "n_frames_with_fov": len(covered),
+                "n_frames": n_frames,
+                "n_frames_with_fov": n_with_fov,
             })
-            for ring in geometry_to_rings(geometry):
+            for ring in geometry_to_rings(areas[transect.transect_id]):
                 area_features.append({
                     "type": "Feature",
                     "geometry": {"type": "Polygon", "coordinates": [ring]},
@@ -2796,12 +2819,6 @@ class BambiProcessor:
                         "count": counts[transect.transect_id],
                     },
                 })
-            if area_m2 <= 0 and log_fn:
-                log_fn(f"Warning: {transect.display_name} has no FoV footprint "
-                       f"(frames {transect.first_frame}-{transect.last_frame}) — "
-                       "it contributes a zero area.")
-            if progress_fn:
-                progress_fn(40 + int((i + 1) / len(transects) * 30))
 
         usable = [r for r in rows if r["area_ha"] > 0]
         if not usable:
@@ -2811,13 +2828,39 @@ class BambiProcessor:
 
         n_assigned = sum(1 for a in assignments if a["transect_id"] is not None)
         n_truncated = sum(1 for a in assignments if a["truncated"])
+        n_outside = sum(1 for a in assignments if a["outside_fov"])
         if log_fn:
             log_fn(f"{len(transects)} transect(s), {len(assignments)} track(s): "
                    f"{n_assigned} assigned, {len(assignments) - n_assigned} "
-                   f"unassigned ({n_truncated} beyond the truncation distance)")
+                   f"not counted ({n_outside} outside every transect's field of "
+                   f"view, {n_truncated} beyond the truncation distance)")
             if len(usable) < len(rows):
                 log_fn(f"Warning: {len(rows) - len(usable)} transect(s) without a "
                        "monitored area were excluded from the estimation.")
+
+        # ---- Flight FoV coverage (candidate study area) -------------------- #
+        # The union over *every* frame, so ground seen by two transects counts
+        # once — unlike the summed transect areas, which the density needs to
+        # double-count because each transect is its own sample.
+        if progress_fn:
+            progress_fn(72)
+        flight_area_m2, _flight_geom = merged_fov_area(
+            fov_polygons, sorted(fov_polygons.keys()))
+        flight_area_ha = flight_area_m2 / 10000.0
+
+        study_area_source = "none"
+        if study_area_auto:
+            study_area_ha = flight_area_ha
+            study_area_source = "flight_fov"
+            if flight_area_ha <= 0:
+                raise RuntimeError(
+                    "The flight has no FoV coverage, so no study area could be "
+                    "derived. Untick 'Use flight FoV area' or check the FoV step.")
+            if log_fn:
+                log_fn(f"Study area from the flight's total FoV coverage: "
+                       f"{flight_area_ha:.2f} ha")
+        elif study_area_ha > 0:
+            study_area_source = "manual"
 
         # ---- Estimate ------------------------------------------------------ #
         if progress_fn:
@@ -2832,13 +2875,22 @@ class BambiProcessor:
             "n_tracks": len(assignments),
             "n_tracks_assigned": n_assigned,
             "n_tracks_truncated": n_truncated,
+            "n_tracks_outside_fov": n_outside,
             "n_transects_without_area": len(rows) - len(usable),
+            "flight_fov_area_ha": flight_area_ha,
+            "study_area_source": study_area_source,
             "transects": rows,
             "notes": (
-                "Tracks are assigned to the transect whose flight path is nearest "
-                "in perpendicular distance; the monitored area is the union of the "
-                "frame field-of-view footprints inside the transect's frame range. "
-                "Densities are per 100 ha (= per km²)."
+                "A track counts towards a transect only when it lies inside that "
+                "transect's monitored area (the union of the field-of-view "
+                "footprints of the frames in its range); where several transects "
+                "cover it, the one whose flight path is nearest in perpendicular "
+                "distance wins. "
+                "Densities are per 100 ha (= per km²). The monitored area sums the "
+                "transects (each is its own sample, so shared ground counts once "
+                "per transect), while flight_fov_area_ha unions every frame and "
+                "counts shared ground once — they differ where transects overlap "
+                "or where frames belong to no transect."
             ),
         })
 
@@ -2870,20 +2922,23 @@ class BambiProcessor:
             writer = csv.writer(f)
             writer.writerow(["track_id", "last_frame", "x", "y", "class_id",
                              "transect_id", "transect_name", "distance_m",
-                             "in_frame_range", "truncated"])
+                             "nearest_distance_m", "in_frame_range",
+                             "truncated", "outside_fov"])
             for a in assignments:
                 tid = a["transect_id"]
                 rng = ranges.get(tid)
                 in_range = ""
                 if rng is not None and a["last_frame"] is not None:
                     in_range = int(rng[0] <= a["last_frame"] <= rng[1])
+                nearest = a["nearest_distance_m"]
                 writer.writerow([
                     a["track_id"], a["last_frame"],
                     round(a["x"], 3), round(a["y"], 3), a["class_id"],
                     "" if tid is None else tid,
                     "" if tid is None else names.get(tid, ""),
                     "" if a["distance_m"] is None else round(a["distance_m"], 3),
-                    in_range, int(a["truncated"]),
+                    "" if nearest is None else round(nearest, 3),
+                    in_range, int(a["truncated"]), int(a["outside_fov"]),
                 ])
 
         areas_geojson = os.path.join(analytics_folder, "transect_areas.geojson")
@@ -2895,15 +2950,49 @@ class BambiProcessor:
                 "features": area_features,
             }, f, indent=2)
 
+        # The sub-flight route of each transect (start frame -> end frame), so
+        # the map layers can show the flown line inside its monitored area.
+        by_id = {r["id"]: r for r in rows}
+        route_features = []
+        for transect in transects:
+            line = centerlines.get(transect.transect_id) or []
+            if len(line) < 2:
+                continue
+            row = by_id[transect.transect_id]
+            route_features.append({
+                "type": "Feature",
+                "geometry": {
+                    "type": "LineString",
+                    "coordinates": [[x, y] for x, y in line],
+                },
+                "properties": {
+                    "transect_id": transect.transect_id,
+                    "name": transect.display_name,
+                    "start_frame": transect.start_frame,
+                    "end_frame": transect.end_frame,
+                    "length_m": row["length_m"],
+                    "count": row["count"],
+                },
+            })
+        routes_geojson = os.path.join(analytics_folder, "transect_routes.geojson")
+        with open(routes_geojson, 'w', encoding='utf-8') as f:
+            json.dump({
+                "type": "FeatureCollection",
+                "crs": {"type": "name",
+                        "properties": {"name": f"EPSG:{target_epsg}"}},
+                "features": route_features,
+            }, f, indent=2)
+
         # Tracks assigned to a transect they were not filmed in usually mean two
         # transects run close together — worth surfacing, not worth failing on.
-        mismatched = sum(
-            1 for a in assignments
-            if a["transect_id"] is not None
-            and a["last_frame"] is not None
-            and not (ranges[a["transect_id"]][0] <= a["last_frame"]
-                     <= ranges[a["transect_id"]][1])
-        )
+        def _filmed_elsewhere(a: dict) -> bool:
+            tid, frame = a["transect_id"], a["last_frame"]
+            if tid is None or frame is None:
+                return False
+            lo, hi = ranges[tid]
+            return not lo <= frame <= hi
+
+        mismatched = sum(1 for a in assignments if _filmed_elsewhere(a))
 
         if log_fn:
             total_ha = result["total_ha"]
@@ -2928,6 +3017,7 @@ class BambiProcessor:
             log_fn(f"Per-transect table saved to: {transects_csv}")
             log_fn(f"Track assignment saved to: {tracks_csv}")
             log_fn(f"Transect areas saved to: {areas_geojson}")
+            log_fn(f"Transect routes saved to: {routes_geojson}")
 
         if progress_fn:
             progress_fn(100)

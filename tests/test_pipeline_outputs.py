@@ -12,7 +12,45 @@ from bambi_wildlife_detection.core.pipeline_outputs import (
     load_fov_polygons_3d,
     load_geo_tracks_by_id,
     load_georef_detections_by_frame,
+    read_dem_origin_xy,
 )
+
+
+class TestReadDemOriginXy:
+    def _write(self, path, payload):
+        import json
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return str(path)
+
+    def test_reads_the_json_next_to_the_mesh(self, tmp_path):
+        self._write(tmp_path / "dem.json", {"origin": [500000.0, 5000000.0, 12.0]})
+        assert read_dem_origin_xy(str(tmp_path / "dem.gltf")) == (500000.0, 5000000.0)
+        # .glb meshes resolve to the same sidecar convention
+        assert read_dem_origin_xy(str(tmp_path / "dem.glb")) == (500000.0, 5000000.0)
+
+    def test_explicit_metadata_path_wins(self, tmp_path):
+        self._write(tmp_path / "dem.json", {"origin": [1.0, 2.0, 0.0]})
+        explicit = self._write(tmp_path / "other.json", {"origin": [9.0, 8.0, 0.0]})
+        assert read_dem_origin_xy(str(tmp_path / "dem.gltf"), explicit) == (9.0, 8.0)
+
+    def test_falls_back_to_the_sidecar_when_the_explicit_path_is_unusable(
+            self, tmp_path):
+        self._write(tmp_path / "dem.json", {"origin": [1.0, 2.0, 0.0]})
+        missing = str(tmp_path / "nope.json")
+        assert read_dem_origin_xy(str(tmp_path / "dem.gltf"), missing) == (1.0, 2.0)
+
+    def test_missing_or_malformed_metadata_yields_the_world_origin(self, tmp_path):
+        assert read_dem_origin_xy("", "") == (0.0, 0.0)
+        assert read_dem_origin_xy(str(tmp_path / "absent.gltf")) == (0.0, 0.0)
+
+        bad = self._write(tmp_path / "bad.json", {"no_origin": True})
+        assert read_dem_origin_xy("", bad) == (0.0, 0.0)
+
+        (tmp_path / "broken.json").write_text("{not json", encoding="utf-8")
+        assert read_dem_origin_xy("", str(tmp_path / "broken.json")) == (0.0, 0.0)
+
+        short = self._write(tmp_path / "short.json", {"origin": [1.0]})
+        assert read_dem_origin_xy("", short) == (0.0, 0.0)
 
 
 class TestLoadGeoTracksById:

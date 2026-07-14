@@ -16,9 +16,42 @@ File formats
     ``idx frame x1 y1 z1 x2 y2 z2 confidence class_id``
 """
 
-from typing import Callable, Dict, Optional
+import json
+import os
+from typing import Callable, Dict, Optional, Tuple
 
 LogFn = Optional[Callable[[str], None]]
+
+
+def read_dem_origin_xy(dem_path: str = "",
+                       dem_metadata_path: str = "") -> Tuple[float, float]:
+    """The DEM's ``origin`` (x, y) — the shift from mesh-local to world CRS.
+
+    Poses store camera positions mesh-locally (world CRS minus this origin),
+    while every geo-referenced product is in the world CRS, so anything that
+    mixes the two has to add it back. Falls back to ``(0.0, 0.0)`` when no
+    metadata is found, which is correct for a DEM built at the world origin.
+
+    The metadata sits next to the mesh as a ``.json`` of the same name unless
+    *dem_metadata_path* names it explicitly.
+    """
+    candidates = []
+    if dem_metadata_path:
+        candidates.append(dem_metadata_path)
+    if dem_path:
+        candidates.append(
+            dem_path.replace(".gltf", ".json").replace(".glb", ".json"))
+
+    for path in candidates:
+        if not path or not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                origin = json.load(fh).get("origin", [0, 0, 0])
+            return float(origin[0]), float(origin[1])
+        except (ValueError, TypeError, IndexError, OSError):
+            continue
+    return 0.0, 0.0
 
 
 def load_geo_tracks_by_id(csv_path: str, log_fn: LogFn = None) -> Dict[int, list]:
