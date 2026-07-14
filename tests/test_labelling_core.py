@@ -18,9 +18,11 @@ from bambi_wildlife_detection.core.labelling import (
     TRACK_COLORS_RGB,
     _FrameMatcher,
     _GeoPropagator,
+    box_in_valid_area,
     coerce_attributes,
     custom_fields_from_dicts,
     keyframe_window,
+    load_valid_mask,
     _load_detections_by_frame,
     _load_pixel_tracks,
     _pose_epochs,
@@ -103,6 +105,50 @@ class TestLabelTrack:
         assert track.remove_keyframe(0) is True
         assert track.remove_keyframe(0) is False
         assert track.frame_range() is None
+
+    def test_transform_keyframes_translates_all(self):
+        track = LabelTrack(1)
+        track.set_keyframe(0, (0, 0, 10, 10))
+        track.set_keyframe(10, (100, 50, 110, 60))
+        # move the frame-0 box by (+5, +3), same size
+        track.transform_keyframes((0, 0, 10, 10), (5, 3, 15, 13))
+        assert track.box_at(0)[0] == (5.0, 3.0, 15.0, 13.0)
+        assert track.box_at(10)[0] == (105.0, 53.0, 115.0, 63.0)
+
+    def test_transform_keyframes_scales_about_each_centre(self):
+        track = LabelTrack(1)
+        track.set_keyframe(0, (0, 0, 10, 10))
+        track.set_keyframe(10, (100, 100, 120, 140))
+        # double the width, keep height and centre of the frame-0 box
+        track.transform_keyframes((0, 0, 10, 10), (-5, 0, 15, 10))
+        assert track.box_at(0)[0] == (-5.0, 0.0, 15.0, 10.0)
+        assert track.box_at(10)[0] == (90.0, 100.0, 130.0, 140.0)
+
+    def test_transform_keyframes_commutes_with_interpolation(self):
+        track = LabelTrack(1)
+        track.set_keyframe(0, (0, 0, 10, 10))
+        track.set_keyframe(10, (100, 50, 130, 90))
+        old = track.box_at(5)[0]
+        # drag the interpolated frame-5 box: shift and scale it
+        new = (old[0] + 8, old[1] - 2, old[2] + 20, old[3] + 4)
+        track.transform_keyframes(old, new)
+        assert track.box_at(5)[0] == pytest.approx(new)
+
+    def test_transform_keyframes_clamps_to_bounds(self):
+        track = LabelTrack(1)
+        track.set_keyframe(0, (2, 2, 12, 12))
+        track.set_keyframe(10, (90, 90, 98, 98))
+        track.transform_keyframes(
+            (2, 2, 12, 12), (7, 7, 17, 17), bounds=(100, 100))
+        assert track.box_at(0)[0] == (7.0, 7.0, 17.0, 17.0)
+        assert track.box_at(10)[0] == (95.0, 95.0, 100.0, 100.0)
+
+    def test_transform_keyframes_degenerate_old_box_keeps_sizes(self):
+        track = LabelTrack(1)
+        track.set_keyframe(0, (10, 10, 20, 20))
+        # zero-sized reference box: only the translation is applied
+        track.transform_keyframes((5, 5, 5, 5), (8, 9, 8, 9))
+        assert track.box_at(0)[0] == (13.0, 14.0, 23.0, 24.0)
 
     def test_dict_round_trip(self):
         track = LabelTrack(7, species="red deer", sex="female", age="adult")
@@ -664,6 +710,50 @@ class TestKeyframeWindow:
             assert len(shown) == len(set(shown))
 
 
+class TestValidMask:
+    @staticmethod
+    def _half_masked(height, width):
+        import numpy as np
+        mask = np.full((height, width), 255, dtype=np.uint8)
+        mask[:, width // 2:] = 0  # right half masked off (black)
+        return mask
+
+    def test_no_mask_treats_every_box_as_valid(self):
+        assert box_in_valid_area((0, 0, 10, 10), None, 640, 512)
+
+    def test_box_inside_white_area_is_valid(self):
+        mask = self._half_masked(512, 640)
+        assert box_in_valid_area((10, 10, 100, 100), mask, 640, 512)
+
+    def test_box_reaching_into_black_area_is_invalid(self):
+        mask = self._half_masked(512, 640)
+        assert not box_in_valid_area((300, 10, 340, 50), mask, 640, 512)
+
+    def test_box_fully_in_black_area_is_invalid(self):
+        mask = self._half_masked(512, 640)
+        assert not box_in_valid_area((400, 10, 500, 50), mask, 640, 512)
+
+    def test_mask_with_other_resolution_is_scaled(self):
+        # half-resolution mask for a 640x512 frame
+        mask = self._half_masked(256, 320)
+        assert box_in_valid_area((10, 10, 100, 100), mask, 640, 512)
+        assert not box_in_valid_area((400, 10, 500, 50), mask, 640, 512)
+
+    def test_load_valid_mask_missing_file_returns_none(self, tmp_path):
+        assert load_valid_mask(str(tmp_path), "t") is None
+
+    def test_load_valid_mask_reads_camera_specific_file(self, tmp_path):
+        cv2 = pytest.importorskip("cv2")
+        import numpy as np
+        cv2.imwrite(str(tmp_path / "mask_W.png"),
+                    np.full((8, 16), 255, dtype=np.uint8))
+        loaded = load_valid_mask(str(tmp_path), "w")
+        assert loaded is not None
+        assert loaded.shape == (8, 16)
+        # the thermal modality must not pick up the RGB mask
+        assert load_valid_mask(str(tmp_path), "t") is None
+
+
 class TestGeoPropagator:
     def _propagator(self, tmp_path, with_dem=True):
         dem = tmp_path / "dem.glb"
@@ -740,6 +830,29 @@ class TestGeoPropagator:
         with pytest.raises(RuntimeError, match="no mesh intersection"):
             prop.propagate_series(
                 (10, 10, 20, 20), 0, 25, _images(30), 640, 512, step=10)
+
+    def test_projection_into_masked_off_area_fails(
+            self, fake_geo_stack, tmp_path):
+        cv2 = pytest.importorskip("cv2")
+        import numpy as np
+        # WORLD_QUAD projects to (160, 192, 480, 320) on 640x512 — mask off
+        # exactly that region, so the propagation must be rejected.
+        mask = np.full((512, 640), 255, dtype=np.uint8)
+        mask[192:321, 160:481] = 0
+        cv2.imwrite(str(tmp_path / "mask_T.png"), mask)
+        prop = self._propagator(tmp_path)
+        with pytest.raises(RuntimeError, match="valid .white. mask area"):
+            prop.propagate((10, 10, 20, 20), 0, 1, _images(3), 640, 512)
+
+    def test_projection_into_white_mask_area_passes(
+            self, fake_geo_stack, tmp_path):
+        cv2 = pytest.importorskip("cv2")
+        import numpy as np
+        cv2.imwrite(str(tmp_path / "mask_T.png"),
+                    np.full((512, 640), 255, dtype=np.uint8))
+        prop = self._propagator(tmp_path)
+        result = prop.propagate((10, 10, 20, 20), 0, 1, _images(3), 640, 512)
+        assert result == pytest.approx((160.0, 192.0, 480.0, 320.0))
 
     def test_correction_json_is_loaded(self, fake_geo_stack, tmp_path):
         (tmp_path / "correction.json").write_text(json.dumps({

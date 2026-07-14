@@ -66,6 +66,8 @@ class BambiWildlifeDetection:
         self._video_creator_dlg = None
         self.labelling_tool_action = None
         self._labelling_tool_dlg = None
+        self.transect_tool_action = None
+        self._transect_tool_dlg = None
 
     def tr(self, message):
         """Get the translation for a string using Qt translation API.
@@ -220,6 +222,17 @@ class BambiWildlifeDetection:
                 'Review detections/tracks on extracted frames and create '
                 'key-frame based track annotations'))
 
+        # Transect Splitting Tool
+        self.transect_tool_action = self.add_action(
+            os.path.join(self.plugin_dir, 'icons', 'icon_transect.png'),
+            text=self.tr('Transect Splitting Tool'),
+            callback=self._on_transect_tool,
+            parent=self.iface.mainWindow(),
+            add_to_menu=True,
+            status_tip=self.tr(
+                'Split a flight into transects: define start/end frames on '
+                'the extracted frames with a flight-route overview map'))
+
         # Flight Strategy Planner
         self.flight_planner_action = self.add_action(
             os.path.join(self.plugin_dir, 'icons', 'icon_flight_planner.png'),
@@ -285,6 +298,11 @@ class BambiWildlifeDetection:
         if self._labelling_tool_dlg is not None:
             self._labelling_tool_dlg.close()
             self._labelling_tool_dlg = None
+
+        # Close transect tool if open
+        if self._transect_tool_dlg is not None:
+            self._transect_tool_dlg.close()
+            self._transect_tool_dlg = None
 
         # Disconnect project signals and remove dock widget
         if self.dock_widget:
@@ -412,6 +430,27 @@ class BambiWildlifeDetection:
         self._labelling_tool_dlg.show()
         self._labelling_tool_dlg.raise_()
         self._labelling_tool_dlg.activateWindow()
+
+    def _on_transect_tool(self):
+        """Toolbar action: open the transect splitting tool (non-modal)."""
+        from .bambi_transect_tool import TransectToolDialog
+        self._ensure_dock_widget()
+        if self._transect_tool_dlg is None:
+            self._transect_tool_dlg = TransectToolDialog(
+                self.iface,
+                dock_widget=self.dock_widget,
+                parent=self.iface.mainWindow(),
+            )
+            self._transect_tool_dlg.finished.connect(
+                lambda _: setattr(self, '_transect_tool_dlg', None)
+            )
+        else:
+            # Re-seed defaults in case the target folder changed since the
+            # dialog was last opened.
+            self._transect_tool_dlg.apply_dock_defaults()
+        self._transect_tool_dlg.show()
+        self._transect_tool_dlg.raise_()
+        self._transect_tool_dlg.activateWindow()
 
     def _on_dependency_manager(self):
         """Toolbar action: open the dependency manager (non-modal)."""

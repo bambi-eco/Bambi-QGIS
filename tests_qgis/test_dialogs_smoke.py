@@ -23,6 +23,12 @@ class TestDialogsConstruct:
         assert isinstance(dlg, QDialog)
         _close(dlg)
 
+    def test_transect_tool(self, iface, dock):
+        from bambi_wildlife_detection.bambi_transect_tool import TransectToolDialog
+        dlg = TransectToolDialog(iface, dock)
+        assert isinstance(dlg, QDialog)
+        _close(dlg)
+
     def test_video_creator(self, iface, dock):
         from bambi_wildlife_detection.bambi_video_creator import VideoCreatorDialog
         dlg = VideoCreatorDialog(iface, dock)
@@ -100,8 +106,14 @@ class TestDialogGeometry:
             VideoCreatorDialog)
         return VideoCreatorDialog(iface, dock)
 
+    def _make_transect_tool(self, iface, dock):
+        from bambi_wildlife_detection.bambi_transect_tool import (
+            TransectToolDialog)
+        return TransectToolDialog(iface, dock)
+
     @pytest.mark.parametrize("factory", ["_make_labelling_tool",
-                                         "_make_video_creator"])
+                                         "_make_video_creator",
+                                         "_make_transect_tool"])
     def test_fits_on_the_available_screen(self, factory, iface, dock):
         from qgis.PyQt.QtWidgets import QApplication
         avail = QApplication.primaryScreen().availableGeometry()

@@ -2,7 +2,7 @@
 name=Bambi - QGIS Integration
 qgisMinimumVersion=3.22
 description=Detect and track wildlife in drone videos/photos with geo-referencing
-version=5.0.1
+version=5.1.0
 author=Christoph Praschl, Anna Maschek, David C.Schedl
 email=christoph.praschl@fh-hagenberg.at
 
@@ -20,10 +20,16 @@ about=A comprehensive QGIS plugin for detecting, tracking, and geo-referencing w
     - Calibration wizards for camera intrinsics (single-camera SfM, stereo RGB+thermal) and per-flight pose corrections
     - Companion tools: result video creator, radiometric thermal image viewer (DJI Thermal SDK), randomized transect flight planner, and interactive map-canvas inspectors
     - Key-frame based labelling tool: review detections/tracks on extracted frames (thermal or RGB), draw and edit track bounding boxes with species/sex/age/occlusion classes, interpolate between key frames, and propagate boxes across frames via DEM geo-referencing
+    - Transect splitting tool: split a flight into named transects (frame ranges) on the extracted frames, with a flight-route overview map, flight-path length measurement and an "end after X metres" helper
     - Built-in dependency manager to install all required and optional packages from within QGIS
     All results are automatically added as styled layers to the QGIS project.
 
-changelog=Version 5.0.0:
+changelog=Version 5.1.0:
+    Added:
+    - Transect splitting tool: define named transects as start/end frame ranges of a flight, with a flight-route overview map highlighting the current frame's position, flight-path length measurement between start and end, and an "end after X metres" helper. Definitions are saved to transects_{t,w}/transects.json (+ .csv) in the output folder and loaded automatically.
+    Changed:
+    - Labelling tool: considering masks during frame propagation; allows to move/rescale all bounding boxes of a track simultaneously
+    Version 5.0.0:
     Added:
     - Labelling tool: key-frame based review and annotation of detections/tracks on extracted frames. Draw and edit track bounding boxes, assign species/sex/age/occlusion classes, interpolate between key frames, mark stop frames, and propagate boxes across frames via DEM geo-referencing. Includes a "Copy labels from RGB/Thermal" action that time-matches and reprojects labels between both modalities, plus user-defined custom label fields.
     - Result video creator: renders annotated result videos from processed flights.

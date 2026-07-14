@@ -18,6 +18,7 @@ the labelling workflow. Contains:
   modalities (lazy alfspy/trimesh/bambi imports).
 """
 
+import math
 import os
 import json
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -421,6 +422,43 @@ class LabelTrack:
             a[k] + alpha * (b[k] - a[k]) for k in ("x1", "y1", "x2", "y2")
         )
         return box, False, a.get("occlusion", "none")
+
+    def transform_keyframes(
+            self, old_box: Tuple[float, float, float, float],
+            new_box: Tuple[float, float, float, float],
+            bounds: Optional[Tuple[float, float]] = None) -> None:
+        """Apply the move/resize taking *old_box* to *new_box* to all key frames.
+
+        The change is decomposed into a translation of the box centre and a
+        per-axis scaling of the box size, and every key frame's box is shifted
+        and scaled (about its own centre) by those same amounts.  Because
+        linear interpolation commutes with this transform, interpolated boxes
+        follow along consistently.
+
+        With *bounds* ``(width, height)`` each transformed box is clamped to
+        the image area; a box that would leave the image entirely keeps its
+        transformed geometry instead (mirroring the single-box clamping).
+        """
+        old_w = old_box[2] - old_box[0]
+        old_h = old_box[3] - old_box[1]
+        sx = (new_box[2] - new_box[0]) / old_w if old_w > 1e-9 else 1.0
+        sy = (new_box[3] - new_box[1]) / old_h if old_h > 1e-9 else 1.0
+        dx = (new_box[0] + new_box[2] - old_box[0] - old_box[2]) / 2.0
+        dy = (new_box[1] + new_box[3] - old_box[1] - old_box[3]) / 2.0
+        for kf in self.keyframes.values():
+            cx = (kf["x1"] + kf["x2"]) / 2.0 + dx
+            cy = (kf["y1"] + kf["y2"]) / 2.0 + dy
+            hw = (kf["x2"] - kf["x1"]) / 2.0 * sx
+            hh = (kf["y2"] - kf["y1"]) / 2.0 * sy
+            box = [cx - hw, cy - hh, cx + hw, cy + hh]
+            if bounds is not None:
+                x1 = max(0.0, box[0])
+                y1 = max(0.0, box[1])
+                x2 = min(float(bounds[0]), box[2])
+                y2 = min(float(bounds[1]), box[3])
+                if x2 > x1 and y2 > y1:
+                    box = [x1, y1, x2, y2]
+            kf["x1"], kf["y1"], kf["x2"], kf["y2"] = box
 
     # -- (de)serialisation -------------------------------------------------
 
@@ -863,6 +901,48 @@ def keyframe_window(frames: List[int], current: int,
     return window
 
 
+def load_valid_mask(target_folder: str, modality: str):
+    """Load the undistortion mask for *modality* as a grayscale array.
+
+    Frame extraction moves the undistortion mask into the flight's target
+    folder as ``mask_T.png`` (thermal) / ``mask_W.png`` (RGB); its white
+    pixels mark the valid image area that survived the undistortion.
+    Returns ``None`` when no mask file exists (older flights) or it cannot
+    be read — the caller then treats the whole frame as valid.
+    """
+    letter = "T" if modality.lower().startswith("t") else "W"
+    for name in (f"mask_{letter}.png", f"mask_{letter.lower()}.png"):
+        path = os.path.join(target_folder, name)
+        if os.path.isfile(path):
+            try:
+                import cv2
+            except ImportError:
+                return None
+            return cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+    return None
+
+
+def box_in_valid_area(box: Box, mask, img_width: int,
+                      img_height: int) -> bool:
+    """True when *box* lies entirely in the valid (white) area of *mask*.
+
+    *box* is in pixel coordinates of an ``img_width`` x ``img_height``
+    frame; the mask may have a different resolution and is sampled with
+    scaled coordinates. Without a mask (``None``) every box is valid.
+    """
+    if mask is None:
+        return True
+    import numpy as np
+
+    mh, mw = mask.shape[:2]
+    sx, sy = mw / float(img_width), mh / float(img_height)
+    x1 = min(mw - 1, max(0, int(math.floor(box[0] * sx))))
+    y1 = min(mh - 1, max(0, int(math.floor(box[1] * sy))))
+    x2 = min(mw - 1, max(x1, int(math.ceil(box[2] * sx))))
+    y2 = min(mh - 1, max(y1, int(math.ceil(box[3] * sy))))
+    return bool(np.all(mask[y1:y2 + 1, x1:x2 + 1] > 127))
+
+
 class _GeoPropagator:
     """Projects a pixel-space box from one frame to another via the DEM.
 
@@ -883,6 +963,8 @@ class _GeoPropagator:
         self.modality = modality
         self._tri_mesh = None
         self._correction = None
+        self._valid_mask = None
+        self._valid_mask_loaded = False
 
     @property
     def is_loaded(self) -> bool:
@@ -946,7 +1028,8 @@ class _GeoPropagator:
         not accumulate along the series.  Returns ``(boxes, failures)`` where
         *boxes* is a list of ``(frame, box)`` in propagation order and
         *failures* a list of ``(frame, message)`` for frames the box could not
-        be projected into (outside the frame, frame outside the poses range).
+        be projected into (outside the frame or the valid mask area, frame
+        outside the poses range).
 
         Raises ``RuntimeError`` if the source box itself cannot be ray-cast
         onto the DEM — that failure applies to the whole series.
@@ -1021,7 +1104,12 @@ class _GeoPropagator:
     def _world_to_box(self, world, dst_frame: int, dst_images: List[dict],
                       dst_width: int, dst_height: int,
                       ) -> Tuple[float, float, float, float]:
-        """Project local world points into the target frame's image plane."""
+        """Project local world points into the target frame's image plane.
+
+        Besides the frame bounds the projected box is validated against the
+        undistortion mask (``mask_T.png`` / ``mask_W.png``): the target
+        frames are always this propagator's modality, so its mask applies.
+        """
         import numpy as np
         from .camera_pose import world_to_pixel
 
@@ -1038,7 +1126,21 @@ class _GeoPropagator:
             raise RuntimeError(
                 f"The projected box lies completely outside frame {dst_frame}."
             )
-        return (
+        box = (
             max(0.0, nx1), max(0.0, ny1),
             min(float(dst_width - 1), nx2), min(float(dst_height - 1), ny2),
         )
+        if not box_in_valid_area(box, self._mask(), dst_width, dst_height):
+            raise RuntimeError(
+                f"The projected box lies outside the valid (white) mask "
+                f"area in frame {dst_frame}."
+            )
+        return box
+
+    def _mask(self):
+        """The modality's undistortion mask, loaded once (``None`` = no mask)."""
+        if not self._valid_mask_loaded:
+            self._valid_mask = load_valid_mask(
+                self.target_folder, self.modality)
+            self._valid_mask_loaded = True
+        return self._valid_mask

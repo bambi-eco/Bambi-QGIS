@@ -105,8 +105,10 @@ from .core.labelling import (  # noqa: F401 — re-exported API
     _load_detections_by_frame,
     _load_pixel_tracks,
     _pose_epochs,
+    box_in_valid_area,
     custom_fields_from_dicts,
     keyframe_window,
+    load_valid_mask,
     propagation_frames,
     read_custom_fields,
     track_color_rgb,
@@ -1038,6 +1040,14 @@ class LabellingToolDialog(QDialog):
             "the track without geo-propagation.")
         self.draw_kf_btn.toggled.connect(self._on_draw_kf_toggled)
         kg.addWidget(self.draw_kf_btn)
+        self.whole_track_check = QCheckBox("Move/resize whole track")
+        self.whole_track_check.setToolTip(
+            "Apply moving or resizing of the box to the whole track: every "
+            "key frame's box is shifted and scaled by the same amount. On "
+            "interpolated frames the track is transformed without creating "
+            "a new key frame. Unchecked: only the current frame's box "
+            "changes (promoting it to a key frame).")
+        kg.addWidget(self.whole_track_check)
         # Per-key-frame attribute: occlusion can change along the track
         # (visible on one key frame, occluded on the next).
         occ_row = QHBoxLayout()
@@ -2025,7 +2035,7 @@ class LabellingToolDialog(QDialog):
                 self, "BAMBI Labelling Tool",
                 f"None of the {other_name} label boxes could be projected onto "
                 f"the {this_name} frames (no DEM intersection or all outside "
-                "the frames).")
+                "the frames / the valid mask area).")
             return
 
         self._mark_dirty()
@@ -2050,14 +2060,25 @@ class LabellingToolDialog(QDialog):
     # ------------------------------------------------------------------
 
     def _on_box_committed(self, track_id: int, rect: QRectF):
-        """Selected box was moved/resized — write a key frame here."""
+        """Selected box was moved/resized — write a key frame here.
+
+        In "Move/resize whole track" mode the same shift and scaling is
+        applied to all key frames of the track instead.
+        """
         track = self._store.tracks.get(track_id) if self._store else None
         if track is None:
             return
         rect = self._clamp_rect(rect)
-        track.set_keyframe(
-            self._current_frame,
-            (rect.left(), rect.top(), rect.right(), rect.bottom()))
+        new_box = (rect.left(), rect.top(), rect.right(), rect.bottom())
+        old = (track.box_at(self._current_frame)
+               if self.whole_track_check.isChecked() else None)
+        if old is not None:
+            scene_rect = self.canvas.scene().sceneRect()
+            track.transform_keyframes(
+                old[0], new_box,
+                bounds=(scene_rect.width(), scene_rect.height()))
+        else:
+            track.set_keyframe(self._current_frame, new_box)
         self._mark_dirty()
         self._refresh_track_list()
         # Deferred: reached from the _BoxItem's mouseReleaseEvent — see
@@ -2235,7 +2256,7 @@ class LabellingToolDialog(QDialog):
                 self, "BAMBI Labelling Tool",
                 f"Created {len(boxes)} key frame(s).\n\n"
                 f"Skipped frame(s) {skipped}: the projected box lies outside "
-                "the frame.")
+                "the frame or the valid (white) mask area.")
 
     # ------------------------------------------------------------------
     # Persistence
