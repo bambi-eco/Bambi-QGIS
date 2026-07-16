@@ -7036,6 +7036,34 @@ class BambiDockWidget(QDockWidget):
                 self.update_status("add_layers", "🔴 No valid tracks")
                 return
 
+            # Ask for a frame range — a track is kept when its final frame
+            # falls inside the range (its earlier history is not considered)
+            final_frames = {
+                key: max(d['frame'] for d in detections)
+                for key, detections in all_tracks.items()
+            }
+            dlg = FrameRangeDialog(
+                self, min(final_frames.values()), max(final_frames.values()),
+                len(all_tracks), "track end frames"
+            )
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                self.update_status("add_layers", "⚪ Cancelled")
+                return
+
+            start, end = dlg.selected_range()
+            all_tracks = {
+                key: detections for key, detections in all_tracks.items()
+                if start <= final_frames[key] <= end
+            }
+
+            if not all_tracks:
+                QMessageBox.warning(
+                    self, "No Tracks",
+                    "No tracks end within the selected frame range."
+                )
+                self.update_status("add_layers", "🔴 No valid tracks")
+                return
+
             # Check if there are many tracks - warn user
             num_tracks = len(all_tracks)
             if num_tracks > 50:

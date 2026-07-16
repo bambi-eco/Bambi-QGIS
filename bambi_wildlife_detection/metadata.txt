@@ -2,7 +2,7 @@
 name=Bambi - QGIS Integration
 qgisMinimumVersion=3.22
 description=Detect and track wildlife in drone videos/photos with geo-referencing
-version=5.1.0
+version=5.1.1
 author=Christoph Praschl, Anna Maschek, David C.Schedl
 email=christoph.praschl@fh-hagenberg.at
 
@@ -24,7 +24,10 @@ about=A comprehensive QGIS plugin for detecting, tracking, and geo-referencing w
     - Built-in dependency manager to install all required and optional packages from within QGIS
     All results are automatically added as styled layers to the QGIS project.
 
-changelog=Version 5.1.0:
+changelog=Version 5.1.1:
+    Changed:
+    - Add Tracks to QGIS now also allows to filter between a start and end frame
+    Version 5.1.0:
     Added:
     - Transect splitting tool: define named transects as start/end frame ranges of a flight, with a flight-route overview map highlighting the current frame's position, flight-path length measurement between start and end, and an "end after X metres" helper. Definitions are saved to transects_{t,w}/transects.json (+ .csv) in the output folder and loaded automatically.
     - Survey analytics: transect-based population estimation with three estimators (naive, bootstrap and zero-inflated negative binomial regression), ported from the R analysis of Praschl et al. 2026 and validated against it. Tracks are assigned to the transect nearest in perpendicular distance (with an optional truncation), and a transect's monitored area is the union of its frames' field-of-view footprints. Requires the transect definitions, "Calculate Field of View" and "Calculate Track Perpendicular"; results are written to analytics_{t,w}/population_estimate.json plus per-transect and per-track CSVs, and the transects can be loaded into QGIS as one layer group each (its merged field of view, its sub-flight route and the tracks assigned to it), nested under a "BAMBI Transect Areas" group. An optional study area (entered manually or derived from the flight's total field-of-view coverage) extrapolates every density to an abundance.
