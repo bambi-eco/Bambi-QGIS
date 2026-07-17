@@ -4189,6 +4189,13 @@ class BambiDockWidget(QDockWidget):
                             pass
         except Exception:  # nosec B110
             pass
+        if file_crs_label == "Unknown":
+            # rasterio reports crs=None for e.g. compound CRS files; GDAL's OSR
+            # can often still identify the horizontal EPSG code.
+            from .austria_dem_downloader import detect_geotiff_epsg
+            detected = detect_geotiff_epsg(geotiff_path)
+            if detected:
+                file_crs_label = detected
         input_crs_label = source_crs_override if source_crs_override else file_crs_label
 
         # Confirm conversion

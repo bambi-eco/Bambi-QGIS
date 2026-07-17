@@ -56,6 +56,15 @@ EPSG_TO_PROJ4 = {
         " +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs"
     ),
     "EPSG:3035": BEV_CRS_PROJ4,
+    # Amersfoort / RD New (Netherlands, e.g. AHN DEM tiles). The towgs84
+    # parameters carry the Bessel->WGS84 datum shift; without them the
+    # reprojection is ~100 m off.
+    "EPSG:28992": (
+        "+proj=sterea +lat_0=52.1561605555556 +lon_0=5.38763888888889"
+        " +k=0.9999079 +x_0=155000 +y_0=463000 +ellps=bessel"
+        " +towgs84=565.417,50.3319,465.552,-0.398957,0.343988,-1.8774,4.0725"
+        " +units=m +no_defs"
+    ),
     "EPSG:32632": "+proj=utm +zone=32 +datum=WGS84 +units=m +no_defs",
     "EPSG:32633": "+proj=utm +zone=33 +datum=WGS84 +units=m +no_defs",
     "EPSG:32634": "+proj=utm +zone=34 +datum=WGS84 +units=m +no_defs",
@@ -63,8 +72,54 @@ EPSG_TO_PROJ4 = {
 
 
 def get_proj4_for_crs(crs_str: str) -> str:
-    """Get PROJ4 string for a CRS, with fallback to the original string."""
-    return EPSG_TO_PROJ4.get(crs_str, crs_str)
+    """Get PROJ4 string for a CRS, with fallback to the original string.
+
+    Any UTM zone (EPSG:326xx/327xx) is synthesized on the fly; other EPSG
+    codes must be listed in EPSG_TO_PROJ4. Raw PROJ4 strings pass through
+    unchanged.
+    """
+    if crs_str in EPSG_TO_PROJ4:
+        return EPSG_TO_PROJ4[crs_str]
+    try:
+        epsg = int(crs_str.upper().replace("EPSG:", "").strip())
+    except (ValueError, AttributeError):
+        return crs_str
+    if 32601 <= epsg <= 32660:
+        return f"+proj=utm +zone={epsg - 32600} +datum=WGS84 +units=m +no_defs"
+    if 32701 <= epsg <= 32760:
+        return f"+proj=utm +zone={epsg - 32700} +south +datum=WGS84 +units=m +no_defs"
+    return crs_str
+
+
+def detect_geotiff_epsg(path) -> Optional[str]:
+    """Identify a GeoTIFF's horizontal EPSG code via GDAL's OSR.
+
+    Fallback for files whose CRS rasterio cannot represent and reports as
+    ``None`` — e.g. Dutch AHN tiles tagged with the compound
+    "Amersfoort / RD New + NAP height" CRS. OSR still identifies the
+    projected component. Returns e.g. ``"EPSG:28992"`` or None.
+    """
+    try:
+        from osgeo import gdal, osr
+    except ImportError:
+        return None
+    try:
+        ds = gdal.Open(str(path))
+        if ds is None:
+            return None
+        wkt = ds.GetProjection()
+        if not wkt:
+            return None
+        srs = osr.SpatialReference(wkt=wkt)
+        # Prefer the horizontal component; a compound CRS's root authority
+        # code (e.g. EPSG:7415) is useless for 2D reprojection.
+        for key in ("PROJCS", "GEOGCS", None):
+            code = srs.GetAuthorityCode(key)
+            if code:
+                return f"EPSG:{code}"
+    except Exception:  # nosec B110
+        return None
+    return None
 
 
 # BEV ATOM service
@@ -1258,25 +1313,48 @@ class GeoTIFFConversionWorker(QObject):
             # Check if reprojection is needed
             needs_reprojection = False
             source_crs_string = None
+            rasterio_reads_crs = False
 
             try:
                 import rasterio
                 with rasterio.open(input_path) as src:
                     if src.crs:
                         source_crs_string = str(src.crs)
+                        rasterio_reads_crs = True
                         self.log.emit(f"Source CRS (from file): {source_crs_string}")
                     else:
-                        self.log.emit("Warning: Input GeoTIFF has no CRS defined")
+                        self.log.emit("Warning: rasterio could not read a CRS from the input GeoTIFF")
             except ImportError:
                 self.finished.emit(False, "rasterio library is required for GeoTIFF processing")
                 return
             except Exception as e:
                 self.log.emit(f"Warning: Could not read source CRS: {e}")
 
+            # rasterio reports crs=None for some valid files (e.g. Dutch AHN
+            # tiles with a compound "RD New + NAP height" CRS). GDAL's OSR can
+            # still identify the horizontal EPSG code — without this fallback
+            # the mesh would be built from unreprojected coordinates and
+            # silently labeled with the target CRS.
+            if source_crs_string is None:
+                detected = detect_geotiff_epsg(input_path)
+                if detected:
+                    source_crs_string = detected
+                    self.log.emit(f"Source CRS identified via GDAL: {detected}")
+
             # Determine the effective source CRS: override takes priority over file metadata
             effective_source_crs = self.source_crs_override or source_crs_string
             if self.source_crs_override:
                 self.log.emit(f"Source CRS override applied: {self.source_crs_override}")
+
+            if self.output_crs and not effective_source_crs:
+                self.finished.emit(
+                    False,
+                    "Could not determine the source CRS of the GeoTIFF, so it cannot "
+                    "be reprojected to the target CRS. Enter the correct source CRS "
+                    "in the 'Source CRS' override field (e.g. EPSG:28992 for Dutch "
+                    "AHN tiles) and retry."
+                )
+                return
 
             if self.output_crs and effective_source_crs:
                 try:
@@ -1300,20 +1378,25 @@ class GeoTIFFConversionWorker(QObject):
 
                 with tempfile.TemporaryDirectory() as temp_dir:
                     temp_path = Path(temp_dir)
-                    # If source CRS is overridden, first re-tag the file so rasterio
-                    # reprojects from the correct source CRS.
-                    if self.source_crs_override:
+                    # Re-tag the file when the CRS embedded in it is unusable for
+                    # rasterio: either the user overrode it, or rasterio could not
+                    # read it and it was identified via GDAL instead.
+                    retag_crs = self.source_crs_override
+                    if retag_crs is None and not rasterio_reads_crs:
+                        retag_crs = source_crs_string
+                    if retag_crs:
                         from rasterio.crs import CRS as RasterioCRS
                         import rasterio
-                        override_proj4 = get_proj4_for_crs(self.source_crs_override)
-                        if override_proj4 == self.source_crs_override:
-                            self.finished.emit(False, f"Unknown source CRS '{self.source_crs_override}'. "
+                        retag_proj4 = get_proj4_for_crs(retag_crs)
+                        if not retag_proj4.startswith("+"):
+                            self.finished.emit(False, f"Unknown source CRS '{retag_crs}'. "
                                                "Add it to EPSG_TO_PROJ4 or use a supported EPSG code.")
                             return
                         retagged_file = temp_path / "retagged.tif"
                         with rasterio.open(input_path) as src:
                             meta = src.meta.copy()
-                            meta['crs'] = RasterioCRS.from_proj4(override_proj4)
+                            meta['crs'] = RasterioCRS.from_proj4(retag_proj4)
+                            meta['driver'] = 'GTiff'  # source may report read-only LIBERTIFF
                             with rasterio.open(retagged_file, 'w', **meta) as dst:
                                 dst.write(src.read())
                         source_for_reproject = retagged_file

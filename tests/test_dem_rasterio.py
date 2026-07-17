@@ -180,6 +180,81 @@ class TestGenerateMeshReal:
         assert meta["origin_wgs84"]["latitude"] == pytest.approx(47.51 - 6 * 0.0005, abs=0.01)
 
 
+class TestGeoTIFFConversionWorkerSourceCrs:
+    """Source-CRS handling for files rasterio cannot read the CRS of.
+
+    Dutch AHN tiles carry a compound "Amersfoort / RD New + NAP height" CRS
+    that rasterio reports as ``crs = None``; the worker must fall back to
+    GDAL identification (or the user override) instead of silently building
+    a mesh from unreprojected coordinates labeled with the target CRS.
+    """
+
+    def _write_crsless_rd_tile(self, tmp_path):
+        # 60 m tile at RD New (95000, 481250) — the corner of AHN tile 24HN2 —
+        # written without any CRS tag so rasterio reads crs=None.
+        data = np.linspace(-1.3, 8.0, 6 * 6).reshape(6, 6)
+        path = tmp_path / "ahn.tif"
+        with rasterio.open(
+            str(path), "w",
+            driver="GTiff", height=6, width=6, count=1, dtype="float32",
+            transform=from_origin(95000.0, 481310.0, 10.0, 10.0),
+        ) as dst:
+            dst.write(data.astype("float32"), 1)
+        return path
+
+    def _run(self, worker):
+        worker.finished = SignalRecorder()
+        worker.progress = SignalRecorder()
+        worker.log = SignalRecorder()
+        worker.run()
+        assert worker.finished.calls, "worker did not finish"
+        return worker.finished.calls[-1]
+
+    def test_unknown_source_crs_fails_instead_of_mislabeling(
+            self, tmp_path, monkeypatch):
+        from bambi_wildlife_detection import austria_dem_downloader as add
+        monkeypatch.setattr(add, "detect_geotiff_epsg", lambda p: None)
+        tile = self._write_crsless_rd_tile(tmp_path)
+        worker = GeoTIFFConversionWorker(
+            str(tile), str(tmp_path / "out"), output_crs="EPSG:32631",
+            simplify_factor=1)
+        success, message = self._run(worker)
+        assert success is False
+        assert "Could not determine the source CRS" in message
+
+    def test_gdal_identified_rd_new_is_reprojected_to_utm31(
+            self, tmp_path, monkeypatch):
+        from bambi_wildlife_detection import austria_dem_downloader as add
+        monkeypatch.setattr(add, "detect_geotiff_epsg", lambda p: "EPSG:28992")
+        tile = self._write_crsless_rd_tile(tmp_path)
+        worker = GeoTIFFConversionWorker(
+            str(tile), str(tmp_path / "out"), output_crs="EPSG:32631",
+            simplify_factor=1)
+        success, message = self._run(worker)
+        assert success is True, message
+
+        meta = json.loads((tmp_path / "out" / "ahn.json").read_text())
+        assert meta["crs"] == "EPSG:32631"
+        # RD (95000, 481250) is UTM 31N (~602.6 km, ~5797.4 km), lat/lon
+        # (52.317, 4.505) in the Dutch dunes — not raw RD numbers.
+        assert 602000 < meta["origin"][0] < 603500
+        assert 5.796e6 < meta["origin"][1] < 5.799e6
+        assert meta["origin_wgs84"]["latitude"] == pytest.approx(52.317, abs=0.01)
+        assert meta["origin_wgs84"]["longitude"] == pytest.approx(4.505, abs=0.01)
+
+    def test_source_crs_override_on_crsless_file(self, tmp_path, monkeypatch):
+        from bambi_wildlife_detection import austria_dem_downloader as add
+        monkeypatch.setattr(add, "detect_geotiff_epsg", lambda p: None)
+        tile = self._write_crsless_rd_tile(tmp_path)
+        worker = GeoTIFFConversionWorker(
+            str(tile), str(tmp_path / "out"), output_crs="EPSG:32631",
+            simplify_factor=1, source_crs_override="EPSG:28992")
+        success, message = self._run(worker)
+        assert success is True, message
+        meta = json.loads((tmp_path / "out" / "ahn.json").read_text())
+        assert 602000 < meta["origin"][0] < 603500
+
+
 class TestGeoTIFFConversionWorkerEndToEnd:
     def test_converts_bev_geotiff_to_utm_mesh(self, tmp_path, bev_tile):
         out_dir = tmp_path / "out"

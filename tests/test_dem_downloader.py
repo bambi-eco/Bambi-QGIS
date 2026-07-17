@@ -49,6 +49,26 @@ class TestGetProj4ForCrs:
     def test_unknown_crs_passes_through(self):
         assert get_proj4_for_crs("EPSG:9999") == "EPSG:9999"
 
+    def test_any_utm_zone_is_synthesized(self):
+        assert get_proj4_for_crs("EPSG:32631") == (
+            "+proj=utm +zone=31 +datum=WGS84 +units=m +no_defs")
+        assert "+south" in get_proj4_for_crs("EPSG:32731")
+
+    def test_rd_new_has_datum_shift(self):
+        proj4 = get_proj4_for_crs("EPSG:28992")
+        assert "+proj=sterea" in proj4
+        assert "+towgs84" in proj4
+
+    def test_raw_proj4_passes_through(self):
+        raw = "+proj=utm +zone=31 +datum=WGS84 +units=m +no_defs"
+        assert get_proj4_for_crs(raw) == raw
+
+
+class TestDetectGeotiffEpsg:
+    def test_missing_file_returns_none(self, tmp_path):
+        from bambi_wildlife_detection.austria_dem_downloader import detect_geotiff_epsg
+        assert detect_geotiff_epsg(tmp_path / "nope.tif") is None
+
 
 # ---------------------------------------------------------------------------
 # BoundingBox
