@@ -57,6 +57,12 @@ into ``detections_{m}/detections.txt`` in the exact format of the "Detect
 Animals" stage (``frame x1 y1 x2 y2 confidence class_id``) so the rest of the
 pipeline (geo-referencing, tracking, …) can consume them.  The exported block
 is delimited by a marker comment and replaced on re-export.
+
+"Replace detections in project" is the destructive sibling: after a modal
+confirmation it overwrites ``detections_{m}/detections.txt`` with the label
+boxes alone (detector output is discarded) and deletes the derived tracking
+outputs (``tracks_{m}/``, ``tracks_pixel_{m}/``), so re-running
+geo-referencing and tracking rebuilds everything from the labels.
 """
 
 import os
@@ -1134,6 +1140,16 @@ class LabellingToolDialog(QDialog):
             "use them. Re-exporting replaces the previously added block.")
         self.export_det_btn.clicked.connect(self._on_add_detections_to_project)
         eg.addWidget(self.export_det_btn)
+        self.replace_det_btn = QPushButton("Replace detections in project")
+        self.replace_det_btn.setToolTip(
+            "Save the labels and REPLACE detections_{t,w}/detections.txt "
+            "with the interpolated label boxes — the detector output is "
+            "discarded and the derived tracking outputs (tracks_{t,w}/, "
+            "tracks_pixel_{t,w}/) are deleted. Asks for confirmation "
+            "before touching anything.")
+        self.replace_det_btn.clicked.connect(
+            self._on_replace_detections_in_project)
+        eg.addWidget(self.replace_det_btn)
         vbox.addWidget(export_group)
 
         vbox.addStretch()
@@ -2337,6 +2353,60 @@ class LabellingToolDialog(QDialog):
             f"{len(self._store.tracks)} label track(s) to:\n{det_file}\n\n"
             "Re-run 'Geo-Reference Detections' (and tracking, if needed) in "
             "the plugin panel to update the QGIS layers.")
+
+    def _on_replace_detections_in_project(self):
+        """Replace the pipeline's detections (and derived tracks) with the labels."""
+        if self._store is None:
+            return
+        if not any(t.keyframes for t in self._store.tracks.values()):
+            QMessageBox.information(
+                self, "BAMBI Labelling Tool",
+                "There are no label tracks with key frames to export.")
+            return
+        m = self._modality
+        modality_name = "RGB" if m == "w" else "Thermal"
+        reply = QMessageBox.warning(
+            self, "Replace Detections in Project",
+            f"This replaces the {modality_name} pipeline results with the "
+            "label tracks:\n\n"
+            f"• detections_{m}/detections.txt is overwritten with the "
+            "interpolated label boxes — all detector output is discarded\n"
+            f"• the derived tracking outputs (tracks_{m}/, "
+            f"tracks_pixel_{m}/) are deleted\n\n"
+            "This cannot be undone. Replace them?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel)
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            # Keep labels.json/csv in sync with what is exported.
+            self._store.save()
+            self._dirty = False
+            det_file, n_boxes, removed = self._store.replace_detections()
+        except Exception as exc:
+            QMessageBox.warning(
+                self, "BAMBI Labelling Tool",
+                f"Could not replace detections:\n{exc}")
+            return
+
+        # Refresh the read-only overlays: the detections now show the label
+        # boxes and the deleted pipeline tracks disappear.
+        self._detections = _load_detections_by_frame(det_file)
+        self._pixel_tracks = _load_pixel_tracks(
+            os.path.join(self._target_folder, f"tracks_{m}", "tracks_pixel.csv"))
+        self._render_frame()
+
+        removed_note = ""
+        if removed:
+            removed_note = "Deleted stale tracking output:\n" + "\n".join(
+                removed) + "\n\n"
+        QMessageBox.information(
+            self, "BAMBI Labelling Tool",
+            f"Replaced the detections with {n_boxes} bounding box(es) from "
+            f"{len(self._store.tracks)} label track(s) in:\n{det_file}\n\n"
+            f"{removed_note}"
+            "Re-run 'Geo-Reference Detections' and 'Track Animals' in the "
+            "plugin panel to rebuild the QGIS layers from the labels.")
 
     def _maybe_save_dirty(self) -> bool:
         """Ask the user about unsaved changes. Returns False on cancel."""

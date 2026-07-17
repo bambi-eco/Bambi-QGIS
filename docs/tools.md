@@ -93,6 +93,8 @@ The projected boxes are added as **new label tracks** (species/sex/age/occlusion
 
 **Add detections to project** additionally merges the interpolated label boxes into `detections_{t,w}/detections.txt` in the exact format of the **Detect Animals** step (`frame x1 y1 x2 y2 confidence class_id`, confidence `1.0000` for manual labels) so the rest of the pipeline can consume them. Detector output is preserved: the labels are appended as a marked block that is replaced on re-export, and the species → `class_id` mapping is documented as a comment inside the block. Re-run **Geo-Reference Detections** (and tracking, if needed) afterwards to update the QGIS layers.
 
+**Replace detections in project** is the destructive variant: after a confirmation dialog it overwrites `detections_{t,w}/detections.txt` with the label boxes **alone** (all detector output is discarded) and deletes the tracking outputs derived from the previous detections (`tracks_{t,w}/`, `tracks_pixel_{t,w}/`). Use it when the manual labels should fully supersede the detector run; re-run **Geo-Reference Detections** and **Track Animals** afterwards to rebuild the QGIS layers from the labels.
+
 ### Controls
 
 | Input                   | Action                                     |

@@ -55,7 +55,7 @@ Before starting processing, configure per-step settings in the **Configuration**
 ![Configuration Tab](../images/config_tab.png)
 
 - **Extraction**: Frame skip, limit, sampling rate, and thermal visualisation (see below)
-- **Detection**: Confidence threshold, model path
+- **Detection**: Confidence threshold, thermal/RGB model paths
 - **Tracking**: Backend selection, IoU threshold, interpolation, TRex tracklet import
 - **SAM3**: Roboflow API key for segmentation
 - **ALFS**: Resolution, tile size
@@ -131,11 +131,13 @@ flight_route_t/    # or flight_route_w/ depending on camera selection
 
 Use **→ Add Flight Route to QGIS** to load both layers with styling applied.
 
+> **Note:** Frame extraction (Step 1) is optional for this step. If no `poses.json` exists yet, only the AirData-based flight route line is generated (a warning is shown), which is useful for a quick overview of the flight before running any extraction. Camera positions, frame/distance markers and image labels require Step 1; re-run this step after extraction to add them.
+
 ![Flight Route](../images/route.png)
 
 ### 3. Detect Animals
 
-Runs YOLO-based detection on all extracted frames. The default thermal wildlife detection model is downloaded automatically from HuggingFace on first use.
+Runs YOLO-based detection on all extracted frames. Separate model paths can be configured for the thermal and the RGB modality; the model matching the selected camera is used. The default wildlife detection model for each modality is downloaded automatically from HuggingFace on first use.
 
 **Outputs:**
 ```
@@ -143,7 +145,7 @@ detections_t/    # or detections_w/ depending on camera selection
 └── detections.txt    # Bounding box detections (frame, x1, y1, x2, y2, confidence, class)
 ```
 
-Manual annotations created with the [Labelling Tool](tools.md#labelling-tool) can be merged into the same `detections.txt` (via its **Add detections to project** button), so they flow through geo-referencing and tracking like regular detections.
+Manual annotations created with the [Labelling Tool](tools.md#labelling-tool) can be merged into the same `detections.txt` (via its **Add detections to project** button) — or can fully replace the detector output and the derived tracking results (via **Replace detections in project**, after confirmation) — so they flow through geo-referencing and tracking like regular detections.
 
 #### → Geo-Reference Detections
 
@@ -322,6 +324,10 @@ segmentation_t/    # or segmentation_w/ depending on camera selection
 ## Survey analytics
 
 The **Survey Analytics** tab (next to *Processing*) turns geo-referenced detections, tracks, or exported frames into population-level products. The point-based tools (density heatmap, distance sampling) let you pick the **source**: *Detections* uses every geo-referenced bounding box, while *Tracks* uses one representative point per track (so an animal followed across many frames is counted once); their camera (thermal/RGB) follows the existing Detection / Tracking camera selectors on the Processing tab. The coverage map instead combines the exported frame GeoTIFFs and has its own camera selector. Results are written to a new `analytics_t/` or `analytics_w/` folder, and the run log for these steps appears on the Processing tab.
+
+**Analysing several flights together.** *Distance sampling* and *Population estimation* each carry a **Projects** selector: add one or more BAMBI projects and/or keep **Add current project** ticked, and the analysis runs on every project and combines the results into a single estimate (distance sampling pools the perpendicular distances and sums the flight-route effort *L*; population estimation pools all the transects into one count/area sample set). Leaving the list empty with only *Add current project* ticked reproduces the single-project behaviour. Before running, each project is checked for its required files — if anything is missing the run is aborted and a message names what is missing in which project(s). The combined result is written to the **active project's** `analytics_*` folder, while each pooled project keeps its own per-transect CSV/GeoJSON in its own folder.
+
+For distance sampling an added project is just a target folder. For population estimation the transects must be georeferenced with the right DEM origin, so its **+ Add Project…** button opens a small dialog with **two pickers** — the project's target folder and its **`dem.json`** (DEM metadata JSON). The active project reuses the DEM configured on the Processing tab; every *added* project supplies its own `dem.json`, and the results dialog shows each project's DEM-origin source (`config` for the active project, `provided` for added ones).
 
 ### Density heatmap
 
@@ -503,7 +509,8 @@ Detection and Re-ID models are stored globally in the QGIS profile directory and
 
 ```
 %APPDATA%\QGIS\QGIS3\profiles\default\bambi_deps\models\
-├── thermal_animal_detector.pt               # YOLO detection model
+├── thermal_animal_detector.pt               # YOLO detection model (thermal)
+├── rgb_animal_detector.pt                   # YOLO detection model (RGB)
 ├── osnet_x0_5_bambi_thermal_omni.pt         # BAMBI Re-ID model
 └── osnet_x0_25_msmt17.pt                    # BoxMOT default Re-ID model
 ```

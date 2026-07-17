@@ -1271,19 +1271,33 @@ class BambiDockWidget(QDockWidget):
         detection_group = QGroupBox("Detection")
         detection_layout = QFormLayout(detection_group)
 
-        self.model_path_edit = QLineEdit()
-        self.model_path_edit.setPlaceholderText("Leave empty for default HuggingFace model")
-        model_browse_btn = QPushButton("Browse...")
-        model_browse_btn.clicked.connect(self.browse_model)
-        model_row = QHBoxLayout()
-        model_row.addWidget(self.model_path_edit)
-        model_row.addWidget(model_browse_btn)
-        detection_layout.addRow("Model Path:", model_row)
+        self.thermal_model_path_edit = QLineEdit()
+        self.thermal_model_path_edit.setPlaceholderText(
+            "Leave empty for default HuggingFace model")
+        thermal_model_browse_btn = QPushButton("Browse...")
+        thermal_model_browse_btn.clicked.connect(self.browse_thermal_model)
+        thermal_model_row = QHBoxLayout()
+        thermal_model_row.addWidget(self.thermal_model_path_edit)
+        thermal_model_row.addWidget(thermal_model_browse_btn)
+        detection_layout.addRow("Thermal Model Path:", thermal_model_row)
+
+        self.rgb_model_path_edit = QLineEdit()
+        self.rgb_model_path_edit.setPlaceholderText(
+            "Leave empty for default HuggingFace model")
+        rgb_model_browse_btn = QPushButton("Browse...")
+        rgb_model_browse_btn.clicked.connect(self.browse_rgb_model)
+        rgb_model_row = QHBoxLayout()
+        rgb_model_row.addWidget(self.rgb_model_path_edit)
+        rgb_model_row.addWidget(rgb_model_browse_btn)
+        detection_layout.addRow("RGB Model Path:", rgb_model_row)
+
         detection_label = QLabel(
-            "Note, that the default BAMBI model was trained on white-hotspot thermal "
-            "data showing roe deer, red deer and wild boar with an AGL between 30 to "
-            "60 m. So the applicability is limited to that scope. Additionally, the "
-            "model is based on the Ultralytics framework so the utilization follows "
+            "The model matching the camera selected in the Detection step is "
+            "used. Note, that the default BAMBI models were trained on "
+            "white-hotspot thermal respectively RGB data showing roe deer, red "
+            "deer and wild boar with an AGL between 30 to 60 m. So the "
+            "applicability is limited to that scope. Additionally, the models "
+            "are based on the Ultralytics framework so the utilization follows "
             "their license."
         )
         detection_label.setWordWrap(True)
@@ -2488,6 +2502,12 @@ class BambiDockWidget(QDockWidget):
         ds_desc.setStyleSheet("color: gray; font-size: 10px;")
         ds_layout.addWidget(ds_desc)
 
+        ds_layout.addWidget(self._build_projects_group(
+            "ds",
+            "BAMBI target folders to pool for the distance-sampling estimate. "
+            "Their perpendicular distances are combined and the flight-route "
+            "lengths summed into the total effort L."))
+
         ds_params_row = QHBoxLayout()
         ds_params_row.addWidget(QLabel("Source:"))
         self.ds_source_combo = QComboBox()
@@ -2596,6 +2616,14 @@ class BambiDockWidget(QDockWidget):
         pop_desc.setWordWrap(True)
         pop_desc.setStyleSheet("color: gray; font-size: 10px;")
         pop_layout.addWidget(pop_desc)
+
+        pop_layout.addWidget(self._build_projects_group(
+            "pop",
+            "BAMBI projects to combine. Every project's transects are pooled "
+            "into one count/area table and the estimators run on all of them "
+            "together; each added project supplies its own dem.json so its "
+            "transects are georeferenced with the right DEM origin.",
+            with_dem=True))
 
         pop_params_row = QHBoxLayout()
         pop_params_row.addWidget(QLabel("Camera:"))
@@ -2971,7 +2999,8 @@ class BambiDockWidget(QDockWidget):
             "target_epsg": epsg,
 
             # Detection
-            "model_path": self.model_path_edit.text() or None,
+            "thermal_model_path": self.thermal_model_path_edit.text() or None,
+            "rgb_model_path": self.rgb_model_path_edit.text() or None,
             "min_confidence": self.confidence_spin.value(),
             "detect_use_all_frames": (
                 self.detect_all_frames_check.isChecked()
@@ -3123,6 +3152,9 @@ class BambiDockWidget(QDockWidget):
             "ds_truncation": (
                 self.ds_truncation_spin.value()
                 if hasattr(self, 'ds_truncation_spin') else 0.0),
+            "ds_project_folders": (
+                [e["target"] for e in self._resolve_project_entries("ds")]
+                if hasattr(self, 'ds_projects_list') else []),
 
             # Survey analytics: transect population estimation
             "pop_camera": (
@@ -3144,6 +3176,9 @@ class BambiDockWidget(QDockWidget):
             "pop_seed": (
                 self.pop_seed_spin.value()
                 if hasattr(self, 'pop_seed_spin') else 42),
+            "pop_project_folders": (
+                self._resolve_project_entries("pop")
+                if hasattr(self, 'pop_projects_list') else []),
         }
 
     def _selected_population_methods(self) -> list:
@@ -3158,6 +3193,229 @@ class BambiDockWidget(QDockWidget):
             if not hasattr(self, attr) or getattr(self, attr).isChecked()
         ]
         return methods
+
+    # ------------------------------------------------------------------ #
+    # Multi-project selector (shared by distance sampling & population)
+    # ------------------------------------------------------------------ #
+
+    def _build_projects_group(self, prefix: str, tooltip: str,
+                              with_dem: bool = False) -> QGroupBox:
+        """A project list + add/remove + 'Add current project' selector.
+
+        Lets a Survey Analytics tool run over several BAMBI target folders at
+        once and combine the results. Each list entry stores its target folder
+        and (when *with_dem*) the project's DEM metadata JSON, under the item's
+        ``Qt.UserRole`` data. The widgets are stored on ``self`` under
+        ``{prefix}_projects_list`` and ``{prefix}_include_current_check`` so
+        :meth:`_resolve_project_entries` can read them back.
+
+        :param with_dem: population estimation needs each added project's
+            ``dem.json`` to place its transects, so its Add button opens a
+            two-picker dialog; distance sampling has no DEM dependency and just
+            picks a folder.
+        """
+        box = QGroupBox("Projects")
+        layout = QVBoxLayout(box)
+
+        desc = QLabel(
+            "Analyse one or more BAMBI target folders together — each project "
+            "is processed on its own and the results are combined. Leave the "
+            "list empty and keep 'Add current project' ticked to analyse only "
+            "the active project (same as before)."
+            + (" Added projects need their DEM metadata (dem.json) so their "
+               "transects can be georeferenced; the current project reuses the "
+               "DEM configured on the Processing tab." if with_dem else "")
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color: gray; font-size: 10px;")
+        layout.addWidget(desc)
+
+        lst = QListWidget()
+        lst.setToolTip(tooltip)
+        lst.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        lst.setMaximumHeight(90)
+        setattr(self, f"{prefix}_projects_list", lst)
+        layout.addWidget(lst)
+
+        btn_row = QHBoxLayout()
+        add_btn = QPushButton("+ Add Project…" if with_dem else "+ Add Folder…")
+        add_btn.setToolTip(
+            "Add a project (target folder + dem.json) to analyse." if with_dem
+            else "Add a BAMBI target folder to analyse.")
+        if with_dem:
+            add_btn.clicked.connect(lambda: self._add_project_with_dem(prefix))
+        else:
+            add_btn.clicked.connect(lambda: self._add_project_folder(prefix))
+        remove_btn = QPushButton("− Remove Selected")
+        remove_btn.setToolTip("Remove the selected project(s) from the list.")
+        remove_btn.clicked.connect(lambda: self._remove_project_folders(prefix))
+        btn_row.addWidget(add_btn)
+        btn_row.addWidget(remove_btn)
+        btn_row.addStretch()
+
+        include_current = QCheckBox("Add current project")
+        include_current.setChecked(True)
+        include_current.setToolTip(
+            "Include the active project's target folder in the analysis, in "
+            "addition to any projects listed above.")
+        setattr(self, f"{prefix}_include_current_check", include_current)
+        btn_row.addWidget(include_current)
+        layout.addLayout(btn_row)
+        return box
+
+    def _project_item_role(self):
+        """Qt.UserRole, spelled for both PyQt5 and PyQt6."""
+        return Qt.ItemDataRole.UserRole
+
+    def _append_project_item(self, prefix: str, target: str, dem: str = ""):
+        """Add one project entry to a tool's list, de-duplicated by target."""
+        lst = getattr(self, f"{prefix}_projects_list", None)
+        if lst is None:
+            return
+        key = os.path.normcase(os.path.abspath(target))
+        for i in range(lst.count()):
+            data = lst.item(i).data(self._project_item_role()) or {}
+            if os.path.normcase(os.path.abspath(data.get("target", ""))) == key:
+                return
+        label = target
+        if dem:
+            label = f"{target}    —    DEM: {os.path.basename(dem)}"
+        item = QListWidgetItem(label)
+        item.setData(self._project_item_role(), {"target": target, "dem": dem})
+        item.setToolTip(f"Target: {target}" + (f"\nDEM: {dem}" if dem else ""))
+        lst.addItem(item)
+
+    def _add_project_folder(self, prefix: str):
+        """Append a chosen BAMBI target folder (no DEM) to a tool's list."""
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select BAMBI Target Folder")
+        if folder:
+            self._append_project_item(prefix, folder)
+
+    def _add_project_with_dem(self, prefix: str):
+        """Prompt for a target folder + its dem.json, then add the project."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Add Project")
+        dlg.setMinimumWidth(520)
+        layout = QVBoxLayout(dlg)
+        form = QFormLayout()
+
+        target_edit = QLineEdit()
+        target_edit.setPlaceholderText("BAMBI target folder")
+        target_browse = QPushButton("Browse…")
+
+        def _pick_target():
+            folder = QFileDialog.getExistingDirectory(
+                dlg, "Select BAMBI Target Folder")
+            if folder:
+                target_edit.setText(folder)
+                # Offer the DEM sitting next to the mesh if it is obvious.
+                if not dem_edit.text():
+                    for name in ("dem.json", "dem_mesh.json"):
+                        guess = os.path.join(folder, name)
+                        if os.path.isfile(guess):
+                            dem_edit.setText(guess)
+                            break
+        target_browse.clicked.connect(_pick_target)
+        target_row = QHBoxLayout()
+        target_row.addWidget(target_edit)
+        target_row.addWidget(target_browse)
+        form.addRow("Target folder:", target_row)
+
+        dem_edit = QLineEdit()
+        dem_edit.setPlaceholderText("DEM metadata JSON (dem.json)")
+        dem_browse = QPushButton("Browse…")
+
+        def _pick_dem():
+            start = target_edit.text().strip() or ""
+            file, _ = QFileDialog.getOpenFileName(
+                dlg, "Select DEM Metadata JSON", start, "JSON files (*.json)")
+            if file:
+                dem_edit.setText(file)
+        dem_browse.clicked.connect(_pick_dem)
+        dem_row = QHBoxLayout()
+        dem_row.addWidget(dem_edit)
+        dem_row.addWidget(dem_browse)
+        form.addRow("DEM metadata:", dem_row)
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        layout.addWidget(buttons)
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        target = target_edit.text().strip()
+        dem = dem_edit.text().strip()
+        if not target:
+            QMessageBox.warning(self, "Add Project",
+                                "Please choose a target folder.")
+            return
+        if not dem or not os.path.isfile(dem):
+            QMessageBox.warning(
+                self, "Add Project",
+                "Please choose the project's DEM metadata JSON (dem.json).")
+            return
+        self._append_project_item(prefix, target, dem)
+
+    def _remove_project_folders(self, prefix: str):
+        """Remove the selected project(s) from a tool's list."""
+        lst = getattr(self, f"{prefix}_projects_list", None)
+        if lst is None:
+            return
+        for item in lst.selectedItems():
+            lst.takeItem(lst.row(item))
+
+    def _resolve_project_entries(self, prefix: str) -> List[Dict[str, str]]:
+        """Ordered, de-duplicated ``{"target", "dem"}`` entries for a tool.
+
+        The projects explicitly listed, followed by the active project (with an
+        empty DEM, so the worker reuses the configured DEM) when 'Add current
+        project' is ticked. Blank targets and duplicates (by normalised target
+        path) are dropped; existence is not checked here — the run handlers
+        report missing folders/files to the user.
+        """
+        entries: List[Dict[str, str]] = []
+        lst = getattr(self, f"{prefix}_projects_list", None)
+        if lst is not None:
+            for i in range(lst.count()):
+                data = lst.item(i).data(self._project_item_role()) or {}
+                entries.append({"target": data.get("target", ""),
+                                "dem": data.get("dem", "")})
+        check = getattr(self, f"{prefix}_include_current_check", None)
+        if check is not None and check.isChecked():
+            current = self.target_folder_edit.text().strip()
+            if current:
+                entries.append({"target": current, "dem": ""})
+
+        seen = set()
+        resolved: List[Dict[str, str]] = []
+        for entry in entries:
+            target = (entry.get("target") or "").strip()
+            if not target:
+                continue
+            key = os.path.normcase(os.path.abspath(target))
+            if key in seen:
+                continue
+            seen.add(key)
+            resolved.append({"target": target, "dem": (entry.get("dem") or "").strip()})
+        return resolved
+
+    def _warn_missing_project_files(self, problems: Dict[str, List[str]]):
+        """Report which required files are missing in which project(s)."""
+        blocks = []
+        for folder, missing in problems.items():
+            name = os.path.basename(os.path.normpath(folder)) or folder
+            bullets = "\n".join(f"      • {m}" for m in missing)
+            blocks.append(f"  {name}\n    ({folder})\n{bullets}")
+        body = "\n\n".join(blocks)
+        QMessageBox.warning(
+            self, "Missing Prerequisites",
+            "The analysis was aborted — required files are missing in the "
+            "following project(s):\n\n" + body)
 
     def validate_inputs(self, required_fields: list) -> bool:
         """Validate that required input fields are filled."""
@@ -4764,11 +5022,17 @@ class BambiDockWidget(QDockWidget):
             # Still check QGIS layers even without target folder
             self._check_existing_qgis_layers()
 
-    def browse_model(self):
+    def browse_thermal_model(self):
         file, _ = QFileDialog.getOpenFileName(
-            self, "Select YOLO Model", "", "Model Files (*.pt *.onnx)")
+            self, "Select Thermal YOLO Model", "", "Model Files (*.pt *.onnx)")
         if file:
-            self.model_path_edit.setText(file)
+            self.thermal_model_path_edit.setText(file)
+
+    def browse_rgb_model(self):
+        file, _ = QFileDialog.getOpenFileName(
+            self, "Select RGB YOLO Model", "", "Model Files (*.pt *.onnx)")
+        if file:
+            self.rgb_model_path_edit.setText(file)
 
     def browse_dem_metadata(self):
         """Browse for DEM metadata JSON file."""
@@ -5486,19 +5750,34 @@ class BambiDockWidget(QDockWidget):
         config = self.get_config()
         camera = config.get("flight_route_camera", "T")
 
-        # Check if poses exist for selected camera
+        # Poses are optional: without them only the AirData route line is
+        # generated (no camera positions / frame markers / image labels)
         target_folder = config["target_folder"]
         poses_file = os.path.join(target_folder, f"poses_{'t' if camera == 'T' else 'w'}.json")
+        airdata_path = config.get("airdata_path", "")
 
         if not os.path.exists(poses_file):
             camera_name = "Thermal" if camera == "T" else "RGB"
+            if not (airdata_path and os.path.exists(airdata_path)):
+                QMessageBox.warning(
+                    self,
+                    "Missing Prerequisites",
+                    f"{camera_name} frame extraction has not been completed and "
+                    f"no AirData CSV is selected.\n"
+                    f"Run Step 1 (Extract Frames) for {camera_name}, or select an "
+                    f"AirData file to generate the flight route line only."
+                )
+                return
             QMessageBox.warning(
                 self,
-                "Missing Prerequisites",
+                "Camera Positions Not Available",
                 f"{camera_name} frame extraction has not been completed.\n"
-                f"Please run Step 1 (Extract Frames) for {camera_name} first."
+                f"Only the flight route line (from AirData) will be generated — "
+                f"camera positions, frame/distance markers and image labels "
+                f"will not be available.\n\n"
+                f"Run Step 1 (Extract Frames) for {camera_name} and re-run this "
+                f"step later to add them."
             )
-            return
 
         self.start_worker("flight_route")
 
@@ -5663,30 +5942,44 @@ class BambiDockWidget(QDockWidget):
             QMessageBox.critical(self, "Error", f"Failed to add coverage map: {e}")
 
     def run_distance_sampling(self):
-        """Run the distance-sampling estimation step."""
+        """Run the distance-sampling estimation step (one or more projects)."""
         config = self.get_config()
-        target_folder = config.get("target_folder", "")
-        if not target_folder or not os.path.isdir(target_folder):
-            QMessageBox.warning(self, "Missing Target Folder",
-                                "Please set a valid target folder first.")
+        folders = config.get("ds_project_folders", [])
+        if not folders:
+            QMessageBox.warning(
+                self, "No Projects",
+                "At least one project must be available. Add one or more BAMBI "
+                "target folders, or tick 'Add current project'.")
             return
 
         source = config.get("ds_source", "detections")
         fr_suffix = "t" if config.get("flight_route_camera", "T") == "T" else "w"
         if source == "tracks":
             trk_suffix = "t" if config.get("tracking_camera", "T") == "T" else "w"
-            perp_file = os.path.join(target_folder, f"flight_route_{fr_suffix}",
-                                     f"perpendicular_tracks_{trk_suffix}.json")
-            msg = "Track perpendicular distances (run 'Calculate Track Perpendicular' first)"
+            perp_name = f"perpendicular_tracks_{trk_suffix}.json"
+            perp_msg = ("Track perpendicular distances "
+                        "(run 'Calculate Track Perpendicular')")
         else:
             det_suffix = "t" if config.get("detection_camera", "T") == "T" else "w"
-            perp_file = os.path.join(target_folder, f"flight_route_{fr_suffix}",
-                                     f"perpendicular_{det_suffix}.json")
-            msg = "Perpendicular distances (run 'Calculate Perpendicular' first)"
+            perp_name = f"perpendicular_{det_suffix}.json"
+            perp_msg = "Perpendicular distances (run 'Calculate Perpendicular')"
 
-        if not os.path.exists(perp_file):
-            QMessageBox.warning(self, "Missing Prerequisites",
-                                f"The following are required:\n\n• {msg}")
+        problems: Dict[str, List[str]] = {}
+        for folder in folders:
+            missing = []
+            if not os.path.isdir(folder):
+                problems[folder] = ["The project folder does not exist."]
+                continue
+            fr_dir = os.path.join(folder, f"flight_route_{fr_suffix}")
+            if not os.path.exists(os.path.join(fr_dir, perp_name)):
+                missing.append(perp_msg)
+            if not os.path.exists(os.path.join(fr_dir, "flight_route.geojson")):
+                missing.append("Flight route (run 'Generate Flight Route')")
+            if missing:
+                problems[folder] = missing
+
+        if problems:
+            self._warn_missing_project_files(problems)
             return
 
         self.start_worker("distance_sampling")
@@ -5717,6 +6010,25 @@ class BambiDockWidget(QDockWidget):
             f"<td align='right'>{m['aic']:.2f}</td></tr>"
             for m in r.get("models", [])
         )
+
+        projects = r.get("projects", [])
+        projects_section = ""
+        if len(projects) > 1:
+            proj_rows = "".join(
+                f"<tr><td>{os.path.basename(os.path.normpath(p['target_folder']))}</td>"
+                f"<td align='right'>{p.get('n', 0)}</td>"
+                f"<td align='right'>{p.get('transect_length_m', 0):.0f}</td></tr>"
+                for p in projects
+            )
+            projects_section = f"""
+        <h4>Projects pooled ({len(projects)})</h4>
+        <table cellpadding='4'>
+          <tr><th align='left'>Project</th><th align='right'>Observations</th>
+              <th align='right'>Route length (m)</th></tr>
+          {proj_rows}
+        </table>
+        """
+
         html = f"""
         <h3>Distance-Sampling Estimate ({r.get('source', '')})</h3>
         <table cellpadding='4'>
@@ -5746,6 +6058,7 @@ class BambiDockWidget(QDockWidget):
               <th align='right'>AIC</th></tr>
           {rows}
         </table>
+        {projects_section}
         <p style='color:gray;font-size:11px'>{r.get('notes', '')}</p>
         <p style='color:gray;font-size:11px'>Saved to: {result_file}</p>
         """
@@ -5764,12 +6077,14 @@ class BambiDockWidget(QDockWidget):
         dlg.exec()
 
     def run_population_estimation(self):
-        """Run the transect-based population estimation step."""
+        """Run the transect-based population estimation (one or more projects)."""
         config = self.get_config()
-        target_folder = config.get("target_folder", "")
-        if not target_folder or not os.path.isdir(target_folder):
-            QMessageBox.warning(self, "Missing Target Folder",
-                                "Please set a valid target folder first.")
+        entries = config.get("pop_project_folders", [])
+        if not entries:
+            QMessageBox.warning(
+                self, "No Projects",
+                "At least one project must be available. Add one or more BAMBI "
+                "projects, or tick 'Add current project'.")
             return
 
         if not config.get("pop_methods"):
@@ -5783,28 +6098,52 @@ class BambiDockWidget(QDockWidget):
         camera_label = "Thermal" if suffix == "t" else "RGB"
         fr_suffix = "t" if config.get("flight_route_camera", "T") == "T" else "w"
 
-        missing = []
-        if not os.path.exists(os.path.join(
-                target_folder, f"transects_{suffix}", "transects.json")):
-            missing.append(
-                f"{camera_label} transect definitions "
-                "(define them with the Transect Splitting Tool)")
-        if not os.path.exists(os.path.join(
-                target_folder, f"fov_{suffix}", "fov_polygons.txt")):
-            missing.append(
-                f"{camera_label} FoV footprints (run 'Calculate Field of View')")
-        if not os.path.exists(os.path.join(
-                target_folder, f"flight_route_{fr_suffix}",
-                f"perpendicular_tracks_{suffix}.json")):
-            missing.append(
-                f"{camera_label} track perpendicular distances "
-                "(run 'Calculate Track Perpendicular')")
+        current = self.target_folder_edit.text().strip()
+        current_key = (os.path.normcase(os.path.abspath(current))
+                       if current else None)
 
-        if missing:
-            bullets = "\n".join(f"• {m}" for m in missing)
-            QMessageBox.warning(
-                self, "Missing Prerequisites",
-                f"The following are required:\n\n{bullets}")
+        problems: Dict[str, List[str]] = {}
+        for entry in entries:
+            folder = entry.get("target", "")
+            dem = entry.get("dem", "")
+            if not os.path.isdir(folder):
+                problems[folder] = ["The project folder does not exist."]
+                continue
+            missing = []
+            if not os.path.exists(os.path.join(
+                    folder, f"transects_{suffix}", "transects.json")):
+                missing.append(
+                    f"{camera_label} transect definitions "
+                    "(define them with the Transect Splitting Tool)")
+            if not os.path.exists(os.path.join(
+                    folder, f"fov_{suffix}", "fov_polygons.txt")):
+                missing.append(
+                    f"{camera_label} FoV footprints "
+                    "(run 'Calculate Field of View')")
+            if not os.path.exists(os.path.join(
+                    folder, f"flight_route_{fr_suffix}",
+                    f"perpendicular_tracks_{suffix}.json")):
+                missing.append(
+                    f"{camera_label} track perpendicular distances "
+                    "(run 'Calculate Track Perpendicular')")
+            if not os.path.exists(os.path.join(folder, f"poses_{suffix}.json")):
+                missing.append(
+                    f"{camera_label} camera poses (poses_{suffix}.json — "
+                    "run frame extraction)")
+            # The active project uses the DEM configured on the Processing tab;
+            # every added project must supply its own dem.json.
+            is_current = (current_key is not None
+                          and os.path.normcase(os.path.abspath(folder)) == current_key)
+            if not is_current:
+                if not dem:
+                    missing.append("DEM metadata (dem.json) — add it for this project")
+                elif not os.path.isfile(dem):
+                    missing.append(f"DEM metadata not found: {dem}")
+            if missing:
+                problems[folder] = missing
+
+        if problems:
+            self._warn_missing_project_files(problems)
             return
 
         self.start_worker("population_estimation")
@@ -5877,6 +6216,30 @@ class BambiDockWidget(QDockWidget):
             f"<td align='right' style='color:#c80'>{no_area} (excluded)</td></tr>"
             if no_area else "")
 
+        projects = r.get("projects", [])
+        projects_section = ""
+        if len(projects) > 1:
+            proj_rows = "".join(
+                f"<tr><td>{p.get('name', '')}</td>"
+                f"<td align='right'>{p.get('n_transects', 0)}</td>"
+                f"<td align='right'>{int(p.get('total_count', 0))}</td>"
+                f"<td align='right'>{p.get('total_ha', 0):.2f}</td>"
+                f"<td align='right'>{p.get('dem_origin_source', '')}</td></tr>"
+                for p in projects
+            )
+            projects_section = f"""
+        <h4>Projects pooled ({len(projects)})</h4>
+        <table cellpadding='4'>
+          <tr><th align='left'>Project</th><th align='right'>Transects</th>
+              <th align='right'>Counted</th><th align='right'>Area (ha)</th>
+              <th align='right'>DEM origin</th></tr>
+          {proj_rows}
+        </table>
+        <p style='color:gray;font-size:11px'>DEM origin: "config" = the active
+        project's configured DEM; "provided" = the dem.json supplied when the
+        project was added.</p>
+        """
+
         html = f"""
         <h3>Transect Population Estimate ({r.get('camera', '')})</h3>
         <table cellpadding='4'>
@@ -5907,6 +6270,7 @@ class BambiDockWidget(QDockWidget):
               <th align='right'>{'Abundance' if study_ha > 0 else '—'}</th></tr>
           {est_rows}
         </table>
+        {projects_section}
         <h4>Per transect</h4>
         <table cellpadding='4'>
           <tr><th align='left'>Name</th><th align='right'>Frames</th>
@@ -9077,6 +9441,12 @@ class BambiDockWidget(QDockWidget):
         for key, value in load_config_entries(read_str, read_double, read_bool):
             attr, role = WIDGET_BINDINGS[key]
             self._apply_config_value(attr, role, value)
+
+        # Legacy migration: projects saved before the model path was split
+        # per modality stored a single Detection/ModelPath (thermal model).
+        legacy_model_path = read_str("Detection/ModelPath", "")
+        if legacy_model_path and not self.thermal_model_path_edit.text():
+            self.thermal_model_path_edit.setText(legacy_model_path)
 
         # Additional corrections (bound to a list widget, loaded separately)
         corrections_json = read_str("Correction/AdditionalCorrections", "[]")

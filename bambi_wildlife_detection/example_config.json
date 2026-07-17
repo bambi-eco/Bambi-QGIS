@@ -32,7 +32,9 @@
     },
     
     "detection": {
-        "model_path": null,
+        "_comment": "Model matching the selected modality is used; null downloads the default HuggingFace model",
+        "thermal_model_path": null,
+        "rgb_model_path": null,
         "min_confidence": 0.5,
         "labels": ["animal"]
     },

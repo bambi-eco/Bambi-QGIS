@@ -11,8 +11,8 @@ See [Installation problems](installation.md#installation-problems) for Git/PATH 
 ## Model download fails
 
 - Check your internet connection
-- Download manually from HuggingFace: [Detection (thermal_animal_detector.pt)](https://huggingface.co/cpraschl/bambi-thermal-detection), [Re-ID (osnet_x0_5_bambi_thermal_omni.pt)](https://huggingface.co/cpraschl/bambi-thermal-omni)
-- Place `thermal_animal_detector.pt` in `%APPDATA%\QGIS\QGIS3\profiles\default\bambi_deps\models\` (or specify a custom path in the **Model Path** field of the Detection configuration)
+- Download manually from HuggingFace: [Thermal detection (thermal_animal_detector.pt)](https://huggingface.co/cpraschl/bambi-thermal-detection), [RGB detection (rgb/weights/best.pt)](https://huggingface.co/cpraschl/bambi-models), [Re-ID (osnet_x0_5_bambi_thermal_omni.pt)](https://huggingface.co/cpraschl/bambi-thermal-omni)
+- Place `thermal_animal_detector.pt` (thermal) or the RGB weights renamed to `rgb_animal_detector.pt` in `%APPDATA%\QGIS\QGIS3\profiles\default\bambi_deps\models\` (or specify a custom path in the **Thermal/RGB Model Path** fields of the Detection configuration)
 
 ## Geo-referencing issues
 

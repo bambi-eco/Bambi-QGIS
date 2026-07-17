@@ -333,3 +333,143 @@ class TestStudyArea:
         with pytest.raises(FileNotFoundError,
                            match="Calculate Track Perpendicular"):
             processor.run_population_estimation(flight)
+
+
+def _write_second_flight(folder, origin):
+    """A 2-transect flight like the ``flight`` fixture, at a different origin.
+
+    Writes its own ``dem.json`` (carrying the origin) and returns its path, so
+    the project can be added with an explicit DEM. Returns ``(dem_path,)``.
+    """
+    os.makedirs(folder, exist_ok=True)
+
+    dem_path = os.path.join(folder, "dem.json")
+    with open(dem_path, "w", encoding="utf-8") as fh:
+        json.dump({"origin": list(origin) + [0.0]}, fh)
+    images = []
+    for i in range(20):
+        images.append({"imagefile": f"a{i:03d}.png",
+                       "location": [i * 10.0, 0.0, 100.0]})
+    for i in range(20):
+        images.append({"imagefile": f"b{i:03d}.png",
+                       "location": [i * 10.0, 100.0, 100.0]})
+    with open(os.path.join(folder, "poses_t.json"), "w", encoding="utf-8") as fh:
+        json.dump({"images": images}, fh)
+
+    os.makedirs(os.path.join(folder, "transects_t"), exist_ok=True)
+    with open(os.path.join(folder, "transects_t", "transects.json"),
+              "w", encoding="utf-8") as fh:
+        json.dump({"version": 1, "modality": "t", "transects": [
+            {"id": 1, "name": "South", "start_frame": 0, "end_frame": 19},
+            {"id": 2, "name": "", "start_frame": 20, "end_frame": 39},
+        ]}, fh)
+
+    os.makedirs(os.path.join(folder, "fov_t"), exist_ok=True)
+    lines = ["# FoV polygon georeferenced data\n"]
+    for idx, img in enumerate(images):
+        cx = img["location"][0] + origin[0]
+        cy = img["location"][1] + origin[1]
+        corners = [(cx - 10, cy - 10), (cx + 10, cy - 10),
+                   (cx + 10, cy + 10), (cx - 10, cy + 10)]
+        coords = " ".join(f"{x:.6f} {y:.6f} 0.000000" for x, y in corners)
+        lines.append(f"{idx} 4 {coords}\n")
+    with open(os.path.join(folder, "fov_t", "fov_polygons.txt"),
+              "w", encoding="utf-8") as fh:
+        fh.write("".join(lines))
+
+    # 3 tracks near transect A, 1 near transect B, 1 far from both.
+    tracks = [
+        {"track_id": 1, "last_frame": 5, "class_id": 0,
+         "detection_center": [origin[0] + 50.0, origin[1] + 5.0, 0.0]},
+        {"track_id": 2, "last_frame": 8, "class_id": 0,
+         "detection_center": [origin[0] + 80.0, origin[1] - 3.0, 0.0]},
+        {"track_id": 3, "last_frame": 12, "class_id": 1,
+         "detection_center": [origin[0] + 120.0, origin[1] + 8.0, 0.0]},
+        {"track_id": 4, "last_frame": 25, "class_id": 0,
+         "detection_center": [origin[0] + 60.0, origin[1] + 104.0, 0.0]},
+        {"track_id": 5, "last_frame": 30, "class_id": 0,
+         "detection_center": [origin[0] + 60.0, origin[1] + 600.0, 0.0]},
+    ]
+    os.makedirs(os.path.join(folder, "flight_route_t"), exist_ok=True)
+    with open(os.path.join(folder, "flight_route_t",
+                           "perpendicular_tracks_t.json"), "w",
+              encoding="utf-8") as fh:
+        json.dump({"crs": "EPSG:32633", "tracks": tracks}, fh)
+
+    # World-CRS flight route (poses shifted by the origin) for origin recovery.
+    route = [[img["location"][0] + origin[0], img["location"][1] + origin[1]]
+             for img in images]
+    with open(os.path.join(folder, "flight_route_t", "flight_route.geojson"),
+              "w", encoding="utf-8") as fh:
+        json.dump({"type": "FeatureCollection", "features": [
+            {"type": "Feature", "properties": {},
+             "geometry": {"type": "LineString", "coordinates": route}},
+        ]}, fh)
+    return dem_path
+
+
+class TestMultiProject:
+    """Pooling several flights into one combined estimate."""
+
+    def test_pools_two_projects(self, processor, flight, tmp_path):
+        folder2 = tmp_path / "target2"
+        dem2 = _write_second_flight(str(folder2), origin=(600000.0, 5100000.0))
+
+        config = dict(flight)
+        config["pop_project_folders"] = [
+            {"target": flight["target_folder"], "dem": ""},
+            {"target": str(folder2), "dem": dem2},
+        ]
+        processor.run_population_estimation(config)
+
+        result = _read_json(os.path.join(
+            flight["target_folder"], "analytics_t", "population_estimate.json"))
+
+        # Two projects, two transects and five tracks each.
+        assert result["n_projects"] == 2
+        assert len(result["projects"]) == 2
+        assert result["n_transects"] == 4
+        assert result["n_tracks"] == 10
+        # Four counted per flight (the far track is never monitored).
+        assert result["total_count"] == 8
+        assert result["n_tracks_outside_fov"] == 2
+        # 8 counted animals on 4 x 0.42 ha = 1.68 ha.
+        assert result["total_ha"] == pytest.approx(1.68, rel=1e-6)
+        assert result["estimates"]["naive"]["density_per_100ha"] == pytest.approx(
+            8 / 1.68 * 100.0, rel=1e-6)
+
+        # Names are project-prefixed so the two flights' transects stay distinct.
+        names = [t["name"] for t in result["transects"]]
+        assert any(n.endswith("/ North") for n in names)
+        assert any(n.endswith("/ South") for n in names)
+
+        # The current project used the configured DEM; the second used the
+        # dem.json supplied with it.
+        sources = {p["name"]: p["dem_origin_source"] for p in result["projects"]}
+        assert sources[os.path.basename(flight["target_folder"])] == "config"
+        assert sources["target2"] == "provided"
+
+    def test_added_project_without_dem_is_an_error(self, processor, flight, tmp_path):
+        folder2 = tmp_path / "target2"
+        _write_second_flight(str(folder2), origin=(600000.0, 5100000.0))
+        config = dict(flight)
+        # The added project carries no dem.json, so its origin cannot be resolved.
+        config["pop_project_folders"] = [
+            {"target": flight["target_folder"], "dem": ""},
+            {"target": str(folder2), "dem": ""},
+        ]
+        with pytest.raises(FileNotFoundError, match="dem.json"):
+            processor.run_population_estimation(config)
+
+    def test_single_project_via_folders_matches_default(self, processor, flight):
+        config = dict(flight)
+        config["pop_project_folders"] = [{"target": flight["target_folder"], "dem": ""}]
+        processor.run_population_estimation(config)
+        result = _read_json(os.path.join(
+            flight["target_folder"], "analytics_t", "population_estimate.json"))
+
+        assert result["n_projects"] == 1
+        assert result["n_transects"] == 2
+        assert result["total_count"] == 4
+        # A lone project keeps its plain transect names (no project prefix).
+        assert {t["name"] for t in result["transects"]} == {"North", "Transect 2"}

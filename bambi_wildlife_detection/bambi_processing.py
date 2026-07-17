@@ -196,8 +196,21 @@ class CancelledException(Exception):
 class BambiProcessor:
     """Main processing class for BAMBI wildlife detection pipeline."""
 
-    DEFAULT_MODEL_REPO = "cpraschl/bambi-thermal-detection"
-    DEFAULT_MODEL_FILENAME = "thermal_animal_detector.pt"
+    # Default detection models per modality: HuggingFace repo, path of the
+    # weights file inside the repo, and the local filename used in the shared
+    # bambi_deps/models/ cache.
+    DEFAULT_MODELS = {
+        "T": {
+            "repo": "cpraschl/bambi-thermal-detection",
+            "remote_path": "thermal_animal_detector.pt",
+            "filename": "thermal_animal_detector.pt",
+        },
+        "W": {
+            "repo": "cpraschl/bambi-models",
+            "remote_path": "rgb/weights/best.pt",
+            "filename": "rgb_animal_detector.pt",
+        },
+    }
 
     @staticmethod
     def _get_default_model_dir() -> str:
@@ -363,20 +376,23 @@ class BambiProcessor:
         from .core.corrections import correction_for_frame_config
         return correction_for_frame_config(frame_idx, config)
 
-    def download_default_model(self, log_fn=None) -> str:
+    def download_default_model(self, log_fn=None, camera: str = "T") -> str:
         """Download the default detection model from HuggingFace to the shared
         ``bambi_deps/models/`` folder in the QGIS profile directory.
 
         :param log_fn: Optional logging function
+        :param camera: Modality to fetch the model for ("T" thermal, "W" RGB)
         :return: Path to the downloaded model
         """
         import urllib.parse
         import requests
 
+        model_spec = self.DEFAULT_MODELS.get(camera, self.DEFAULT_MODELS["T"])
+
         models_folder = self._get_default_model_dir()
         os.makedirs(models_folder, exist_ok=True)
 
-        model_path = os.path.join(models_folder, self.DEFAULT_MODEL_FILENAME)
+        model_path = os.path.join(models_folder, model_spec["filename"])
 
         if os.path.exists(model_path):
             # Check if file is not empty (incomplete download)
@@ -389,11 +405,11 @@ class BambiProcessor:
                 os.remove(model_path)
 
         if log_fn:
-            log_fn(f"Downloading model from HuggingFace: {self.DEFAULT_MODEL_REPO}")
-            log_fn("This may take a few minutes (model is ~6MB)...")
+            log_fn(f"Downloading model from HuggingFace: {model_spec['repo']}")
+            log_fn("This may take a few minutes...")
 
         # Direct download URL from HuggingFace
-        url = f"https://huggingface.co/{self.DEFAULT_MODEL_REPO}/resolve/main/{self.DEFAULT_MODEL_FILENAME}"
+        url = f"https://huggingface.co/{model_spec['repo']}/resolve/main/{model_spec['remote_path']}"
 
         try:
             # Validate URL scheme before downloading
@@ -446,8 +462,9 @@ class BambiProcessor:
             error_msg = (
                 f"Failed to download model automatically.\n\n"
                 f"Please download manually:\n"
-                f"1. Go to: https://huggingface.co/{self.DEFAULT_MODEL_REPO}\n"
-                f"2. Download: {self.DEFAULT_MODEL_FILENAME}\n"
+                f"1. Go to: https://huggingface.co/{model_spec['repo']}\n"
+                f"2. Download: {model_spec['remote_path']}\n"
+                f"   (rename it to: {model_spec['filename']})\n"
                 f"3. Save to: {model_path}\n\n"
                 f"Or specify a local model path in the Parameters tab.\n\n"
                 f"Error: {str(e)}"
@@ -904,6 +921,10 @@ class BambiProcessor:
         - flight_route.geojson: LineString from AirData GPS log
         - camera_positions.geojson: Point markers at each extracted frame position
 
+        The poses file is optional: without it only the AirData route line is
+        generated (camera positions are skipped with a warning). At least one of
+        the two sources (poses, AirData) must be available.
+
         :param config: Configuration dictionary
         :param progress_fn: Progress callback function
         :param log_fn: Logging callback function
@@ -922,20 +943,33 @@ class BambiProcessor:
         if progress_fn:
             progress_fn(10)
 
-        # Load poses file for camera position markers
+        # Load poses file for camera position markers (optional — without it
+        # only the AirData route line is generated)
         poses_file = os.path.join(target_folder, f"poses_{camera_suffix}.json")
-        if not os.path.exists(poses_file):
-            raise FileNotFoundError(f"poses_{camera_suffix}.json not found at {poses_file}")
+        images = []
+        if os.path.exists(poses_file):
+            with open(poses_file, 'r') as f:
+                poses = json.load(f)
 
-        with open(poses_file, 'r') as f:
-            poses = json.load(f)
+            images = poses.get("images", [])
+            if len(images) < 1:
+                raise RuntimeError("Need at least 1 frame to create a flight route")
 
-        images = poses.get("images", [])
-        if len(images) < 1:
-            raise RuntimeError("Need at least 1 frame to create a flight route")
-
-        if log_fn:
-            log_fn(f"Found {len(images)} frame positions")
+            if log_fn:
+                log_fn(f"Found {len(images)} frame positions")
+        else:
+            if not (airdata_path and os.path.exists(airdata_path)):
+                raise FileNotFoundError(
+                    f"poses_{camera_suffix}.json not found at {poses_file} and no "
+                    "AirData file is available — nothing to generate. Run 'Extract "
+                    "Frames' or select an AirData CSV first."
+                )
+            if log_fn:
+                log_fn(
+                    f"Warning: poses_{camera_suffix}.json not found — camera "
+                    "positions will not be generated, only the AirData route line. "
+                    "Run 'Extract Frames' and re-run this step to add them."
+                )
 
         if progress_fn:
             progress_fn(20)
@@ -1102,18 +1136,27 @@ class BambiProcessor:
                 log_fn(f"Flight route line saved to: {route_line_file}")
 
         # Save camera frame positions (points only, no connecting line)
-        camera_points_geojson = {
-            "type": "FeatureCollection",
-            "name": "camera_positions",
-            "crs": crs_block,
-            "features": point_features
-        }
-        camera_points_file = os.path.join(route_folder, "camera_positions.geojson")
-        with open(camera_points_file, 'w', encoding='utf-8') as f:
-            json.dump(camera_points_geojson, f, indent=2)
+        if point_features:
+            camera_points_geojson = {
+                "type": "FeatureCollection",
+                "name": "camera_positions",
+                "crs": crs_block,
+                "features": point_features
+            }
+            camera_points_file = os.path.join(route_folder, "camera_positions.geojson")
+            with open(camera_points_file, 'w', encoding='utf-8') as f:
+                json.dump(camera_points_geojson, f, indent=2)
+
+            if log_fn:
+                log_fn(f"Camera positions saved to: {camera_points_file}")
+
+        if not route_coordinates and not point_features:
+            raise RuntimeError(
+                "No flight route data could be generated — the AirData file "
+                "contained no usable GPS positions and no poses are available."
+            )
 
         if log_fn:
-            log_fn(f"Camera positions saved to: {camera_points_file}")
             log_fn("Flight route generation complete")
 
         if progress_fn:
@@ -2301,67 +2344,44 @@ class BambiProcessor:
         source = config.get("ds_source", "detections")
         target_folder = config["target_folder"]
         target_epsg = config.get("target_epsg", 32633)
-        fr_camera = config.get("flight_route_camera", "T")
-        fr_suffix = "t" if fr_camera == "T" else "w"
+
+        # One or more BAMBI target folders; the perpendicular distances are
+        # pooled and the flight-route lengths summed into the total effort L.
+        project_folders = list(config.get("ds_project_folders") or [target_folder])
 
         if log_fn:
-            log_fn(f"Running distance-sampling estimation ({source})...")
+            log_fn(f"Running distance-sampling estimation ({source}) over "
+                   f"{len(project_folders)} project(s)...")
         if progress_fn:
             progress_fn(5)
 
-        # ---- Load perpendicular distances -------------------------------- #
-        if source == "tracks":
-            trk_suffix = "t" if config.get("tracking_camera", "T") == "T" else "w"
-            perp_file = os.path.join(
-                target_folder, f"flight_route_{fr_suffix}",
-                f"perpendicular_tracks_{trk_suffix}.json")
-            list_key, dist_key = "tracks", "distance_m"
-            prereq = "Calculate Track Perpendicular"
-        else:
-            det_suffix = "t" if config.get("detection_camera", "T") == "T" else "w"
-            perp_file = os.path.join(
-                target_folder, f"flight_route_{fr_suffix}",
-                f"perpendicular_{det_suffix}.json")
-            list_key, dist_key = "perpendiculas", "distance_m"
-            prereq = "Calculate Perpendicular"
+        # ---- Pool the perpendicular distances and effort L ---------------- #
+        distance_arrays = []
+        transect_length = 0.0
+        projects_summary = []
+        for i, folder in enumerate(project_folders):
+            d, length = self._load_distance_sampling_project(
+                folder, source, config, log_fn)
+            distance_arrays.append(d)
+            transect_length += length
+            projects_summary.append({
+                "target_folder": folder,
+                "n": int(d.size),
+                "transect_length_m": length,
+            })
+            if progress_fn:
+                progress_fn(5 + int((i + 1) / len(project_folders) * 15))
 
-        if not os.path.exists(perp_file):
-            raise FileNotFoundError(
-                f"{os.path.basename(perp_file)} not found. Please run '{prereq}' first."
-            )
-        with open(perp_file, 'r', encoding='utf-8') as f:
-            perp_data = json.load(f)
-        distances = np.asarray(
-            [float(e[dist_key]) for e in perp_data.get(list_key, []) if dist_key in e],
-            dtype=np.float64)
-        distances = distances[np.isfinite(distances) & (distances >= 0)]
+        distances = (np.concatenate(distance_arrays) if distance_arrays
+                     else np.asarray([], dtype=np.float64))
         if distances.size < 2:
-            raise RuntimeError("Not enough perpendicular distances for distance sampling.")
+            raise RuntimeError(
+                "Not enough perpendicular distances for distance sampling.")
+        if transect_length <= 0:
+            raise RuntimeError("The pooled flight routes have zero length.")
 
         if progress_fn:
             progress_fn(20)
-
-        # ---- Transect length L from the flight route --------------------- #
-        route_file = os.path.join(
-            target_folder, f"flight_route_{fr_suffix}", "flight_route.geojson")
-        if not os.path.exists(route_file):
-            raise FileNotFoundError(
-                "flight_route.geojson not found. Please run 'Generate Flight Route' first."
-            )
-        with open(route_file, 'r', encoding='utf-8') as f:
-            route_geojson = json.load(f)
-        route_coords = None
-        for feature in route_geojson.get("features", []):
-            if feature.get("geometry", {}).get("type") == "LineString":
-                route_coords = feature["geometry"]["coordinates"]
-                break
-        if not route_coords or len(route_coords) < 2:
-            raise RuntimeError("Flight route does not contain a valid LineString.")
-        rc = np.asarray(route_coords, dtype=np.float64)
-        seg = np.diff(rc[:, :2], axis=0)
-        transect_length = float(np.hypot(seg[:, 0], seg[:, 1]).sum())
-        if transect_length <= 0:
-            raise RuntimeError("Flight route has zero length.")
 
         # ---- Truncation -------------------------------------------------- #
         w_cfg = config.get("ds_truncation", 0) or 0
@@ -2423,6 +2443,8 @@ class BambiProcessor:
             "crs": f"EPSG:{target_epsg}",
             "n": n,
             "n_before_truncation": int(distances.size),
+            "n_projects": len(project_folders),
+            "projects": projects_summary,
             "transect_length_m": transect_length,
             "truncation_m": w,
             "best_model": best["name"],
@@ -2453,6 +2475,10 @@ class BambiProcessor:
                 "Encounter-rate variance uses a Poisson approximation (CV = 1/sqrt(n)); "
                 "abundance is reported for the covered strip area 2*w*L. Multiply density "
                 "by your study-area size for a study-area abundance estimate."
+                + ("" if len(project_folders) == 1 else
+                   " Several projects were pooled: their perpendicular distances "
+                   "were combined and their flight-route lengths summed into the "
+                   "total effort L, assuming a shared detection function.")
             ),
         }
 
@@ -2466,6 +2492,10 @@ class BambiProcessor:
             json.dump(result, f, indent=2)
 
         if log_fn:
+            if len(project_folders) > 1:
+                log_fn(f"Pooled {len(project_folders)} projects: "
+                       f"{int(distances.size)} observations, "
+                       f"total L={transect_length:.1f} m")
             log_fn(f"Best model: {best['name']} (AIC={best['aic']:.2f})")
             log_fn(f"ESW={esw:.2f} m, detection probability p={p:.3f}")
             log_fn(f"Density={density_km2:.3f} /km^2 "
@@ -2475,6 +2505,73 @@ class BambiProcessor:
             log_fn(f"Distance-sampling results saved to: {out_file}")
         if progress_fn:
             progress_fn(100)
+
+    def _load_distance_sampling_project(self, target_folder, source, config,
+                                        log_fn=None):
+        """Perpendicular distances and flight-route length L for one project.
+
+        Returns ``(distances, transect_length_m)`` — a numpy array of the
+        finite, non-negative perpendicular distances and the flight-route
+        length in metres. Errors name the project folder so a multi-project run
+        can say which flight is at fault.
+        """
+        import numpy as np
+
+        fr_suffix = "t" if config.get("flight_route_camera", "T") == "T" else "w"
+        if source == "tracks":
+            trk_suffix = "t" if config.get("tracking_camera", "T") == "T" else "w"
+            perp_file = os.path.join(
+                target_folder, f"flight_route_{fr_suffix}",
+                f"perpendicular_tracks_{trk_suffix}.json")
+            list_key, dist_key = "tracks", "distance_m"
+            prereq = "Calculate Track Perpendicular"
+        else:
+            det_suffix = "t" if config.get("detection_camera", "T") == "T" else "w"
+            perp_file = os.path.join(
+                target_folder, f"flight_route_{fr_suffix}",
+                f"perpendicular_{det_suffix}.json")
+            list_key, dist_key = "perpendiculas", "distance_m"
+            prereq = "Calculate Perpendicular"
+
+        if not os.path.exists(perp_file):
+            raise FileNotFoundError(
+                f"{os.path.basename(perp_file)} not found in {target_folder}. "
+                f"Please run '{prereq}' first.")
+        with open(perp_file, 'r', encoding='utf-8') as f:
+            perp_data = json.load(f)
+        distances = np.asarray(
+            [float(e[dist_key]) for e in perp_data.get(list_key, []) if dist_key in e],
+            dtype=np.float64)
+        distances = distances[np.isfinite(distances) & (distances >= 0)]
+
+        route_file = os.path.join(
+            target_folder, f"flight_route_{fr_suffix}", "flight_route.geojson")
+        if not os.path.exists(route_file):
+            raise FileNotFoundError(
+                f"flight_route.geojson not found in {target_folder}. "
+                "Please run 'Generate Flight Route' first.")
+        with open(route_file, 'r', encoding='utf-8') as f:
+            route_geojson = json.load(f)
+        route_coords = None
+        for feature in route_geojson.get("features", []):
+            if feature.get("geometry", {}).get("type") == "LineString":
+                route_coords = feature["geometry"]["coordinates"]
+                break
+        if not route_coords or len(route_coords) < 2:
+            raise RuntimeError(
+                f"Flight route in {target_folder} does not contain a valid "
+                "LineString.")
+        rc = np.asarray(route_coords, dtype=np.float64)
+        seg = np.diff(rc[:, :2], axis=0)
+        transect_length = float(np.hypot(seg[:, 0], seg[:, 1]).sum())
+        if transect_length <= 0:
+            raise RuntimeError(
+                f"Flight route in {target_folder} has zero length.")
+
+        if log_fn:
+            log_fn(f"  {target_folder}: {int(distances.size)} distance(s), "
+                   f"L={transect_length:.1f} m")
+        return distances, transect_length
 
     def _fit_detection_function(self, name, x, w, log_fn=None):
         """Fit a detection function by MLE; returns a dict of results or None.
@@ -2668,19 +2765,12 @@ class BambiProcessor:
             ``pop_study_area_ha`` (manual, 0 = no abundance),
             ``flight_route_camera``, ``dem_path``, ``target_epsg``.
         """
-        from .core.pipeline_outputs import load_fov_polygons_3d, read_dem_origin_xy
-        from .core.population import (
-            assign_tracks, estimate_population, geometry_to_rings,
-            merged_fov_area, shapely_area_predicate, transect_centerline,
-        )
-        from .core.transects import TransectStore, cumulative_distances, \
-            flight_positions, path_length
+        from .core.population import estimate_population
 
         target_folder = config["target_folder"]
         target_epsg = config.get("target_epsg", 32633)
         camera = config.get("pop_camera", "T")
         suffix = "t" if camera == "T" else "w"
-        fr_suffix = "t" if config.get("flight_route_camera", "T") == "T" else "w"
         truncation = float(config.get("pop_truncation", 0.0) or 0.0)
         methods = list(config.get("pop_methods") or ["naive", "bootstrap", "zinb"])
         n_boot = int(config.get("pop_n_boot", 999) or 999)
@@ -2688,48 +2778,263 @@ class BambiProcessor:
         study_area_auto = bool(config.get("pop_study_area_auto", False))
         study_area_ha = float(config.get("pop_study_area_ha", 0.0) or 0.0)
 
+        # One or more BAMBI projects: every project's transects are pooled into
+        # a single count/area table and the estimators run over all of them
+        # together. Each project keeps its own DEM georeferencing — the active
+        # project from the config, added projects from their own dem.json.
+        raw_entries = config.get("pop_project_folders") or [{"target": target_folder}]
+        entries = []
+        for e in raw_entries:
+            if isinstance(e, dict):
+                entries.append((e.get("target", ""), e.get("dem", "") or ""))
+            else:                       # tolerate a bare folder string
+                entries.append((e, ""))
+        current_key = os.path.normcase(os.path.abspath(target_folder))
+        multi = len(entries) > 1
+        camera_label = "Thermal" if suffix == "t" else "RGB"
+
         if log_fn:
-            log_fn(f"Running transect population estimation "
-                   f"({'Thermal' if suffix == 't' else 'RGB'})...")
+            log_fn(f"Running transect population estimation ({camera_label}) "
+                   f"over {len(entries)} project(s)...")
         if progress_fn:
-            progress_fn(5)
+            progress_fn(3)
+
+        combined_rows = []
+        combined_usable = []
+        total_flight_area_ha = 0.0
+        agg = {"n_tracks": 0, "n_assigned": 0, "n_truncated": 0,
+               "n_outside": 0, "n_without_area": 0, "mismatched": 0}
+        projects_summary = []
+
+        for pi, (folder, dem_override) in enumerate(entries):
+            if cancel_check and cancel_check():
+                raise CancelledException("Population estimation cancelled")
+            is_current = os.path.normcase(os.path.abspath(folder)) == current_key
+
+            def _proj_progress(pct, _pi=pi):
+                if progress_fn:
+                    span = 68.0 / len(entries)
+                    progress_fn(5 + int((_pi + pct / 100.0) * span))
+
+            proj = self._population_project_table(
+                folder, config, is_current, dem_override,
+                log_fn, cancel_check, _proj_progress)
+
+            proj_name = os.path.basename(os.path.normpath(folder)) or folder
+            for r in proj["rows"]:
+                row = dict(r)
+                row["project"] = proj_name
+                if multi:
+                    row["name"] = f"{proj_name} / {r['name']}"
+                combined_rows.append(row)
+                if row["area_ha"] > 0:
+                    combined_usable.append(row)
+
+            total_flight_area_ha += proj["flight_area_ha"]
+            for key in agg:
+                agg[key] += proj[key]
+            projects_summary.append({
+                "target_folder": folder,
+                "name": proj_name,
+                "n_transects": len(proj["usable"]),
+                "n_transects_total": len(proj["rows"]),
+                "total_count": proj["total_count"],
+                "total_ha": proj["total_ha"],
+                "flight_fov_area_ha": proj["flight_area_ha"],
+                "dem_origin_source": proj["origin_source"],
+            })
+
+        if not combined_usable:
+            raise RuntimeError(
+                "No transect has a monitored area in any project. Check that "
+                "the FoV step covered the transects' frame ranges.")
+
+        # ---- Study area (region the density is extrapolated to) ------------ #
+        study_area_source = "none"
+        if study_area_auto:
+            study_area_ha = total_flight_area_ha
+            study_area_source = "flight_fov"
+            if total_flight_area_ha <= 0:
+                raise RuntimeError(
+                    "The flights have no FoV coverage, so no study area could "
+                    "be derived. Untick 'Use flight FoV area' or check the FoV "
+                    "step.")
+            if log_fn:
+                log_fn(f"Study area from the flights' total FoV coverage: "
+                       f"{total_flight_area_ha:.2f} ha")
+        elif study_area_ha > 0:
+            study_area_source = "manual"
+
+        # ---- Estimate over the pooled transects ---------------------------- #
+        if progress_fn:
+            progress_fn(78)
+        result = estimate_population(
+            combined_usable, methods=methods, n_boot=n_boot, seed=seed,
+            study_area_ha=study_area_ha)
+        result.update({
+            "camera": camera_label,
+            "crs": f"EPSG:{target_epsg}",
+            "truncation_m": truncation,
+            "n_projects": len(entries),
+            "projects": projects_summary,
+            "n_tracks": agg["n_tracks"],
+            "n_tracks_assigned": agg["n_assigned"],
+            "n_tracks_truncated": agg["n_truncated"],
+            "n_tracks_outside_fov": agg["n_outside"],
+            "n_transects_without_area": agg["n_without_area"],
+            "flight_fov_area_ha": total_flight_area_ha,
+            "study_area_source": study_area_source,
+            "transects": combined_rows,
+            "notes": (
+                "A track counts towards a transect only when it lies inside that "
+                "transect's monitored area (the union of the field-of-view "
+                "footprints of the frames in its range); where several transects "
+                "cover it, the one whose flight path is nearest in perpendicular "
+                "distance wins. "
+                "Densities are per 100 ha (= per km²). The monitored area sums the "
+                "transects (each is its own sample, so shared ground counts once "
+                "per transect), while flight_fov_area_ha unions every frame and "
+                "counts shared ground once — they differ where transects overlap "
+                "or where frames belong to no transect."
+                + ("" if not multi else
+                   " Several projects were pooled: every project's transects are "
+                   "one shared sample set for the estimators, the monitored areas "
+                   "and flight FoV coverages summed across flights. Each project's "
+                   "own DEM georeferencing was used to place its transects.")
+            ),
+        })
+
+        # ---- Write outputs -------------------------------------------------- #
+        analytics_folder = os.path.join(target_folder, f"analytics_{suffix}")
+        os.makedirs(analytics_folder, exist_ok=True)
+
+        out_file = os.path.join(analytics_folder, "population_estimate.json")
+        with open(out_file, 'w', encoding='utf-8') as f:
+            json.dump(result, f, indent=2)
+
+        # A combined per-transect table (with a project column) alongside the
+        # per-project CSVs each project already wrote into its own analytics
+        # folder; only needed when more than one project was pooled.
+        combined_csv = None
+        if multi:
+            combined_csv = os.path.join(
+                analytics_folder, "population_transects_combined.csv")
+            with open(combined_csv, 'w', encoding='utf-8', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(["project", "id", "name", "start_frame",
+                                 "end_frame", "length_m", "area_m2", "area_ha",
+                                 "count", "n_frames", "n_frames_with_fov"])
+                for r in combined_rows:
+                    writer.writerow([
+                        r.get("project", ""), r["id"], r["name"],
+                        r["start_frame"], r["end_frame"], r["length_m"],
+                        r["area_m2"], round(r["area_ha"], 4), r["count"],
+                        r["n_frames"], r["n_frames_with_fov"],
+                    ])
+
+        if log_fn:
+            total_ha = result["total_ha"]
+            log_fn(f"Total: {int(result['total_count'])} animals on "
+                   f"{total_ha:.2f} ha across {result['n_transects']} transect(s) "
+                   f"({result['n_zero_transects']} with zero counts)")
+            if agg["mismatched"]:
+                log_fn(f"Note: {agg['mismatched']} track(s) were assigned to a "
+                       "transect whose frame range does not contain their "
+                       "sighting frame (transects running close together).")
+            for name, est in result["estimates"].items():
+                density = est.get("density_per_100ha")
+                if density is None:
+                    log_fn(f"  {name}: failed — {est.get('error')}")
+                    continue
+                ci = est.get("ci95")
+                ci_txt = (f" (95% CI {ci[0]:.2f}–{ci[1]:.2f})" if ci else "")
+                log_fn(f"  {name}: {density:.2f} animals/100 ha{ci_txt}")
+                if est.get("error"):
+                    log_fn(f"    warning: {est['error']}")
+            log_fn(f"Population estimate saved to: {out_file}")
+            if combined_csv:
+                log_fn(f"Combined per-transect table saved to: {combined_csv}")
+
+        if progress_fn:
+            progress_fn(100)
+
+    def _population_project_table(self, target_folder, config, is_current,
+                                  dem_override="", log_fn=None, cancel_check=None,
+                                  progress_cb=None):
+        """Build one project's transect count/area table and write its outputs.
+
+        Runs the per-project half of :meth:`run_population_estimation` — loads
+        the transects, poses, FoV footprints and track perpendicular distances,
+        assigns the tracks and measures each transect's monitored area — then
+        writes that project's own ``population_transects.csv``,
+        ``population_tracks.csv``, ``transect_areas.geojson`` and
+        ``transect_routes.geojson`` into its ``analytics_{m}`` folder. The
+        estimation itself runs once on the pooled table in the caller.
+
+        :param is_current: True when *target_folder* is the active project, so
+            its DEM origin comes straight from the config.
+        :param dem_override: DEM metadata JSON of an added (non-active) project,
+            supplying its mesh->world origin.
+        :return: a dict with ``rows`` (all transects), ``usable`` (area > 0),
+            ``flight_area_ha``, the track-assignment tallies (``n_tracks``,
+            ``n_assigned``, ``n_truncated``, ``n_outside``, ``n_without_area``,
+            ``mismatched``), ``total_count``/``total_ha`` over the usable
+            transects and ``origin_source``.
+        """
+        from .core.pipeline_outputs import load_fov_polygons_3d
+        from .core.population import (
+            assign_tracks, geometry_to_rings, merged_fov_area,
+            shapely_area_predicate, transect_centerline,
+        )
+        from .core.transects import TransectStore, cumulative_distances, \
+            flight_positions, path_length
+
+        target_epsg = config.get("target_epsg", 32633)
+        camera = config.get("pop_camera", "T")
+        suffix = "t" if camera == "T" else "w"
+        fr_suffix = "t" if config.get("flight_route_camera", "T") == "T" else "w"
+        truncation = float(config.get("pop_truncation", 0.0) or 0.0)
+
+        if log_fn:
+            log_fn(f"Project {target_folder}:")
 
         # ---- Transects ---------------------------------------------------- #
         store = TransectStore(target_folder, suffix)
         if not store.load():
             raise FileNotFoundError(
-                f"transects_{suffix}/transects.json not found. Please define "
-                "transects with the Transect Splitting Tool first."
+                f"transects_{suffix}/transects.json not found in {target_folder}. "
+                "Please define transects with the Transect Splitting Tool first."
             )
         transects = store.ordered()
         if not transects:
-            raise RuntimeError("The transect definition contains no transects.")
+            raise RuntimeError(
+                f"The transect definition in {target_folder} contains no transects.")
 
         # ---- Poses (transect centre lines) -------------------------------- #
         poses_path = os.path.join(target_folder, f"poses_{suffix}.json")
         if not os.path.exists(poses_path):
             raise FileNotFoundError(
-                f"poses_{suffix}.json not found. Please run frame extraction first.")
+                f"poses_{suffix}.json not found in {target_folder}. Please run "
+                "frame extraction first.")
         with open(poses_path, 'r', encoding='utf-8') as f:
             images = json.load(f).get("images", [])
         if not images:
-            raise RuntimeError(f"poses_{suffix}.json contains no frames.")
+            raise RuntimeError(f"poses_{suffix}.json in {target_folder} has no frames.")
         for transect in transects:
             transect.clamp(len(images))
 
         # The poses store camera positions mesh-locally; the tracks' geo-referenced
         # positions are in the world CRS, so shift the centre lines by the DEM origin.
-        x_offset, y_offset = read_dem_origin_xy(
-            config.get("dem_path", ""),
-            config.get("alfs_dem_metadata_path") or "")
+        x_offset, y_offset, origin_source = self._resolve_population_origin(
+            target_folder, config, is_current, dem_override, log_fn)
 
         centerlines = {
             t.transect_id: transect_centerline(
                 images, t.first_frame, t.last_frame, x_offset, y_offset)
             for t in transects
         }
-        if progress_fn:
-            progress_fn(20)
+        if progress_cb:
+            progress_cb(20)
 
         # ---- Track perpendicular distances -------------------------------- #
         perp_file = os.path.join(
@@ -2737,13 +3042,14 @@ class BambiProcessor:
             f"perpendicular_tracks_{suffix}.json")
         if not os.path.exists(perp_file):
             raise FileNotFoundError(
-                f"{os.path.basename(perp_file)} not found. Please run "
-                "'Calculate Track Perpendicular' first."
+                f"{os.path.basename(perp_file)} not found in {target_folder}. "
+                "Please run 'Calculate Track Perpendicular' first."
             )
         with open(perp_file, 'r', encoding='utf-8') as f:
             tracks = json.load(f).get("tracks", [])
         if not tracks:
-            raise RuntimeError("No tracks with perpendicular distances found.")
+            raise RuntimeError(
+                f"No tracks with perpendicular distances found in {target_folder}.")
 
         # ---- Monitored area per transect (union of the frame FoVs) --------- #
         # Computed before the assignment: a track only counts towards a
@@ -2751,12 +3057,13 @@ class BambiProcessor:
         fov_file = os.path.join(target_folder, f"fov_{suffix}", "fov_polygons.txt")
         if not os.path.exists(fov_file):
             raise FileNotFoundError(
-                f"fov_{suffix}/fov_polygons.txt not found. Please run "
-                "'Calculate Field of View' first."
+                f"fov_{suffix}/fov_polygons.txt not found in {target_folder}. "
+                "Please run 'Calculate Field of View' first."
             )
         fov_polygons = load_fov_polygons_3d(fov_file, log_fn)
         if not fov_polygons:
-            raise RuntimeError("The FoV file contains no polygons.")
+            raise RuntimeError(
+                f"The FoV file in {target_folder} contains no polygons.")
 
         cum = cumulative_distances(flight_positions(images))
         areas: Dict[int, object] = {}
@@ -2776,8 +3083,8 @@ class BambiProcessor:
                 log_fn(f"Warning: {transect.display_name} has no FoV footprint "
                        f"(frames {transect.first_frame}-{transect.last_frame}) — "
                        "it contributes a zero area.")
-            if progress_fn:
-                progress_fn(25 + int((i + 1) / len(transects) * 25))
+            if progress_cb:
+                progress_cb(25 + int((i + 1) / len(transects) * 30))
 
         # ---- Assign the tracks --------------------------------------------- #
         assignments = assign_tracks(
@@ -2787,8 +3094,8 @@ class BambiProcessor:
         for a in assignments:
             if a["transect_id"] is not None:
                 counts[a["transect_id"]] += 1
-        if progress_fn:
-            progress_fn(60)
+        if progress_cb:
+            progress_cb(65)
 
         rows = []
         area_features = []
@@ -2821,11 +3128,6 @@ class BambiProcessor:
                 })
 
         usable = [r for r in rows if r["area_ha"] > 0]
-        if not usable:
-            raise RuntimeError(
-                "No transect has a monitored area. Check that the FoV step "
-                "covered the transects' frame ranges.")
-
         n_assigned = sum(1 for a in assignments if a["transect_id"] is not None)
         n_truncated = sum(1 for a in assignments if a["truncated"])
         n_outside = sum(1 for a in assignments if a["outside_fov"])
@@ -2842,65 +3144,15 @@ class BambiProcessor:
         # The union over *every* frame, so ground seen by two transects counts
         # once — unlike the summed transect areas, which the density needs to
         # double-count because each transect is its own sample.
-        if progress_fn:
-            progress_fn(72)
+        if progress_cb:
+            progress_cb(75)
         flight_area_m2, _flight_geom = merged_fov_area(
             fov_polygons, sorted(fov_polygons.keys()))
         flight_area_ha = flight_area_m2 / 10000.0
 
-        study_area_source = "none"
-        if study_area_auto:
-            study_area_ha = flight_area_ha
-            study_area_source = "flight_fov"
-            if flight_area_ha <= 0:
-                raise RuntimeError(
-                    "The flight has no FoV coverage, so no study area could be "
-                    "derived. Untick 'Use flight FoV area' or check the FoV step.")
-            if log_fn:
-                log_fn(f"Study area from the flight's total FoV coverage: "
-                       f"{flight_area_ha:.2f} ha")
-        elif study_area_ha > 0:
-            study_area_source = "manual"
-
-        # ---- Estimate ------------------------------------------------------ #
-        if progress_fn:
-            progress_fn(75)
-        result = estimate_population(
-            usable, methods=methods, n_boot=n_boot, seed=seed,
-            study_area_ha=study_area_ha)
-        result.update({
-            "camera": "Thermal" if suffix == "t" else "RGB",
-            "crs": f"EPSG:{target_epsg}",
-            "truncation_m": truncation,
-            "n_tracks": len(assignments),
-            "n_tracks_assigned": n_assigned,
-            "n_tracks_truncated": n_truncated,
-            "n_tracks_outside_fov": n_outside,
-            "n_transects_without_area": len(rows) - len(usable),
-            "flight_fov_area_ha": flight_area_ha,
-            "study_area_source": study_area_source,
-            "transects": rows,
-            "notes": (
-                "A track counts towards a transect only when it lies inside that "
-                "transect's monitored area (the union of the field-of-view "
-                "footprints of the frames in its range); where several transects "
-                "cover it, the one whose flight path is nearest in perpendicular "
-                "distance wins. "
-                "Densities are per 100 ha (= per km²). The monitored area sums the "
-                "transects (each is its own sample, so shared ground counts once "
-                "per transect), while flight_fov_area_ha unions every frame and "
-                "counts shared ground once — they differ where transects overlap "
-                "or where frames belong to no transect."
-            ),
-        })
-
-        # ---- Write outputs -------------------------------------------------- #
+        # ---- Write this project's outputs ---------------------------------- #
         analytics_folder = os.path.join(target_folder, f"analytics_{suffix}")
         os.makedirs(analytics_folder, exist_ok=True)
-
-        out_file = os.path.join(analytics_folder, "population_estimate.json")
-        with open(out_file, 'w', encoding='utf-8') as f:
-            json.dump(result, f, indent=2)
 
         transects_csv = os.path.join(analytics_folder, "population_transects.csv")
         with open(transects_csv, 'w', encoding='utf-8', newline='') as f:
@@ -2993,34 +3245,57 @@ class BambiProcessor:
             return not lo <= frame <= hi
 
         mismatched = sum(1 for a in assignments if _filmed_elsewhere(a))
+        if progress_cb:
+            progress_cb(100)
 
+        return {
+            "target_folder": target_folder,
+            "rows": rows,
+            "usable": usable,
+            "flight_area_ha": flight_area_ha,
+            "n_tracks": len(assignments),
+            "n_assigned": n_assigned,
+            "n_truncated": n_truncated,
+            "n_outside": n_outside,
+            "n_without_area": len(rows) - len(usable),
+            "mismatched": mismatched,
+            "total_count": sum(r["count"] for r in usable),
+            "total_ha": sum(r["area_ha"] for r in usable),
+            "origin_source": origin_source,
+        }
+
+    def _resolve_population_origin(self, target_folder, config, is_current,
+                                   dem_override="", log_fn=None):
+        """The mesh→world XY offset for one project's transect centre lines.
+
+        The poses store camera positions mesh-locally (world CRS minus the DEM
+        origin), so the centre lines are shifted back by that origin. The active
+        project takes it from the config's DEM metadata (unchanged behaviour);
+        an added project supplies its own ``dem.json`` via *dem_override*.
+        Returns ``(x_offset, y_offset, source)``.
+        """
+        from .core.pipeline_outputs import read_dem_origin_xy
+
+        # The active project takes its origin straight from the config's DEM
+        # metadata — unchanged from the single-project behaviour, including the
+        # (0, 0) fallback of read_dem_origin_xy when no metadata is configured.
+        if is_current:
+            x_offset, y_offset = read_dem_origin_xy(
+                config.get("dem_path", "") or "",
+                config.get("alfs_dem_metadata_path") or "")
+            return x_offset, y_offset, "config"
+
+        # An added project must carry its own DEM metadata JSON.
+        if not dem_override or not os.path.isfile(dem_override):
+            raise FileNotFoundError(
+                f"No DEM metadata (dem.json) provided for project {target_folder}. "
+                "Add the project's dem.json so its transects can be georeferenced."
+            )
+        x_offset, y_offset = read_dem_origin_xy("", dem_override)
         if log_fn:
-            total_ha = result["total_ha"]
-            log_fn(f"Total: {int(result['total_count'])} animals on "
-                   f"{total_ha:.2f} ha across {result['n_transects']} transect(s) "
-                   f"({result['n_zero_transects']} with zero counts)")
-            if mismatched:
-                log_fn(f"Note: {mismatched} track(s) were assigned to a transect "
-                       "whose frame range does not contain their sighting frame "
-                       "(transects running close together).")
-            for name, est in result["estimates"].items():
-                density = est.get("density_per_100ha")
-                if density is None:
-                    log_fn(f"  {name}: failed — {est.get('error')}")
-                    continue
-                ci = est.get("ci95")
-                ci_txt = (f" (95% CI {ci[0]:.2f}–{ci[1]:.2f})" if ci else "")
-                log_fn(f"  {name}: {density:.2f} animals/100 ha{ci_txt}")
-                if est.get("error"):
-                    log_fn(f"    warning: {est['error']}")
-            log_fn(f"Population estimate saved to: {out_file}")
-            log_fn(f"Per-transect table saved to: {transects_csv}")
-            log_fn(f"Track assignment saved to: {tracks_csv}")
-            log_fn(f"Transect areas saved to: {areas_geojson}")
-            log_fn(f"Transect routes saved to: {routes_geojson}")
-
-        if progress_fn:
-            progress_fn(100)
+            log_fn(f"  DEM origin from {os.path.basename(dem_override)}: "
+                   f"({x_offset:.1f}, {y_offset:.1f})")
+        return x_offset, y_offset, "provided"
 
     def run_detection(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Run animal detection on extracted frames.
@@ -3039,7 +3314,12 @@ class BambiProcessor:
         camera_name = "Thermal" if camera == "T" else "RGB"
 
         target_folder = config["target_folder"]
-        model_path = config.get("model_path")
+        # Pick the model matching the selected modality; fall back to the
+        # legacy single-model key for old configs.
+        if camera == "T":
+            model_path = config.get("thermal_model_path") or config.get("model_path")
+        else:
+            model_path = config.get("rgb_model_path") or config.get("model_path")
         min_confidence = config.get("min_confidence", 0.5)
 
         # Frame filter options (use start/end frame like alfs)
@@ -3057,8 +3337,8 @@ class BambiProcessor:
         # Download default model if not specified
         if not model_path:
             if log_fn:
-                log_fn("No model specified, downloading default model...")
-            model_path = self.download_default_model(log_fn)
+                log_fn(f"No {camera_name} model specified, downloading default model...")
+            model_path = self.download_default_model(log_fn, camera=camera)
 
         # Verify model exists
         if not os.path.exists(model_path):

@@ -21,6 +21,7 @@ the labelling workflow. Contains:
 import math
 import os
 import json
+import shutil
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
@@ -633,10 +634,7 @@ class LabelStore:
 
         Returns ``(detections_path, number_of_exported_boxes)``.
         """
-        det_folder = os.path.join(
-            self.target_folder, f"detections_{self.modality}")
-        os.makedirs(det_folder, exist_ok=True)
-        det_file = os.path.join(det_folder, "detections.txt")
+        det_file = self._detections_file()
 
         # Keep everything up to (excluding) a previous export block.
         existing: List[str] = []
@@ -651,6 +649,43 @@ class LabelStore:
         if existing and not existing[-1].endswith("\n"):
             existing[-1] += "\n"
 
+        return self._write_label_block(det_file, existing)
+
+    def replace_detections(self) -> Tuple[str, int, List[str]]:
+        """Replace ``detections.txt`` with the label boxes alone.
+
+        Unlike :meth:`export_to_detections` the detector output is
+        discarded — afterwards the file contains only the labelled boxes.
+        The tracking outputs derived from the previous detections
+        (``tracks_{m}/`` and ``tracks_pixel_{m}/``) are removed as well
+        because they no longer match; re-running geo-referencing and
+        tracking regenerates them from the labels.
+
+        Returns ``(detections_path, number_of_boxes, removed_folders)``.
+        """
+        det_file = self._detections_file()
+        det_file, n_boxes = self._write_label_block(
+            det_file, ["# frame x1 y1 x2 y2 confidence class_id\n"])
+
+        removed: List[str] = []
+        for name in (f"tracks_{self.modality}",
+                     f"tracks_pixel_{self.modality}"):
+            folder = os.path.join(self.target_folder, name)
+            if os.path.isdir(folder):
+                shutil.rmtree(folder)
+                removed.append(folder)
+        return det_file, n_boxes, removed
+
+    def _detections_file(self) -> str:
+        """Path of this modality's ``detections.txt`` (folder is created)."""
+        det_folder = os.path.join(
+            self.target_folder, f"detections_{self.modality}")
+        os.makedirs(det_folder, exist_ok=True)
+        return os.path.join(det_folder, "detections.txt")
+
+    def _write_label_block(self, det_file: str,
+                           existing: List[str]) -> Tuple[str, int]:
+        """Write *existing* lines plus the marker-delimited label block."""
         mapping = self.species_class_ids()
         rows: List[tuple] = []  # (frame, track_id, x1, y1, x2, y2, class_id)
         for track in sorted(self.tracks.values(), key=lambda t: t.track_id):

@@ -234,6 +234,48 @@ class TestLabelStore:
         assert "0.8000 1" in content            # detector line preserved
         assert "# class_id mapping:" in content
 
+    def test_replace_detections_discards_detector_output_and_tracks(
+            self, store, tmp_path):
+        det_dir = tmp_path / "detections_t"
+        det_dir.mkdir()
+        (det_dir / "detections.txt").write_text(
+            "# frame x1 y1 x2 y2 confidence class_id\n"
+            "0 1.00 1.00 2.00 2.00 0.8000 1\n")
+        tracks_dir = tmp_path / "tracks_t"
+        tracks_dir.mkdir()
+        (tracks_dir / "tracks_pixel.csv").write_text("0,1,0,0,1,1,0.9,1,0\n")
+        px_dir = tmp_path / "tracks_pixel_t"
+        px_dir.mkdir()
+        (px_dir / "tracks_pixel.csv").write_text("0,1,0,0,1,1,0.9,1,0\n")
+        other_dir = tmp_path / "tracks_w"       # other modality stays
+        other_dir.mkdir()
+
+        self._add_track(store)
+        det_file, count, removed = store.replace_detections()
+
+        assert count == 3
+        content = (det_dir / "detections.txt").read_text()
+        assert "0.8000 1" not in content        # detector line discarded
+        assert content.count(LabelStore.DETECTIONS_MARKER) == 1
+        by_frame = _load_detections_by_frame(det_file)
+        assert sorted(by_frame.keys()) == [0, 1, 2]
+        assert not tracks_dir.exists()
+        assert not px_dir.exists()
+        assert other_dir.exists()
+        assert sorted(removed) == sorted([str(tracks_dir), str(px_dir)])
+
+        # A later merge export keeps a single marker block.
+        store.export_to_detections()
+        assert (det_dir / "detections.txt").read_text().count(
+            LabelStore.DETECTIONS_MARKER) == 1
+
+    def test_replace_detections_without_track_folders(self, store, tmp_path):
+        self._add_track(store)
+        det_file, count, removed = store.replace_detections()
+        assert count == 3
+        assert removed == []
+        assert (tmp_path / "detections_t" / "detections.txt").is_file()
+
 
 class TestCustomField:
     def test_rejects_empty_reserved_and_unknown(self):
