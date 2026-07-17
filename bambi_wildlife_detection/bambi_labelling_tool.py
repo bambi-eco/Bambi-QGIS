@@ -949,6 +949,13 @@ class LabellingToolDialog(QDialog):
         resample_row.addStretch()
         og.addLayout(resample_row)
 
+        import_all_btn = QPushButton("Import all as label tracks")
+        import_all_btn.setToolTip(
+            "Convert every existing pipeline track into an editable label "
+            "track (the resample setting above is applied to each track).")
+        import_all_btn.clicked.connect(self._on_import_all_tracks)
+        og.addWidget(import_all_btn)
+
         # Cross-modality import: project the other modality's label tracks
         # (RGB <-> thermal) into this modality via the DEM and add them as
         # new, editable label tracks for manual refinement.
@@ -1835,14 +1842,12 @@ class LabellingToolDialog(QDialog):
         self._refresh_track_list()
         self._render_frame()
 
-    def _on_import_track(self):
-        """Convert the selected pipeline track into an editable label track."""
-        if self._store is None or self.import_track_combo.currentIndex() < 0:
-            return
-        src_tid = self.import_track_combo.currentData()
+    def _import_pixel_track(self, src_tid: int) -> Optional[LabelTrack]:
+        """Convert one pipeline track into a label track and add it to the
+        store, or return ``None`` if the pipeline track is empty."""
         entries = self._pixel_tracks.get(src_tid, [])
         if not entries:
-            return
+            return None
 
         step = self.import_resample_spin.value()
         track = LabelTrack(self._store.next_track_id())
@@ -1855,10 +1860,45 @@ class LabellingToolDialog(QDialog):
                     f, (d["x1"], d["y1"], d["x2"], d["y2"]), occlusion="none")
 
         self._store.tracks[track.track_id] = track
+        return track
+
+    def _on_import_track(self):
+        """Convert the selected pipeline track into an editable label track."""
+        if self._store is None or self.import_track_combo.currentIndex() < 0:
+            return
+        src_tid = self.import_track_combo.currentData()
+        track = self._import_pixel_track(src_tid)
+        if track is None:
+            return
         self._selected_track = track.track_id
         self._mark_dirty()
         self._refresh_track_list()
-        self._goto_frame(first, force=True)
+        self._goto_frame(track.frames()[0], force=True)
+
+    def _on_import_all_tracks(self):
+        """Convert every pipeline track into an editable label track."""
+        if self._store is None or not self._pixel_tracks:
+            return
+        reply = QMessageBox.question(
+            self, "BAMBI Labelling Tool",
+            f"Import all {len(self._pixel_tracks)} pipeline tracks as "
+            "label tracks?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        imported = []
+        for src_tid in sorted(self._pixel_tracks.keys()):
+            track = self._import_pixel_track(src_tid)
+            if track is not None:
+                imported.append(track)
+        if not imported:
+            return
+
+        self._selected_track = imported[0].track_id
+        self._mark_dirty()
+        self._refresh_track_list()
+        self._goto_frame(imported[0].frames()[0], force=True)
 
     def _current_track(self) -> Optional[LabelTrack]:
         if self._store is None or self._selected_track is None:

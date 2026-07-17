@@ -49,7 +49,7 @@ Point it at a processing **target folder** (the one containing `frames_t/` / `fr
 
 ### Reviewing existing results
 
-Detections (`detections_{t,w}/detections.txt`) and tracks (`tracks_{t,w}/tracks_pixel.csv`) are drawn as read-only overlays (toggleable via checkboxes). An existing pipeline track can be converted into an editable label track with **Import as label track**; the **Resample** value controls how many key frames are kept (`1` = every frame of the track becomes a key frame, `N` = only every N-th frame plus the first and last).
+Detections (`detections_{t,w}/detections.txt`) and tracks (`tracks_{t,w}/tracks_pixel.csv`) are drawn as read-only overlays (toggleable via checkboxes). An existing pipeline track can be converted into an editable label track with **Import as label track**; the **Resample** value controls how many key frames are kept (`1` = every frame of the track becomes a key frame, `N` = only every N-th frame plus the first and last). **Import all as label tracks** converts every pipeline track at once, applying the same Resample setting to each.
 
 **Copy labels from _&lt;other modality&gt;_** imports the label tracks you already made on the other camera (RGB ↔ thermal) into the current one — see [Cross-modality copy](#cross-modality-copy) below.
 
