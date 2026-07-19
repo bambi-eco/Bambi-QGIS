@@ -94,6 +94,36 @@ def count_srt_frames(srt_paths: List[str]) -> int:
     return sum(len(parser.parse(p)) for p in srt_paths)
 
 
+def _make_curve_colorizer(parse_fn, colormap: str, curve_cfg: Dict[str, Any]):
+    """Build a ThermalColorizer that tone-maps via a curve instead of lo/hi clipping.
+
+    The curve (see ``core.thermal_curve.ThermalCurve``) normalizes the
+    temperatures into its own domain and shapes them through the control-
+    point curve; out-of-domain pixels clamp to the curve's endpoint values
+    rather than being rendered black. Only ``_apply_colormap`` is replaced —
+    parsing and BGR conversion stay in the framework class.
+    """
+    import numpy as np
+    from bambi.thermal.thermal_colorizer import ThermalColorizer
+    from .core.thermal_curve import ThermalCurve
+
+    class _CurveThermalColorizer(ThermalColorizer):
+        def __init__(self, parse_fn, colormap, curve):
+            super().__init__(parse_fn=parse_fn, colormap=colormap)
+            self.curve = curve
+
+        def _apply_colormap(self, temp):
+            norm = self.curve.apply(np.asarray(temp, dtype=np.float32))
+            rgba = self._get_cmap()(norm)               # H×W×4 float64
+            return (rgba[:, :, :3] * 255).astype(np.uint8)
+
+    return _CurveThermalColorizer(
+        parse_fn=parse_fn,
+        colormap=colormap,
+        curve=ThermalCurve.from_dict(curve_cfg),
+    )
+
+
 class ProcessingWorker(QObject):
     """Worker class for background processing."""
 
@@ -563,24 +593,40 @@ class BambiProcessor:
             colormap = config.get("thermal_photo_colormap")
             lo_threshold = config.get("thermal_photo_lo_threshold")
             hi_threshold = config.get("thermal_photo_hi_threshold")
+            curve_cfg = config.get("thermal_photo_curve")
             thermal_colorizer = None
             thermal_instance = None
 
-            if colormap is not None or lo_threshold is not None or hi_threshold is not None:
+            if (colormap is not None or lo_threshold is not None
+                    or hi_threshold is not None or curve_cfg is not None):
                 import numpy as np
                 from .bambi_thermal import Thermal
                 thermal_instance = Thermal(dtype=np.float32)
-                thermal_colorizer = ThermalColorizer(
-                    parse_fn=thermal_instance.parse,
-                    colormap=colormap or "white-hotspot",
-                    lo_threshold=lo_threshold,
-                    hi_threshold=hi_threshold,
-                )
-                if log_fn:
-                    log_fn(
-                        f"Thermal colormap '{colormap or 'white-hotspot'}' will be applied "
-                        f"during frame extraction."
+                if curve_cfg is not None:
+                    thermal_colorizer = _make_curve_colorizer(
+                        parse_fn=thermal_instance.parse,
+                        colormap=colormap or "white-hotspot",
+                        curve_cfg=curve_cfg,
                     )
+                    if log_fn:
+                        log_fn(
+                            f"Thermal curve mapping "
+                            f"({thermal_colorizer.curve.describe()}) with "
+                            f"colormap '{colormap or 'white-hotspot'}' will "
+                            f"be applied during frame extraction."
+                        )
+                else:
+                    thermal_colorizer = ThermalColorizer(
+                        parse_fn=thermal_instance.parse,
+                        colormap=colormap or "white-hotspot",
+                        lo_threshold=lo_threshold,
+                        hi_threshold=hi_threshold,
+                    )
+                    if log_fn:
+                        log_fn(
+                            f"Thermal colormap '{colormap or 'white-hotspot'}' will be applied "
+                            f"during frame extraction."
+                        )
 
             # Build extension patterns once (shared by EXIF fallback + extractor)
             _ext_suffixes = (".JPG", ".jpg", ".jpeg", ".JPEG", ".tiff", ".TIFF", ".png", ".PNG")

@@ -90,6 +90,10 @@ CONFIG_ENTRIES: List[ConfigEntry] = [
     ConfigEntry("Input/ThermalVisLoValue", "double", 0.0),
     ConfigEntry("Input/ThermalVisHiEnable", "bool01", False, "eq1"),
     ConfigEntry("Input/ThermalVisHiValue", "double", 100.0),
+    # The curve itself (Input/ThermalVisCurve, a JSON dict) is intentionally
+    # not in the table — it is bound to a dialog, not a value widget, and is
+    # saved/loaded separately like Correction/AdditionalCorrections.
+    ConfigEntry("Input/ThermalVisMode", "int_double", 0),
     # ===== Extraction =====
     ConfigEntry("Extraction/Skip", "int_str", 0),
     ConfigEntry("Extraction/LimitEnable", "bool01", False, "eq1"),
@@ -220,6 +224,7 @@ WIDGET_BINDINGS: Dict[str, Tuple[str, str]] = {
     "Input/ThermalVisLoValue": ("thermal_vis_lo_spin", "spin"),
     "Input/ThermalVisHiEnable": ("thermal_vis_hi_check", "check"),
     "Input/ThermalVisHiValue": ("thermal_vis_hi_spin", "spin"),
+    "Input/ThermalVisMode": ("thermal_vis_mode_combo", "combo_index"),
     "Extraction/Skip": ("extract_skip_spin", "spin"),
     "Extraction/LimitEnable": ("extract_limit_check", "check"),
     "Extraction/LimitValue": ("extract_limit_spin", "spin"),

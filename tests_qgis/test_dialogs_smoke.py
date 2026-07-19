@@ -59,6 +59,22 @@ class TestDialogsConstruct:
         from bambi_wildlife_detection.bambi_thermal_viewer import ThermalViewerDialog
         dlg = ThermalViewerDialog()
         assert isinstance(dlg, QDialog)
+        # both tone-mapping modes must switch without error
+        dlg._tone_mode_box.setCurrentIndex(1)
+        dlg._tone_mode_box.setCurrentIndex(0)
+        _close(dlg)
+
+    def test_curve_editor_dialog(self):
+        from bambi_wildlife_detection.bambi_curve_widget import CurveEditorDialog
+        from bambi_wildlife_detection.core.thermal_curve import ThermalCurve
+        curve = ThermalCurve(5.0, 35.0, [(0.0, 0.0), (0.4, 0.7), (1.0, 1.0)])
+        dlg = CurveEditorDialog(curve=curve)
+        assert isinstance(dlg, QDialog)
+        # the editor round-trips the curve it was seeded with
+        out = dlg.curve()
+        assert out.domain_lo == pytest.approx(5.0)
+        assert out.domain_hi == pytest.approx(35.0)
+        assert out.points == curve.points
         _close(dlg)
 
     def test_feature_viewer(self):

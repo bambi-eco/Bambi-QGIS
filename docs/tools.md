@@ -39,6 +39,7 @@ Key features:
 - Load any DJI radiometric thermal JPEG or TIFF directly
 - Choose from multiple **colormaps** (`white-hotspot`, `black-hotspot`, `plasma`, `inferno`, `magma`, `viridis`, `jet`)
 - Set optional **lower and upper temperature thresholds** (°C) that clip the display range, making it easier to isolate warm or cold targets
+- Alternatively switch **Tone mapping** to **Curve (custom mapping)** for a fine-granular, tone curve over a fixed temperature range (with live histogram); the range can be typed in or auto-detected by scanning the opened image/folder
 - Pixel temperature readout on hover
 
 ## Labelling Tool

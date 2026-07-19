@@ -5,8 +5,9 @@ BAMBI Thermal Image Viewer
 
 Dialog for loading and visualising DJI radiometric thermal JPG images.
 Uses thermal_parser to extract per-pixel temperature values (°C), applies a
-configurable colormap and optional lower/upper clipping thresholds (pixels
-outside the range are rendered black).  Mouse hover shows the temperature at
+configurable colormap and either optional lower/upper clipping thresholds
+(pixels outside the range are rendered black) or a curve
+mapping (see ``bambi_curve_widget``).  Mouse hover shows the temperature at
 the cursor position.
 
 All heavy / native imports (thermal_parser, matplotlib) are deferred to the
@@ -23,6 +24,8 @@ from qgis.PyQt.QtWidgets import (
 )
 from qgis.PyQt.QtGui import QPixmap, QImage
 from qgis.PyQt.QtCore import Qt
+
+from .bambi_curve_widget import CurveEditorPanel
 
 
 _COLORMAPS = ['white-hotspot', 'black-hotspot', 'plasma', 'inferno', 'magma', 'viridis', 'jet']
@@ -144,6 +147,7 @@ class ThermalViewerDialog(QDialog):
         self._image_list = []   # paths when a folder is open
         self._image_index = -1  # -1 = single-file mode
         self._thermal_meta = {}  # last-loaded measurement parameters
+        self._current_path = None
 
         self._build_ui()
 
@@ -196,8 +200,20 @@ class ThermalViewerDialog(QDialog):
         self._cmap_box.currentTextChanged.connect(self._on_cmap_changed)
         form.addRow("Colormap:", self._cmap_box)
 
+        # Tone mapping mode: simple thresholds vs. curve mapping
+        self._tone_mode_box = QComboBox()
+        self._tone_mode_box.addItems(["Thresholds (lower/upper)",
+                                      "Curve (custom mapping)"])
+        self._tone_mode_box.setToolTip(
+            "Thresholds: linear stretch with optional black clipping.\n"
+            "Curve: fine-granular tone mapping over a fixed temperature "
+            "range, like the Curves tool in image editors.")
+        self._tone_mode_box.currentIndexChanged.connect(self._on_tone_mode_changed)
+        form.addRow("Tone mapping:", self._tone_mode_box)
+
         # Lower threshold
         lo_row = QHBoxLayout()
+        self._lo_label = QLabel("Lower threshold (→ black):")
         self._lo_check = QCheckBox("Enable")
         self._lo_spin = QDoubleSpinBox()
         self._lo_spin.setRange(-200.0, 3000.0)
@@ -210,10 +226,13 @@ class ThermalViewerDialog(QDialog):
         lo_row.addWidget(self._lo_check)
         lo_row.addWidget(self._lo_spin)
         lo_row.addStretch()
-        form.addRow("Lower threshold (→ black):", lo_row)
+        self._lo_row_widget = QWidget()
+        self._lo_row_widget.setLayout(lo_row)
+        form.addRow(self._lo_label, self._lo_row_widget)
 
         # Upper threshold
         hi_row = QHBoxLayout()
+        self._hi_label = QLabel("Upper threshold (→ black):")
         self._hi_check = QCheckBox("Enable")
         self._hi_spin = QDoubleSpinBox()
         self._hi_spin.setRange(-200.0, 3000.0)
@@ -226,7 +245,18 @@ class ThermalViewerDialog(QDialog):
         hi_row.addWidget(self._hi_check)
         hi_row.addWidget(self._hi_spin)
         hi_row.addStretch()
-        form.addRow("Upper threshold (→ black):", hi_row)
+        self._hi_row_widget = QWidget()
+        self._hi_row_widget.setLayout(hi_row)
+        form.addRow(self._hi_label, self._hi_row_widget)
+
+        # Curve mapping panel (hidden while tone mapping = thresholds)
+        self._curve_panel = CurveEditorPanel(
+            image_paths_provider=self._curve_image_paths,
+            parse_factory=self._curve_parse_factory,
+        )
+        self._curve_panel.curveChanged.connect(self._refresh_display)
+        self._curve_panel.setVisible(False)
+        form.addRow(self._curve_panel)
 
         root.addWidget(ctrl)
 
@@ -300,9 +330,12 @@ class ThermalViewerDialog(QDialog):
         if self._image_index < len(self._image_list) - 1:
             self._navigate(self._image_index + 1)
 
-    def _load(self, path):
-        # Lazy-create the Thermal instance once and reuse it for all files so
-        # the SDK DLLs are loaded only once and the OS reference count stays at 1.
+    def _ensure_thermal(self):
+        """Lazy-create the shared Thermal instance; returns it or None.
+
+        Created once and reused for all files so the SDK DLLs are loaded
+        only once and the OS reference count stays at 1.
+        """
         if self._thermal is None:
             Thermal, err = _load_thermal()
             if Thermal is None:
@@ -311,11 +344,30 @@ class ThermalViewerDialog(QDialog):
                     f"Could not load the thermal parser:\n{err}\n\n"
                     "Make sure numpy and Pillow are installed in QGIS's Python."
                 )
-                return
+                return None
             import numpy as np
             self._thermal = Thermal(dtype=np.float32)
+        return self._thermal
 
-        import numpy as np  # already loaded by QGIS, safe here
+    # Providers for the curve panel's "Auto Detect" scan ----------------
+
+    def _curve_image_paths(self):
+        if self._image_list:
+            return list(self._image_list)
+        return [self._current_path] if self._current_path else []
+
+    def _curve_parse_factory(self):
+        thermal = self._ensure_thermal()
+        if thermal is None:
+            raise RuntimeError("thermal parser could not be loaded")
+        # The viewer owns the instance — nothing to close after the scan.
+        return thermal.parse, (lambda: None)
+
+    def _load(self, path):
+        if self._ensure_thermal() is None:
+            return
+
+        self._current_path = path
         self._path_label.setText(os.path.basename(path))
         self._info_label.setText("Parsing thermal data…")
 
@@ -340,6 +392,10 @@ class ThermalViewerDialog(QDialog):
         for spin in (self._lo_spin, self._hi_spin):
             spin.blockSignals(False)
 
+        # Feed the curve panel: seed the domain once, refresh the histogram
+        self._curve_panel.seed_domain_if_default(t_min, t_max)
+        self._curve_panel.set_temperature_array(arr)
+
         self._file_info = (
             f"{os.path.basename(path)}  |  "
             f"{arr.shape[1]} × {arr.shape[0]} px  |  "
@@ -363,6 +419,14 @@ class ThermalViewerDialog(QDialog):
         self._cmap_name = name
         self._refresh_display()
 
+    def _on_tone_mode_changed(self, index):
+        use_curve = index == 1
+        for w in (self._lo_label, self._lo_row_widget,
+                  self._hi_label, self._hi_row_widget):
+            w.setVisible(not use_curve)
+        self._curve_panel.setVisible(use_curve)
+        self._refresh_display()
+
     def _refresh_display(self):
         """Recompute the full-resolution colormapped pixmap and update the label."""
         if self._temp_array is None:
@@ -371,23 +435,29 @@ class ThermalViewerDialog(QDialog):
         import numpy as np  # safe: already in QGIS's process
 
         arr = self._temp_array
+        mask = None
 
-        # Build out-of-range mask
-        lo_val = self._lo_spin.value() if self._lo_check.isChecked() else None
-        hi_val = self._hi_spin.value() if self._hi_check.isChecked() else None
+        if self._tone_mode_box.currentIndex() == 1:
+            # Curve mapping: out-of-domain temperatures clamp to the curve's
+            # endpoint values instead of being blacked out.
+            norm = self._curve_panel.curve().apply(arr)
+        else:
+            # Threshold mode: linear stretch + optional black clipping
+            lo_val = self._lo_spin.value() if self._lo_check.isChecked() else None
+            hi_val = self._hi_spin.value() if self._hi_check.isChecked() else None
 
-        mask = np.zeros(arr.shape, dtype=bool)
-        if lo_val is not None:
-            mask |= arr < lo_val
-        if hi_val is not None:
-            mask |= arr > hi_val
+            mask = np.zeros(arr.shape, dtype=bool)
+            if lo_val is not None:
+                mask |= arr < lo_val
+            if hi_val is not None:
+                mask |= arr > hi_val
 
-        lo = lo_val if lo_val is not None else float(arr.min())
-        hi = hi_val if hi_val is not None else float(arr.max())
-        if hi <= lo:
-            hi = lo + 1.0
+            lo = lo_val if lo_val is not None else float(arr.min())
+            hi = hi_val if hi_val is not None else float(arr.max())
+            if hi <= lo:
+                hi = lo + 1.0
 
-        norm = np.clip((arr - lo) / (hi - lo), 0.0, 1.0)
+            norm = np.clip((arr - lo) / (hi - lo), 0.0, 1.0)
 
         # Lazy-resolve colormap function (imports matplotlib only once)
         if self._get_cmap is None:
@@ -407,7 +477,8 @@ class ThermalViewerDialog(QDialog):
             gray = (norm * 255).astype(np.uint8)
             rgb = np.stack([gray, gray, gray], axis=2)
 
-        rgb[mask] = 0   # pixels outside thresholds → black
+        if mask is not None:
+            rgb[mask] = 0   # pixels outside thresholds → black
 
         h, w = arr.shape
         # Keep the bytes object alive until QPixmap.fromImage() copies the data

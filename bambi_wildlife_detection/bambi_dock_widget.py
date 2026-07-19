@@ -1081,6 +1081,20 @@ class BambiDockWidget(QDockWidget):
         ])
         thermal_vis_layout.addRow("Colormap:", self.thermal_vis_cmap_combo)
 
+        self.thermal_vis_mode_combo = QComboBox()
+        self.thermal_vis_mode_combo.addItems([
+            "Thresholds (lower/upper)",
+            "Curve (custom mapping)",
+        ])
+        self.thermal_vis_mode_combo.setToolTip(
+            "Thresholds: linear stretch with optional black clipping.\n"
+            "Curve: fine-granular tone mapping over a fixed temperature "
+            "range, like the Curves tool in image editors. The range can "
+            "be auto-detected by scanning the flight's images.")
+        self.thermal_vis_mode_combo.currentIndexChanged.connect(
+            self._on_thermal_vis_mode_changed)
+        thermal_vis_layout.addRow("Tone mapping:", self.thermal_vis_mode_combo)
+
         lo_row = QHBoxLayout()
         self.thermal_vis_lo_check = QCheckBox("Enable")
         self.thermal_vis_lo_spin = QDoubleSpinBox()
@@ -1106,6 +1120,24 @@ class BambiDockWidget(QDockWidget):
         hi_row.addWidget(self.thermal_vis_hi_spin)
         hi_row.addStretch()
         thermal_vis_layout.addRow("Upper threshold (→ black):", hi_row)
+
+        # Curve mapping (used when tone mapping = curve)
+        self._thermal_vis_curve = None  # core.thermal_curve.ThermalCurve
+        curve_row = QHBoxLayout()
+        self.thermal_vis_curve_btn = QPushButton("Edit Curve…")
+        self.thermal_vis_curve_btn.setToolTip(
+            "Define the temperature-to-intensity mapping curve. "
+            "\"Auto Detect\" inside the editor scans the thermal photo "
+            "directory for the flight's actual temperature range.")
+        self.thermal_vis_curve_btn.clicked.connect(self._edit_thermal_vis_curve)
+        self.thermal_vis_curve_label = QLabel()
+        self.thermal_vis_curve_label.setStyleSheet("color: grey;")
+        curve_row.addWidget(self.thermal_vis_curve_btn)
+        curve_row.addWidget(self.thermal_vis_curve_label, 1)
+        thermal_vis_layout.addRow("Curve:", curve_row)
+        self._on_thermal_vis_mode_changed(
+            self.thermal_vis_mode_combo.currentIndex())
+        self._update_thermal_vis_curve_label()
 
         sdk_row = QHBoxLayout()
         self._thermal_sdk_info_label = QLabel()
@@ -2982,11 +3014,18 @@ class BambiDockWidget(QDockWidget):
             ),
             "thermal_photo_lo_threshold": (
                 self.thermal_vis_lo_spin.value()
-                if self.thermal_vis_lo_check.isChecked() else None
+                if self.thermal_vis_lo_check.isChecked()
+                and self.thermal_vis_mode_combo.currentIndex() == 0 else None
             ),
             "thermal_photo_hi_threshold": (
                 self.thermal_vis_hi_spin.value()
-                if self.thermal_vis_hi_check.isChecked() else None
+                if self.thermal_vis_hi_check.isChecked()
+                and self.thermal_vis_mode_combo.currentIndex() == 0 else None
+            ),
+            "thermal_photo_curve": (
+                self._thermal_vis_curve.to_dict()
+                if self.thermal_vis_mode_combo.currentIndex() == 1
+                and self._thermal_vis_curve is not None else None
             ),
 
             # Common inputs
@@ -4916,6 +4955,68 @@ class BambiDockWidget(QDockWidget):
                 "⚠ DJI Thermal SDK not found – install it via the Dependency Manager."
             )
             self._thermal_sdk_info_label.setVisible(True)
+
+    def _on_thermal_vis_mode_changed(self, index):
+        """Enable either the threshold widgets or the curve editor row."""
+        curve_mode = index == 1
+        self.thermal_vis_lo_check.setEnabled(not curve_mode)
+        self.thermal_vis_hi_check.setEnabled(not curve_mode)
+        self.thermal_vis_lo_spin.setEnabled(
+            not curve_mode and self.thermal_vis_lo_check.isChecked())
+        self.thermal_vis_hi_spin.setEnabled(
+            not curve_mode and self.thermal_vis_hi_check.isChecked())
+        self.thermal_vis_curve_btn.setEnabled(curve_mode)
+        self.thermal_vis_curve_label.setEnabled(curve_mode)
+
+    def _update_thermal_vis_curve_label(self):
+        if self._thermal_vis_curve is None:
+            self.thermal_vis_curve_label.setText("(not defined)")
+        else:
+            self.thermal_vis_curve_label.setText(
+                self._thermal_vis_curve.describe())
+
+    def _thermal_photo_image_paths(self):
+        """List the thermal photos the curve auto-detection should scan."""
+        import glob as _glob
+        folder = self.thermal_photo_dir_edit.text().strip()
+        if not folder or not os.path.isdir(folder):
+            return []
+        _ext_suffixes = (".JPG", ".jpg", ".jpeg", ".JPEG",
+                         ".tiff", ".TIFF", ".png", ".PNG")
+        if self.thermal_photo_filter_check.isChecked():
+            patterns = tuple(f"{p}{e}" for p in ("*_T_*", "*_T")
+                             for e in _ext_suffixes)
+        else:
+            patterns = tuple(f"*{e}" for e in _ext_suffixes)
+        return sorted(set(
+            p for pattern in patterns
+            for p in _glob.glob(os.path.join(folder, pattern))
+        ))
+
+    def _thermal_parse_factory(self):
+        """Create a Thermal parser for the curve auto-detection scan.
+
+        Returns ``(parse_fn, close_fn)``; the caller must invoke *close_fn*
+        when done so the SDK DLLs are released.
+        """
+        import numpy as np
+        from .bambi_thermal import Thermal
+        thermal = Thermal(dtype=np.float32)
+        return thermal.parse, thermal.close
+
+    def _edit_thermal_vis_curve(self):
+        from .bambi_curve_widget import CurveEditorDialog
+        from .core.thermal_curve import ThermalCurve
+        curve = self._thermal_vis_curve or ThermalCurve(0.0, 40.0)
+        dlg = CurveEditorDialog(
+            curve=curve,
+            image_paths_provider=self._thermal_photo_image_paths,
+            parse_factory=self._thermal_parse_factory,
+            parent=self,
+        )
+        if dlg.exec():
+            self._thermal_vis_curve = dlg.curve()
+            self._update_thermal_vis_curve_label()
 
     def set_inspector_actions(self, inspector_action, fov_inspector_action,
                               fov_georef_inspector_action=None):
@@ -9390,6 +9491,9 @@ class BambiDockWidget(QDockWidget):
         self._additional_corrections = []
         self._update_corrections_list_ui()
 
+        self._thermal_vis_curve = None
+        self._update_thermal_vis_curve_label()
+
         self.log("Configuration reset to defaults")
 
     def _config_widget_value(self, attr: str, role: str):
@@ -9465,6 +9569,13 @@ class BambiDockWidget(QDockWidget):
         project.writeEntry(PLUGIN_SCOPE, "Correction/AdditionalCorrections",
                            json.dumps(corrections_data))
 
+        # Thermal curve mapping is bound to a dialog, not a value widget,
+        # so it is likewise saved separately (empty string = no curve).
+        project.writeEntry(
+            PLUGIN_SCOPE, "Input/ThermalVisCurve",
+            json.dumps(self._thermal_vis_curve.to_dict())
+            if self._thermal_vis_curve is not None else "")
+
         # Mark project as modified so user is prompted to save
         project.setDirty(True)
 
@@ -9513,6 +9624,19 @@ class BambiDockWidget(QDockWidget):
                 self._add_correction_to_list(corr)
         except json.JSONDecodeError:
             pass
+
+        # Thermal curve mapping (bound to a dialog, loaded separately)
+        curve_json = read_str("Input/ThermalVisCurve", "")
+        if curve_json:
+            from .core.thermal_curve import ThermalCurve
+            try:
+                self._thermal_vis_curve = ThermalCurve.from_dict(
+                    json.loads(curve_json))
+            except (json.JSONDecodeError, TypeError, ValueError):
+                self._thermal_vis_curve = None
+        else:
+            self._thermal_vis_curve = None
+        self._update_thermal_vis_curve_label()
 
         self.log("Configuration loaded from project")
 
