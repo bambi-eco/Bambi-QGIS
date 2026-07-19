@@ -32,6 +32,7 @@ changelog=Version 5.2.0:
     - Labelling tool: new "Replace detections in project" button that replaces the existing detections/tracks instead of appending to them.
     - Labelling tool: new "Import all as label tracks" button to import every pipeline track at once instead of one by one.
     - Distance sampling and transect-based population estimation can now pool the outputs of multiple projects into one combined estimate.
+    - Detect Animals now shows an Ultralytics license notice (AGPL-3.0; commercial use requires an Ultralytics Enterprise License) before running; cancelling aborts the detection, and a "Remember my decision" checkbox skips the notice in subsequent runs.
     Fixed:
     - GeoTIFF to mesh conversion: DEMs with a compound CRS (e.g. Dutch AHN tiles tagged "Amersfoort / RD New + NAP height") were converted without reprojection and silently mislabeled with the target CRS, placing the mesh hundreds of kilometres from the flight and yielding empty geo-referencing results. The CRS is now identified via GDAL when rasterio cannot read it, and the conversion fails with a clear message if the source CRS cannot be determined.
     - GeoTIFF to mesh conversion now supports any UTM target zone (previously only zones 32-34) and EPSG:28992 (Dutch RD New) as a source CRS, including its Bessel datum shift.

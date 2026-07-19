@@ -6,7 +6,14 @@ schema-bound widgets and a real ``QgsProject`` through
 save → reset → load, which is exactly the manual check the config-schema
 refactor (core.config_schema) otherwise requires.
 """
+import pytest
+from qgis.core import QgsSettings
+from qgis.PyQt.QtWidgets import QMessageBox
+
+from bambi_wildlife_detection.bambi_dock_widget import PLUGIN_SCOPE
 from bambi_wildlife_detection.core.config_schema import WIDGET_BINDINGS
+
+LICENSE_KEY = f"{PLUGIN_SCOPE}/skipUltralyticsLicenseNotice"
 
 
 class TestConstruction:
@@ -100,6 +107,54 @@ class TestConfigRoundTrip:
         dock.confidence_spin.setValue(0.42)
         dock.load_config_from_project()   # nothing saved -> early return
         assert dock.confidence_spin.value() == 0.42
+
+
+class TestUltralyticsLicenseNotice:
+    """_confirm_ultralytics_license gating before the detection stage."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_license_setting(self):
+        settings = QgsSettings()
+        settings.remove(LICENSE_KEY)
+        yield
+        settings.remove(LICENSE_KEY)
+
+    def test_stored_skip_bypasses_dialog(self, dock, monkeypatch):
+        QgsSettings().setValue(LICENSE_KEY, True)
+
+        def fail_exec(box):
+            raise AssertionError("dialog must not be shown when skip is stored")
+
+        monkeypatch.setattr(QMessageBox, "exec", fail_exec)
+        assert dock._confirm_ultralytics_license() is True
+
+    def test_ok_with_remember_persists_skip(self, dock, monkeypatch):
+        def fake_exec(box):
+            box.checkBox().setChecked(True)
+            box.button(QMessageBox.StandardButton.Ok).click()
+
+        monkeypatch.setattr(QMessageBox, "exec", fake_exec)
+        assert dock._confirm_ultralytics_license() is True
+        assert QgsSettings().value(LICENSE_KEY, False, type=bool) is True
+
+    def test_ok_without_remember_stores_nothing(self, dock, monkeypatch):
+        def fake_exec(box):
+            box.button(QMessageBox.StandardButton.Ok).click()
+
+        monkeypatch.setattr(QMessageBox, "exec", fake_exec)
+        assert dock._confirm_ultralytics_license() is True
+        assert QgsSettings().value(LICENSE_KEY, False, type=bool) is False
+
+    def test_cancel_blocks_and_never_persists(self, dock, monkeypatch):
+        # Even with "Remember my decision" ticked, cancelling must not be
+        # stored — otherwise detection would be silently blocked forever.
+        def fake_exec(box):
+            box.checkBox().setChecked(True)
+            box.button(QMessageBox.StandardButton.Cancel).click()
+
+        monkeypatch.setattr(QMessageBox, "exec", fake_exec)
+        assert dock._confirm_ultralytics_license() is False
+        assert QgsSettings().value(LICENSE_KEY, False, type=bool) is False
 
 
 class TestResetToDefaults:

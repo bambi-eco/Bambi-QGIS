@@ -24,7 +24,7 @@ from qgis.PyQt.QtWidgets import (
 )
 from qgis.PyQt.QtGui import QFont, QColor
 from qgis.core import (
-    QgsProject, QgsVectorLayer, QgsCoordinateReferenceSystem,
+    QgsProject, QgsSettings, QgsVectorLayer, QgsCoordinateReferenceSystem,
     QgsFeature, QgsGeometry, QgsPointXY, QgsField, QgsRasterLayer,
     QgsLineSymbol, QgsMarkerSymbol, QgsPalLayerSettings, QgsTextFormat,
     QgsVectorLayerSimpleLabeling, QgsTextBufferSettings, QgsLayerTreeGroup
@@ -5268,6 +5268,51 @@ class BambiDockWidget(QDockWidget):
 
         self.start_worker("extract_rgb_frames")
 
+    def _confirm_ultralytics_license(self) -> bool:
+        """Show the Ultralytics license notice before running detection.
+
+        Returns True if the user accepted (or previously chose to skip the
+        notice), False if they cancelled. The skip decision is only stored
+        when the user accepts, so cancelling can never silently disable
+        detection in future runs.
+        """
+        settings = QgsSettings()
+        settings_key = f"{PLUGIN_SCOPE}/skipUltralyticsLicenseNotice"
+        if settings.value(settings_key, False, type=bool):
+            return True
+
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("Ultralytics License Notice")
+        msg_box.setIcon(QMessageBox.Icon.Information)
+        msg_box.setText(
+            "Wildlife detection uses the Ultralytics framework, which is "
+            "licensed under AGPL-3.0."
+        )
+        msg_box.setInformativeText(
+            "Commercial use requires a separate Ultralytics Enterprise "
+            "License. Please make sure your usage complies with the license "
+            "terms before proceeding.\n\n"
+            "See https://www.ultralytics.com/license for details."
+        )
+        msg_box.setStandardButtons(
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel
+        )
+        msg_box.setDefaultButton(QMessageBox.StandardButton.Ok)
+        remember_check = QCheckBox("Remember my decision")
+        remember_check.setChecked(False)
+        msg_box.setCheckBox(remember_check)
+
+        msg_box.exec()
+        # exec() returns a plain int under PyQt6, so resolve the clicked
+        # button to a StandardButton for a binding-agnostic comparison.
+        clicked = msg_box.standardButton(msg_box.clickedButton())
+        if clicked != QMessageBox.StandardButton.Ok:
+            return False
+
+        if remember_check.isChecked():
+            settings.setValue(settings_key, True)
+        return True
+
     def run_detection(self):
         """Run animal detection step."""
         config = self.get_config()
@@ -5286,6 +5331,9 @@ class BambiDockWidget(QDockWidget):
                 f"{camera_name} frame extraction has not been completed.\n"
                 f"Please run Step 1 (Extract Frames) for {camera_name} first."
             )
+            return
+
+        if not self._confirm_ultralytics_license():
             return
 
         self.start_worker("detection")
