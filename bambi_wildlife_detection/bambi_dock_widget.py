@@ -717,6 +717,14 @@ class BambiDockWidget(QDockWidget):
         crs_row.addWidget(self.target_crs_auto_btn)
         output_layout.addRow("Target CRS:", crs_row)
 
+        crs_info_label = QLabel(
+            "Only UTM CRS is supported (EPSG:32601-32660 N / EPSG:32701-32760 S). "
+            "A metric CRS is required for the subsequent processing."
+        )
+        crs_info_label.setWordWrap(True)
+        crs_info_label.setStyleSheet("color: gray; font-size: 10px;")
+        output_layout.addRow("", crs_info_label)
+
         input_layout.addWidget(output_group)
 
         # Geo-referencing data with tabs for different input methods
@@ -996,6 +1004,22 @@ class BambiDockWidget(QDockWidget):
         self.use_gimbal_heading_check.setToolTip(
             "When enabled, uses the gimbal heading instead of the compass heading for the yaw rotation.")
         frame_ext_layout.addRow("Heading source:", self.use_gimbal_heading_check)
+
+        self.no_images_check = QCheckBox("Only extract poses (no images)")
+        self.no_images_check.setChecked(False)
+        self.no_images_check.setToolTip(
+            "When enabled, only the poses.json file is created and no image data is "
+            "written to disk.")
+        frame_ext_layout.addRow("Pose-only mode:", self.no_images_check)
+
+        no_images_label = QLabel(
+            "For debugging / previewing the flight route only. All subsequent stages "
+            "(detection, tracking, correction, georeferencing, analytics) depend on the "
+            "extracted images and will not work when this is enabled."
+        )
+        no_images_label.setWordWrap(True)
+        no_images_label.setStyleSheet("color: gray; font-size: 10px;")
+        frame_ext_layout.addRow("", no_images_label)
 
         extraction_tab_layout.addWidget(frame_ext_group)
 
@@ -3006,6 +3030,7 @@ class BambiDockWidget(QDockWidget):
             ),
             "preserve_aspect_ratio": self.preserve_aspect_ratio_check.isChecked(),
             "use_gimbal_heading": self.use_gimbal_heading_check.isChecked(),
+            "no_images": self.no_images_check.isChecked(),
 
             # Thermal visualisation
             "thermal_photo_colormap": (

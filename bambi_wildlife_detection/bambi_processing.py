@@ -703,6 +703,7 @@ class BambiProcessor:
                     skip=config.get("extract_skip", 0),
                     limit=config.get("extract_limit"),
                     extensions=photo_extensions_t,
+                    no_images=config.get("no_images", False),
                 )
             finally:
                 if thermal_instance is not None:
@@ -746,6 +747,7 @@ class BambiProcessor:
                     limit=config.get("extract_limit"),
                     sampling_rate=config.get("extract_sampling_rate") or 0,
                     timezone=_video_tz,
+                    no_images=config.get("no_images", False),
                 )
 
         # Move poses.json written into frames_folder to target folder with suffix
@@ -889,6 +891,7 @@ class BambiProcessor:
                 skip=config.get("extract_skip", 0),
                 limit=config.get("extract_limit"),
                 extensions=photo_extensions_w,
+                no_images=config.get("no_images", False),
             )
         else:
             from bambi.video.calibrated_video_frame_accessor import CalibratedVideoFrameAccessor
@@ -929,6 +932,7 @@ class BambiProcessor:
                     limit=config.get("extract_limit"),
                     sampling_rate=config.get("extract_sampling_rate") or 0,
                     timezone=_video_tz,
+                    no_images=config.get("no_images", False),
                 )
 
         # Move poses.json written into frames_folder to target folder with suffix
