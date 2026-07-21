@@ -4,8 +4,6 @@ import csv
 import json
 import os
 
-import pytest
-
 from bambi_wildlife_detection.core.transects import (
     Transect,
     TransectStore,

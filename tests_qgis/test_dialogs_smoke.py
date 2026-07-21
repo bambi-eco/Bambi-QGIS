@@ -171,3 +171,46 @@ class TestCustomFieldWidgets:
         _set_field_widget_value(field, widget, "not a number")
         assert _field_widget_value(field, widget) == 0
         widget.deleteLater()
+
+
+class TestTrackMerging:
+    """Merging / splitting through the dialog's list selection."""
+
+    def _dialog_with_tracks(self, iface, dock, tmp_path):
+        from bambi_wildlife_detection.bambi_labelling_tool import (
+            LabelStore, LabelTrack, LabellingToolDialog)
+        dlg = LabellingToolDialog(iface, dock)
+        dlg._store = LabelStore(str(tmp_path), "t")
+        for track_id, frames in ((1, (0, 10)), (2, (40, 50)), (3, (80, 90))):
+            track = LabelTrack(track_id)
+            for f in frames:
+                track.set_keyframe(f, (0, 0, 10, 10))
+            dlg._store.tracks[track_id] = track
+        dlg._refresh_track_list()
+        return dlg
+
+    def test_selection_ids_follow_the_list(self, iface, dock, tmp_path):
+        dlg = self._dialog_with_tracks(iface, dock, tmp_path)
+        for row in (0, 2):
+            dlg.track_list.item(row).setSelected(True)
+        assert dlg._selected_track_ids() == [1, 3]
+        _close(dlg)
+
+    def test_merge_replaces_the_sources_with_one_track(
+            self, iface, dock, tmp_path):
+        dlg = self._dialog_with_tracks(iface, dock, tmp_path)
+        assert dlg._apply_merge([1, 3], mark_gaps=True) == 1
+        assert sorted(dlg._store.tracks) == [1, 2]
+        assert dlg._store.tracks[1].frames() == [0, 10, 80, 90]
+        assert dlg._store.tracks[1].is_stop(10) is True
+        _close(dlg)
+
+    def test_the_multi_selection_survives_a_list_refresh(
+            self, iface, dock, tmp_path):
+        dlg = self._dialog_with_tracks(iface, dock, tmp_path)
+        dlg._selected_track = 2
+        for row in (0, 1):
+            dlg.track_list.item(row).setSelected(True)
+        dlg._refresh_track_list()
+        assert dlg._selected_track_ids() == [1, 2]
+        _close(dlg)

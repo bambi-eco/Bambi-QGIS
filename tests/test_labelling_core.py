@@ -21,14 +21,19 @@ from bambi_wildlife_detection.core.labelling import (
     box_in_valid_area,
     coerce_attributes,
     custom_fields_from_dicts,
+    find_overlapping_tracks,
+    group_track_ids,
     keyframe_window,
     load_valid_mask,
     _load_detections_by_frame,
     _load_pixel_tracks,
     _pose_epochs,
+    merge_tracks,
     propagation_frames,
     read_custom_fields,
+    split_track,
     track_color_rgb,
+    track_world_positions,
     validate_custom_fields,
     write_custom_fields,
 )
@@ -904,3 +909,222 @@ class TestGeoPropagator:
         prop = self._propagator(tmp_path)
         prop.load()
         assert prop._correction["translation"]["z"] == 3.0
+
+
+# ---------------------------------------------------------------------------
+# Merging & splitting tracks
+# ---------------------------------------------------------------------------
+
+def _track(track_id, frames, **kwargs):
+    track = LabelTrack(track_id, **kwargs)
+    for f in frames:
+        track.set_keyframe(f, (f, f, f + 10, f + 10))
+    return track
+
+
+class TestMergeTracks:
+    def test_keyframes_are_combined(self):
+        merged, conflicts = merge_tracks(
+            [_track(4, [20, 30]), _track(2, [0, 10])])
+        assert merged.track_id == 2          # the lowest id survives
+        assert merged.frames() == [0, 10, 20, 30]
+        assert conflicts == 0
+
+    def test_lower_track_id_wins_on_a_shared_frame(self):
+        a, b = _track(1, [0]), _track(3, [0])
+        b.set_keyframe(0, (99, 99, 100, 100))
+        merged, conflicts = merge_tracks([b, a])
+        assert conflicts == 1
+        assert merged.keyframes[0]["x1"] == 0.0
+
+    def test_gap_between_the_tracks_becomes_a_stop_frame(self):
+        merged, _ = merge_tracks([_track(1, [0, 10]), _track(2, [50, 60])])
+        assert merged.is_stop(10) is True     # gap 10 -> 50 is not bridged
+        assert merged.box_at(30) is None
+        assert merged.is_stop(60) is False    # nothing follows the last one
+
+    def test_gaps_can_be_interpolated_instead(self):
+        merged, _ = merge_tracks(
+            [_track(1, [0, 10]), _track(2, [50, 60])], mark_gaps=False)
+        assert merged.is_stop(10) is False
+        assert merged.box_at(30) is not None
+
+    def test_adjacent_frames_are_not_marked_as_a_gap(self):
+        merged, _ = merge_tracks([_track(1, [0, 10]), _track(2, [11, 20])])
+        assert merged.is_stop(10) is False
+
+    def test_existing_stop_frames_survive(self):
+        a = _track(1, [0, 10])
+        a.set_keyframe(10, (0, 0, 1, 1), stop=True)
+        merged, _ = merge_tracks([a, _track(2, [20, 30])], mark_gaps=False)
+        assert merged.is_stop(10) is True
+
+    def test_unknown_classes_are_filled_in_from_the_other_tracks(self):
+        a = _track(1, [0], species="unknown", sex="unknown")
+        b = _track(2, [10], species="red deer", sex="female", age="adult")
+        merged, _ = merge_tracks([a, b])
+        assert (merged.species, merged.sex, merged.age) == \
+            ("red deer", "female", "adult")
+
+    def test_known_classes_of_the_lowest_id_are_kept(self):
+        a = _track(1, [0], species="roe deer")
+        b = _track(2, [10], species="red deer")
+        merged, _ = merge_tracks([a, b])
+        assert merged.species == "roe deer"
+
+    def test_custom_attributes_are_merged_lowest_id_first(self):
+        a = _track(1, [0], attributes={"observer": "ann"})
+        b = _track(2, [10], attributes={"observer": "bob", "note": "far"})
+        merged, _ = merge_tracks([a, b])
+        assert merged.attributes == {"observer": "ann", "note": "far"}
+
+    def test_keyframe_attributes_are_copied_not_shared(self):
+        a = _track(1, [0])
+        a.set_keyframe(0, (0, 0, 1, 1), attributes={"note": "x"})
+        merged, _ = merge_tracks([a, _track(2, [10])])
+        merged.keyframes[0]["attributes"]["note"] = "changed"
+        assert a.keyframes[0]["attributes"]["note"] == "x"
+
+    def test_a_single_track_cannot_be_merged(self):
+        with pytest.raises(ValueError, match="at least two"):
+            merge_tracks([_track(1, [0])])
+
+
+class TestSplitTrack:
+    def test_split_on_a_keyframe_keeps_it_on_both_sides(self):
+        head, tail = split_track(_track(1, [0, 10, 20]), 10, 7)
+        assert head.track_id == 1 and head.frames() == [0, 10]
+        assert tail.track_id == 7 and tail.frames() == [10, 20]
+        assert head.keyframes[10] == tail.keyframes[10]
+
+    def test_split_on_an_interpolated_frame_freezes_the_box(self):
+        track = LabelTrack(1)
+        track.set_keyframe(0, (0, 0, 10, 10))
+        track.set_keyframe(10, (100, 50, 110, 60))
+        head, tail = split_track(track, 5, 2)
+        assert head.frames() == [0, 5] and tail.frames() == [5, 10]
+        assert head.box_at(5)[0] == (50.0, 25.0, 60.0, 35.0)
+        assert tail.box_at(5)[0] == (50.0, 25.0, 60.0, 35.0)
+
+    def test_classes_and_attributes_are_carried_over(self):
+        track = _track(1, [0, 10], species="fox", sex="male",
+                       attributes={"note": "near the road"})
+        head, tail = split_track(track, 5, 9)
+        assert tail.species == "fox" and tail.sex == "male"
+        assert tail.attributes == {"note": "near the road"}
+        tail.attributes["note"] = "changed"
+        assert head.attributes["note"] == "near the road"
+
+    def test_the_two_parts_are_independent_of_the_original(self):
+        track = _track(1, [0, 10, 20])
+        head, _tail = split_track(track, 10, 2)
+        head.keyframes[0]["x1"] = 999.0
+        assert track.keyframes[0]["x1"] == 0.0
+
+    def test_split_outside_the_range_is_rejected(self):
+        with pytest.raises(ValueError, match="no bounding box"):
+            split_track(_track(1, [10, 20]), 30, 2)
+
+    def test_split_inside_a_gap_is_rejected(self):
+        track = _track(1, [0, 30])
+        track.set_keyframe(0, (0, 0, 1, 1), stop=True)
+        with pytest.raises(ValueError, match="no bounding box"):
+            split_track(track, 15, 2)
+
+    def test_split_on_the_first_or_last_keyframe_is_rejected(self):
+        track = _track(1, [0, 10, 20])
+        for frame in (0, 20):
+            with pytest.raises(ValueError, match="must lie between"):
+                split_track(track, frame, 2)
+
+
+class _StubPropagator:
+    """Returns a world quad centred on a per-frame position."""
+
+    def __init__(self, centres):
+        self.centres = centres  # frame -> (x, y) or None to fail
+
+    def _box_to_world(self, box, frame, images, width, height):
+        centre = self.centres.get(frame)
+        if centre is None:
+            raise RuntimeError("no mesh intersection")
+        x, y = centre
+        return [(x - 1, y - 1, 0.0), (x + 1, y - 1, 0.0),
+                (x + 1, y + 1, 0.0), (x - 1, y + 1, 0.0)]
+
+
+class TestTrackWorldPositions:
+    def test_box_centres_are_projected_per_keyframe(self):
+        prop = _StubPropagator({0: (10.0, 20.0), 10: (12.0, 20.0)})
+        positions = track_world_positions(
+            prop, _track(1, [0, 10]), _images(20), 640, 512)
+        assert positions == {0: (10.0, 20.0), 10: (12.0, 20.0)}
+
+    def test_unprojectable_keyframes_are_skipped(self):
+        prop = _StubPropagator({0: (1.0, 1.0), 10: None})
+        positions = track_world_positions(
+            prop, _track(1, [0, 10]), _images(20), 640, 512)
+        assert list(positions) == [0]
+
+    def test_real_propagator_centres_the_world_quad(
+            self, fake_geo_stack, tmp_path):
+        dem = tmp_path / "dem.glb"
+        dem.write_bytes(b"glb")
+        prop = _GeoPropagator(str(tmp_path), str(dem), "", "t")
+        positions = track_world_positions(
+            prop, _track(1, [0, 1]), _images(3), 640, 512)
+        # WORLD_QUAD is centred on the origin
+        assert positions == {0: (0.0, 0.0), 1: (0.0, 0.0)}
+
+
+class TestFindOverlappingTracks:
+    def test_close_tracks_are_proposed_with_their_distance(self):
+        pairs = find_overlapping_tracks(
+            {1: {0: (0.0, 0.0)}, 2: {50: (2.0, 0.0)}}, max_distance=3.0)
+        assert pairs == [(1, 2, 2.0, 50)]  # 2 m apart, 50 frames apart
+
+    def test_distant_tracks_are_not_proposed(self):
+        pairs = find_overlapping_tracks(
+            {1: {0: (0.0, 0.0)}, 2: {50: (20.0, 0.0)}}, max_distance=3.0)
+        assert pairs == []
+
+    def test_the_closest_pair_of_positions_counts(self):
+        pairs = find_overlapping_tracks(
+            {1: {0: (0.0, 0.0), 10: (100.0, 0.0)},
+             2: {20: (101.0, 0.0), 30: (200.0, 0.0)}}, max_distance=2.0)
+        assert pairs[0][:3] == (1, 2, 1.0)
+
+    def test_overlapping_frame_ranges_report_a_zero_gap(self):
+        pairs = find_overlapping_tracks(
+            {1: {0: (0.0, 0.0), 100: (0.0, 0.0)}, 2: {50: (0.5, 0.0)}},
+            max_distance=1.0)
+        assert pairs[0][3] == 0
+
+    def test_a_large_frame_gap_can_be_excluded(self):
+        positions = {1: {0: (0.0, 0.0)}, 2: {500: (0.5, 0.0)}}
+        assert find_overlapping_tracks(positions, 1.0, max_frame_gap=100) == []
+        assert find_overlapping_tracks(positions, 1.0, max_frame_gap=0)
+        assert find_overlapping_tracks(positions, 1.0, max_frame_gap=600)
+
+    def test_results_are_sorted_by_distance(self):
+        pairs = find_overlapping_tracks(
+            {1: {0: (0.0, 0.0)}, 2: {10: (2.0, 0.0)}, 3: {20: (0.5, 0.0)}},
+            max_distance=5.0)
+        assert [p[2] for p in pairs] == sorted(p[2] for p in pairs)
+        assert pairs[0][:2] == (1, 3)
+
+    def test_tracks_without_positions_are_ignored(self):
+        pairs = find_overlapping_tracks(
+            {1: {0: (0.0, 0.0)}, 2: {}}, max_distance=100.0)
+        assert pairs == []
+
+
+class TestGroupTrackIds:
+    def test_chained_pairs_become_one_group(self):
+        assert group_track_ids([(1, 2), (2, 5)]) == [[1, 2, 5]]
+
+    def test_independent_pairs_stay_separate(self):
+        assert group_track_ids([(1, 2), (4, 7)]) == [[1, 2], [4, 7]]
+
+    def test_no_pairs_yield_no_groups(self):
+        assert group_track_ids([]) == []

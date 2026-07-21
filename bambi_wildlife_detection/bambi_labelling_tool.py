@@ -28,6 +28,13 @@ Features
 * Existing label boxes can be moved/resized (which writes a key frame at the
   current frame) and their classes edited at any time.
 * Existing pipeline tracks can be imported as editable label tracks.
+* Merging & splitting: several tracks of the same animal (it left the frame,
+  the detector lost it) are merged into one — either manually by selecting
+  them in the track list, or from their ground positions: every label box is
+  ray-cast onto the DEM and track pairs seen at nearly the same position are
+  proposed in a confirmation dialog before anything is changed.  A track that
+  wrongly covers two animals can be split at the current frame into a
+  start → frame and a frame → end track.
 * Geo-referenced propagation: the current bounding box is ray-cast onto the
   DEM (pixel → world) with the camera pose of the current frame and
   back-projected (world → pixel) with the pose of an offset frame — the
@@ -113,11 +120,16 @@ from .core.labelling import (  # noqa: F401 — re-exported API
     _pose_epochs,
     box_in_valid_area,
     custom_fields_from_dicts,
+    find_overlapping_tracks,
+    group_track_ids,
     keyframe_window,
     load_valid_mask,
+    merge_tracks,
     propagation_frames,
     read_custom_fields,
+    split_track,
     track_color_rgb,
+    track_world_positions,
     validate_custom_fields,
     write_custom_fields,
 )
@@ -749,6 +761,101 @@ class _CustomFieldsDialog(QDialog):
 
 
 # ---------------------------------------------------------------------------
+# Automatic merge proposals
+# ---------------------------------------------------------------------------
+
+class _MergeProposalsDialog(QDialog):
+    """Human-in-the-loop confirmation of automatically found merge candidates.
+
+    Lists the track pairs :func:`find_overlapping_tracks` proposed — each
+    with the distance between their closest ground positions and the gap
+    between their frame ranges — and lets the user tick the ones to merge.
+    Nothing is merged until this dialog is accepted.
+    """
+
+    _COLUMNS = ("Merge", "Tracks", "Distance", "Frame gap", "Frame ranges")
+
+    def __init__(self, proposals: List[Tuple[int, int, float, int]],
+                 tracks: Dict[int, LabelTrack], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Merge Tracks by Ground Position")
+        self.resize(620, 420)
+
+        layout = QVBoxLayout(self)
+        intro = QLabel(
+            f"{len(proposals)} track pair(s) were seen at nearly the same "
+            "ground position and may be the same animal.<br><br>"
+            "Tick the pairs to merge — pairs that share a track are merged "
+            "into one track together. <b>Nothing is changed until you press "
+            "OK.</b>")
+        intro.setWordWrap(True)
+        intro.setTextFormat(Qt.TextFormat.RichText)
+        intro.setStyleSheet("color: #888;")
+        layout.addWidget(intro)
+
+        self.table = QTableWidget(len(proposals), len(self._COLUMNS))
+        self.table.setHorizontalHeaderLabels(self._COLUMNS)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        for col in range(1, len(self._COLUMNS) - 1):
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(
+            len(self._COLUMNS) - 1, QHeaderView.ResizeMode.Stretch)
+
+        self._pairs: List[Tuple[int, int]] = []
+        for row, (a, b, distance, gap) in enumerate(proposals):
+            self._pairs.append((a, b))
+            check = QTableWidgetItem()
+            check.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+            check.setCheckState(Qt.CheckState.Checked)
+            self.table.setItem(row, 0, check)
+            self.table.setItem(row, 1, QTableWidgetItem(f"L{a} ↔ L{b}"))
+            self.table.setItem(row, 2, QTableWidgetItem(f"{distance:.2f} m"))
+            self.table.setItem(
+                row, 3, QTableWidgetItem("overlapping" if gap == 0 else str(gap)))
+            self.table.setItem(
+                row, 4, QTableWidgetItem(
+                    f"{self._range_text(tracks.get(a))}  /  "
+                    f"{self._range_text(tracks.get(b))}"))
+        layout.addWidget(self.table, 1)
+
+        btn_row = QHBoxLayout()
+        all_btn = QPushButton("Select all")
+        all_btn.clicked.connect(lambda: self._set_all(Qt.CheckState.Checked))
+        none_btn = QPushButton("Select none")
+        none_btn.clicked.connect(lambda: self._set_all(Qt.CheckState.Unchecked))
+        btn_row.addWidget(all_btn)
+        btn_row.addWidget(none_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Merge")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    @staticmethod
+    def _range_text(track: Optional[LabelTrack]) -> str:
+        rng = track.frame_range() if track else None
+        return f"{rng[0]}–{rng[1]}" if rng else "empty"
+
+    def _set_all(self, state) -> None:
+        for row in range(self.table.rowCount()):
+            self.table.item(row, 0).setCheckState(state)
+
+    def accepted_pairs(self) -> List[Tuple[int, int]]:
+        """The track pairs the user confirmed."""
+        return [
+            pair for row, pair in enumerate(self._pairs)
+            if self.table.item(row, 0).checkState() == Qt.CheckState.Checked
+        ]
+
+
+# ---------------------------------------------------------------------------
 # Main dialog
 # ---------------------------------------------------------------------------
 
@@ -973,6 +1080,13 @@ class LabellingToolDialog(QDialog):
         tracks_group = QGroupBox("Label tracks")
         tg = QVBoxLayout(tracks_group)
         self.track_list = QListWidget()
+        # Extended selection so several tracks can be picked for merging; the
+        # *current* item still drives the editing panel.
+        self.track_list.setSelectionMode(
+            QListWidget.SelectionMode.ExtendedSelection)
+        self.track_list.setToolTip(
+            "Ctrl / Shift click selects several tracks — for merging or "
+            "deleting them together.")
         self.track_list.currentItemChanged.connect(self._on_track_list_selection)
         tg.addWidget(self.track_list)
 
@@ -984,10 +1098,67 @@ class LabellingToolDialog(QDialog):
             "current frame.")
         self.new_track_btn.toggled.connect(self._on_new_track_toggled)
         del_track_btn = QPushButton("Delete Track")
+        del_track_btn.setToolTip(
+            "Delete the selected label track(s).")
         del_track_btn.clicked.connect(self._on_delete_track)
         btn_row.addWidget(self.new_track_btn)
         btn_row.addWidget(del_track_btn)
         tg.addLayout(btn_row)
+
+        # Merging / splitting: one animal is often labelled as several tracks
+        # (it left the frame, the detector lost it) — or one track wrongly
+        # covers two animals.
+        merge_row = QHBoxLayout()
+        self.merge_btn = QPushButton("Merge Selected")
+        self.merge_btn.setToolTip(
+            "Merge the tracks selected above into one: their key frames are "
+            "combined, the lowest track id and its classes are kept. Gaps "
+            "between the merged tracks become stop frames (no interpolation "
+            "across them).")
+        self.merge_btn.clicked.connect(self._on_merge_selected)
+        self.split_btn = QPushButton("Split at Frame")
+        self.split_btn.setToolTip(
+            "Split the selected track at the current frame into two tracks: "
+            "start → current frame and current frame → end. Both keep a key "
+            "frame on the current frame.")
+        self.split_btn.clicked.connect(self._on_split_track)
+        merge_row.addWidget(self.merge_btn)
+        merge_row.addWidget(self.split_btn)
+        tg.addLayout(merge_row)
+
+        self.auto_merge_btn = QPushButton("Find mergeable tracks (geo)…")
+        self.auto_merge_btn.setToolTip(
+            "Ray-cast every label box onto the DEM and list the track pairs "
+            "that were seen at (nearly) the same ground position — they are "
+            "likely the same animal. Nothing is merged before you confirm "
+            "the proposals.")
+        self.auto_merge_btn.clicked.connect(self._on_auto_merge)
+        tg.addWidget(self.auto_merge_btn)
+
+        auto_row = QHBoxLayout()
+        auto_row.addWidget(QLabel("Max distance:"))
+        self.merge_distance_spin = QDoubleSpinBox()
+        self.merge_distance_spin.setRange(0.1, 1000.0)
+        self.merge_distance_spin.setDecimals(1)
+        self.merge_distance_spin.setSingleStep(0.5)
+        self.merge_distance_spin.setValue(3.0)
+        self.merge_distance_spin.setSuffix(" m")
+        self.merge_distance_spin.setToolTip(
+            "Two tracks are proposed when their closest ground positions lie "
+            "within this distance.")
+        auto_row.addWidget(self.merge_distance_spin)
+        auto_row.addWidget(QLabel("gap ≤"))
+        self.merge_gap_spin = QSpinBox()
+        self.merge_gap_spin.setRange(0, 100000)
+        self.merge_gap_spin.setValue(300)
+        self.merge_gap_spin.setSuffix(" frames")
+        self.merge_gap_spin.setSpecialValueText("any gap")
+        self.merge_gap_spin.setToolTip(
+            "Only propose tracks whose frame ranges are at most this many "
+            "frames apart, so a different animal crossing the same spot much "
+            "later is not offered. 0 ignores the time distance.")
+        auto_row.addWidget(self.merge_gap_spin)
+        tg.addLayout(auto_row)
         vbox.addWidget(tracks_group)
 
         # Track-level attributes (identity of the animal; per track)
@@ -1718,8 +1889,13 @@ class LabellingToolDialog(QDialog):
         self._updating_ui = False
 
     def _refresh_track_list(self):
+        # Rebuilding drops the selection, but the list is also refreshed after
+        # ordinary edits — so a multi-track selection made for merging is
+        # restored afterwards.
+        previous = set(self._selected_track_ids())
         self._updating_ui = True
         self.track_list.clear()
+        restore: List[QListWidgetItem] = []
         if self._store:
             for track in sorted(self._store.tracks.values(),
                                 key=lambda t: t.track_id):
@@ -1730,9 +1906,21 @@ class LabellingToolDialog(QDialog):
                 item.setData(Qt.ItemDataRole.UserRole, track.track_id)
                 item.setForeground(_track_color(track.track_id))
                 self.track_list.addItem(item)
+                if track.track_id in previous:
+                    restore.append(item)
                 if track.track_id == self._selected_track:
+                    # Clears the selection, so the multi-selection below is
+                    # restored afterwards.
                     self.track_list.setCurrentItem(item)
+        for item in restore:
+            item.setSelected(True)
         self._updating_ui = False
+
+    def _selected_track_ids(self) -> List[int]:
+        """Track ids selected in the list (empty when the list is empty)."""
+        ids = [item.data(Qt.ItemDataRole.UserRole)
+               for item in self.track_list.selectedItems()]
+        return sorted(tid for tid in ids if tid is not None)
 
     # ------------------------------------------------------------------
     # Track selection / creation / deletion
@@ -1826,21 +2014,236 @@ class LabellingToolDialog(QDialog):
         self._render_frame()
 
     def _on_delete_track(self):
-        track = self._current_track()
-        if track is None:
+        ids = self._selected_track_ids()
+        if self._store is None or not ids:
             return
+        if len(ids) == 1:
+            track = self._store.tracks[ids[0]]
+            question = (f"Delete label track L{track.track_id} "
+                        f"({len(track.keyframes)} key frame(s))?")
+        else:
+            listed = ", ".join(f"L{tid}" for tid in ids)
+            question = f"Delete {len(ids)} label tracks ({listed})?"
         reply = QMessageBox.question(
-            self, "Delete Track",
-            f"Delete label track L{track.track_id} "
-            f"({len(track.keyframes)} key frame(s))?",
+            self, "Delete Track", question,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
         if reply != QMessageBox.StandardButton.Yes:
             return
-        del self._store.tracks[track.track_id]
+        for tid in ids:
+            self._store.tracks.pop(tid, None)
         self._selected_track = None
+        self.track_list.clearSelection()
         self._mark_dirty()
         self._refresh_track_list()
         self._render_frame()
+
+    # ------------------------------------------------------------------
+    # Merging & splitting tracks
+    # ------------------------------------------------------------------
+
+    def _apply_merge(self, ids: List[int], mark_gaps: bool) -> Optional[int]:
+        """Merge the tracks *ids* in the store; returns the surviving id."""
+        tracks = [self._store.tracks[tid] for tid in ids
+                  if tid in self._store.tracks]
+        if len(tracks) < 2:
+            return None
+        merged, _conflicts = merge_tracks(tracks, mark_gaps=mark_gaps)
+        for track in tracks:
+            del self._store.tracks[track.track_id]
+        self._store.tracks[merged.track_id] = merged
+        return merged.track_id
+
+    def _on_merge_selected(self):
+        """Merge the tracks selected in the list into a single track."""
+        ids = self._selected_track_ids()
+        if self._store is None:
+            return
+        if len(ids) < 2:
+            QMessageBox.information(
+                self, "Merge Tracks",
+                "Select at least two label tracks to merge — hold Ctrl or "
+                "Shift while clicking in the track list.")
+            return
+
+        listed = "\n".join(
+            f"• L{tid}  [{self._track_range_text(tid)}]" for tid in ids)
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle("Merge Tracks")
+        box.setText(
+            f"Merge these {len(ids)} label tracks into track L{ids[0]}?\n\n"
+            f"{listed}\n\n"
+            "The key frames are combined; where two tracks share a frame the "
+            "lower track id wins.")
+        gap_check = QCheckBox("Interpolate across the gaps between the tracks")
+        gap_check.setToolTip(
+            "Unchecked (recommended): the last key frame before a gap becomes "
+            "a stop frame, leaving the frames in between without a box. "
+            "Checked: boxes are interpolated straight through the gap.")
+        box.setCheckBox(gap_check)
+        box.setStandardButtons(
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        box.setDefaultButton(QMessageBox.StandardButton.Yes)
+        if box.exec() != QMessageBox.StandardButton.Yes:
+            return
+
+        merged_id = self._apply_merge(ids, mark_gaps=not gap_check.isChecked())
+        if merged_id is None:
+            return
+        self._selected_track = merged_id
+        self.track_list.clearSelection()
+        self._mark_dirty()
+        self._refresh_track_list()
+        self._render_frame()
+
+    def _track_range_text(self, track_id: int) -> str:
+        track = self._store.tracks.get(track_id) if self._store else None
+        rng = track.frame_range() if track else None
+        return f"{rng[0]}–{rng[1]}" if rng else "empty"
+
+    def _on_split_track(self):
+        """Split the selected track at the current frame into two tracks."""
+        track = self._current_track()
+        if track is None:
+            QMessageBox.information(
+                self, "Split Track", "Please select a label track first.")
+            return
+        try:
+            head, tail = split_track(
+                track, self._current_frame, self._store.next_track_id())
+        except ValueError as exc:
+            QMessageBox.warning(self, "Split Track", str(exc))
+            return
+
+        self._store.tracks[head.track_id] = head
+        self._store.tracks[tail.track_id] = tail
+        self._mark_dirty()
+        self._refresh_track_list()
+        self._render_frame()
+        self.status_label.setText(
+            f"Split L{head.track_id} at frame {self._current_frame}: "
+            f"L{head.track_id} [{self._track_range_text(head.track_id)}] and "
+            f"L{tail.track_id} [{self._track_range_text(tail.track_id)}]")
+
+    def _on_auto_merge(self):
+        """Propose merges from the tracks' ground positions (DEM ray-cast)."""
+        if self._store is None or not self._images:
+            QMessageBox.information(
+                self, "Merge Tracks", "Load a target folder first.")
+            return
+        tracks = [t for t in self._store.tracks.values() if t.keyframes]
+        if len(tracks) < 2:
+            QMessageBox.information(
+                self, "Merge Tracks",
+                "At least two label tracks with key frames are needed.")
+            return
+        if not self._ensure_propagator("Finding mergeable tracks"):
+            return
+        if self._img_size is None:
+            self._img_size = self._modality_image_size(
+                self._modality, self._images)
+        if self._img_size is None:
+            QMessageBox.warning(
+                self, "Merge Tracks",
+                "Frame image size unknown — cannot project the boxes.")
+            return
+
+        positions: Dict[int, Dict[int, Tuple[float, float]]] = {}
+        error = None
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            for track in tracks:
+                positions[track.track_id] = track_world_positions(
+                    self._propagator, track, self._images,
+                    self._img_size[0], self._img_size[1])
+        except Exception as exc:
+            error = str(exc)
+        finally:
+            QApplication.restoreOverrideCursor()
+        if error is not None:
+            QMessageBox.warning(
+                self, "Merge Tracks",
+                f"Could not project the label boxes onto the DEM:\n{error}")
+            return
+
+        if not any(positions.values()):
+            QMessageBox.warning(
+                self, "Merge Tracks",
+                "None of the label boxes could be ray-cast onto the DEM, so "
+                "no ground positions are available for comparison.")
+            return
+
+        proposals = find_overlapping_tracks(
+            positions, self.merge_distance_spin.value(),
+            self.merge_gap_spin.value())
+        if not proposals:
+            QMessageBox.information(
+                self, "Merge Tracks",
+                "No track pair was seen within "
+                f"{self.merge_distance_spin.value():.1f} m of another.\n\n"
+                "Increase the maximum distance (or the frame gap) to widen "
+                "the search.")
+            return
+
+        dialog = _MergeProposalsDialog(proposals, self._store.tracks, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        groups = group_track_ids(dialog.accepted_pairs())
+        if not groups:
+            return
+
+        merged_ids = [self._apply_merge(group, mark_gaps=True)
+                      for group in groups]
+        merged_ids = [tid for tid in merged_ids if tid is not None]
+        if not merged_ids:
+            return
+        self._selected_track = merged_ids[0]
+        self.track_list.clearSelection()
+        self._mark_dirty()
+        self._refresh_track_list()
+        self._render_frame()
+        listed = ", ".join(f"L{tid}" for tid in merged_ids)
+        QMessageBox.information(
+            self, "Merge Tracks",
+            f"Merged {sum(len(g) for g in groups)} track(s) into "
+            f"{len(merged_ids)} track(s): {listed}\n\n"
+            "Gaps between the merged parts were marked as stop frames.")
+
+    def _ensure_propagator(self, purpose: str) -> bool:
+        """Create the DEM propagator and let the user confirm loading the mesh.
+
+        Returns ``False`` when the user declined or the mesh failed to load
+        (a message box has been shown in that case).
+        """
+        if self._propagator is None:
+            if not self._dem_path:
+                self._resolve_paths_from_layers()
+            self._propagator = _GeoPropagator(
+                self._target_folder, self._dem_path,
+                self._correction_path, self._modality)
+        if self._propagator.is_loaded:
+            return True
+
+        reply = QMessageBox.question(
+            self, "Load Digital Elevation Model",
+            f"{purpose} needs to load the DEM mesh.\n\n"
+            "This may take some time on the first use. Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes)
+        if reply != QMessageBox.StandardButton.Yes:
+            return False
+
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            self._propagator.load()
+        except Exception as exc:
+            QMessageBox.warning(
+                self, "BAMBI Labelling Tool",
+                f"Could not load the DEM mesh:\n{exc}")
+            return False
+        finally:
+            QApplication.restoreOverrideCursor()
+        return True
 
     def _import_pixel_track(self, src_tid: int) -> Optional[LabelTrack]:
         """Convert one pipeline track into a label track and add it to the
@@ -2014,20 +2417,8 @@ class LabellingToolDialog(QDialog):
             return
 
         # ---- DEM propagator ----------------------------------------------
-        if self._propagator is None:
-            if not self._dem_path:
-                self._resolve_paths_from_layers()
-            self._propagator = _GeoPropagator(
-                self._target_folder, self._dem_path,
-                self._correction_path, self._modality)
-        if not self._propagator.is_loaded:
-            reply = QMessageBox.question(
-                self, "Load Digital Elevation Model",
-                f"Copying labels from {other_name} needs to load the DEM "
-                "mesh.\n\nThis may take some time on the first use. Continue?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes)
-            if reply != QMessageBox.StandardButton.Yes:
-                return
+        if not self._ensure_propagator(f"Copying labels from {other_name}"):
+            return
 
         # ---- project every source key frame -------------------------------
         src_w, src_h = src_size
@@ -2038,16 +2429,6 @@ class LabellingToolDialog(QDialog):
         first_new_frame: Optional[int] = None
 
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        try:
-            if not self._propagator.is_loaded:
-                self._propagator.load()
-        except Exception as exc:
-            QApplication.restoreOverrideCursor()
-            QMessageBox.warning(
-                self, "BAMBI Labelling Tool",
-                f"Could not load the DEM mesh:\n{exc}")
-            return
-
         try:
             for src in sorted(src_tracks, key=lambda t: t.track_id):
                 new_track = LabelTrack(
@@ -2259,21 +2640,8 @@ class LabellingToolDialog(QDialog):
                 f"Target frame {dst_frame} is outside the frame range.")
             return
 
-        if self._propagator is None:
-            if not self._dem_path:
-                self._resolve_paths_from_layers()
-            self._propagator = _GeoPropagator(
-                self._target_folder, self._dem_path,
-                self._correction_path, self._modality)
-
-        if not self._propagator.is_loaded:
-            reply = QMessageBox.question(
-                self, "Load Digital Elevation Model",
-                "Geo-referenced propagation needs to load the DEM mesh.\n\n"
-                "This may take some time on the first use. Continue?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes)
-            if reply != QMessageBox.StandardButton.Yes:
-                return
+        if not self._ensure_propagator("Geo-referenced propagation"):
+            return
 
         if self._img_size is None:
             QMessageBox.warning(

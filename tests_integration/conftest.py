@@ -62,6 +62,7 @@ def pytest_report_header(config):
     return ("integration outputs: ephemeral "
             "(set BAMBI_TEST_KEEP_OUTPUT=1 to keep them for inspection)")
 
+
 # ---------------------------------------------------------------------------
 # Test flight selection (raw BAMBI dataset)
 # ---------------------------------------------------------------------------

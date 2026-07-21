@@ -75,8 +75,9 @@ def _pchip_eval(x: np.ndarray, y: np.ndarray, m: np.ndarray,
     h10 = t3 - 2 * t2 + t
     h01 = -2 * t3 + 3 * t2
     h11 = t3 - t2
-    return (h00 * y[idx] + h10 * h * m[idx]
-            + h01 * y[idx + 1] + h11 * h * m[idx + 1])
+    start = h00 * y[idx] + h10 * h * m[idx]
+    end = h01 * y[idx + 1] + h11 * h * m[idx + 1]
+    return start + end
 
 
 def normalize_points(
@@ -170,8 +171,8 @@ class ThermalCurve:
     def apply(self, temperatures: np.ndarray, lut_size: int = 1024) -> np.ndarray:
         """Map a temperature array (°C) to normalized intensities [0, 1]."""
         arr = np.asarray(temperatures, dtype=np.float32)
-        t = np.clip((arr - self.domain_lo)
-                    / (self.domain_hi - self.domain_lo), 0.0, 1.0)
+        span = self.domain_hi - self.domain_lo
+        t = np.clip((arr - self.domain_lo) / span, 0.0, 1.0)
         lut = self.lut(lut_size)
         xs = np.linspace(0.0, 1.0, lut_size)
         return np.interp(t, xs, lut).astype(np.float32)
@@ -185,13 +186,14 @@ class ThermalCurve:
         if len(self.points) != 2:
             return False
         (x0, y0), (x1, y1) = self.points
-        return (abs(x0) < 1e-9 and abs(y0) < 1e-9
-                and abs(x1 - 1.0) < 1e-9 and abs(y1 - 1.0) < 1e-9)
+        starts_at_origin = abs(x0) < 1e-9 and abs(y0) < 1e-9
+        ends_at_one = abs(x1 - 1.0) < 1e-9 and abs(y1 - 1.0) < 1e-9
+        return starts_at_origin and ends_at_one
 
     def describe(self) -> str:
-        return (f"{self.domain_lo:.1f} – {self.domain_hi:.1f} °C, "
-                f"{len(self.points)} points"
-                + (" (linear)" if self.is_identity() else ""))
+        text = (f"{self.domain_lo:.1f} – {self.domain_hi:.1f} °C, "
+                f"{len(self.points)} points")
+        return f"{text} (linear)" if self.is_identity() else text
 
 
 class TemperatureScan:

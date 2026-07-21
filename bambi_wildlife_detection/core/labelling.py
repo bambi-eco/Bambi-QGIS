@@ -12,6 +12,9 @@ the labelling workflow. Contains:
 * :class:`LabelTrack` / :class:`LabelStore` — key-frame storage,
   interpolation, stop frames, JSON/CSV persistence and the
   ``detections.txt`` export,
+* :func:`merge_tracks` / :func:`split_track` — track surgery, plus
+  :func:`track_world_positions`, :func:`find_overlapping_tracks` and
+  :func:`group_track_ids` for proposing merges from ground positions,
 * read-only loaders for pipeline outputs (detections, pixel tracks),
 * :class:`_FrameMatcher` — cross-modality frame matching by capture time,
 * :class:`_GeoPropagator` — DEM-based box propagation between frames and
@@ -496,6 +499,214 @@ class LabelTrack:
                 entry["attributes"] = dict(kf["attributes"])
             track.keyframes[int(f)] = entry
         return track
+
+
+def merge_tracks(tracks: List["LabelTrack"],
+                 mark_gaps: bool = True) -> Tuple["LabelTrack", int]:
+    """Combine several label tracks of one animal into a single track.
+
+    The resulting track keeps the **lowest** track id and that track's
+    classes; ``unknown`` classes and missing custom attributes are filled in
+    from the other tracks (lowest id first).  Key frames are merged by frame
+    number — when two tracks carry a key frame on the same frame the one from
+    the lower track id wins.
+
+    With *mark_gaps* the last key frame before a jump to another source track
+    is flagged as a stop frame, so the frames in between stay empty instead
+    of being interpolated across a stretch where the animal was not seen.
+
+    Returns ``(merged_track, number_of_dropped_duplicate_key_frames)``;
+    raises ``ValueError`` for fewer than two tracks.
+    """
+    ordered = sorted(tracks, key=lambda t: t.track_id)
+    if len(ordered) < 2:
+        raise ValueError("Merging needs at least two label tracks.")
+
+    merged = LabelTrack(ordered[0].track_id)
+    for track in ordered:
+        for attr in ("species", "sex", "age"):
+            value = (getattr(track, attr) or "").strip()
+            if getattr(merged, attr) in ("", "unknown") and \
+                    value not in ("", "unknown"):
+                setattr(merged, attr, value)
+        for name, value in track.attributes.items():
+            merged.attributes.setdefault(name, value)
+
+    conflicts = 0
+    origin: Dict[int, int] = {}  # frame -> track id it came from
+    for track in ordered:
+        for frame, entry in track.keyframes.items():
+            if frame in merged.keyframes:
+                conflicts += 1
+                continue
+            copy = dict(entry)
+            if entry.get("attributes"):
+                copy["attributes"] = dict(entry["attributes"])
+            merged.keyframes[frame] = copy
+            origin[frame] = track.track_id
+
+    if mark_gaps:
+        frames = merged.frames()
+        for frame, nxt in zip(frames, frames[1:]):
+            if origin[frame] != origin[nxt] and nxt - frame > 1:
+                merged.keyframes[frame]["stop"] = True
+    return merged, conflicts
+
+
+def split_track(track: "LabelTrack", frame: int,
+                new_track_id: int) -> Tuple["LabelTrack", "LabelTrack"]:
+    """Split *track* at *frame* into a head and a tail track.
+
+    The head keeps the original id and runs from the track's first key frame
+    to *frame*, the tail gets *new_track_id* and runs from *frame* to the
+    last key frame — both carry a key frame **on** the split frame (an
+    interpolated box there is frozen into one).  Classes and custom
+    attributes are copied to both.
+
+    Raises ``ValueError`` when the track has no box on *frame* (outside its
+    range or inside a gap after a stop frame) or when the split would leave
+    one side empty (on the first or last key frame).
+    """
+    res = track.box_at(frame)
+    if res is None:
+        raise ValueError(
+            f"The track has no bounding box on frame {frame} — it can only "
+            "be split where it is visible.")
+    fs = track.frames()
+    if frame <= fs[0] or frame >= fs[-1]:
+        raise ValueError(
+            "The split frame must lie between the track's first and last "
+            f"key frame ({fs[0]}–{fs[-1]}).")
+
+    def _new(track_id: int) -> LabelTrack:
+        return LabelTrack(track_id, track.species, track.sex, track.age,
+                          attributes=dict(track.attributes))
+
+    def _copy(entry: dict) -> dict:
+        copy = dict(entry)
+        if entry.get("attributes"):
+            copy["attributes"] = dict(entry["attributes"])
+        return copy
+
+    if frame in track.keyframes:
+        split_entry = _copy(track.keyframes[frame])
+    else:
+        split_entry = {
+            "x1": res[0][0], "y1": res[0][1],
+            "x2": res[0][2], "y2": res[0][3],
+            "occlusion": res[2],
+        }
+        attributes = track.attributes_at(frame)
+        if attributes:
+            split_entry["attributes"] = attributes
+
+    head, tail = _new(track.track_id), _new(new_track_id)
+    for f in fs:
+        target = head if f < frame else tail if f > frame else None
+        if target is not None:
+            target.keyframes[f] = _copy(track.keyframes[f])
+    head.keyframes[frame] = dict(split_entry)
+    tail.keyframes[frame] = dict(split_entry)
+    return head, tail
+
+
+def track_world_positions(propagator: "_GeoPropagator", track: "LabelTrack",
+                          images: List[dict], img_width: int, img_height: int,
+                          ) -> Dict[int, Tuple[float, float]]:
+    """Ground position of every key-frame box of *track*, in mesh-local metres.
+
+    Each box is ray-cast onto the DEM with its frame's camera and reduced to
+    the horizontal centroid of the resulting footprint, giving the positions
+    :func:`find_overlapping_tracks` compares.  Key frames whose box cannot be
+    projected (no mesh intersection, frame outside the poses range) are left
+    out instead of failing the whole track.
+    """
+    import numpy as np
+
+    positions: Dict[int, Tuple[float, float]] = {}
+    for frame in track.frames():
+        entry = track.keyframes[frame]
+        box = (entry["x1"], entry["y1"], entry["x2"], entry["y2"])
+        try:
+            world = propagator._box_to_world(
+                box, frame, images, img_width, img_height)
+        except RuntimeError:
+            continue
+        centre = np.asarray(world, dtype=float).reshape(-1, 3).mean(axis=0)
+        positions[frame] = (float(centre[0]), float(centre[1]))
+    return positions
+
+
+def _frame_gap(frames_a: Iterable[int], frames_b: Iterable[int]) -> int:
+    """Frames between the ranges of two tracks (0 when they overlap)."""
+    a, b = sorted(frames_a), sorted(frames_b)
+    if a[0] <= b[-1] and b[0] <= a[-1]:
+        return 0
+    return b[0] - a[-1] if a[-1] < b[0] else a[0] - b[-1]
+
+
+def find_overlapping_tracks(
+        positions: Dict[int, Dict[int, Tuple[float, float]]],
+        max_distance: float, max_frame_gap: int = 0,
+) -> List[Tuple[int, int, float, int]]:
+    """Find track pairs that were seen at (nearly) the same ground position.
+
+    *positions* maps a track id to its key-frame positions as returned by
+    :func:`track_world_positions`.  Two tracks are reported when their
+    closest positions lie within *max_distance* metres; with a positive
+    *max_frame_gap* pairs whose frame ranges are further apart than that are
+    dropped, which keeps unrelated animals crossing the same spot much later
+    out of the list.
+
+    Returns ``(track_a, track_b, distance, frame_gap)`` tuples — ``track_a <
+    track_b`` — sorted by distance, i.e. best candidates first.  They are
+    *candidates*: the caller is expected to have them confirmed before
+    merging anything.
+    """
+    usable = {tid: pts for tid, pts in positions.items() if pts}
+    ids = sorted(usable)
+    pairs: List[Tuple[int, int, float, int]] = []
+    for i, a in enumerate(ids):
+        for b in ids[i + 1:]:
+            gap = _frame_gap(usable[a], usable[b])
+            if max_frame_gap > 0 and gap > max_frame_gap:
+                continue
+            best = min(
+                math.hypot(pa[0] - pb[0], pa[1] - pb[1])
+                for pa in usable[a].values() for pb in usable[b].values()
+            )
+            if best <= max_distance:
+                pairs.append((a, b, best, gap))
+    pairs.sort(key=lambda p: p[2])
+    return pairs
+
+
+def group_track_ids(pairs: Iterable[Tuple[int, int]]) -> List[List[int]]:
+    """Collect accepted merge pairs into connected groups.
+
+    ``(1, 2)`` and ``(2, 5)`` describe one animal seen three times, so they
+    become the single group ``[1, 2, 5]`` — merging pair by pair would
+    otherwise fail once the first merge removed track 2.
+    """
+    parent: Dict[int, int] = {}
+
+    def find(x: int) -> int:
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for a, b in pairs:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[max(ra, rb)] = min(ra, rb)
+
+    groups: Dict[int, List[int]] = {}
+    for tid in parent:
+        groups.setdefault(find(tid), []).append(tid)
+    return sorted((sorted(g) for g in groups.values() if len(g) > 1),
+                  key=lambda g: g[0])
 
 
 class LabelStore:

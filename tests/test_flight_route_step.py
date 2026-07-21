@@ -58,6 +58,7 @@ class TestRunFlightRoute:
 
     def test_airdata_only_generates_route_line_without_camera_positions(
             self, processor, tmp_path, monkeypatch):
+        pytest.importorskip("pyproj")  # AirData routes are projected to UTM
         airdata = tmp_path / "airdata.csv"
         airdata.write_text("stub")
         _install_fake_airdata(
@@ -79,6 +80,9 @@ class TestRunFlightRoute:
 
     def test_airdata_with_no_usable_gps_raises(
             self, processor, tmp_path, monkeypatch):
+        # Without pyproj the projection already fails, so the RuntimeError
+        # would not tell us anything about the GPS-origin filter.
+        pytest.importorskip("pyproj")
         airdata = tmp_path / "airdata.csv"
         airdata.write_text("stub")
         # A single (0, 0) fix is dropped by the GPS-origin filter, leaving

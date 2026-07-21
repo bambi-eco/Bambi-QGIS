@@ -2,8 +2,6 @@
 """Unit tests for core.flight_files and core.output_inventory."""
 import sys
 
-import pytest
-
 from bambi_wildlife_detection.core.flight_files import (
     detect_common_files,
     extract_embedded_srts,

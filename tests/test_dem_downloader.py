@@ -438,6 +438,7 @@ class TestGLTFMeshGenerator:
         assert meta["origin_wgs84"]["latitude"] == pytest.approx(47.5, abs=1e-6)
 
     def test_generate_mesh_all_nodata_fails(self, monkeypatch, tmp_path):
+        pytest.importorskip("pyproj")
         elevation = np.full((3, 3), -9999.0)
         dataset = FakeRasterioDataset(
             elevation,

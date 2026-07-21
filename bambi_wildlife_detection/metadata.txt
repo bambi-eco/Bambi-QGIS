@@ -26,17 +26,18 @@ about=A comprehensive QGIS plugin for detecting, tracking, and geo-referencing w
 
 changelog=Version 5.2.0:
     Added:
-    - Thermal tone-curve mapping: both the Thermal Image Viewer and the photo-extraction thermal visualisation now offer a "Curve (custom mapping)" mode as a fine-granular alternative to the lower/upper thresholds — a curve with draggable control points maps a fixed temperature range to display intensity (with a live temperature histogram). The range can be entered manually or determined via "Auto Detect", which scans the flight's thermal images for the actual minimum/maximum temperature (optionally ignoring the extreme 1% to suppress dead/hot pixels). The curve is stored in the QGIS project.
+    - Thermal tone-curve mapping: both the Thermal Image Viewer and the photo-extraction thermal visualisati0on now offer a "Curve (custom mapping)" mode as a fine-granular alternative to the lower/upper thresholds — a curve with draggable control points maps a fixed temperature range to display intensity (with a live temperature histogram). The range can be entered manually or determined via "Auto Detect", which scans the flight's thermal images for the actual minimum/maximum temperature (optionally ignoring the extreme 1% to suppress dead/hot pixels). The curve is stored in the QGIS project.
+    - Labelling tool: new "Replace detections in project" button that replaces the existing detections/tracks instead of appending to them.
+    - Labelling tool: new "Import all as label tracks" button to import every pipeline track at once instead of one by one.
+    - Labelling tool: now supports to merge/split tracks
+    - Processing tool: Now also supports the "no images" flag of the pose extractors for debugging purposes.
     Changed:
     - Generate Flight Route is now also usable without frame extraction, based only on the AirData file (camera positions are skipped).
     - Add Tracks to QGIS now allows filtering tracks between a start and an end frame.
     - Detection models can now be configured separately for RGB and thermal recordings (previously a single model was used for both).
-    - Labelling tool: new "Replace detections in project" button that replaces the existing detections/tracks instead of appending to them.
-    - Labelling tool: new "Import all as label tracks" button to import every pipeline track at once instead of one by one.
     - Distance sampling and transect-based population estimation can now pool the outputs of multiple projects into one combined estimate.
     - Detect Animals now shows an Ultralytics license notice (AGPL-3.0; commercial use requires an Ultralytics Enterprise License) before running; cancelling aborts the detection, and a "Remember my decision" checkbox skips the notice in subsequent runs.
     - Processing tool: Added a label about the target CRS input form, that we need a UTM CRS.
-    - Processing tool: Now also supports the "no images" flag of the pose extractors for debugging purposes.
     Fixed:
     - GeoTIFF to mesh conversion: DEMs with a compound CRS (e.g. Dutch AHN tiles tagged "Amersfoort / RD New + NAP height") were converted without reprojection and silently mislabeled with the target CRS, placing the mesh hundreds of kilometres from the flight and yielding empty geo-referencing results. The CRS is now identified via GDAL when rasterio cannot read it, and the conversion fails with a clear message if the source CRS cannot be determined.
     - GeoTIFF to mesh conversion now supports any UTM target zone (previously only zones 32-34) and EPSG:28992 (Dutch RD New) as a source CRS, including its Bessel datum shift.

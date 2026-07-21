@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """Unit tests for core.ortho_tiling (ALFS/orthomosaic geometry helpers)."""
 import numpy as np
-import pytest
 
 from bambi_wildlife_detection.core.ortho_tiling import (
     create_tile_camera,

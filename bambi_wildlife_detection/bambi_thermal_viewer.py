@@ -134,7 +134,8 @@ class ThermalViewerDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Thermal Image Viewer")
-        flags = Qt.WindowType.Window | Qt.WindowType.WindowCloseButtonHint | Qt.WindowType.WindowMinimizeButtonHint | Qt.WindowType.WindowMaximizeButtonHint
+        flags = Qt.WindowType.Window | Qt.WindowType.WindowCloseButtonHint
+        flags |= Qt.WindowType.WindowMinimizeButtonHint | Qt.WindowType.WindowMaximizeButtonHint
         self.setWindowFlags(flags)
         self.resize(860, 680)
 

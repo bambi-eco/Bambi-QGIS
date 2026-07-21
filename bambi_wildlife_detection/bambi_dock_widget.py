@@ -2962,6 +2962,11 @@ class BambiDockWidget(QDockWidget):
         thermal_video_paths = [p.strip() for p in self.thermal_video_paths_edit.text().split(",") if p.strip()]
         rgb_video_paths = [p.strip() for p in self.rgb_video_paths_edit.text().split(",") if p.strip()]
 
+        # Thermal visualisation: the lo/hi spin boxes apply in the threshold
+        # mode, the curve in the curve mode — the other one is sent as None.
+        threshold_mode = self.thermal_vis_mode_combo.currentIndex() == 0
+        curve_mode = self.thermal_vis_mode_combo.currentIndex() == 1
+
         return {
             # Input mode
             "input_mode": "video" if video_mode else "photo",
@@ -3039,18 +3044,15 @@ class BambiDockWidget(QDockWidget):
             ),
             "thermal_photo_lo_threshold": (
                 self.thermal_vis_lo_spin.value()
-                if self.thermal_vis_lo_check.isChecked()
-                and self.thermal_vis_mode_combo.currentIndex() == 0 else None
+                if threshold_mode and self.thermal_vis_lo_check.isChecked() else None
             ),
             "thermal_photo_hi_threshold": (
                 self.thermal_vis_hi_spin.value()
-                if self.thermal_vis_hi_check.isChecked()
-                and self.thermal_vis_mode_combo.currentIndex() == 0 else None
+                if threshold_mode and self.thermal_vis_hi_check.isChecked() else None
             ),
             "thermal_photo_curve": (
                 self._thermal_vis_curve.to_dict()
-                if self.thermal_vis_mode_combo.currentIndex() == 1
-                and self._thermal_vis_curve is not None else None
+                if curve_mode and self._thermal_vis_curve is not None else None
             ),
 
             # Common inputs
@@ -3281,15 +3283,19 @@ class BambiDockWidget(QDockWidget):
         box = QGroupBox("Projects")
         layout = QVBoxLayout(box)
 
-        desc = QLabel(
+        description = (
             "Analyse one or more BAMBI target folders together — each project "
             "is processed on its own and the results are combined. Leave the "
             "list empty and keep 'Add current project' ticked to analyse only "
             "the active project (same as before)."
-            + (" Added projects need their DEM metadata (dem.json) so their "
-               "transects can be georeferenced; the current project reuses the "
-               "DEM configured on the Processing tab." if with_dem else "")
         )
+        if with_dem:
+            description += (
+                " Added projects need their DEM metadata (dem.json) so their "
+                "transects can be georeferenced; the current project reuses "
+                "the DEM configured on the Processing tab."
+            )
+        desc = QLabel(description)
         desc.setWordWrap(True)
         desc.setStyleSheet("color: gray; font-size: 10px;")
         layout.addWidget(desc)
@@ -3404,8 +3410,7 @@ class BambiDockWidget(QDockWidget):
         layout.addLayout(form)
 
         buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok
-            | QDialogButtonBox.StandardButton.Cancel)
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(dlg.accept)
         buttons.rejected.connect(dlg.reject)
         layout.addWidget(buttons)
@@ -6313,8 +6318,8 @@ class BambiDockWidget(QDockWidget):
                     "run frame extraction)")
             # The active project uses the DEM configured on the Processing tab;
             # every added project must supply its own dem.json.
-            is_current = (current_key is not None
-                          and os.path.normcase(os.path.abspath(folder)) == current_key)
+            folder_key = os.path.normcase(os.path.abspath(folder))
+            is_current = current_key is not None and folder_key == current_key
             if not is_current:
                 if not dem:
                     missing.append("DEM metadata (dem.json) — add it for this project")

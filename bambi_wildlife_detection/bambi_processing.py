@@ -597,8 +597,8 @@ class BambiProcessor:
             thermal_colorizer = None
             thermal_instance = None
 
-            if (colormap is not None or lo_threshold is not None
-                    or hi_threshold is not None or curve_cfg is not None):
+            if any(v is not None for v in
+                   (colormap, lo_threshold, hi_threshold, curve_cfg)):
                 import numpy as np
                 from .bambi_thermal import Thermal
                 thermal_instance = Thermal(dtype=np.float32)
@@ -2488,6 +2488,18 @@ class BambiProcessor:
         gx = best["g"](xs)
         hist_counts, hist_edges = np.histogram(x, bins=min(20, max(5, n // 5)), range=(0, w))
 
+        notes = (
+            "Encounter-rate variance uses a Poisson approximation (CV = 1/sqrt(n)); "
+            "abundance is reported for the covered strip area 2*w*L. Multiply density "
+            "by your study-area size for a study-area abundance estimate."
+        )
+        if len(project_folders) > 1:
+            notes += (
+                " Several projects were pooled: their perpendicular distances "
+                "were combined and their flight-route lengths summed into the "
+                "total effort L, assuming a shared detection function."
+            )
+
         result = {
             "source": source,
             "crs": f"EPSG:{target_epsg}",
@@ -2521,15 +2533,7 @@ class BambiProcessor:
                 "counts": hist_counts.tolist(),
                 "edges": hist_edges.tolist(),
             },
-            "notes": (
-                "Encounter-rate variance uses a Poisson approximation (CV = 1/sqrt(n)); "
-                "abundance is reported for the covered strip area 2*w*L. Multiply density "
-                "by your study-area size for a study-area abundance estimate."
-                + ("" if len(project_folders) == 1 else
-                   " Several projects were pooled: their perpendicular distances "
-                   "were combined and their flight-route lengths summed into the "
-                   "total effort L, assuming a shared detection function.")
-            ),
+            "notes": notes,
         }
 
         det_suffix_out = ("t" if config.get("tracking_camera", "T") == "T" else "w") \
@@ -2921,6 +2925,27 @@ class BambiProcessor:
         result = estimate_population(
             combined_usable, methods=methods, n_boot=n_boot, seed=seed,
             study_area_ha=study_area_ha)
+
+        notes = (
+            "A track counts towards a transect only when it lies inside that "
+            "transect's monitored area (the union of the field-of-view "
+            "footprints of the frames in its range); where several transects "
+            "cover it, the one whose flight path is nearest in perpendicular "
+            "distance wins. "
+            "Densities are per 100 ha (= per km²). The monitored area sums the "
+            "transects (each is its own sample, so shared ground counts once "
+            "per transect), while flight_fov_area_ha unions every frame and "
+            "counts shared ground once — they differ where transects overlap "
+            "or where frames belong to no transect."
+        )
+        if multi:
+            notes += (
+                " Several projects were pooled: every project's transects are "
+                "one shared sample set for the estimators, the monitored areas "
+                "and flight FoV coverages summed across flights. Each project's "
+                "own DEM georeferencing was used to place its transects."
+            )
+
         result.update({
             "camera": camera_label,
             "crs": f"EPSG:{target_epsg}",
@@ -2935,23 +2960,7 @@ class BambiProcessor:
             "flight_fov_area_ha": total_flight_area_ha,
             "study_area_source": study_area_source,
             "transects": combined_rows,
-            "notes": (
-                "A track counts towards a transect only when it lies inside that "
-                "transect's monitored area (the union of the field-of-view "
-                "footprints of the frames in its range); where several transects "
-                "cover it, the one whose flight path is nearest in perpendicular "
-                "distance wins. "
-                "Densities are per 100 ha (= per km²). The monitored area sums the "
-                "transects (each is its own sample, so shared ground counts once "
-                "per transect), while flight_fov_area_ha unions every frame and "
-                "counts shared ground once — they differ where transects overlap "
-                "or where frames belong to no transect."
-                + ("" if not multi else
-                   " Several projects were pooled: every project's transects are "
-                   "one shared sample set for the estimators, the monitored areas "
-                   "and flight FoV coverages summed across flights. Each project's "
-                   "own DEM georeferencing was used to place its transects.")
-            ),
+            "notes": notes,
         })
 
         # ---- Write outputs -------------------------------------------------- #
