@@ -5,6 +5,7 @@ import numpy as np
 from bambi_wildlife_detection.core.ortho_tiling import (
     create_tile_camera,
     crop_to_content,
+    erode_valid_mask,
     filter_shots_for_tile,
     merge_orthomosaic_average,
 )
@@ -218,3 +219,55 @@ class TestMergeOrthomosaicAverage:
             [_FakeDataset("uint8")], nodata, fake_merge)
         assert avg[0, 0, 0] == 255      # untouched nodata
         assert avg[0, 0, 1] == 30
+
+
+# ---------------------------------------------------------------------------
+# erode_valid_mask
+# ---------------------------------------------------------------------------
+
+class TestErodeValidMask:
+    def test_zero_erosion_returns_input(self):
+        mask = np.ones((5, 5), dtype=bool)
+        out = erode_valid_mask(mask, 0)
+        assert out is mask
+
+    def test_negative_erosion_returns_input(self):
+        mask = np.ones((5, 5), dtype=bool)
+        assert erode_valid_mask(mask, -3) is mask
+
+    def test_empty_mask_returned_unchanged(self):
+        mask = np.zeros((5, 5), dtype=bool)
+        assert erode_valid_mask(mask, 2) is mask
+
+    def test_one_px_removes_full_border(self):
+        mask = np.ones((5, 5), dtype=bool)
+        out = erode_valid_mask(mask, 1)
+        # The outer ring is dropped; a 3x3 interior remains.
+        expected = np.zeros((5, 5), dtype=bool)
+        expected[1:4, 1:4] = True
+        assert np.array_equal(out, expected)
+
+    def test_two_px_erosion(self):
+        mask = np.ones((7, 7), dtype=bool)
+        out = erode_valid_mask(mask, 2)
+        expected = np.zeros((7, 7), dtype=bool)
+        expected[2:5, 2:5] = True
+        assert np.array_equal(out, expected)
+
+    def test_erosion_larger_than_mask_clears_it(self):
+        mask = np.ones((3, 3), dtype=bool)
+        out = erode_valid_mask(mask, 5)
+        assert not out.any()
+
+    def test_diamond_shape_on_interior_blob(self):
+        # A single interior True pixel is removed by a 1 px erosion because
+        # its 4-neighbours must all be valid.
+        mask = np.zeros((5, 5), dtype=bool)
+        mask[2, 2] = True
+        assert not erode_valid_mask(mask, 1).any()
+
+    def test_does_not_mutate_input(self):
+        mask = np.ones((4, 4), dtype=bool)
+        original = mask.copy()
+        erode_valid_mask(mask, 1)
+        assert np.array_equal(mask, original)

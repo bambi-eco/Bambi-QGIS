@@ -127,6 +127,8 @@ class TestRunPip:
     def test_streams_output_and_succeeds(self, monkeypatch):
         monkeypatch.setattr(subprocess, "Popen", _FakePopen)
         monkeypatch.setattr(_FakePopen, "returncode", 0)
+        # Detection unavailable -> no constraint pinning injected.
+        monkeypatch.setattr(ops, "_write_constraints_file", lambda log_fn: None)
         logs = []
         ops._run_pip(["install", "example"], logs.append)
         assert _FakePopen.last_cmd[-4:] == ['-m', 'pip', 'install', 'example']
@@ -136,8 +138,93 @@ class TestRunPip:
     def test_nonzero_exit_raises(self, monkeypatch):
         monkeypatch.setattr(subprocess, "Popen", _FakePopen)
         monkeypatch.setattr(_FakePopen, "returncode", 1)
+        monkeypatch.setattr(ops, "_write_constraints_file", lambda log_fn: None)
         with pytest.raises(RuntimeError, match="pip exited with code 1"):
             ops._run_pip(["install", "example"], lambda m: None)
+
+    def test_install_injects_constraints(self, monkeypatch):
+        monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+        monkeypatch.setattr(_FakePopen, "returncode", 0)
+        monkeypatch.setattr(ops, "_write_constraints_file",
+                            lambda log_fn: "/tmp/c.txt")
+        ops._run_pip(["install", "--force-reinstall", "example"], lambda m: None)
+        assert _FakePopen.last_cmd[-2:] == ['-c', '/tmp/c.txt']
+
+    def test_custom_index_url_is_not_pinned(self, monkeypatch):
+        # A custom --index-url (e.g. the CUDA torch index) may not host the
+        # pinned numpy/scipy, so pinning must be skipped there.
+        monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+        monkeypatch.setattr(_FakePopen, "returncode", 0)
+        monkeypatch.setattr(ops, "_write_constraints_file",
+                            lambda log_fn: pytest.fail("must not build constraints"))
+        ops._run_pip(
+            ["install", "torch", "--index-url", "https://x/whl/cu121"],
+            lambda m: None)
+        assert "-c" not in _FakePopen.last_cmd
+
+    def test_uninstall_is_not_pinned(self, monkeypatch):
+        monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+        monkeypatch.setattr(_FakePopen, "returncode", 0)
+        monkeypatch.setattr(ops, "_write_constraints_file",
+                            lambda log_fn: pytest.fail("must not build constraints"))
+        ops._run_pip(["uninstall", "torch", "-y"], lambda m: None)
+        assert "-c" not in _FakePopen.last_cmd
+
+
+class TestBundledVersionPinning:
+    def setup_method(self):
+        ops._bundled_versions_cache = None
+
+    def teardown_method(self):
+        ops._bundled_versions_cache = None
+
+    def test_detect_parses_probe_output(self, monkeypatch):
+        def fake_run(cmd, **kwargs):
+            assert "-s" in cmd  # user site must be disabled to see bundled build
+
+            class R:
+                stdout = "numpy==2.2.6\nscipy==1.13.0\n"
+            return R()
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        assert ops._detect_bundled_versions() == {
+            "numpy": "2.2.6", "scipy": "1.13.0"}
+
+    def test_detect_result_is_cached(self, monkeypatch):
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+
+            class R:
+                stdout = "numpy==2.2.6\n"
+            return R()
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        ops._detect_bundled_versions()
+        ops._detect_bundled_versions()
+        assert len(calls) == 1  # second call served from cache
+
+    def test_detect_failure_degrades_to_empty(self, monkeypatch):
+        def boom(cmd, **kwargs):
+            raise OSError("no python")
+
+        monkeypatch.setattr(subprocess, "run", boom)
+        assert ops._detect_bundled_versions(log_fn=lambda m: None) == {}
+
+    def test_write_constraints_file_contents(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(ops, "_detect_bundled_versions",
+                            lambda log_fn=None: {"numpy": "2.2.6", "scipy": "1.13.0"})
+        monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+        path = ops._write_constraints_file(lambda m: None)
+        content = open(path).read()
+        assert "numpy==2.2.6" in content
+        assert "scipy==1.13.0" in content
+
+    def test_write_constraints_none_when_nothing_detected(self, monkeypatch):
+        monkeypatch.setattr(ops, "_detect_bundled_versions",
+                            lambda log_fn=None: {})
+        assert ops._write_constraints_file(lambda m: None) is None
 
 
 class TestInstallGithubZip:

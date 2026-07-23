@@ -2341,9 +2341,20 @@ class BambiDockWidget(QDockWidget):
         self.geotiff_camera_combo.addItems(["T - Thermal", "W - RGB"])
         self.geotiff_camera_combo.setFixedWidth(100)
         self.geotiff_camera_combo.setToolTip("Select camera source for frames and poses")
+        self.geotiff_edge_erosion_spin = QSpinBox()
+        self.geotiff_edge_erosion_spin.setRange(0, 10)
+        self.geotiff_edge_erosion_spin.setValue(2)
+        self.geotiff_edge_erosion_spin.setFixedWidth(55)
+        self.geotiff_edge_erosion_spin.setToolTip(
+            "Shrink each frame's valid footprint by this many pixels before\n"
+            "saving, to remove the dark antialiased rim at the image border\n"
+            "that otherwise shows as seams in the orthomosaic. 0 disables it."
+        )
         self.export_geotiffs_status = QLabel("⚪ Not started")
         step8_row.addWidget(self.export_geotiffs_btn)
         step8_row.addWidget(self.geotiff_camera_combo)
+        step8_row.addWidget(QLabel("Erode px:"))
+        step8_row.addWidget(self.geotiff_edge_erosion_spin)
         step8_row.addWidget(self.export_geotiffs_status)
         steps_btn_layout.addLayout(step8_row)
 
@@ -3180,6 +3191,9 @@ class BambiDockWidget(QDockWidget):
             "fov_camera": "T" if self.fov_camera_combo.currentIndex() == 0 else "W",
             "alfs_camera": "T" if self.alfs_camera_combo.currentIndex() == 0 else "W",
             "geotiff_camera": "T" if self.geotiff_camera_combo.currentIndex() == 0 else "W",
+            "geotiff_edge_erosion_px": (
+                self.geotiff_edge_erosion_spin.value()
+                if hasattr(self, 'geotiff_edge_erosion_spin') else 2),
             "sam3_camera": "T" if self.sam3_camera_combo.currentIndex() == 0 else "W",
             # Orthomosaic (merge of exported frame GeoTIFFs)
             "ortho_camera": "T" if self.ortho_camera_combo.currentIndex() == 0 else "W",
@@ -5042,6 +5056,7 @@ class BambiDockWidget(QDockWidget):
             curve=curve,
             image_paths_provider=self._thermal_photo_image_paths,
             parse_factory=self._thermal_parse_factory,
+            colormap=self.thermal_vis_cmap_combo.currentText(),
             parent=self,
         )
         if dlg.exec():

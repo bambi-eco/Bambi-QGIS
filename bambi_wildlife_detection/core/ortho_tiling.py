@@ -124,6 +124,46 @@ def crop_to_content(image, bounds):
     return cropped, (new_min_x, new_min_y, new_max_x, new_max_y)
 
 
+def erode_valid_mask(valid_mask, erosion_px):
+    """Shrink a boolean validity mask inward by *erosion_px* pixels.
+
+    Each frame rendered as an orthophoto has an antialiased/interpolated
+    fringe one or two pixels wide at the footprint border, where the alpha
+    channel is non-zero but the RGB has bled towards black. Left in place
+    that dark ring shows up as a seam wherever frames overlap in the
+    orthomosaic. Eroding the mask before it becomes the GeoTIFF nodata mask
+    drops the ring to nodata so neighbouring frames cover it instead.
+
+    Implemented as *erosion_px* successive 4-neighbour erosions, i.e. a
+    diamond (city-block) structuring element of radius *erosion_px*; for the
+    1-2 px rim this targets it is effectively identical to a box kernel.
+    ``erosion_px <= 0`` or an all-empty mask returns the input unchanged.
+
+    :param valid_mask: 2-D boolean ndarray (True = valid pixel).
+    :param erosion_px: number of pixels to erode from the border.
+    :returns: eroded boolean ndarray of the same shape.
+    """
+    if erosion_px <= 0 or not np.any(valid_mask):
+        return valid_mask
+    m = valid_mask.astype(bool)
+    # Border pixels (outside the array) count as invalid, so shifts that fall
+    # off the edge erode inward there too. Iterate 4-neighbour erosions
+    # erosion_px times → equivalent to a (2r+1) square structuring element.
+    for _ in range(int(erosion_px)):
+        eroded = m.copy()
+        eroded[1:, :] &= m[:-1, :]
+        eroded[:-1, :] &= m[1:, :]
+        eroded[:, 1:] &= m[:, :-1]
+        eroded[:, :-1] &= m[:, 1:]
+        # Also erode along the array boundary itself.
+        eroded[0, :] = False
+        eroded[-1, :] = False
+        eroded[:, 0] = False
+        eroded[:, -1] = False
+        m = eroded
+    return m
+
+
 def merge_orthomosaic_average(datasets, nodata, rio_merge):
     """Merge datasets by averaging overlapping valid pixels.
 

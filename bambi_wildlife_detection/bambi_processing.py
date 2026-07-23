@@ -6864,6 +6864,12 @@ class BambiProcessor:
         dem_metadata_path = config.get("alfs_dem_metadata_path")
         frame_step = config.get("alfs_frame_step", 1)
         mask_simplify_epsilon = config.get("geotiff_mask_simplify_epsilon", 2.0)
+        # Shrink the valid footprint by this many pixels before saving. The
+        # rendered footprint edge is an antialiased/interpolated fringe where
+        # alpha > 0 but RGB has bled towards black, producing the dark rim
+        # visible where frames overlap in the orthomosaic. Eroding the mask
+        # drops that ring to nodata. 0 disables the erosion.
+        edge_erosion_px = int(config.get("geotiff_edge_erosion_px", 2))
 
         frames_folder = os.path.join(target_folder, f"frames_{camera_suffix}")
 
@@ -7119,6 +7125,12 @@ class BambiProcessor:
 
                     output_image = rendered[:, :, :3]
                     output_valid = rendered[:, :, 3] > 0
+
+                    # Erode the valid footprint to remove the dark antialiased
+                    # rim at the frame border (see geotiff_edge_erosion_px).
+                    if edge_erosion_px > 0:
+                        from .core.ortho_tiling import erode_valid_mask
+                        output_valid = erode_valid_mask(output_valid, edge_erosion_px)
 
                     # Save GeoTIFF
                     utm_bounds = (utm_min_x, utm_min_y, utm_max_x, utm_max_y)

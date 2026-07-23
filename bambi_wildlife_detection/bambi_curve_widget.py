@@ -22,13 +22,16 @@ The heavy work (curve math, image scanning) lives in
 ``core.thermal_curve``; this module is Qt-only glue and painting.
 """
 
+import os
 from typing import Callable, List, Optional, Sequence, Tuple
 
 from qgis.PyQt.QtCore import Qt, pyqtSignal, QPointF, QRectF
-from qgis.PyQt.QtGui import QColor, QPainter, QPainterPath, QPen
+from qgis.PyQt.QtGui import (
+    QColor, QImage, QPainter, QPainterPath, QPen, QPixmap,
+)
 from qgis.PyQt.QtWidgets import (
     QApplication, QCheckBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
-    QHBoxLayout, QLabel, QMessageBox, QProgressDialog, QPushButton,
+    QFrame, QHBoxLayout, QLabel, QMessageBox, QProgressDialog, QPushButton,
     QSizePolicy, QVBoxLayout, QWidget,
 )
 
@@ -38,6 +41,28 @@ from .core.thermal_curve import (
 
 _POINT_HIT_RADIUS_PX = 9.0
 _HIST_BARS = 128
+
+# Display names that are not matplotlib colormaps (mirrors the extraction
+# pipeline and the thermal viewer). "(none)" falls back to white-hotspot,
+# matching bambi_processing._make_curve_colorizer's ``colormap or ...``.
+_PREVIEW_CMAP_ALIASES = {"white-hotspot": "gray", "black-hotspot": "gray_r"}
+
+
+def _make_get_cmap():
+    """Return a ``get_cmap(name)`` callable, or None when matplotlib is absent."""
+    try:
+        import matplotlib as mpl
+        if hasattr(mpl, "colormaps"):
+            def _get(name):
+                return mpl.colormaps[_PREVIEW_CMAP_ALIASES.get(name, name)]
+        else:
+            import matplotlib.cm as cm
+
+            def _get(name):
+                return cm.get_cmap(_PREVIEW_CMAP_ALIASES.get(name, name))
+        return _get
+    except Exception:
+        return None
 
 
 def _event_xy(event) -> Tuple[float, float]:
@@ -287,18 +312,37 @@ class CurveEditorPanel(QWidget):
         *parse_fn* maps a file path to a °C array and *close_fn* releases
         any resources afterwards. Exceptions raised by the factory are shown
         to the user.
+    :param show_preview: When True a live preview of a dataset image with the
+        current curve applied is shown below the editor, with forward/backward
+        buttons to page through the flight's thermal images.
+    :param colormap: Colormap the preview colorizes with (the extraction
+        colormap); ``"(none)"`` falls back to white-hotspot like extraction.
     """
 
     curveChanged = pyqtSignal()
 
     def __init__(self, image_paths_provider: Optional[Callable] = None,
-                 parse_factory: Optional[Callable] = None, parent=None):
+                 parse_factory: Optional[Callable] = None,
+                 show_preview: bool = False,
+                 colormap: str = "white-hotspot", parent=None):
         super().__init__(parent)
         self._image_paths_provider = image_paths_provider
         self._parse_factory = parse_factory
         self._scan = None            # TemperatureScan from Auto Detect
         self._temp_array = None      # single-image histogram source
+        self._show_preview = show_preview
+        self._colormap = colormap or "white-hotspot"
+        # Preview state
+        self._preview_paths: List[str] = []
+        self._preview_index = 0
+        self._preview_parse_fn: Optional[Callable] = None
+        self._preview_close_fn: Optional[Callable] = None
+        self._preview_arr = None          # cached °C array of current image
+        self._preview_pixmap: Optional[QPixmap] = None
+        self._get_cmap = None             # resolved lazily on first colorize
         self._build_ui()
+        if self._show_preview:
+            self._init_preview()
 
     def _build_ui(self):
         import numpy as np  # noqa: F401 — ensures availability early
@@ -350,15 +394,52 @@ class CurveEditorPanel(QWidget):
         bottom_row.addWidget(self.reset_btn)
         root.addLayout(bottom_row)
 
+        if self._show_preview:
+            self._build_preview_ui(root)
+
         self.curve_widget.curveChanged.connect(self.curveChanged)
         self.curve_widget.hoverInfo.connect(self.hover_label.setText)
         self.lo_spin.valueChanged.connect(self._on_domain_changed)
         self.hi_spin.valueChanged.connect(self._on_domain_changed)
+        # Recolorize the preview whenever the curve or domain changes.
+        self.curveChanged.connect(self._refresh_preview)
         self._on_domain_changed()
 
         if self._image_paths_provider is None:
             self.auto_detect_btn.setVisible(False)
             self.robust_check.setVisible(False)
+
+    def _build_preview_ui(self, root):
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setFrameShadow(QFrame.Shadow.Sunken)
+        root.addWidget(line)
+
+        nav_row = QHBoxLayout()
+        nav_row.addWidget(QLabel("Preview:"))
+        self.preview_prev_btn = QPushButton("◀")
+        self.preview_prev_btn.setFixedWidth(34)
+        self.preview_prev_btn.setToolTip("Previous image")
+        self.preview_prev_btn.clicked.connect(self._preview_prev)
+        self.preview_next_btn = QPushButton("▶")
+        self.preview_next_btn.setFixedWidth(34)
+        self.preview_next_btn.setToolTip("Next image")
+        self.preview_next_btn.clicked.connect(self._preview_next)
+        self.preview_counter_label = QLabel("")
+        self.preview_counter_label.setStyleSheet("color: grey;")
+        nav_row.addWidget(self.preview_prev_btn)
+        nav_row.addWidget(self.preview_next_btn)
+        nav_row.addWidget(self.preview_counter_label, 1)
+        root.addLayout(nav_row)
+
+        self.preview_label = QLabel("")
+        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_label.setMinimumHeight(180)
+        self.preview_label.setStyleSheet(
+            "background: #1a1a1a; color: grey; border: 1px solid #444;")
+        self.preview_label.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                         QSizePolicy.Policy.Expanding)
+        root.addWidget(self.preview_label, 1)
 
     # ------------------------------------------------------------------
     # Curve accessors
@@ -518,6 +599,145 @@ class CurveEditorPanel(QWidget):
             f"{scan.maximum:.1f} °C\n"
             f"1st–99th percentile: {scan.percentile(1):.1f} – "
             f"{scan.percentile(99):.1f} °C")
+        self._load_preview_image()
+
+    # ------------------------------------------------------------------
+    # Live preview
+    # ------------------------------------------------------------------
+
+    def set_preview_colormap(self, name: str):
+        """Change the colormap the preview colorizes with, and refresh."""
+        self._colormap = name or "white-hotspot"
+        self._refresh_preview()
+
+    def release_preview(self):
+        """Release the preview's thermal parser (SDK DLLs). Idempotent."""
+        if self._preview_close_fn is not None:
+            try:
+                self._preview_close_fn()
+            except Exception:
+                pass
+        self._preview_parse_fn = None
+        self._preview_close_fn = None
+
+    def _init_preview(self):
+        """Populate the image list and load the first image (best effort)."""
+        try:
+            self._preview_paths = list(self._image_paths_provider() or []) \
+                if self._image_paths_provider is not None else []
+        except Exception:
+            self._preview_paths = []
+        self._preview_index = 0
+        if not self._preview_paths:
+            self.preview_label.setText(
+                "No thermal images found.\nConfigure the thermal photo "
+                "directory to preview the curve.")
+            self._update_preview_nav()
+            return
+        self._load_preview_image()
+
+    def _ensure_preview_parser(self):
+        if self._preview_parse_fn is None and self._parse_factory is not None:
+            self._preview_parse_fn, self._preview_close_fn = \
+                self._parse_factory()
+        return self._preview_parse_fn
+
+    def _update_preview_nav(self):
+        total = len(self._preview_paths)
+        if total:
+            self.preview_counter_label.setText(
+                f"{self._preview_index + 1} / {total}  —  "
+                f"{os.path.basename(self._preview_paths[self._preview_index])}")
+        else:
+            self.preview_counter_label.setText("")
+        self.preview_prev_btn.setEnabled(self._preview_index > 0)
+        self.preview_next_btn.setEnabled(self._preview_index < total - 1)
+
+    def _preview_prev(self):
+        if self._preview_index > 0:
+            self._preview_index -= 1
+            self._load_preview_image()
+
+    def _preview_next(self):
+        if self._preview_index < len(self._preview_paths) - 1:
+            self._preview_index += 1
+            self._load_preview_image()
+
+    def _load_preview_image(self):
+        """Parse the current preview image and (re)colorize it."""
+        if not self._show_preview or not self._preview_paths:
+            return
+        path = self._preview_paths[self._preview_index]
+        try:
+            parse_fn = self._ensure_preview_parser()
+        except Exception as exc:
+            self._preview_arr = None
+            self.preview_label.setText(
+                f"Thermal parser unavailable:\n{exc}")
+            self._update_preview_nav()
+            return
+        if parse_fn is None:
+            self._preview_arr = None
+            self.preview_label.setText("No thermal parser available.")
+            self._update_preview_nav()
+            return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            self._preview_arr = parse_fn(path)
+        except Exception as exc:
+            self._preview_arr = None
+            self.preview_label.setText(f"Could not parse image:\n{exc}")
+            self._update_preview_nav()
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+        # Feed the histogram backdrop from this image unless a scan is active.
+        if self._scan is None:
+            self.set_temperature_array(self._preview_arr)
+        self._update_preview_nav()
+        self._refresh_preview()
+
+    def _refresh_preview(self):
+        """Recolorize the cached preview array with the current curve."""
+        if not self._show_preview or self._preview_arr is None:
+            return
+        import numpy as np
+
+        norm = self.curve().apply(self._preview_arr)
+        if self._get_cmap is None:
+            self._get_cmap = _make_get_cmap()
+        rgb = None
+        if self._get_cmap is not None:
+            try:
+                rgba = self._get_cmap(self._colormap)(norm)
+                rgb = (rgba[:, :, :3] * 255).astype(np.uint8)
+            except Exception:
+                rgb = None
+        if rgb is None:
+            gray = (norm * 255).astype(np.uint8)
+            rgb = np.stack([gray, gray, gray], axis=2)
+        rgb = np.ascontiguousarray(rgb)
+
+        h, w = norm.shape
+        raw = rgb.tobytes()
+        img = QImage(raw, w, h, 3 * w, QImage.Format.Format_RGB888)
+        self._preview_pixmap = QPixmap.fromImage(img)
+        del img, raw
+        self._rescale_preview()
+
+    def _rescale_preview(self):
+        if self._preview_pixmap is None or self._preview_pixmap.isNull():
+            return
+        scaled = self._preview_pixmap.scaled(
+            self.preview_label.size(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation)
+        self.preview_label.setPixmap(scaled)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._show_preview:
+            self._rescale_preview()
 
 
 class CurveEditorDialog(QDialog):
@@ -525,24 +745,28 @@ class CurveEditorDialog(QDialog):
 
     def __init__(self, curve: Optional[ThermalCurve] = None,
                  image_paths_provider: Optional[Callable] = None,
-                 parse_factory: Optional[Callable] = None, parent=None):
+                 parse_factory: Optional[Callable] = None,
+                 colormap: str = "white-hotspot", parent=None):
         super().__init__(parent)
         self.setWindowTitle("Thermal Curve Mapping")
-        self.resize(460, 420)
+        self.resize(520, 680)
 
         layout = QVBoxLayout(self)
         hint = QLabel(
             "Map flight temperatures (x-axis, °C) to display intensity "
             "(y-axis). Left-click adds or drags a control point, "
             "right-click removes one. \"Auto Detect\" scans the configured "
-            "thermal photo directory for the actual temperature range.")
+            "thermal photo directory for the actual temperature range. The "
+            "preview below shows a flight image with the curve applied — use "
+            "◀ / ▶ to page through the images.")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: grey;")
         layout.addWidget(hint)
 
         self.panel = CurveEditorPanel(
             image_paths_provider=image_paths_provider,
-            parse_factory=parse_factory, parent=self)
+            parse_factory=parse_factory, show_preview=True,
+            colormap=colormap, parent=self)
         if curve is not None:
             self.panel.set_curve(curve)
         layout.addWidget(self.panel, 1)
@@ -555,3 +779,8 @@ class CurveEditorDialog(QDialog):
 
     def curve(self) -> ThermalCurve:
         return self.panel.curve()
+
+    def done(self, result):
+        # Release the preview's thermal parser (SDK DLLs) on close.
+        self.panel.release_preview()
+        super().done(result)

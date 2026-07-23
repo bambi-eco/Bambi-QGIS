@@ -18,6 +18,18 @@ _DJI_SDK_URL = (
     'TSDK/v1.8(16.1)/dji_thermal_sdk_v1.8_20250829.zip'
 )
 
+# ABI-sensitive packages that QGIS ships as compiled builds in its (read-only)
+# application site-packages.  Our pip installs land in the *user* site, so a
+# transitive dependency that pulls a newer numpy/scipy silently *shadows* the
+# bundled build and breaks QGIS at import time (e.g. the numpy 2.1 vs 2.2
+# ``_no_nep50_warning`` skew that killed GeoTIFF export, or a scipy ABI
+# mismatch).  Every install is pinned to the versions QGIS already ships via a
+# pip constraints file so no dependency can move them out from under QGIS.
+_BUNDLED_PIN_PACKAGES = ('numpy', 'scipy')
+
+# Cache for _detect_bundled_versions: None = not probed yet, dict = result.
+_bundled_versions_cache = None
+
 # Tested version ranges per pip distribution name (or special key for non-pip packages).
 # None means no bound (any version is accepted).
 _VERSION_RANGES = {
@@ -130,8 +142,90 @@ def _find_python():
     return sys.executable  # fallback – may not work on Windows QGIS
 
 
+def _detect_bundled_versions(log_fn=None):
+    """Return ``{pkg: version}`` for the QGIS-bundled builds of the packages in
+    ``_BUNDLED_PIN_PACKAGES``.
+
+    The versions are probed by running the pip interpreter with the *user*
+    site-packages disabled (``-s``), so the numbers reflect the build QGIS
+    ships even when a shadowing copy is already present in the user site.
+    The result is cached for the life of the process; failures degrade to an
+    empty dict (installs then proceed unpinned rather than breaking).
+    """
+    global _bundled_versions_cache
+    if _bundled_versions_cache is not None:
+        return _bundled_versions_cache
+
+    python = _find_python()
+    # importlib.metadata avoids importing (and paying the import cost of) the
+    # packages themselves; -s drops the user site so we see the bundled dist.
+    probe = (
+        'import importlib.metadata as m\n'
+        'for n in {names!r}:\n'
+        '    try: print(n + "==" + m.version(n))\n'
+        '    except Exception: pass\n'
+    ).format(names=list(_BUNDLED_PIN_PACKAGES))
+
+    versions = {}
+    try:
+        kwargs = dict(capture_output=True, text=True, timeout=30)
+        if sys.platform == 'win32':
+            kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+        result = subprocess.run([python, '-s', '-c', probe], **kwargs)  # nosec B603
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if '==' in line:
+                name, ver = line.split('==', 1)
+                if name in _BUNDLED_PIN_PACKAGES and ver:
+                    versions[name] = ver
+    except Exception as exc:  # nosec B110
+        if log_fn:
+            log_fn(f'Could not detect QGIS-bundled package versions ({exc}); '
+                   f'installing without version pins.')
+
+    _bundled_versions_cache = versions
+    return versions
+
+
+def _write_constraints_file(log_fn):
+    """Write a pip constraints file pinning the QGIS-bundled ABI-sensitive
+    packages to their current versions.
+
+    Returns the file path, or ``None`` when nothing could be detected (in which
+    case the caller installs unpinned).
+    """
+    versions = _detect_bundled_versions(log_fn)
+    if not versions:
+        return None
+
+    import tempfile
+    path = os.path.join(tempfile.gettempdir(), 'bambi_pip_constraints.txt')
+    try:
+        with open(path, 'w') as f:
+            for name, ver in versions.items():
+                f.write(f'{name}=={ver}\n')
+    except Exception as exc:  # nosec B110
+        if log_fn:
+            log_fn(f'Could not write constraints file ({exc}); '
+                   f'installing without version pins.')
+        return None
+    return path
+
+
 def _run_pip(args, log_fn):
     python = _find_python()
+    args = list(args)
+
+    # Pin the ABI-sensitive bundled packages (numpy/scipy) on every install so a
+    # transitive dependency cannot upgrade them into the user site and shadow
+    # QGIS's own build.  Skipped for a custom --index-url (e.g. the CUDA torch
+    # index), which may not host the pinned versions.
+    if args and args[0] == 'install' and '--index-url' not in args:
+        constraints = _write_constraints_file(log_fn)
+        if constraints:
+            args += ['-c', constraints]
+            log_fn(f'Pinning bundled packages to QGIS versions via {constraints}')
+
     # -u: force unbuffered stdout/stderr so lines arrive in real time
     cmd = [python, '-u', '-m', 'pip'] + args
     log_fn(f'Python: {python}')

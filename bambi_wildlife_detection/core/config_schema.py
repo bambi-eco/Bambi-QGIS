@@ -162,6 +162,8 @@ CONFIG_ENTRIES: List[ConfigEntry] = [
     ConfigEntry("ALFS/SamplingMode", "bool", False),
     ConfigEntry("ALFS/SamplingRate", "int_double", 10),
     ConfigEntry("ALFS/SamplingRange", "int_double", 5),
+    # ===== GeoTIFF Export Settings =====
+    ConfigEntry("GeoTIFF/EdgeErosionPx", "int_double", 2),
     # ===== Orthomosaic Settings =====
     ConfigEntry("Ortho/Method", "int_double", 0),
     ConfigEntry("Ortho/AllFrames", "bool", True),
@@ -285,6 +287,7 @@ WIDGET_BINDINGS: Dict[str, Tuple[str, str]] = {
     "ALFS/SamplingMode": ("alfs_sampling_check", "check"),
     "ALFS/SamplingRate": ("alfs_sampling_rate_spin", "spin"),
     "ALFS/SamplingRange": ("alfs_sampling_range_spin", "spin"),
+    "GeoTIFF/EdgeErosionPx": ("geotiff_edge_erosion_spin", "spin"),
     "Ortho/Method": ("ortho_method_combo", "combo_index"),
     "Ortho/AllFrames": ("ortho_all_frames_check", "check"),
     "Ortho/StartFrame": ("ortho_start_frame_spin", "spin"),
