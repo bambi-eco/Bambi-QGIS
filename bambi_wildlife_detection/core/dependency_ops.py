@@ -22,7 +22,7 @@ _DJI_SDK_URL = (
 # None means no bound (any version is accepted).
 _VERSION_RANGES = {
     'bambi-detection': ("0.4.0", "0.4.0"),
-    'AlfsPy': ("0.0.0", "0.0.0"),
+    'AlfsPy': ("0.0.0", "1.0.0"),
     'pycolmap': ('4.0.3', '4.0.3'),
     'boxmot': ('17.0.0', '18.0.0'),
     'georef-tracker': ("0.1.0", "0.1.0"),
