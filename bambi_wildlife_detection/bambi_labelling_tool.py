@@ -41,7 +41,8 @@ Features
   result usually only needs small size adaptions.  A sampling rate adds
   intermediate key frames on the way to the target frame, so the linear
   interpolation between key frames never has to bridge a long span of curved
-  drone ego-motion.
+  drone ego-motion.  Selecting several tracks in the list propagates all of
+  their boxes on the current frame in one step.
 * Cross-modality copy: the label tracks of the other modality (RGB ↔
   thermal) are projected onto this modality's frames — frames are matched by
   capture time, each box is ray-cast onto the DEM with the source camera and
@@ -1085,8 +1086,8 @@ class LabellingToolDialog(QDialog):
         self.track_list.setSelectionMode(
             QListWidget.SelectionMode.ExtendedSelection)
         self.track_list.setToolTip(
-            "Ctrl / Shift click selects several tracks — for merging or "
-            "deleting them together.")
+            "Ctrl / Shift click selects several tracks — for merging, "
+            "deleting or geo-propagating them together.")
         self.track_list.currentItemChanged.connect(self._on_track_list_selection)
         tg.addWidget(self.track_list)
 
@@ -1296,9 +1297,15 @@ class LabellingToolDialog(QDialog):
             "Ray-cast the current box onto the DEM and back-project it into "
             "the offset frame — and, if sampling is enabled, into the "
             "intermediate frames; a key frame is created at each. Usually "
-            "only small size adaptions are needed afterwards.")
+            "only small size adaptions are needed afterwards.\n\n"
+            "Select several tracks in the list (Ctrl / Shift click) to "
+            "propagate all of their boxes on the current frame in one step.")
         self.propagate_btn.clicked.connect(self._on_propagate)
         pg.addWidget(self.propagate_btn)
+        # Connected here (not where the list is built): the handler needs the
+        # button, which is created further down.
+        self.track_list.itemSelectionChanged.connect(
+            self._update_propagate_button)
         prop_hint = QLabel(
             "Projection quality depends on calibration and correction "
             "accuracy.")
@@ -2617,19 +2624,55 @@ class LabellingToolDialog(QDialog):
     # Geo-referenced propagation
     # ------------------------------------------------------------------
 
-    def _on_propagate(self):
+    def _propagation_tracks(self) -> List[LabelTrack]:
+        """The tracks the propagation acts on.
+
+        The list multi-selection (already used for merging and deleting) also
+        drives the propagation, so several tracks can be propagated in one
+        step.  Falls back to the current track when nothing is selected.
+        """
+        if self._store is None:
+            return []
+        tracks = [self._store.tracks[tid] for tid in self._selected_track_ids()
+                  if tid in self._store.tracks]
+        if tracks:
+            return tracks
         track = self._current_track()
-        if track is None:
+        return [track] if track is not None else []
+
+    def _update_propagate_button(self):
+        """Show the number of tracks a propagation would cover."""
+        count = len(self._propagation_tracks())
+        self.propagate_btn.setText(
+            f"Propagate boxes (geo) — {count} tracks" if count > 1
+            else "Propagate box (geo)")
+
+    def _on_propagate(self):
+        tracks = self._propagation_tracks()
+        if not tracks:
             QMessageBox.information(
                 self, "BAMBI Labelling Tool",
                 "Please select a label track first.")
             return
-        res = track.box_at(self._current_frame)
-        if res is None:
+        multi = len(tracks) > 1
+
+        # Tracks without a box on the current frame have nothing to project.
+        todo = []
+        missing: List[int] = []
+        for track in tracks:
+            res = track.box_at(self._current_frame)
+            if res is None:
+                missing.append(track.track_id)
+            else:
+                todo.append((track, res))
+        if not todo:
             QMessageBox.information(
                 self, "BAMBI Labelling Tool",
+                f"None of the {len(tracks)} selected tracks has a box on "
+                f"frame {self._current_frame}." if multi else
                 "The selected track has no box on the current frame.")
             return
+
         offset = self.prop_offset_spin.value()
         if offset == 0:
             return
@@ -2649,38 +2692,95 @@ class LabellingToolDialog(QDialog):
                 "Frame image size unknown — cannot project.")
             return
 
+        # (track, res, boxes, failures) per successfully projected track; the
+        # DEM ray-cast can fail for one track (box off the mesh) while the
+        # others project fine, so a failure only drops that track.
+        results = []
+        errors: List[Tuple[int, str]] = []
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            boxes, failures = self._propagator.propagate_series(
-                res[0], self._current_frame, dst_frame, self._images,
-                self._img_size[0], self._img_size[1],
-                step=self.prop_sample_spin.value())
-        except Exception as exc:
+            for track, res in todo:
+                try:
+                    boxes, failures = self._propagator.propagate_series(
+                        res[0], self._current_frame, dst_frame, self._images,
+                        self._img_size[0], self._img_size[1],
+                        step=self.prop_sample_spin.value())
+                except Exception as exc:
+                    errors.append((track.track_id, str(exc)))
+                    continue
+                if boxes:
+                    results.append((track, res, boxes, failures))
+                else:
+                    errors.append((track.track_id,
+                                   failures[0][1] if failures else
+                                   "No frames to propagate to."))
+        finally:
             QApplication.restoreOverrideCursor()
-            QMessageBox.warning(self, "Propagation Failed", str(exc))
-            return
-        QApplication.restoreOverrideCursor()
 
-        if not boxes:
+        if not results:
             QMessageBox.warning(
                 self, "Propagation Failed",
-                failures[0][1] if failures else
-                "No frames to propagate to.")
+                self._propagation_report(
+                    [], missing, errors, self._current_frame) if multi
+                else errors[0][1])
             return
 
-        for frame, new_box in boxes:
-            track.set_keyframe(frame, new_box, occlusion=res[2])
+        src_frame = self._current_frame
+        for track, res, boxes, _failures in results:
+            for frame, new_box in boxes:
+                track.set_keyframe(frame, new_box, occlusion=res[2])
+        # Jump to the frame furthest from the source frame (the target frame,
+        # unless it was skipped for every track) — also correct for backwards
+        # propagation, where the target is the *lowest* frame.
+        landing = max(
+            (frame for _t, _r, boxes, _f in results for frame, _b in boxes),
+            key=lambda f: abs(f - src_frame))
         self._mark_dirty()
         self._refresh_track_list()
-        self._goto_frame(boxes[-1][0], force=True)
+        self._goto_frame(landing, force=True)
 
-        if failures:
+        report = self._propagation_report(results, missing, errors, src_frame)
+        if report:
+            QMessageBox.information(self, "BAMBI Labelling Tool", report)
+
+    def _propagation_report(self, results, missing: List[int],
+                            errors: List[Tuple[int, str]],
+                            src_frame: int) -> str:
+        """Summarise a propagation run; empty when there is nothing to report.
+
+        A single fully successful track stays silent (as before); anything
+        skipped — frames, whole tracks — is listed per track.
+        """
+        multi = len(results) + len(missing) + len(errors) > 1
+        lines: List[str] = []
+        created = 0
+        for track, _res, boxes, failures in results:
+            created += len(boxes)
+            if not failures:
+                continue
             skipped = ", ".join(str(f) for f, _ in failures)
-            QMessageBox.information(
-                self, "BAMBI Labelling Tool",
-                f"Created {len(boxes)} key frame(s).\n\n"
+            lines.append(
+                f"• L{track.track_id}: {len(boxes)} key frame(s), skipped "
+                f"frame(s) {skipped} — the projected box lies outside the "
+                "frame or the valid (white) mask area."
+                if multi else
                 f"Skipped frame(s) {skipped}: the projected box lies outside "
                 "the frame or the valid (white) mask area.")
+        for tid in missing:
+            lines.append(f"• L{tid}: no box on frame {src_frame} — skipped.")
+        for tid, message in errors:
+            lines.append(f"• L{tid}: {message}")
+        if not lines:
+            return ""
+
+        if not results:  # nothing was created — the reasons say it all
+            header = ""
+        elif multi:
+            header = (f"Created {created} key frame(s) in "
+                      f"{len(results)} track(s).\n\n")
+        else:
+            header = f"Created {created} key frame(s).\n\n"
+        return header + "\n".join(lines)
 
     # ------------------------------------------------------------------
     # Persistence

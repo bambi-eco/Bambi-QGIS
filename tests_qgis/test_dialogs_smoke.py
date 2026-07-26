@@ -173,21 +173,26 @@ class TestCustomFieldWidgets:
         widget.deleteLater()
 
 
+def _dialog_with_tracks(iface, dock, tmp_path):
+    """A labelling dialog holding three tracks with disjoint frame ranges."""
+    from bambi_wildlife_detection.bambi_labelling_tool import (
+        LabelStore, LabelTrack, LabellingToolDialog)
+    dlg = LabellingToolDialog(iface, dock)
+    dlg._store = LabelStore(str(tmp_path), "t")
+    for track_id, frames in ((1, (0, 10)), (2, (40, 50)), (3, (80, 90))):
+        track = LabelTrack(track_id)
+        for f in frames:
+            track.set_keyframe(f, (0, 0, 10, 10))
+        dlg._store.tracks[track_id] = track
+    dlg._refresh_track_list()
+    return dlg
+
+
 class TestTrackMerging:
     """Merging / splitting through the dialog's list selection."""
 
     def _dialog_with_tracks(self, iface, dock, tmp_path):
-        from bambi_wildlife_detection.bambi_labelling_tool import (
-            LabelStore, LabelTrack, LabellingToolDialog)
-        dlg = LabellingToolDialog(iface, dock)
-        dlg._store = LabelStore(str(tmp_path), "t")
-        for track_id, frames in ((1, (0, 10)), (2, (40, 50)), (3, (80, 90))):
-            track = LabelTrack(track_id)
-            for f in frames:
-                track.set_keyframe(f, (0, 0, 10, 10))
-            dlg._store.tracks[track_id] = track
-        dlg._refresh_track_list()
-        return dlg
+        return _dialog_with_tracks(iface, dock, tmp_path)
 
     def test_selection_ids_follow_the_list(self, iface, dock, tmp_path):
         dlg = self._dialog_with_tracks(iface, dock, tmp_path)
@@ -213,4 +218,39 @@ class TestTrackMerging:
             dlg.track_list.item(row).setSelected(True)
         dlg._refresh_track_list()
         assert dlg._selected_track_ids() == [1, 2]
+        _close(dlg)
+
+
+class TestPropagationSelection:
+    """The geo-propagation acts on the list selection (several tracks)."""
+
+    def test_every_selected_track_is_propagated(self, iface, dock, tmp_path):
+        dlg = _dialog_with_tracks(iface, dock, tmp_path)
+        for row in (0, 2):
+            dlg.track_list.item(row).setSelected(True)
+        assert [t.track_id for t in dlg._propagation_tracks()] == [1, 3]
+        assert "2 tracks" in dlg.propagate_btn.text()
+        _close(dlg)
+
+    def test_it_falls_back_to_the_current_track(self, iface, dock, tmp_path):
+        dlg = _dialog_with_tracks(iface, dock, tmp_path)
+        dlg.track_list.clearSelection()
+        dlg._selected_track = 2
+        assert [t.track_id for t in dlg._propagation_tracks()] == [2]
+        dlg._update_propagate_button()
+        assert dlg.propagate_btn.text() == "Propagate box (geo)"
+        _close(dlg)
+
+    def test_the_report_lists_the_tracks_that_were_skipped(
+            self, iface, dock, tmp_path):
+        dlg = _dialog_with_tracks(iface, dock, tmp_path)
+        track = dlg._store.tracks[1]
+        report = dlg._propagation_report(
+            [(track, ((0, 0, 10, 10), True, False), [(20, (1, 1, 2, 2))],
+              [(30, "outside")])],
+            missing=[2], errors=[(3, "no DEM hit")], src_frame=10)
+        assert "Created 1 key frame(s) in 1 track(s)" in report
+        assert "L1" in report and "30" in report      # partially skipped
+        assert "L2: no box on frame 10" in report     # nothing to project
+        assert "L3: no DEM hit" in report             # ray-cast failed
         _close(dlg)

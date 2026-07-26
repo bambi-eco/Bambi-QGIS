@@ -75,6 +75,8 @@ When an animal temporarily disappears (e.g. under a tree) and reappears recogniz
 
 Instead of manually re-drawing a box on a far-away frame, **Propagate box (geo)** ray-casts the current box onto the DEM (pixel → world) with the current frame's camera pose and back-projects it (world → pixel) into the frame at the configured **Frame offset**, creating a key frame there. The DEM mesh is loaded once on first use (may take a while). As with the geo-referenced FoV inspector, the result depends on calibration and correction accuracy — usually only small size adaptions are needed.
 
+Several tracks can be propagated in one step: select them in the track list (Ctrl / Shift click, the same selection used for merging and deleting) and the button changes to **Propagate boxes (geo) — _n_ tracks**, projecting each selected track's box on the current frame. Tracks are handled independently — one whose box has no DEM intersection, or that has no box on the current frame at all, is skipped without aborting the others, and a summary afterwards lists per track what was created and what was skipped.
+
 ### Cross-modality copy
 
 Wildlife is often easier to spot in one modality than the other (e.g. warm animals in thermal, or distinctive shapes in RGB). Once a modality is labelled, **Copy labels from _&lt;other modality&gt;_** (in the *Overlays* section, its caption follows the current modality) brings those tracks over instead of re-labelling from scratch.

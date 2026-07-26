@@ -19,7 +19,7 @@ about=A comprehensive QGIS plugin for detecting, tracking, and geo-referencing w
     - DEM import: automatic download (Austria), GeoTIFF conversion, or flat surface meshes for aquatic surveys
     - Calibration wizards for camera intrinsics (single-camera SfM, stereo RGB+thermal) and per-flight pose corrections
     - Companion tools: result video creator, radiometric thermal image viewer (DJI Thermal SDK), randomized transect flight planner, and interactive map-canvas inspectors
-    - Key-frame based labelling tool: review detections/tracks on extracted frames (thermal or RGB), draw and edit track bounding boxes with species/sex/age/occlusion classes, interpolate between key frames, and propagate boxes across frames via DEM geo-referencing
+    - Key-frame based labelling tool: review detections/tracks on extracted frames (thermal or RGB), draw and edit track bounding boxes with species/sex/age/occlusion classes, interpolate between key frames, and propagate boxes of one or several tracks across frames via DEM geo-referencing
     - Transect splitting tool: split a flight into named transects (frame ranges) on the extracted frames, with a flight-route overview map, flight-path length measurement and an "end after X metres" helper
     - Built-in dependency manager to install all required and optional packages from within QGIS
     All results are automatically added as styled layers to the QGIS project.
@@ -30,6 +30,7 @@ changelog=Version 5.2.0:
     - Labelling tool: new "Replace detections in project" button that replaces the existing detections/tracks instead of appending to them.
     - Labelling tool: new "Import all as label tracks" button to import every pipeline track at once instead of one by one.
     - Labelling tool: now supports to merge/split tracks
+    - Labelling tool: the geo-referenced propagation now works on several tracks at once — select multiple tracks in the track list (Ctrl/Shift click) and the boxes of every selected track on the current frame are propagated in one step (the DEM is loaded once). Tracks without a box on the current frame, or whose box cannot be projected, are skipped instead of aborting the run and are listed in a summary afterwards.
     - Processing tool: Now also supports the "no images" flag of the pose extractors for debugging purposes.
     Changed:
     - Generate Flight Route is now also usable without frame extraction, based only on the AirData file (camera positions are skipped).
