@@ -26,7 +26,7 @@ about=A comprehensive QGIS plugin for detecting, tracking, and geo-referencing w
 
 changelog=Version 5.2.0:
     Added:
-    - Thermal tone-curve mapping: both the Thermal Image Viewer and the photo-extraction thermal visualisati0on now offer a "Curve (custom mapping)" mode as a fine-granular alternative to the lower/upper thresholds — a curve with draggable control points maps a fixed temperature range to display intensity (with a live temperature histogram). The range can be entered manually or determined via "Auto Detect", which scans the flight's thermal images for the actual minimum/maximum temperature (optionally ignoring the extreme 1% to suppress dead/hot pixels). The curve is stored in the QGIS project.
+    - Thermal tone-curve mapping: both the Thermal Image Viewer and the photo-extraction thermal visualisation now offer a "Curve (custom mapping)" mode as a fine-granular alternative to the lower/upper thresholds — a curve with draggable control points maps a fixed temperature range to display intensity (with a live temperature histogram). The range can be entered manually or determined via "Auto Detect", which scans the flight's thermal images for the actual minimum/maximum temperature (optionally ignoring the extreme 1%% to suppress dead/hot pixels). The curve is stored in the QGIS project.
     - Labelling tool: new "Replace detections in project" button that replaces the existing detections/tracks instead of appending to them.
     - Labelling tool: new "Import all as label tracks" button to import every pipeline track at once instead of one by one.
     - Labelling tool: now supports to merge/split tracks
