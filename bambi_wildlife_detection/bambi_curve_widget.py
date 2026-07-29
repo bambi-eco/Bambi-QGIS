@@ -565,7 +565,7 @@ class CurveEditorPanel(QWidget):
         finally:
             try:
                 close_fn()
-            except Exception:
+            except Exception:  # nosec B110
                 pass
             progress.close()
 
@@ -615,7 +615,7 @@ class CurveEditorPanel(QWidget):
         if self._preview_close_fn is not None:
             try:
                 self._preview_close_fn()
-            except Exception:
+            except Exception:  # nosec B110
                 pass
         self._preview_parse_fn = None
         self._preview_close_fn = None

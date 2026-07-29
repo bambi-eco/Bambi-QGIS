@@ -16,9 +16,10 @@ echo "============================================"
 # ---- 1. Bandit: security vulnerability scan ----
 echo ""
 echo "=== 1/3  Bandit (security vulnerabilities) ==="
-# Medium+ severity to skip informational noise.
+# Scan at ALL severity levels (incl. Low) to match the plugins.qgis.org
+# uploader check, which flags Low findings such as B110 (try/except/pass).
 # B603/B607 (subprocess) are expected in the dependency manager.
-bandit -r "$PLUGIN_DIR" --severity-level medium 2>&1 | tee "$REPORTS_DIR/bandit.txt"
+bandit -r "$PLUGIN_DIR" 2>&1 | tee "$REPORTS_DIR/bandit.txt"
 if [ "${PIPESTATUS[0]}" -eq 0 ]; then
     BANDIT_STATUS="PASS"
 else
