@@ -112,6 +112,9 @@ CONFIG_ENTRIES: List[ConfigEntry] = [
     ConfigEntry("Input/CorrectionPath", "str"),
     ConfigEntry("Input/TargetFolder", "str"),
     ConfigEntry("Input/TargetCrs", "str"),
+    # Legacy text outputs alongside the 6.0 store; see
+    # EXCHANGE_FORMAT_PLAN.md §9. On by default for 6.x.
+    ConfigEntry("Input/WriteLegacyTextOutputs", "bool", True),
     # ===== Detection Settings =====
     ConfigEntry("Detection/ThermalModelPath", "str"),
     ConfigEntry("Detection/RgbModelPath", "str"),
@@ -243,6 +246,7 @@ WIDGET_BINDINGS: Dict[str, Tuple[str, str]] = {
     "Input/CorrectionPath": ("correction_path_edit", "line"),
     "Input/TargetFolder": ("target_folder_edit", "line"),
     "Input/TargetCrs": ("target_crs_edit", "crs"),
+    "Input/WriteLegacyTextOutputs": ("legacy_text_outputs_check", "check"),
     "Detection/ThermalModelPath": ("thermal_model_path_edit", "line"),
     "Detection/RgbModelPath": ("rgb_model_path_edit", "line"),
     "Detection/Confidence": ("confidence_spin", "spin"),

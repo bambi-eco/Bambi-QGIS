@@ -1005,8 +1005,27 @@ than today's behaviour, and it never runs again.
 >   counts disagree that alignment is unrecoverable, so those rows are reported
 >   and skipped rather than matched by proximity.
 
-Legacy *writers* stay available for one release behind a "Also write legacy text
-outputs" toggle, so users with external scripts are not stranded.
+Legacy *writers* stay available for one release behind an "Also write legacy
+text outputs" toggle (`Input/WriteLegacyTextOutputs`, on by default), so users
+with external scripts are not stranded.
+
+**Only outputs the store fully replaces are routed through it** —
+`detections.txt`, `georeferenced.txt`, `tracks.csv`, `tracks_pixel.csv`.
+`fov_polygons.txt`, the segmentation JSON and `labels.csv` are deliberately
+*not* gated: no stage writes them to the store yet, so the toggle would let a
+user delete their only copy. A test guards that rule rather than the wiring, so
+gating one of them later has to be a deliberate change.
+
+Two honest limits while the toggle exists:
+
+* **Turning it off breaks internal consumers**, not just external scripts. The
+  Video Creator, the click tool and the QGIS layer builders still read the text
+  files, so the checkbox says so. It becomes genuinely safe once those move
+  (phases 5–6), which is when this stops being an expert-only switch.
+* **Backend-native outputs are not gated.** The advanced tracker and the TRex
+  importer write their own `tracks_pixel.csv`; only the store-derived export is
+  suppressed. Gating those means changing the backends, which belongs with the
+  Phase 6 exporter work.
 
 ---
 
@@ -1018,7 +1037,7 @@ Each phase leaves the plugin working.
 |---|---|
 | **0** ✅ | `core/gpkg.py` (aspatial GPKG boilerplate, stdlib sqlite3) + `core/store.py` (schema, vocabulary seeding, invariant triggers). No stage uses it yet. **Done:** 95 unit tests + 14 QGIS spikes; GPKG layout confirmed; ratchet 20 → 22. |
 | **1** ✅ | 5.x importer (`core/migration.py`) + "Migrate 5.x…" action on the dock widget. Read-only with respect to the legacy files. **Done:** 33 unit tests on golden fixtures, 5 QGIS widget tests, 5 integration tests on flight 6's real output; ratchet 22 → 24. |
-| **2** ✅ | Detection stage, TRex import → write the store (`core/detection_store.py`). `detection_id`, `species` (base classes 0 / -1 / -2), `enums`, `field_schema`, `detection_sources` and `class_mapping` live, plus `core/schema_editor.py` + the *Project Schema* dialog on the Detection tab; **latent bugs 1 and 2 fixed.** Dual-write with a parity check on every detection run. **Done:** +86 unit, +17 QGIS; ratchet 24 → 25. |
+| **2** ✅ | Detection stage, TRex import → write the store (`core/detection_store.py`). `detection_id`, `species` (base classes 0 / -1 / -2), `enums`, `field_schema`, `detection_sources` and `class_mapping` live, plus `core/schema_editor.py` + the *Project Schema* dialog on the Detection tab; **latent bugs 1 and 2 fixed.** Dual-write with a parity check on every detection run, behind `Input/WriteLegacyTextOutputs` (§9). **Done:** +86 unit, +17 QGIS, +11 toggle; ratchet 24 → 25. |
 | **3** ✅ | Georeference + tracking read/write the store (`core/track_store.py`), `track_runs` introduced, `georef_failures` populated. **`core/track_export.py` deleted.** **Done:** +28 unit, +6 integration on flight 6; ratchet held at 25 (see below). |
 | **4** ✅ | Labelling tool onto the store (`core/label_store.py`): upsert materialisation (§6.2), manual tracks (§6.5), custom fields into `detections.attributes`, closed vocabulary in every categorical combo (§6.8), `origin_*` provenance on import. Consumer audit done (§8.2). **Done:** +46 unit; ratchet 25 → 26. |
 | **5** | `stages` table wired up, cascade (**latent bug 3 fixed**), `output_inventory` rewrite, Reset-stage UI (incl. locked-file handling), QGIS layer builders read the store into **memory layers** (§11). |

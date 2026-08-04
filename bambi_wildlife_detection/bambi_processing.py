@@ -13,7 +13,7 @@ from typing import Dict, Any, Optional, List, Tuple
 
 from qgis.PyQt.QtCore import QObject, pyqtSignal
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from typing import Callable
 
 # Progress callback receives a single int: percentage 0-100
@@ -216,6 +216,29 @@ class ProcessingWorker(QObject):
             tb = traceback.format_exc()
             self.error.emit(self.step, f"{str(e)}\n\n{tb}")
             self.finished.emit(self.step, False)
+
+
+class _DiscardedWriter:
+    """Stands in for a file when legacy text output is switched off.
+
+    Lets the stages keep one code path: they always "write" their text file,
+    and the toggle decides whether the bytes reach the disk.
+    """
+
+    def write(self, _text: str) -> None:
+        pass
+
+
+def _legacy_text_writer(config: Dict[str, Any], path: str, stack):
+    """Open *path* for the legacy text output, or discard the writes.
+
+    Only files with a complete equivalent in the 6.0 store may be routed
+    through this — switching the toggle off must never remove the only copy of
+    something (EXCHANGE_FORMAT_PLAN.md §9).
+    """
+    if not config.get("write_legacy_text_outputs", True):
+        return _DiscardedWriter()
+    return stack.enter_context(open(path, "w", encoding="utf-8"))
 
 
 class CancelledException(Exception):
@@ -3487,7 +3510,8 @@ class BambiProcessor:
 
         # Write detection results
         output_file = os.path.join(detections_folder, "detections.txt")
-        with open(output_file, 'w', encoding='utf-8') as f:
+        with ExitStack() as _stack:
+            f = _legacy_text_writer(config, output_file, _stack)
             f.write("# frame x1 y1 x2 y2 confidence class_id\n")
             for idx in frame_indices:
                 # Check for cancellation
@@ -3912,7 +3936,8 @@ class BambiProcessor:
         # Write georeferenced results
         output_file = os.path.join(georef_folder, "georeferenced.txt")
 
-        with open(output_file, 'w', encoding='utf-8') as f:
+        with ExitStack() as _stack:
+            f = _legacy_text_writer(config, output_file, _stack)
             f.write("# idx frame min_x min_y min_z max_x max_y max_z confidence class_id\n")
             for idx, det in enumerate(georeferenced):
                 f.write(f"{idx} {det['frame']} {det['x1']:.6f} {det['y1']:.6f} {det['z1']:.6f} "
@@ -4798,6 +4823,9 @@ class BambiProcessor:
         """
         from .core import track_store
 
+        if not config.get("write_legacy_text_outputs", True):
+            return ""   # the membership lives in the store; this is the export
+
         target_folder = config["target_folder"]
         tracks_folder = os.path.join(target_folder, f"tracks_{camera_suffix}")
         pixel_file = os.path.join(tracks_folder, "tracks_pixel.csv")
@@ -5063,7 +5091,8 @@ class BambiProcessor:
 
         output_file = os.path.join(tracks_folder, "tracks.csv")
 
-        with open(output_file, 'w', encoding='utf-8') as f:
+        with ExitStack() as _stack:
+            f = _legacy_text_writer(config, output_file, _stack)
             for frame, tid, d in results:
                 f.write(f"{frame:08d},{tid},{d.x1:.6f},{d.y1:.6f},{d.z1:.6f},"
                         f"{d.x2:.6f},{d.y2:.6f},{d.z2:.6f},"

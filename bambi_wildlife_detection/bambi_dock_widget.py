@@ -705,6 +705,22 @@ class BambiDockWidget(QDockWidget):
         target_row.addWidget(self.migrate_btn)
         output_layout.addRow("Target Folder:", target_row)
 
+        # 6.0 writes the GeoPackage store; the text files are kept alongside it
+        # for one release. They are not decoration yet — several tools still
+        # read them — so the tooltip says what stops working.
+        self.legacy_text_outputs_check = QCheckBox(
+            "Also write legacy text outputs (.txt / .csv)")
+        self.legacy_text_outputs_check.setChecked(True)
+        self.legacy_text_outputs_check.setToolTip(
+            "6.0 stores detections, geo-referencing and tracks in "
+            "bambi_{t,w}/*.gpkg. The 5.x text files are written alongside them "
+            "so external scripts keep working.\n\n"
+            "Turning this off also stops the Video Creator, the click tool and "
+            "the QGIS layers from finding their input, until those read the "
+            "store directly. Leave it on unless you know you do not need them."
+        )
+        output_layout.addRow("", self.legacy_text_outputs_check)
+
         self.target_crs_edit = QLineEdit()
         self.target_crs_edit.setPlaceholderText("EPSG:32633 (UTM CRS required)")
         self.target_crs_edit.setText("EPSG:32633")
@@ -3098,6 +3114,9 @@ class BambiDockWidget(QDockWidget):
             # Output
             "target_folder": self.target_folder_edit.text(),
             "target_epsg": epsg,
+            "write_legacy_text_outputs": (
+                self.legacy_text_outputs_check.isChecked()
+                if hasattr(self, 'legacy_text_outputs_check') else True),
 
             # Detection
             "thermal_model_path": self.thermal_model_path_edit.text() or None,
