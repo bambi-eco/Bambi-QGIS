@@ -1415,6 +1415,20 @@ class BambiDockWidget(QDockWidget):
         detection_layout.addRow("Sample Rate:", self.detect_sample_rate_spin)
 
         detect_tab_layout.addWidget(detection_group)
+
+        # Project vocabulary. Species are a property of the survey rather than
+        # of whichever tool is open, so they are configured here and only here
+        # — that is what keeps class ids stable.
+        vocabulary_group = QGroupBox("Project Schema")
+        vocabulary_layout = QVBoxLayout(vocabulary_group)
+        vocabulary_layout.addWidget(QLabel(
+            "Species, enums and custom fields for this project. Every tool "
+            "picks from these; none of them can invent new ones."))
+        self.schema_editor_btn = QPushButton("Edit Project Schema…")
+        self.schema_editor_btn.clicked.connect(self.open_schema_dialog)
+        vocabulary_layout.addWidget(self.schema_editor_btn)
+        detect_tab_layout.addWidget(vocabulary_group)
+
         detect_tab_layout.addStretch()
 
         # ----- Sub-Tab 2: Position Correction -----
@@ -5041,6 +5055,25 @@ class BambiDockWidget(QDockWidget):
                 f"  • {w}" for w in report.warnings)
         QMessageBox.information(self, "Migration finished", text)
         self._refresh_migrate_button()
+
+    def open_schema_dialog(self, initial_tab: int = 0) -> bool:
+        """Open the Project Schema editor for the current target folder.
+
+        Returns True when the user accepted, so callers that show a species or
+        enum combo can repopulate it.
+        """
+        from .bambi_schema_dialog import BambiSchemaDialog
+
+        folder = self.target_folder_edit.text().strip()
+        if not folder or not os.path.isdir(folder):
+            QMessageBox.warning(
+                self, "Project Schema",
+                "Select a target folder first — the schema belongs to a "
+                "project.")
+            return False
+
+        dialog = BambiSchemaDialog(folder, parent=self, initial_tab=initial_tab)
+        return dialog.exec() == QDialog.DialogCode.Accepted
 
     def open_correction_wizard(self) -> None:
         """Open the correction calibration wizard as a modal dialog."""

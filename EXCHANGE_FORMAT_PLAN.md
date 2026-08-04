@@ -984,12 +984,53 @@ Each phase leaves the plugin working.
 |---|---|
 | **0** ✅ | `core/gpkg.py` (aspatial GPKG boilerplate, stdlib sqlite3) + `core/store.py` (schema, vocabulary seeding, invariant triggers). No stage uses it yet. **Done:** 95 unit tests + 14 QGIS spikes; GPKG layout confirmed; ratchet 20 → 22. |
 | **1** ✅ | 5.x importer (`core/migration.py`) + "Migrate 5.x…" action on the dock widget. Read-only with respect to the legacy files. **Done:** 33 unit tests on golden fixtures, 5 QGIS widget tests, 5 integration tests on flight 6's real output; ratchet 22 → 24. |
-| **2** | Detection stage, TRex import → write the store. `detection_id`, `species` (base classes 0 / -1 / -2), `enums`, `field_schema`, `detection_sources` and `class_mapping` land here, plus `core/schema_editor.py` + the *Project Schema* dialog hosted by the Detection tab; **latent bugs 1 and 2 fixed.** Dual-write text files behind the compat toggle. |
+| **2** ✅ | Detection stage, TRex import → write the store (`core/detection_store.py`). `detection_id`, `species` (base classes 0 / -1 / -2), `enums`, `field_schema`, `detection_sources` and `class_mapping` live, plus `core/schema_editor.py` + the *Project Schema* dialog on the Detection tab; **latent bugs 1 and 2 fixed.** Dual-write with a parity check on every detection run. **Done:** +86 unit, +17 QGIS; ratchet 24 → 25. |
 | **3** | Georeference + tracking read/write the store, `track_runs` introduced. `georef_failures` populated. **`core/track_export.py` deleted.** |
 | **4** | Labelling tool onto the store: upsert materialisation (§6.2), manual tracks (§6.5), `origin_*` provenance, custom fields into `detections.attributes`, all categorical combos bound to the store, gear + "Manage species…" opening the shared dialog (§6.8). |
 | **5** | `stages` table wired up, cascade (**latent bug 3 fixed**), `output_inventory` rewrite, Reset-stage UI (incl. locked-file handling), QGIS layer builders read the store into **memory layers** (§11). |
 | **6** | `core/exporters/` — COCO, MOT, YOLO, TRex npz, GeoJSON. |
 | **7** | Survey analytics onto the store (§8.2): explicit population filter, species/attribute stratification, perpendicular distances keyed by id, multi-project pooling by label. Route/transect files follow. |
+| **8** | UI reorganisation: split the Processing tab into **Pre-Processing** and **Processing** (§10.1). Last, because it is the only phase that moves things the user has learned where to find. |
+
+### 10.1 Phase 8 — splitting the Processing tab
+
+The Processing tab currently runs ten numbered steps in one column, from frame
+extraction to SAM3 geo-referencing. Split it in two:
+
+| Tab | Steps |
+|---|---|
+| **Pre-Processing** | 1 Extract Frames · 2 Generate Flight Route · 5 Calculate Field of View · 6 Generate ALFS · 7 Export Frames as GeoTIFF · 8 Generate Orthomosaic |
+| **Processing** | 3 Detect Animals · 3b Import TRex Tracklets · 4 Track Animals · 9 Run SAM3 Segmentation · 10 Geo-Reference Segmentation |
+
+The split is not cosmetic — it is the dependency graph of §7 made visible:
+
+```
+frames ──> detections ──> georeferenced ──> tracks ──>     [Processing]
+   └────> fov, alfs, geotiffs, orthomosaic                 [Pre-Processing]
+```
+
+Everything in Pre-Processing derives from poses and the DEM and is *independent
+of any animal*; everything in Processing depends on detections. That is also why
+the two can be re-run independently, and why a detector re-run marks tracking
+stale but leaves the ALFS alone. Presenting them as one list has always implied
+a sequence that does not exist.
+
+Three things to settle when it lands:
+
+- **Renumber or keep the numbers?** Keeping `1, 2, 5, 6, 7, 8` in one tab and
+  `3, 4, 9, 10` in the other is confusing; renumbering breaks every screenshot,
+  tutorial and support answer that refers to "step 7". Suggest renumbering
+  within each tab (`P1…P6`, `A1…A5`) so no bare number means two things.
+- **Where does geo-referencing appear?** It has no button today — it runs as
+  part of the detection flow — but it is a distinct stage in the store, with
+  its own `georef_failures`. Phase 3 gives it real status; Phase 8 should
+  surface it in Processing rather than leave it invisible.
+- **SAM3 sits in Processing** on the assumption that segmentation is prompted
+  for animals. If it is used for ground cover or other scene content, it
+  belongs in Pre-Processing instead.
+
+Config keys, step ids and `output_inventory` keys stay unchanged — this is a
+presentation change only, so a saved configuration keeps working.
 
 Phases 2–4 are the bulk. Phase 3 is where the payoff lands.
 
@@ -1137,12 +1178,13 @@ the labelling tool's combos populate from the store.
 |---|---|
 | 0 ✅ | Aspatial-GPKG and locking spikes answered; §4.1 invariants under test |
 | 1 ✅ | Migration golden files + real 5.x flight-6 folder migrate correctly |
-| 2 | Dual-write parity for `detections.txt`; species/enum editors round-trip |
+| 2 ✅ | Dual-write parity for `detections.txt`; species/enum editors round-trip |
 | 3 | Total accounting + no-orphans + `track_export` regression tests pass |
 | 4 | Upsert matrix; manual tracks never touch another run's rows |
 | 5 | Cascade correctness; `output_inventory` reconciles a hand-deleted file |
 | 6 | Exporter fixtures, incl. enum resolution and class-id remapping |
 | 7 | Analytics results unchanged vs. the pre-rework baseline on flight 6 |
+| 8 | Every step still reachable and runnable; saved configs load unchanged |
 
 Phase 7's gate is worth stating plainly: the Praschl2026 R validation baseline
 must still reproduce. A data-plumbing release that quietly changes a population
