@@ -83,7 +83,25 @@ def has_legacy_outputs(target_folder: str) -> bool:
 
 def is_migrated(target_folder: str) -> bool:
     """True when a 6.0 store already exists for *target_folder*."""
-    return os.path.isfile(store.project_path(target_folder))
+    return bool(existing_stores(target_folder))
+
+
+def existing_stores(target_folder: str) -> List[str]:
+    """Names of the 6.0 store files already present, if any.
+
+    Used to refuse a migration that would duplicate live data — the store may
+    have been written by the pipeline itself rather than by an earlier
+    migration.
+    """
+    found = []
+    if os.path.isfile(store.project_path(target_folder)):
+        found.append("project.gpkg")
+    for modality in store.MODALITIES:
+        for kind in store.STAGE_KINDS:
+            path = store.stage_path(target_folder, kind, modality)
+            if os.path.isfile(path):
+                found.append(f"bambi_{modality}/{kind}.gpkg")
+    return found
 
 
 def legacy_modalities(target_folder: str) -> List[str]:
@@ -773,6 +791,18 @@ def migrate_project(target_folder: str, log_fn: LogFn = None) -> MigrationReport
     modalities = legacy_modalities(target_folder)
     if not modalities:
         report.warn("No 5.x outputs found — nothing to migrate.")
+        return report
+
+    # Migration inserts; it does not reconcile. Running it over a folder that
+    # already holds a 6.0 store would add a second copy of every row alongside
+    # the live ones, which is far worse than refusing.
+    existing = existing_stores(target_folder)
+    if existing:
+        found = ", ".join(sorted(existing))
+        report.warn(
+            f"This folder already has a 6.0 store ({found}). Migration only "
+            "ever adds rows, so it would duplicate what is already there. "
+            "Delete the store files first to re-migrate.")
         return report
 
     project = store.open_store(store.project_path(target_folder), store.PROJECT)

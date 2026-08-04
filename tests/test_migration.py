@@ -536,3 +536,50 @@ def test_trex_folder_is_flagged_as_indistinguishable(tmp_path):
     os.makedirs(os.path.join(root, "tracks_pixel_t"), exist_ok=True)
     report = migration.migrate_project(root)
     assert any("TRex" in w for w in report.warnings)
+
+
+def test_migration_refuses_when_a_store_already_exists(legacy):
+    """Migration inserts; it never reconciles, so a second run would duplicate.
+
+    The store may also have been written by the pipeline itself rather than by
+    an earlier migration — that is the dangerous case, because the duplicate
+    rows would sit alongside live ones.
+    """
+    first = migration.migrate_project(legacy)
+    assert first.counts["detections_detector"] == 3
+
+    second = migration.migrate_project(legacy)
+    assert second.counts == {}
+    assert any("already has a 6.0 store" in w for w in second.warnings)
+
+    conn = store.open_store(
+        store.stage_path(legacy, store.DETECTIONS, "t"), store.DETECTIONS, "t")
+    assert len(_rows(conn, "SELECT * FROM detections")) == 5   # not 10
+    conn.close()
+
+
+def test_migration_refuses_a_folder_the_pipeline_already_wrote(tmp_path):
+    from bambi_wildlife_detection.core import detection_store
+
+    root = str(tmp_path / "flight")
+    _write(os.path.join(root, "detections_t", "detections.txt"),
+           "1 10.0 20.0 30.0 40.0 0.9 0\n")
+    detection_store.record_detections(root, "t", [
+        {"frame": 1, "x1": 10.0, "y1": 20.0, "x2": 30.0, "y2": 40.0,
+         "confidence": 0.9, "source_class": "0"}])
+
+    report = migration.migrate_project(root)
+    assert any("already has a 6.0 store" in w for w in report.warnings)
+
+    conn = store.open_store(
+        store.stage_path(root, store.DETECTIONS, "t"), store.DETECTIONS, "t")
+    assert len(_rows(conn, "SELECT * FROM detections")) == 1
+    conn.close()
+
+
+def test_existing_stores_lists_what_is_there(legacy):
+    assert migration.existing_stores(legacy) == []
+    migration.migrate_project(legacy)
+    found = migration.existing_stores(legacy)
+    assert "project.gpkg" in found
+    assert "bambi_t/detections.gpkg" in found

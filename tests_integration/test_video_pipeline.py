@@ -56,6 +56,18 @@ def synthetic_detections(thermal_extraction, base_config, target_folder):
                 f"{i} {width / 2 - half:.1f} {height / 2 - half:.1f} "
                 f"{width / 2 + half:.1f} {height / 2 + half:.1f} 0.90 0\n"
             )
+    # Mirror into the 6.0 store so run_georeference takes the store path and
+    # keys its results on detection_id (EXCHANGE_FORMAT_PLAN.md phase 3).
+    from bambi_wildlife_detection.core import detection_store
+
+    detection_store.record_detections(
+        target_folder, "t",
+        [{"frame": i,
+          "x1": round(width / 2 - half, 2), "y1": round(height / 2 - half, 2),
+          "x2": round(width / 2 + half, 2), "y2": round(height / 2 + half, 2),
+          "confidence": 0.90, "source_class": "0"} for i in range(n)],
+        log_fn=print)
+
     return {"file": det_file, "count": n, "width": width, "height": height}
 
 
@@ -274,16 +286,34 @@ class TestMigrationOnRealOutput:
     """
 
     @pytest.fixture(scope="class")
-    def migrated(self, georeferenced, target_folder):
+    def legacy_copy(self, georeferenced, target_folder, tmp_path_factory):
+        """The legacy text outputs alone, in a folder with no 6.0 store.
+
+        The pipeline now writes the store as it runs, and migration refuses to
+        touch a folder that already has one — so migrating a real 5.x project
+        means migrating the text files without it.
+        """
+        import shutil
+
+        root = str(tmp_path_factory.mktemp("legacy_project"))
+        for name in os.listdir(target_folder):
+            if name.startswith(("detections_", "georeferenced_", "tracks_",
+                                "fov_", "labels_", "segmentation_")):
+                shutil.copytree(os.path.join(target_folder, name),
+                                os.path.join(root, name))
+        return root
+
+    @pytest.fixture(scope="class")
+    def migrated(self, legacy_copy):
         from bambi_wildlife_detection.core import migration
-        return migration.migrate_project(target_folder, log_fn=print)
+        return migration.migrate_project(legacy_copy, log_fn=print)
 
     def test_detections_match_the_text_file(
-            self, migrated, target_folder, synthetic_detections):
+            self, migrated, legacy_copy, synthetic_detections):
         from bambi_wildlife_detection.core import store
 
         conn = store.open_store(
-            store.stage_path(target_folder, store.DETECTIONS, "t"),
+            store.stage_path(legacy_copy, store.DETECTIONS, "t"),
             store.DETECTIONS, "t")
         try:
             n = conn.execute(
@@ -292,15 +322,15 @@ class TestMigrationOnRealOutput:
             conn.close()
         assert n == synthetic_detections["count"]
 
-    def test_every_detection_is_accounted_for(self, migrated, target_folder):
+    def test_every_detection_is_accounted_for(self, migrated, legacy_copy):
         """Either geo-referenced or explicitly failed — never silently absent."""
         from bambi_wildlife_detection.core import store
 
         det = store.open_store(
-            store.stage_path(target_folder, store.DETECTIONS, "t"),
+            store.stage_path(legacy_copy, store.DETECTIONS, "t"),
             store.DETECTIONS, "t")
         geo = store.open_store(
-            store.stage_path(target_folder, store.GEOREFERENCED, "t"),
+            store.stage_path(legacy_copy, store.GEOREFERENCED, "t"),
             store.GEOREFERENCED, "t")
         try:
             all_ids = {r["detection_id"] for r in det.execute(
@@ -319,11 +349,11 @@ class TestMigrationOnRealOutput:
             "recorded as failures")
 
     def test_geo_coordinates_survive_the_round_trip(
-            self, migrated, target_folder, georeferenced):
+            self, migrated, legacy_copy, georeferenced):
         from bambi_wildlife_detection.core import store
 
         geo = store.open_store(
-            store.stage_path(target_folder, store.GEOREFERENCED, "t"),
+            store.stage_path(legacy_copy, store.GEOREFERENCED, "t"),
             store.GEOREFERENCED, "t")
         try:
             rows = [dict(r) for r in geo.execute(
@@ -335,10 +365,10 @@ class TestMigrationOnRealOutput:
                     if r["x1"] >= 0 and r["y1"] >= 0]
         assert [(r["gx1"], r["gy1"]) for r in rows] == expected
 
-    def test_vocabulary_is_seeded(self, migrated, target_folder):
+    def test_vocabulary_is_seeded(self, migrated, legacy_copy):
         from bambi_wildlife_detection.core import store
 
-        conn = store.open_store(store.project_path(target_folder), store.PROJECT)
+        conn = store.open_store(store.project_path(legacy_copy), store.PROJECT)
         try:
             base = {r["name"]: r["species_id"] for r in conn.execute(
                 "SELECT species_id, name FROM species WHERE protected = 1")}
@@ -350,3 +380,65 @@ class TestMigrationOnRealOutput:
         with open(synthetic_detections["file"]) as fh:
             content = fh.read()
         assert "# video_size" in content
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: geo-referencing against the store (EXCHANGE_FORMAT_PLAN.md §3.2, §12.2)
+# ---------------------------------------------------------------------------
+
+class TestGeoreferenceStore:
+    """The live geo-referencing stage, checked through the store.
+
+    The unit tier proves the accounting logic on synthetic data; this proves it
+    on a real DEM ray-cast, where detections genuinely can fail to project.
+    """
+
+    def test_every_detection_is_accounted_for(self, georeferenced, target_folder):
+        from bambi_wildlife_detection.core import track_store
+
+        report = track_store.accounting(target_folder, "t")
+        assert report["detections"] > 0
+        assert report["unaccounted"] == [], (
+            f"{len(report['unaccounted'])} detection(s) neither geo-referenced "
+            "nor recorded as failures")
+        assert report["both"] == []
+
+    def test_resolved_and_failed_sum_to_the_detections(
+            self, georeferenced, target_folder):
+        from bambi_wildlife_detection.core import track_store
+
+        report = track_store.accounting(target_folder, "t")
+        assert report["resolved"] + report["failed"] == report["detections"]
+
+    def test_geo_rows_carry_a_real_detection_id(self, georeferenced, target_folder):
+        from bambi_wildlife_detection.core import track_store
+
+        rows = track_store.load_georeferenced(target_folder, "t")
+        assert rows, "no geo-referenced detections in the store"
+        detection_ids = {row["detection_id"] for row in rows}
+        assert len(detection_ids) == len(rows)     # 1:1, no duplicates
+
+    def test_store_agrees_with_the_text_output(
+            self, georeferenced, target_folder):
+        """Dual-write parity for the geo-referencing stage."""
+        from bambi_wildlife_detection.core import track_store
+
+        rows = track_store.load_georeferenced(target_folder, "t")
+        assert len(rows) == len(georeferenced)
+        for stored, text in zip(
+                sorted(rows, key=lambda r: (r["frame"], r["gx1"])),
+                sorted(georeferenced, key=lambda r: (r["frame"], r["x1"]))):
+            assert stored["frame"] == text["frame"]
+            assert abs(stored["gx1"] - text["x1"]) < 1e-6
+            assert abs(stored["gy1"] - text["y1"]) < 1e-6
+
+    def test_failures_carry_a_known_reason(self, georeferenced, target_folder):
+        from bambi_wildlife_detection.core import track_store
+
+        summary = track_store.failure_summary(target_folder, "t")
+        assert set(summary) <= set(track_store.GEOREF_REASONS)
+
+    def test_no_track_orphans(self, georeferenced, target_folder):
+        from bambi_wildlife_detection.core import track_store
+
+        assert track_store.track_orphans(target_folder, "t") == []

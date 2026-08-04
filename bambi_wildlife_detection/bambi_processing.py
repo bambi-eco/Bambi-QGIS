@@ -3737,6 +3737,24 @@ class BambiProcessor:
                         "class_id": int(parts[6]) if len(parts) > 6 else 0
                     })
 
+        # Prefer the store: its rows carry a detection_id, so the results can be
+        # keyed on it instead of relying on the two files staying in step.
+        from .core import track_store
+
+        if track_store.has_store(target_folder, camera_suffix):
+            stored = track_store.load_detections(target_folder, camera_suffix)
+            if stored:
+                detections = [{
+                    "detection_id": row["detection_id"],
+                    "frame": row["frame"],
+                    "x1": row["x1"], "y1": row["y1"],
+                    "x2": row["x2"], "y2": row["y2"],
+                    "confidence": row["confidence"],
+                    "class_id": int(row["source_class"] or 0),
+                } for row in stored]
+                if log_fn:
+                    log_fn(f"Using {len(detections)} detections from the store")
+
         if log_fn:
             log_fn(f"Loaded {len(detections)} detections to geo-reference")
 
@@ -3775,6 +3793,9 @@ class BambiProcessor:
 
             # Process each detection
             georeferenced = []
+            # Detections that could not be placed, with the reason: these become
+            # georef_failures rows so nothing goes missing silently.
+            georef_failures = []
             total_dets = len(detections)
 
             # Diagnostics for detections whose rays never reach the DEM.  Without
@@ -3798,6 +3819,9 @@ class BambiProcessor:
 
                 if frame_idx >= len(poses["images"]):
                     miss_stats["no_pose"] += 1
+                    georef_failures.append(
+                        {"detection_id": det.get("detection_id"),
+                         "reason": "no_pose"})
                     continue
 
                 # Get frame-specific correction factors
@@ -3840,6 +3864,7 @@ class BambiProcessor:
                         zz = world_coords[:, 2] + z_offset
 
                         georeferenced.append({
+                            "detection_id": det.get("detection_id"),
                             "frame": frame_idx,
                             "x1": min(xx), "y1": min(yy), "z1": min(zz),
                             "x2": max(xx), "y2": max(yy), "z2": max(zz),
@@ -3852,11 +3877,17 @@ class BambiProcessor:
                             (_mesh_x0, _mesh_x1, _mesh_y0, _mesh_y1, _mesh_z),
                         )
                         miss_stats[reason] += 1
+                        georef_failures.append(
+                            {"detection_id": det.get("detection_id"),
+                             "reason": reason})
                         if ground_range is not None:
                             miss_ranges.append(ground_range)
                 except Exception as e:
                     if log_fn:
                         log_fn(f"Warning: Could not geo-reference detection at frame {frame_idx}: {e}")
+                    georef_failures.append(
+                        {"detection_id": det.get("detection_id"),
+                         "reason": "projection_error"})
                     continue
 
                 if progress_fn and idx % 50 == 0:
@@ -3882,6 +3913,23 @@ class BambiProcessor:
                 f.write(f"{idx} {det['frame']} {det['x1']:.6f} {det['y1']:.6f} {det['z1']:.6f} "
                         f"{det['x2']:.6f} {det['y2']:.6f} {det['z2']:.6f} "
                         f"{det['confidence']:.4f} {det['class_id']}\n")
+
+        # Mirror into the store, keyed on detection_id. A detection that could
+        # not be placed is recorded as a failure rather than dropped, so every
+        # detection stays accounted for (§3.2).
+        if any(det.get("detection_id") for det in detections):
+            track_store.record_georeference(
+                target_folder, camera_suffix,
+                [{"detection_id": row["detection_id"],
+                  "gx1": row["x1"], "gy1": row["y1"], "gz1": row["z1"],
+                  "gx2": row["x2"], "gy2": row["y2"], "gz2": row["z2"]}
+                 for row in georeferenced if row.get("detection_id")],
+                [row for row in georef_failures if row.get("detection_id")],
+                log_fn=log_fn)
+            report = track_store.accounting(target_folder, camera_suffix)
+            if report["unaccounted"] and log_fn:
+                log_fn(f"Warning: {len(report['unaccounted'])} detection(s) "
+                       "neither geo-referenced nor recorded as failures")
 
         if log_fn:
             log_fn(f"Geo-referencing complete: {len(georeferenced)} detections")
@@ -4725,29 +4773,48 @@ class BambiProcessor:
         camera = config.get("tracking_camera", "T")
         camera_suffix = "t" if camera == "T" else "w"
         try:
-            self._write_pixel_tracks_from_geo(config, camera_suffix, log_fn)
+            self._write_pixel_tracks(config, camera_suffix, log_fn)
         except Exception as e:  # noqa: BLE001 - best-effort, never fail tracking
             if log_fn:
                 log_fn(f"Warning: could not create pixel tracks file: {e}")
 
-    def _write_pixel_tracks_from_geo(self, config: Dict[str, Any], camera_suffix: str,
-                                     log_fn=None):
-        """Create ``tracks_{cam}/tracks_pixel.csv`` from the geo-referenced tracks.
+    def _write_pixel_tracks(self, config: Dict[str, Any], camera_suffix: str,
+                            log_fn=None):
+        """Write ``tracks_{cam}/tracks_pixel.csv`` from the store.
 
-        The built-in tracker runs in geo space and only writes ``tracks.csv``.
-        To keep the output consistent with the advanced / TRex pipelines (which
-        emit a pixel-space tracks file), derive each track's pixel bounding box
-        by matching its geo-referenced box back to the pixel detection: within a
-        frame, ``detections.txt`` and ``georeferenced.txt`` share the same order,
-        so the k-th pixel box maps to the k-th geo box, whose coordinates then
-        look up the assigned track id in ``tracks.csv``. This is independent of
-        the (frame, track_id) re-sorting applied when writing tracks.csv.
+        This used to reconstruct the pixel/track linkage by rounding each
+        geo-referenced box to three decimals and hashing it, relying on
+        ``detections.txt`` and ``georeferenced.txt`` keeping the same per-frame
+        order — and discarding a whole frame whenever they did not
+        (``core/track_export.py``, removed in 6.0). Track membership is now
+        recorded as (track_id, detection_id) pairs, so this is a join.
 
         No-op when a pixel tracks file already exists (advanced backend).
         """
-        from .core.track_export import write_pixel_tracks_from_geo
-        write_pixel_tracks_from_geo(
-            config["target_folder"], camera_suffix, log_fn=log_fn)
+        from .core import track_store
+
+        target_folder = config["target_folder"]
+        tracks_folder = os.path.join(target_folder, f"tracks_{camera_suffix}")
+        pixel_file = os.path.join(tracks_folder, "tracks_pixel.csv")
+        if os.path.exists(pixel_file):
+            return ""
+
+        rows = track_store.load_pixel_tracks(target_folder, camera_suffix)
+        if not rows:
+            return ""
+
+        os.makedirs(tracks_folder, exist_ok=True)
+        with open(pixel_file, "w", encoding="utf-8") as f:
+            f.write("# frame,track_id,x1,y1,x2,y2,conf,cls,interpolated\n")
+            for row in sorted(rows, key=lambda r: (r["frame"], r["track_id"])):
+                f.write(f"{row['frame']},{row['track_id']},"
+                        f"{row['x1']:.2f},{row['y1']:.2f},"
+                        f"{row['x2']:.2f},{row['y2']:.2f},"
+                        f"{(row['confidence'] or 1.0):.4f},"
+                        f"{row['species_id']},{row['interpolated']}\n")
+        if log_fn:
+            log_fn(f"Wrote pixel-space tracks: {pixel_file} ({len(rows)} rows)")
+        return pixel_file
 
     def _run_builtin_tracking(self, config: Dict[str, Any], progress_fn=None, log_fn=None):
         """Run the built-in Hungarian IoU tracker.
@@ -4832,8 +4899,26 @@ class BambiProcessor:
         # Parse detections
         frames: Dict[int, List[Detection]] = defaultdict(list)
 
+        # Prefer the store: ``source_id`` then carries the real detection_id all
+        # the way through the tracker, so membership needs no reconstruction.
+        from .core import track_store
+
+        stored_geo = track_store.load_georeferenced(target_folder, camera_suffix)
+        from_store = bool(stored_geo)
+        for row in stored_geo:
+            frames[row["frame"]].append(Detection(
+                source_id=row["detection_id"],
+                frame=row["frame"],
+                x1=row["gx1"], y1=row["gy1"], z1=row["gz1"],
+                x2=row["gx2"], y2=row["gy2"], z2=row["gz2"],
+                conf=row["confidence"] if row["confidence"] is not None else 1.0,
+                cls=row["species_id"],
+            ))
+
         with open(georef_file, 'r', encoding='utf-8') as f:
             for line in f:
+                if from_store:
+                    break
                 line = line.strip()
                 if not line or line.startswith('#'):
                     continue
@@ -4970,6 +5055,22 @@ class BambiProcessor:
                 f.write(f"{frame:08d},{tid},{d.x1:.6f},{d.y1:.6f},{d.z1:.6f},"
                         f"{d.x2:.6f},{d.y2:.6f},{d.z2:.6f},"
                         f"{d.conf:.6f},{d.cls},{d.interpolated}\n")
+
+        # Record the run in the store. Membership comes straight from the
+        # tracker's own output — the detection_id travelled through as
+        # ``source_id`` — so nothing is matched back by coordinates.
+        if from_store:
+            track_store.record_tracks(
+                target_folder, camera_suffix,
+                [{"track_id": tid, "detection_id": d.source_id,
+                  "interpolated": int(getattr(d, "interpolated", 0))}
+                 for _frame, tid, d in results
+                 if getattr(d, "source_id", None) is not None],
+                kind="builtin", tracker=tracker_mode_str, log_fn=log_fn)
+            orphans = track_store.track_orphans(target_folder, camera_suffix)
+            if orphans and log_fn:
+                log_fn(f"Warning: {len(orphans)} track member(s) reference a "
+                       "detection that no longer exists")
 
         # Count unique tracks
         unique_tracks = set(r[1] for r in results)

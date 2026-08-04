@@ -985,7 +985,7 @@ Each phase leaves the plugin working.
 | **0** ✅ | `core/gpkg.py` (aspatial GPKG boilerplate, stdlib sqlite3) + `core/store.py` (schema, vocabulary seeding, invariant triggers). No stage uses it yet. **Done:** 95 unit tests + 14 QGIS spikes; GPKG layout confirmed; ratchet 20 → 22. |
 | **1** ✅ | 5.x importer (`core/migration.py`) + "Migrate 5.x…" action on the dock widget. Read-only with respect to the legacy files. **Done:** 33 unit tests on golden fixtures, 5 QGIS widget tests, 5 integration tests on flight 6's real output; ratchet 22 → 24. |
 | **2** ✅ | Detection stage, TRex import → write the store (`core/detection_store.py`). `detection_id`, `species` (base classes 0 / -1 / -2), `enums`, `field_schema`, `detection_sources` and `class_mapping` live, plus `core/schema_editor.py` + the *Project Schema* dialog on the Detection tab; **latent bugs 1 and 2 fixed.** Dual-write with a parity check on every detection run. **Done:** +86 unit, +17 QGIS; ratchet 24 → 25. |
-| **3** | Georeference + tracking read/write the store, `track_runs` introduced. `georef_failures` populated. **`core/track_export.py` deleted.** |
+| **3** ✅ | Georeference + tracking read/write the store (`core/track_store.py`), `track_runs` introduced, `georef_failures` populated. **`core/track_export.py` deleted.** **Done:** +28 unit, +6 integration on flight 6; ratchet held at 25 (see below). |
 | **4** | Labelling tool onto the store: upsert materialisation (§6.2), manual tracks (§6.5), `origin_*` provenance, custom fields into `detections.attributes`, all categorical combos bound to the store, gear + "Manage species…" opening the shared dialog (§6.8). |
 | **5** | `stages` table wired up, cascade (**latent bug 3 fixed**), `output_inventory` rewrite, Reset-stage UI (incl. locked-file handling), QGIS layer builders read the store into **memory layers** (§11). |
 | **6** | `core/exporters/` — COCO, MOT, YOLO, TRex npz, GeoJSON. |
@@ -1025,9 +1025,11 @@ Three things to settle when it lands:
   part of the detection flow — but it is a distinct stage in the store, with
   its own `georef_failures`. Phase 3 gives it real status; Phase 8 should
   surface it in Processing rather than leave it invisible.
-- **SAM3 sits in Processing** on the assumption that segmentation is prompted
-  for animals. If it is used for ground cover or other scene content, it
-  belongs in Pre-Processing instead.
+- **SAM3 sits in Processing.** It is genuinely dual-use — the same prompts can
+  segment animals or scene content — but it is placed with the animal steps
+  because that is its dominant use here, and because a step that could sit in
+  either tab is better in the one where it is usually needed than duplicated
+  across both. Worth revisiting only if scene segmentation becomes routine.
 
 Config keys, step ids and `output_inventory` keys stay unchanged — this is a
 presentation change only, so a saved configuration keeps working.
@@ -1179,7 +1181,7 @@ the labelling tool's combos populate from the store.
 | 0 ✅ | Aspatial-GPKG and locking spikes answered; §4.1 invariants under test |
 | 1 ✅ | Migration golden files + real 5.x flight-6 folder migrate correctly |
 | 2 ✅ | Dual-write parity for `detections.txt`; species/enum editors round-trip |
-| 3 | Total accounting + no-orphans + `track_export` regression tests pass |
+| 3 ✅ | Total accounting + no-orphans + `track_export` regression tests pass |
 | 4 | Upsert matrix; manual tracks never touch another run's rows |
 | 5 | Cascade correctness; `output_inventory` reconciles a hand-deleted file |
 | 6 | Exporter fixtures, incl. enum resolution and class-id remapping |
@@ -1225,12 +1227,22 @@ never retroactively, never lowered:
 
 | After phase | `--cov-fail-under` | Combined |
 |---|---|---|
-| 0 | 22 | 42 |
-| 2 | 24 | 44 |
-| 3 | 27 | 46 |
+| 0 ✅ | 22 | 42 |
+| 2 ✅ | 24 | 44 |
+| 3 | 27 → held at 25 | 46 |
 | 4 | 30 | 47 |
 | 5 | 32 | 48 |
 | 6–7 | 35 | ~50 |
+
+**Phase 3 fell short: 25.7% against a 27% target, so the ratchet stayed at 25.**
+The reason is worth recording rather than quietly restating the goal. Phase 3's
+new logic is well covered (`core/track_store.py` is exercised by 28 unit tests),
+but the phase also *added* lines to `bambi_processing.py` — the store write-backs
+inside `run_georeference` and `_run_builtin_tracking` — and those sit behind
+alfspy, a real DEM and a GPU-less render context, so the unit tier cannot reach
+them. They are covered by the integration tier instead, which the ratchet does
+not count. Expect the same drag in phases 4–5, and read the combined figure
+(`run_all_tests.sh`) rather than the unit one where a phase touches the monolith.
 
 These are targets, not predictions — the point is that the new `core/` code is
 plain-Python and stdlib-only, so unlike the Qt-bound modules that hold coverage
