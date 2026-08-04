@@ -187,3 +187,44 @@ class TestCheckExistingOutputs:
             "sam3_georeference", "trex_import", "perpendicular",
             "track_perpendicular"}
         assert possible <= resettable
+
+
+class TestStoreBackedOutputs:
+    """A stage counts as done from its 6.0 store file too.
+
+    Without this, a project running with legacy text output switched off would
+    report every stage as never started (EXCHANGE_FORMAT_PLAN.md §7).
+    """
+
+    def test_store_file_alone_marks_the_stage_complete(self, tmp_path):
+        from bambi_wildlife_detection.core import store
+
+        root = str(tmp_path)
+        path = store.stage_path(root, store.DETECTIONS, "t")
+        store.open_store(path, store.DETECTIONS, "t").close()
+
+        assert "detection" in check_existing_outputs(root, ALL_T)
+
+    def test_legacy_folder_alone_still_works(self, tmp_path):
+        import os
+
+        root = str(tmp_path)
+        folder = os.path.join(root, "detections_t")
+        os.makedirs(folder)
+        with open(os.path.join(folder, "detections.txt"), "w") as fh:
+            fh.write("x")
+
+        assert "detection" in check_existing_outputs(root, ALL_T)
+
+    def test_neither_means_not_started(self, tmp_path):
+        assert "detection" not in check_existing_outputs(str(tmp_path), ALL_T)
+
+    def test_store_file_for_the_other_modality_does_not_count(self, tmp_path):
+        from bambi_wildlife_detection.core import store
+
+        root = str(tmp_path)
+        store.open_store(
+            store.stage_path(root, store.DETECTIONS, "w"),
+            store.DETECTIONS, "w").close()
+
+        assert "detection" not in check_existing_outputs(root, ALL_T)

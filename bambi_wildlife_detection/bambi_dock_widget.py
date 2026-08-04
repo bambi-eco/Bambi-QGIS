@@ -20,7 +20,7 @@ from qgis.PyQt.QtWidgets import (
     QCheckBox, QTabWidget, QMessageBox, QScrollArea,
     QFrame, QListWidget, QListWidgetItem, QDialog,
     QDialogButtonBox, QGridLayout, QToolButton,
-    QRadioButton, QButtonGroup
+    QRadioButton, QButtonGroup, QInputDialog
 )
 from qgis.PyQt.QtGui import QFont, QColor
 from qgis.core import (
@@ -2495,11 +2495,21 @@ class BambiDockWidget(QDockWidget):
 
         processing_layout.addLayout(progress_layout)
 
-        # Refresh Status button
+        # Refresh / Reset
+        status_row = QHBoxLayout()
         self.refresh_status_btn = QPushButton("🔄 Refresh Status")
         self.refresh_status_btn.setToolTip("Check for existing outputs and QGIS layers to update status indicators")
         self.refresh_status_btn.clicked.connect(self._refresh_all_statuses)
-        processing_layout.addWidget(self.refresh_status_btn)
+        status_row.addWidget(self.refresh_status_btn)
+
+        self.reset_stage_btn = QPushButton("Reset Step…")
+        self.reset_stage_btn.setToolTip(
+            "Delete a step's outputs so it re-runs from scratch, and flag "
+            "everything that depended on it as out of date."
+        )
+        self.reset_stage_btn.clicked.connect(self.reset_stage)
+        status_row.addWidget(self.reset_stage_btn)
+        processing_layout.addLayout(status_row)
 
         # Log output
         log_group = QGroupBox("Log Output")
@@ -5074,6 +5084,92 @@ class BambiDockWidget(QDockWidget):
                 f"  • {w}" for w in report.warnings)
         QMessageBox.information(self, "Migration finished", text)
         self._refresh_migrate_button()
+
+    #: Human-readable names for the stage keys of ``core.stages``.
+    STAGE_LABELS = {
+        "flight_route": "Generate Flight Route",
+        "detection": "Detect Animals",
+        "trex_import": "Import TRex Tracklets",
+        "georeference": "Geo-Reference Detections",
+        "tracking": "Track Animals",
+        "calculate_fov": "Calculate Field of View",
+        "alfs": "Generate ALFS",
+        "export_geotiffs": "Export Frames as GeoTIFF",
+        "orthomosaic": "Generate Orthomosaic",
+        "sam3_segmentation": "SAM3 Segmentation",
+        "sam3_georeference": "Geo-Reference Segmentation",
+        "perpendicular": "Perpendicular Distances",
+        "track_perpendicular": "Track Perpendicular Distances",
+        "population": "Population Estimate",
+        "density": "Density Map",
+        "coverage": "Coverage Map",
+    }
+
+    def reset_stage(self):
+        """Delete one step's outputs and flag what depended on it.
+
+        Replaces deleting a folder in Explorer: the cascade is applied, so the
+        results further downstream are marked out of date instead of quietly
+        surviving as stale files (§7).
+        """
+        from .core import stages
+
+        folder = self.target_folder_edit.text().strip()
+        if not folder or not os.path.isdir(folder):
+            QMessageBox.warning(self, "Reset Step",
+                                "Select a target folder first.")
+            return
+
+        modality = self.detection_camera_combo.currentText()[:1].lower() \
+            if hasattr(self, "detection_camera_combo") else "t"
+        modality = "w" if modality == "r" else "t"
+
+        present = [s for s in stages.known_stages()
+                   if stages.has_output(folder, s, modality)]
+        if not present:
+            QMessageBox.information(
+                self, "Reset Step",
+                "This project has no step outputs to reset.")
+            return
+
+        labels = [f"{self.STAGE_LABELS.get(s, s)}" for s in present]
+        choice, ok = QInputDialog.getItem(
+            self, "Reset Step", "Step to reset:", labels, 0, False)
+        if not ok:
+            return
+        stage = present[labels.index(choice)]
+
+        affected = stages.dependents(stage)
+        affected_present = [s for s in affected
+                            if stages.has_output(folder, s, modality)]
+        message = (f"Delete the outputs of '{choice}'?\n\n"
+                   "The files are removed and the step runs from scratch "
+                   "next time.")
+        if affected_present:
+            names = "\n".join(
+                f"  • {self.STAGE_LABELS.get(s, s)}" for s in affected_present)
+            message += ("\n\nThese depend on it and will be marked out of "
+                        f"date (their files are kept):\n{names}")
+
+        standard = QMessageBox.StandardButton
+        if QMessageBox.question(
+                self, "Reset Step", message,
+                standard.Ok | standard.Cancel, standard.Cancel) != standard.Ok:
+            return
+
+        try:
+            result = stages.reset(folder, stage, modality, log_fn=self.log)
+        except stages.StageLockedError as exc:
+            QMessageBox.warning(self, "Reset Step", str(exc))
+            return
+
+        self._check_existing_outputs(folder)
+        stale_note = (
+            f"{len(result['stale'])} dependent step(s) marked out of date."
+            if result["stale"] else "Nothing depended on it.")
+        QMessageBox.information(
+            self, "Reset Step",
+            f"Removed {len(result['removed'])} output(s).\n{stale_note}")
 
     def open_schema_dialog(self, initial_tab: int = 0) -> bool:
         """Open the Project Schema editor for the current target folder.
