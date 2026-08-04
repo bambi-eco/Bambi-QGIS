@@ -271,17 +271,48 @@ def coord_key(coords):
     return tuple(round(v, 3) for v in coords)
 
 
+def pixel_tracks_from_store(target, suffix):
+    """frame -> [(track_id, x1, y1, x2, y2)] from the 6.0 store, or ``{}``.
+
+    Replaces the reconstruction the overlay used to rely on. The old path also
+    paired ``tracks_pixel.csv`` rows with ``detections.txt`` rows by position
+    (``load_track_id_rows``), which broke in exactly the way
+    ``core/track_export.py`` did whenever a detection was dropped.
+    """
+    from . import store, track_store
+
+    if suffix not in store.MODALITIES:
+        return {}
+    rows = track_store.load_pixel_tracks(target, suffix)
+    out = {}
+    for row in rows:
+        out.setdefault(row["frame"], []).append(
+            (row["track_id"], row["x1"], row["y1"], row["x2"], row["y2"]))
+    return out
+
+
 def load_pixel_tracks(target, suffix, log_fn: Optional[Callable[[str], None]] = None):
     """frame -> list of (track_id, x1, y1, x2, y2) in extracted-frame pixel space.
 
     Strategy, in order of reliability:
+    0. The 6.0 store, where membership is recorded as (track_id, detection_id)
+       and the answer is a join — no matching of any kind.
     1. A pixel-space track CSV if one exists (exact boxes + ids).
     2. Otherwise pair the geo-referenced tracks to the pixel detections by
        matching geo coordinates through georeferenced.txt. This is order-
        independent, so it is correct even when tracks.csv is re-sorted by
        (frame, track_id) or contains interpolated rows.
     3. As a last resort, pair strictly by line index (valid only when the
-       detection and track files share the same ordering, e.g. TRex import)."""
+       detection and track files share the same ordering, e.g. TRex import).
+
+    Steps 1–3 all reconstruct something the pipeline knew and threw away; they
+    remain only for projects with no store (EXCHANGE_FORMAT_PLAN.md §8.2).
+    """
+    # 0. The store. Exact, and unaffected by dropped detections or re-sorting.
+    stored = pixel_tracks_from_store(target, suffix)
+    if stored:
+        return stored
+
     # 1. Direct pixel tracks. Prefer the undistorted file, which matches the
     # extracted (undistorted) frames the overlay is drawn on; the plain
     # tracks_pixel.csv is in raw video space for the TRex pipelines.

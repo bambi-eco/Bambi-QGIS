@@ -300,3 +300,98 @@ class TestCanvasMath:
         s = ve.fmt_area_ratio(500_000, 2_000_000)
         assert s == "0.50 / 2.00 km2 (25%)"
         assert ve.fmt_area_ratio(0, 0).endswith("(0%)")
+
+
+class TestPixelTracksFromStore:
+    """The video creator reads the store rather than reconstructing (§8.2).
+
+    Steps 1-3 of load_pixel_tracks all recover something the pipeline knew and
+    threw away; the store answers directly, so they only run for projects that
+    have none.
+    """
+
+    @staticmethod
+    def _project(root):
+        from bambi_wildlife_detection.core import detection_store, track_store
+
+        detection_store.record_detections(root, "t", [
+            {"frame": 0, "x1": 10.0, "y1": 20.0, "x2": 30.0, "y2": 40.0,
+             "confidence": 0.9, "source_class": "0"},
+            {"frame": 1, "x1": 12.0, "y1": 22.0, "x2": 32.0, "y2": 42.0,
+             "confidence": 0.8, "source_class": "0"},
+        ])
+        ids = [d["detection_id"]
+               for d in track_store.load_detections(root, "t")]
+        track_store.record_tracks(root, "t", [
+            {"track_id": 5, "detection_id": ids[0]},
+            {"track_id": 5, "detection_id": ids[1]},
+        ])
+        return ids
+
+    def test_reads_membership_from_the_store(self, tmp_path):
+        from bambi_wildlife_detection.core import video_export
+
+        root = str(tmp_path)
+        self._project(root)
+        overlay = video_export.pixel_tracks_from_store(root, "t")
+        assert sorted(overlay) == [0, 1]
+        assert overlay[0][0][1:] == (10.0, 20.0, 30.0, 40.0)
+
+    def test_load_pixel_tracks_prefers_the_store(self, tmp_path):
+        """Even with a legacy CSV present, the exact answer wins."""
+        import os
+
+        from bambi_wildlife_detection.core import video_export
+
+        root = str(tmp_path)
+        self._project(root)
+        folder = os.path.join(root, "tracks_t")
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, "tracks_pixel.csv"), "w") as fh:
+            fh.write("0,99,1.0,1.0,2.0,2.0,0.9,0,0\n")
+
+        overlay = video_export.load_pixel_tracks(root, "t")
+        assert {row[0] for rows in overlay.values() for row in rows} != {99}
+
+    def test_falls_back_without_a_store(self, tmp_path):
+        import os
+
+        from bambi_wildlife_detection.core import video_export
+
+        root = str(tmp_path)
+        folder = os.path.join(root, "tracks_t")
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, "tracks_pixel.csv"), "w") as fh:
+            fh.write("0,99,1.0,1.0,2.0,2.0,0.9,0,0\n")
+
+        overlay = video_export.load_pixel_tracks(root, "t")
+        assert overlay[0][0][0] == 99
+
+    def test_unknown_modality_is_ignored(self, tmp_path):
+        from bambi_wildlife_detection.core import video_export
+
+        assert video_export.pixel_tracks_from_store(str(tmp_path), "x") == {}
+
+    def test_a_dropped_detection_does_not_cost_its_frame_mates(self, tmp_path):
+        """What the positional pairing got wrong (§8.2)."""
+        from bambi_wildlife_detection.core import (
+            detection_store, track_store, video_export)
+
+        root = str(tmp_path)
+        detection_store.record_detections(root, "t", [
+            {"frame": 0, "x1": 10.0, "y1": 20.0, "x2": 30.0, "y2": 40.0,
+             "confidence": 0.9, "source_class": "0"},
+            {"frame": 0, "x1": 50.0, "y1": 60.0, "x2": 70.0, "y2": 80.0,
+             "confidence": 0.8, "source_class": "0"},
+        ])
+        ids = [d["detection_id"]
+               for d in track_store.load_detections(root, "t")]
+        # Only one of the two frame-0 detections made it into a track.
+        track_store.record_tracks(
+            root, "t", [{"track_id": 5, "detection_id": ids[0]}])
+
+        overlay = video_export.pixel_tracks_from_store(root, "t")
+        # The tracked detection keeps its overlay; the untracked one simply has
+        # no id to draw. The old positional pairing lost both.
+        assert len(overlay[0]) == 1
+        assert overlay[0][0][1:] == (10.0, 20.0, 30.0, 40.0)

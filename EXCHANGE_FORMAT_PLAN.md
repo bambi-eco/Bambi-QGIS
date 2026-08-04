@@ -836,7 +836,8 @@ throwaway files. None of them is an input format.
 | **YOLO** | per-frame `.txt` with normalised `cls cx cy w h` + `data.yaml`; class map from the `species` table |
 | **TRex `.npz`** | write as well as read, closing the loop with the existing importer |
 | **GeoJSON / GPKG** | geo tracks, detections, FoV, transects — as today but from the store |
-| *(later)* **Camtrap DP**, **Darwin Core Archive** | wildlife-survey exchange / GBIF publishing; revisit once the core lands |
+| **Camtrap DP** | Frictionless survey package: the flight is a deployment, frames are media, detections are observations. Keeps `not-an-animal` as an observation of type `blank` |
+| **Darwin Core Archive** | GBIF publishing: one occurrence per **track**, not per detection. Excludes tracks with no taxon (`animal`/`unknown`) and says how many |
 
 **Enum resolution.** Attribute values stored as `value_id` (§5.1) are resolved to
 their labels on export — no consumer should be handed an integer whose meaning
@@ -1059,7 +1060,7 @@ Each phase leaves the plugin working.
 | **3** ✅ | Georeference + tracking read/write the store (`core/track_store.py`), `track_runs` introduced, `georef_failures` populated. **`core/track_export.py` deleted.** **Done:** +28 unit, +6 integration on flight 6; ratchet held at 25 (see below). |
 | **4** ✅ | Labelling tool onto the store (`core/label_store.py`): upsert materialisation (§6.2), manual tracks (§6.5), custom fields into `detections.attributes`, closed vocabulary in every categorical combo (§6.8), `origin_*` provenance on import. Consumer audit done (§8.2). **Done:** +46 unit; ratchet 25 → 26. |
 | **5** ✅ | `core/stages.py`: dependency graph, cascade (**latent bug 3 fixed**), reconciliation, reset; stages record their own completion; `output_inventory` and the QGIS layer readers prefer the store; "Reset Step…" with locked-file handling. **Done:** +50 unit, +4 inventory, +15 reader, +7 QGIS; ratchet 26 → 27. |
-| **6** | `core/exporters/` — COCO, MOT, YOLO, TRex npz, GeoJSON. Video Creator onto the store, removing the last positional alignment (§8.2). |
+| **6** ✅ | `core/exporters/` — COCO, MOT, YOLO, TRex npz, GeoJSON, **Camtrap DP and Darwin Core Archive**. Video Creator reads the store, removing the last positional alignment (§8.2). **Done:** +36 exporter, +5 video; ratchet 27 → 28. |
 | **7** | Survey analytics onto the store (§8.2): explicit population filter, species/attribute stratification, perpendicular distances keyed by id, multi-project pooling by label. Route/transect files follow. |
 | **8** | UI reorganisation: split the Processing tab into **Pre-Processing** and **Processing** (§10.1). Last, because it is the only phase that moves things the user has learned where to find. |
 
@@ -1255,7 +1256,7 @@ the labelling tool's combos populate from the store.
 | 3 ✅ | Total accounting + no-orphans + `track_export` regression tests pass |
 | 4 ✅ | Upsert matrix; manual tracks never touch another run's rows |
 | 5 ✅ | Cascade correctness; `output_inventory` reconciles a hand-deleted file |
-| 6 | Exporter fixtures, incl. enum resolution and class-id remapping |
+| 6 ✅ | Exporter fixtures, incl. enum resolution and class-id remapping |
 | 7 | Analytics results unchanged vs. the pre-rework baseline on flight 6 |
 | 8 | Every step still reachable and runnable; saved configs load unchanged |
 

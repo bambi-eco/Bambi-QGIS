@@ -1,0 +1,459 @@
+# -*- coding: utf-8 -*-
+"""Exporter tests (EXCHANGE_FORMAT_PLAN.md §8.1).
+
+Three things are checked for every format: that internal ids never leak (they
+are sparse and negative), that enum values arrive as labels rather than
+integers, and that ``not-an-animal`` is handled according to what the format is
+*for* rather than filtered silently.
+"""
+import csv
+import json
+import os
+
+import pytest
+
+from bambi_wildlife_detection.core import (
+    detection_store, exporters, label_store, store, track_store)
+from bambi_wildlife_detection.core.exporters import common
+
+
+@pytest.fixture
+def survey(tmp_path):
+    """A project with three tracked animals, one of them a false positive."""
+    root = str(tmp_path)
+
+    with_species = store.open_store(store.project_path(root), store.PROJECT)
+    with_species.close()
+
+    detection_store.record_detections(root, "t", [
+        {"frame": 0, "x1": 10.0, "y1": 20.0, "x2": 30.0, "y2": 40.0,
+         "confidence": 0.9, "source_class": "1"},
+        {"frame": 1, "x1": 12.0, "y1": 22.0, "x2": 32.0, "y2": 42.0,
+         "confidence": 0.8, "source_class": "1"},
+        {"frame": 0, "x1": 50.0, "y1": 60.0, "x2": 70.0, "y2": 80.0,
+         "confidence": 0.7, "source_class": "5"},
+        {"frame": 1, "x1": 90.0, "y1": 90.0, "x2": 95.0, "y2": 95.0,
+         "confidence": 0.3, "source_class": "0"},
+    ])
+
+    project = store.open_store(store.project_path(root), store.PROJECT)
+    source_id = project.execute(
+        "SELECT source_id FROM detection_sources").fetchone()["source_id"]
+    project.executemany(
+        "INSERT INTO class_mapping (source_id, source_class, species_id) "
+        "VALUES (?, ?, ?)",
+        [(source_id, "1", 1), (source_id, "5", 5), (source_id, "0", -2)])
+    project.commit()
+    project.close()
+
+    detection_store.record_detections(root, "t", [
+        {"frame": 0, "x1": 10.0, "y1": 20.0, "x2": 30.0, "y2": 40.0,
+         "confidence": 0.9, "source_class": "1",
+         "attributes": json.dumps({"occlusion": 1, "collar": "R-114"})},
+        {"frame": 1, "x1": 12.0, "y1": 22.0, "x2": 32.0, "y2": 42.0,
+         "confidence": 0.8, "source_class": "1"},
+        {"frame": 0, "x1": 50.0, "y1": 60.0, "x2": 70.0, "y2": 80.0,
+         "confidence": 0.7, "source_class": "5"},
+        {"frame": 1, "x1": 90.0, "y1": 90.0, "x2": 95.0, "y2": 95.0,
+         "confidence": 0.3, "source_class": "0"},
+    ])
+
+    ids = [d["detection_id"] for d in track_store.load_detections(root, "t")]
+    track_store.record_georeference(root, "t", [
+        {"detection_id": i, "gx1": 500000.0 + n, "gy1": 5300000.0 + n,
+         "gz1": 400.0, "gx2": 500010.0 + n, "gy2": 5300010.0 + n, "gz2": 400.0}
+        for n, i in enumerate(ids)])
+    track_store.record_tracks(root, "t", [
+        {"track_id": 1, "detection_id": ids[0]},
+        {"track_id": 1, "detection_id": ids[1]},
+        {"track_id": 2, "detection_id": ids[2]},
+        {"track_id": 3, "detection_id": ids[3]},
+    ])
+
+    with open(os.path.join(root, "poses_t.json"), "w", encoding="utf-8") as fh:
+        json.dump({"images": [
+            {"imagefile": "frame_000000.jpg", "epoch": 1717000000},
+            {"imagefile": "frame_000001.jpg", "epoch": 1717000001},
+        ]}, fh)
+    return root
+
+
+SIZE = (640, 512)
+
+
+# ---------------------------------------------------------------------------
+# Shared behaviour
+# ---------------------------------------------------------------------------
+
+def test_class_map_is_contiguous_and_non_negative(survey):
+    vocabulary = common.load_vocabulary(survey)
+    rows = common.load_detections(survey, "t", include_not_an_animal=True)
+    mapping, names = common.class_map(
+        (r["species_id"] for r in rows), vocabulary["species"])
+    assert sorted(mapping.values()) == list(range(len(mapping)))
+    assert all(index >= 0 for index in mapping.values())
+    assert "not-an-animal" in names
+
+
+def test_not_an_animal_is_excluded_by_default(survey):
+    rows = common.load_detections(survey, "t")
+    assert all(r["species_id"] != common.NOT_AN_ANIMAL for r in rows)
+    assert len(rows) == 3
+
+
+def test_not_an_animal_can_be_included(survey):
+    assert len(common.load_detections(survey, "t", True)) == 4
+
+
+def test_attributes_resolve_enum_values_to_labels(survey):
+    vocabulary = common.load_vocabulary(survey)
+    rows = common.load_detections(survey, "t")
+    attributes = common.resolve_attributes(
+        rows[0]["attributes"], vocabulary["enum_labels"])
+    assert attributes["occlusion"] == "partially"
+    assert attributes["collar"] == "R-114"
+
+
+def test_export_without_a_store_is_refused(tmp_path):
+    with pytest.raises(common.ExportError, match="no 6.0 store"):
+        common.load_vocabulary(str(tmp_path))
+
+
+def test_registry_lists_every_format():
+    assert set(exporters.EXPORTERS) == {
+        "coco", "yolo", "mot", "trex", "geojson", "camtrap", "dwca"}
+
+
+# ---------------------------------------------------------------------------
+# COCO
+# ---------------------------------------------------------------------------
+
+def test_coco_structure(survey, tmp_path):
+    path = str(tmp_path / "out" / "coco.json")
+    exporters.export_coco(survey, "t", path, image_size=SIZE)
+    with open(path, encoding="utf-8") as fh:
+        document = json.load(fh)
+
+    assert len(document["annotations"]) == 3
+    assert {c["id"] for c in document["categories"]} == {0, 1}
+    assert document["images"][0]["width"] == 640
+    assert all(a["bbox"][2] > 0 for a in document["annotations"])
+
+
+def test_coco_carries_custom_fields(survey, tmp_path):
+    """The complaint that started the rework: fields could not leave labels.json."""
+    path = str(tmp_path / "coco.json")
+    exporters.export_coco(survey, "t", path, image_size=SIZE)
+    with open(path, encoding="utf-8") as fh:
+        annotations = json.load(fh)["annotations"]
+    carried = [a for a in annotations if "attributes" in a]
+    assert carried and carried[0]["attributes"]["occlusion"] == "partially"
+
+
+def test_coco_categories_use_species_names(survey, tmp_path):
+    path = str(tmp_path / "coco.json")
+    exporters.export_coco(survey, "t", path, image_size=SIZE)
+    with open(path, encoding="utf-8") as fh:
+        names = {c["name"] for c in json.load(fh)["categories"]}
+    assert names == {"roe deer", "chamois"}
+
+
+def test_coco_includes_track_ids(survey, tmp_path):
+    path = str(tmp_path / "coco.json")
+    exporters.export_coco(survey, "t", path, image_size=SIZE)
+    with open(path, encoding="utf-8") as fh:
+        annotations = json.load(fh)["annotations"]
+    assert all("track_id" in a for a in annotations)
+
+
+# ---------------------------------------------------------------------------
+# YOLO
+# ---------------------------------------------------------------------------
+
+def test_yolo_writes_normalised_boxes(survey, tmp_path):
+    folder = str(tmp_path / "yolo")
+    exporters.export_yolo(survey, "t", folder, image_size=SIZE)
+    label = os.path.join(folder, "labels", "frame_000000.txt")
+    with open(label, encoding="utf-8") as fh:
+        parts = fh.readline().split()
+    assert len(parts) == 5
+    assert all(0.0 <= float(v) <= 1.0 for v in parts[1:])
+
+
+def test_yolo_data_yaml_lists_the_classes(survey, tmp_path):
+    folder = str(tmp_path / "yolo")
+    exporters.export_yolo(survey, "t", folder, image_size=SIZE)
+    with open(os.path.join(folder, "data.yaml"), encoding="utf-8") as fh:
+        content = fh.read()
+    assert "nc: 2" in content
+    assert "roe deer" in content
+
+
+def test_yolo_omits_false_positives(survey, tmp_path):
+    folder = str(tmp_path / "yolo")
+    exporters.export_yolo(survey, "t", folder, image_size=SIZE)
+    labels = os.listdir(os.path.join(folder, "labels"))
+    total = 0
+    for name in labels:
+        with open(os.path.join(folder, "labels", name), encoding="utf-8") as fh:
+            total += len([line for line in fh if line.strip()])
+    assert total == 3
+
+
+def test_yolo_needs_a_frame_size(survey, tmp_path):
+    with pytest.raises(common.ExportError, match="frame size"):
+        exporters.export_yolo(survey, "t", str(tmp_path / "yolo"))
+
+
+# ---------------------------------------------------------------------------
+# MOT
+# ---------------------------------------------------------------------------
+
+def test_mot_frames_are_one_based(survey, tmp_path):
+    folder = str(tmp_path / "mot")
+    exporters.export_mot(survey, "t", folder)
+    with open(os.path.join(folder, "gt.txt"), encoding="utf-8") as fh:
+        first = fh.readline().split(",")
+    assert int(first[0]) == 1          # store frame 0
+    assert float(first[4]) > 0         # width, not x2
+
+
+def test_mot_sidecar_carries_what_the_columns_cannot(survey, tmp_path):
+    folder = str(tmp_path / "mot")
+    exporters.export_mot(survey, "t", folder)
+    with open(os.path.join(folder, "attributes.csv"), encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    assert rows[0]["species"] == "roe deer"
+    assert rows[0]["occlusion"] == "partially"
+
+
+def test_mot_classes_file_is_written(survey, tmp_path):
+    folder = str(tmp_path / "mot")
+    exporters.export_mot(survey, "t", folder)
+    with open(os.path.join(folder, "classes.txt"), encoding="utf-8") as fh:
+        assert fh.readline().startswith("0 ")
+
+
+def test_mot_omits_untracked_detections(survey, tmp_path):
+    detection_store.record_detections(survey, "t", [
+        {"frame": 5, "x1": 1.0, "y1": 1.0, "x2": 2.0, "y2": 2.0,
+         "confidence": 0.5, "source_class": "1"}], kind=detection_store.MANUAL)
+    folder = str(tmp_path / "mot")
+    messages = []
+    exporters.export_mot(survey, "t", folder, log_fn=messages.append)
+    assert any("untracked" in m for m in messages)
+
+
+# ---------------------------------------------------------------------------
+# GeoJSON
+# ---------------------------------------------------------------------------
+
+def test_geojson_points(survey, tmp_path):
+    path = str(tmp_path / "detections.geojson")
+    exporters.export_geojson(survey, "t", path, epsg=32633)
+    with open(path, encoding="utf-8") as fh:
+        document = json.load(fh)
+    assert document["crs"]["properties"]["name"].endswith("32633")
+    assert all(f["geometry"]["type"] == "Point" for f in document["features"])
+
+
+def test_geojson_keeps_false_positives(survey, tmp_path):
+    """A survey record says what was rejected; it does not omit it."""
+    path = str(tmp_path / "detections.geojson")
+    exporters.export_geojson(survey, "t", path)
+    with open(path, encoding="utf-8") as fh:
+        species = {f["properties"]["species"] for f in json.load(fh)["features"]}
+    assert "not-an-animal" in species
+
+
+def test_geojson_tracks_are_linestrings(survey, tmp_path):
+    path = str(tmp_path / "tracks.geojson")
+    exporters.export_geojson(survey, "t", path, tracks_only=True)
+    with open(path, encoding="utf-8") as fh:
+        features = json.load(fh)["features"]
+    assert len(features) == 1          # only track 1 has two points
+    assert features[0]["geometry"]["type"] == "LineString"
+    assert features[0]["properties"]["n_detections"] == 2
+
+
+# ---------------------------------------------------------------------------
+# TRex
+# ---------------------------------------------------------------------------
+
+def test_trex_writes_one_file_per_track(survey, tmp_path):
+    folder = str(tmp_path / "trex")
+    written = exporters.export_trex_npz(survey, "t", folder)
+    assert len(written) == 2          # the false-positive track is excluded
+
+
+def test_trex_round_trips_through_numpy(survey, tmp_path):
+    import numpy as np
+
+    folder = str(tmp_path / "trex")
+    written = exporters.export_trex_npz(survey, "t", folder)
+    data = np.load(sorted(written)[0])
+    assert list(data["frame"]) == [0, 1]
+    assert data["X"].shape == (2, 2)
+
+
+def test_trex_without_tracks_is_refused(tmp_path):
+    root = str(tmp_path)
+    detection_store.record_detections(root, "t", [
+        {"frame": 0, "x1": 1.0, "y1": 1.0, "x2": 2.0, "y2": 2.0,
+         "confidence": 0.5, "source_class": "1"}])
+    with pytest.raises(common.ExportError, match="No tracks"):
+        exporters.export_trex_npz(root, "t", str(tmp_path / "trex"))
+
+
+# ---------------------------------------------------------------------------
+# Camtrap DP
+# ---------------------------------------------------------------------------
+
+def test_camtrap_writes_the_three_resources(survey, tmp_path):
+    pytest.importorskip("pyproj")
+    folder = str(tmp_path / "camtrap")
+    exporters.export_camtrap_dp(survey, "t", folder, epsg=32633)
+    for name in ("deployments.csv", "media.csv", "observations.csv",
+                 "datapackage.json"):
+        assert os.path.isfile(os.path.join(folder, name))
+
+
+def test_camtrap_observations_carry_species_and_fields(survey, tmp_path):
+    pytest.importorskip("pyproj")
+    folder = str(tmp_path / "camtrap")
+    exporters.export_camtrap_dp(survey, "t", folder, epsg=32633)
+    with open(os.path.join(folder, "observations.csv"), encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    animals = [r for r in rows if r["observationType"] == "animal"]
+    assert animals[0]["scientificName"] == "roe deer"
+    assert animals[0]["occlusion"] == "partially"
+
+
+def test_camtrap_records_false_positives_as_blank(survey, tmp_path):
+    """A rejected detection is a survey record, not noise."""
+    pytest.importorskip("pyproj")
+    folder = str(tmp_path / "camtrap")
+    exporters.export_camtrap_dp(survey, "t", folder, epsg=32633)
+    with open(os.path.join(folder, "observations.csv"), encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    blanks = [r for r in rows if r["observationType"] == "blank"]
+    assert len(blanks) == 1
+    assert blanks[0]["scientificName"] == ""
+
+
+def test_camtrap_coordinates_are_latitude_longitude(survey, tmp_path):
+    pytest.importorskip("pyproj")
+    folder = str(tmp_path / "camtrap")
+    exporters.export_camtrap_dp(survey, "t", folder, epsg=32633)
+    with open(os.path.join(folder, "observations.csv"), encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    latitudes = [float(r["latitude"]) for r in rows if r["latitude"]]
+    assert all(-90 <= lat <= 90 for lat in latitudes)
+    assert all(45 < lat < 55 for lat in latitudes)     # UTM 33N, ~5300 km north
+
+
+def test_camtrap_media_reference_the_frames(survey, tmp_path):
+    pytest.importorskip("pyproj")
+    folder = str(tmp_path / "camtrap")
+    exporters.export_camtrap_dp(survey, "t", folder, epsg=32633)
+    with open(os.path.join(folder, "media.csv"), encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    assert {r["fileName"] for r in rows} == \
+        {"frame_000000.jpg", "frame_000001.jpg"}
+
+
+def test_camtrap_without_a_crs_is_refused(survey, tmp_path):
+    with pytest.raises(common.ExportError, match="project CRS"):
+        exporters.export_camtrap_dp(survey, "t", str(tmp_path / "c"))
+
+
+# ---------------------------------------------------------------------------
+# Darwin Core
+# ---------------------------------------------------------------------------
+
+def test_dwca_is_one_occurrence_per_track(survey, tmp_path):
+    """Not per detection — that would publish one animal hundreds of times."""
+    pytest.importorskip("pyproj")
+    folder = str(tmp_path / "dwca")
+    exporters.export_darwin_core(survey, "t", folder, epsg=32633)
+    with open(os.path.join(folder, "occurrence.txt"), encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh, delimiter="\t"))
+    assert len(rows) == 2
+    assert {r["scientificName"] for r in rows} == {"roe deer", "chamois"}
+
+
+def test_dwca_marks_machine_observations(survey, tmp_path):
+    pytest.importorskip("pyproj")
+    folder = str(tmp_path / "dwca")
+    exporters.export_darwin_core(survey, "t", folder, epsg=32633)
+    with open(os.path.join(folder, "occurrence.txt"), encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh, delimiter="\t"))
+    assert all(r["basisOfRecord"] == "MachineObservation" for r in rows)
+    assert all(r["geodeticDatum"] == "WGS84" for r in rows)
+
+
+def test_dwca_meta_xml_describes_the_columns(survey, tmp_path):
+    pytest.importorskip("pyproj")
+    folder = str(tmp_path / "dwca")
+    exporters.export_darwin_core(survey, "t", folder, epsg=32633)
+    with open(os.path.join(folder, "meta.xml"), encoding="utf-8") as fh:
+        meta = fh.read()
+    assert "occurrence.txt" in meta
+    assert "decimalLatitude" in meta
+
+
+def test_dwca_reports_tracks_it_could_not_publish(survey, tmp_path):
+    """'animal' and 'unknown' are not taxa, so GBIF cannot take them."""
+    pytest.importorskip("pyproj")
+    detection_store.record_detections(survey, "t", [
+        {"frame": 0, "x1": 1.0, "y1": 1.0, "x2": 2.0, "y2": 2.0,
+         "confidence": 0.5, "source_class": "unmapped"}],
+        kind=detection_store.MANUAL)
+    ids = [d["detection_id"] for d in track_store.load_detections(survey, "t")]
+    track_store.record_georeference(survey, "t", [
+        {"detection_id": i, "gx1": 500000.0, "gy1": 5300000.0, "gz1": 400.0,
+         "gx2": 500010.0, "gy2": 5300010.0, "gz2": 400.0} for i in ids])
+    track_store.record_tracks(survey, "t", [
+        {"track_id": 1, "detection_id": ids[0]},
+        {"track_id": 9, "detection_id": ids[-1]},
+    ])
+
+    messages = []
+    exporters.export_darwin_core(
+        survey, "t", str(tmp_path / "dwca"), epsg=32633, log_fn=messages.append)
+    assert any("no species assigned" in m for m in messages)
+
+
+def test_dwca_refuses_when_nothing_is_identified(tmp_path):
+    root = str(tmp_path)
+    detection_store.record_detections(root, "t", [
+        {"frame": 0, "x1": 1.0, "y1": 1.0, "x2": 2.0, "y2": 2.0,
+         "confidence": 0.5, "source_class": "0"}])
+    ids = [d["detection_id"] for d in track_store.load_detections(root, "t")]
+    track_store.record_georeference(root, "t", [
+        {"detection_id": ids[0], "gx1": 5.0, "gy1": 6.0, "gz1": 0.0,
+         "gx2": 7.0, "gy2": 8.0, "gz2": 0.0}])
+    track_store.record_tracks(
+        root, "t", [{"track_id": 1, "detection_id": ids[0]}])
+
+    with pytest.raises(common.ExportError, match="assign species"):
+        exporters.export_darwin_core(
+            root, "t", str(tmp_path / "dwca"), epsg=32633)
+
+
+# ---------------------------------------------------------------------------
+# Manual tracks reach the exports (§6.5)
+# ---------------------------------------------------------------------------
+
+def test_manual_tracks_are_exported_too(survey, tmp_path):
+    label_store.save_tracks(survey, "t", [{
+        "label_track_id": 1, "species_id": 1,
+        "keyframes": [{"frame": 0, "x1": 5.0, "y1": 5.0, "x2": 9.0, "y2": 9.0}],
+    }])
+    label_store.materialise(survey, "t")
+
+    path = str(tmp_path / "coco.json")
+    exporters.export_coco(survey, "t", path, image_size=SIZE)
+    with open(path, encoding="utf-8") as fh:
+        annotations = json.load(fh)["annotations"]
+    assert len(annotations) == 4      # three detector + one manual
