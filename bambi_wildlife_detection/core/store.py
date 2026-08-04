@@ -111,9 +111,12 @@ CREATE TABLE species (
 );
 
 CREATE TABLE enums (
-    enum_id   INTEGER PRIMARY KEY AUTOINCREMENT,
-    name      TEXT UNIQUE NOT NULL,
-    protected INTEGER NOT NULL DEFAULT 0
+    enum_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT UNIQUE NOT NULL,
+    protected  INTEGER NOT NULL DEFAULT 0,
+    -- Highest value_id ever handed out, so deleting the last value does not
+    -- let its id come back meaning something else (§4.1).
+    high_water INTEGER NOT NULL DEFAULT -1
 );
 
 CREATE TABLE enum_values (
@@ -140,7 +143,9 @@ CREATE TABLE detection_sources (
     kind        TEXT NOT NULL,
     model       TEXT,
     version     TEXT,
-    generation  INTEGER NOT NULL DEFAULT 1,
+    -- 0 = never run; the first recorded run makes it 1. Bumped per source, so
+    -- one producer re-running leaves the others' generations alone (§4.1).
+    generation  INTEGER NOT NULL DEFAULT 0,
     config_hash TEXT,
     created_at  TEXT
 );
@@ -480,24 +485,79 @@ def seed_vocabulary(conn: sqlite3.Connection) -> None:
             (field_name, field_scope, enum_id))
 
 
-def next_species_id(conn: sqlite3.Connection) -> int:
-    """The id a newly added species gets — always above every existing one.
+#: Highest species id the seeded taxonomy occupies; custom species start above.
+_SPECIES_BASE_HIGH_WATER = max(species_id for species_id, _ in SEEDED_SPECIES)
 
-    Append-only by construction: ids of deleted species are never reissued, so
-    a stale reference can never come to mean a different animal.
-    """
+
+def _species_high_water(conn: sqlite3.Connection) -> int:
+    stored = get_meta(conn, "species_high_water")
+    high = _SPECIES_BASE_HIGH_WATER if stored is None else int(stored)
     row = conn.execute(
         "SELECT MAX(species_id) AS m FROM species WHERE species_id >= 0"
     ).fetchone()
-    return 1 if row["m"] is None else int(row["m"]) + 1
+    if row["m"] is not None:
+        high = max(high, int(row["m"]))
+    return high
+
+
+def next_species_id(conn: sqlite3.Connection) -> int:
+    """The id a newly added species *would* get. Does not reserve it."""
+    return _species_high_water(conn) + 1
+
+
+def reserve_species_id(conn: sqlite3.Connection) -> int:
+    """Take the next species id, recording it so it is never handed out twice.
+
+    A plain ``MAX(species_id) + 1`` would reissue the id of a deleted species
+    whenever it happened to be the highest — and a stale reference to it would
+    then silently mean a different animal. The high-water mark is what makes
+    the ids append-only in the sense §4.1 claims.
+    """
+    species_id = next_species_id(conn)
+    set_meta(conn, "species_high_water", species_id)
+    return species_id
+
+
+def note_species_id(conn: sqlite3.Connection, species_id: int) -> None:
+    """Record an externally chosen species id against the high-water mark.
+
+    Used by the migration, which assigns the ids 5.x would have derived.
+    """
+    if species_id > _species_high_water(conn):
+        set_meta(conn, "species_high_water", species_id)
+
+
+def _enum_high_water(conn: sqlite3.Connection, enum_id: int) -> int:
+    row = conn.execute(
+        "SELECT high_water FROM enums WHERE enum_id = ?", (enum_id,)).fetchone()
+    high = -1 if row is None else int(row["high_water"])
+    values = conn.execute(
+        "SELECT MAX(value_id) AS m FROM enum_values WHERE enum_id = ?",
+        (enum_id,)).fetchone()
+    if values["m"] is not None:
+        high = max(high, int(values["m"]))
+    return high
 
 
 def next_enum_value_id(conn: sqlite3.Connection, enum_id: int) -> int:
-    """The id a newly added enum value gets (append-only, like species)."""
-    row = conn.execute(
-        "SELECT MAX(value_id) AS m FROM enum_values WHERE enum_id = ?",
-        (enum_id,)).fetchone()
-    return 0 if row["m"] is None else int(row["m"]) + 1
+    """The id a newly added enum value *would* get. Does not reserve it."""
+    return _enum_high_water(conn, enum_id) + 1
+
+
+def reserve_enum_value_id(conn: sqlite3.Connection, enum_id: int) -> int:
+    """Take the next enum value id (append-only, like :func:`reserve_species_id`)."""
+    value_id = next_enum_value_id(conn, enum_id)
+    conn.execute("UPDATE enums SET high_water = ? WHERE enum_id = ?",
+                 (value_id, enum_id))
+    return value_id
+
+
+def note_enum_value_id(conn: sqlite3.Connection, enum_id: int,
+                       value_id: int) -> None:
+    """Record an externally chosen enum value id against the high-water mark."""
+    if value_id > _enum_high_water(conn, enum_id):
+        conn.execute("UPDATE enums SET high_water = ? WHERE enum_id = ?",
+                     (value_id, enum_id))
 
 
 def resolve_species(conn: sqlite3.Connection, source_id: int,

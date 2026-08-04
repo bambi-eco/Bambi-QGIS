@@ -110,17 +110,23 @@ def test_next_species_id_is_above_every_existing_one(project):
 
 
 def test_deleted_species_ids_are_not_reissued(project):
-    """Adding a species after deleting one must not reuse the freed id."""
-    project.execute("INSERT INTO species (species_id, name) VALUES (10, 'wolf')")
-    project.execute("INSERT INTO species (species_id, name) VALUES (11, 'lynx')")
-    project.execute("DELETE FROM species WHERE species_id = 11")
-    assert store.next_species_id(project) == 11  # max(10) + 1 — lynx's id is gone
+    """Adding a species after deleting one must not reuse the freed id.
 
-    project.execute("DELETE FROM species WHERE species_id = 10")
-    project.execute(
-        "INSERT INTO species (species_id, name) VALUES (?, 'badger')",
-        (store.next_species_id(project),))
-    assert _species(project)["badger"] >= 10
+    Only :func:`store.reserve_species_id` guarantees this — ``next_species_id``
+    is a non-reserving peek, and a bare ``MAX(species_id) + 1`` would hand the
+    id of a deleted top-most species straight back.
+    """
+    ids = []
+    for name in ("wolf", "lynx", "badger"):
+        species_id = store.reserve_species_id(project)
+        project.execute(
+            "INSERT INTO species (species_id, name) VALUES (?, ?)",
+            (species_id, name))
+        ids.append(species_id)
+
+    project.execute("DELETE FROM species WHERE species_id IN (?, ?)",
+                    (ids[-1], ids[-2]))
+    assert store.reserve_species_id(project) > max(ids)
 
 
 def test_adding_a_species_never_renumbers_existing_ones(project):
@@ -315,4 +321,50 @@ def test_seeding_does_not_revert_user_edits(tmp_path):
     assert names["Roe Deer"] == 1
     assert names["wolf"] == 10
     assert "roe deer" not in names
+    conn.close()
+
+
+def test_species_id_is_not_reissued_after_deleting_the_highest(project):
+    """A plain MAX()+1 would hand the id straight back (§4.1)."""
+    first = store.reserve_species_id(project)
+    project.execute("INSERT INTO species (species_id, name) VALUES (?, 'wolf')",
+                    (first,))
+    project.execute("DELETE FROM species WHERE species_id = ?", (first,))
+    assert store.reserve_species_id(project) > first
+
+
+def test_enum_value_id_is_not_reissued_after_deleting_the_highest(project):
+    enum_id = project.execute(
+        "SELECT enum_id FROM enums WHERE name = 'age'").fetchone()["enum_id"]
+    first = store.reserve_enum_value_id(project, enum_id)
+    project.execute(
+        "INSERT INTO enum_values (enum_id, value_id, label, ordinal) "
+        "VALUES (?, ?, 'subadult', ?)", (enum_id, first, first))
+    project.execute(
+        "DELETE FROM enum_values WHERE enum_id = ? AND value_id = ?",
+        (enum_id, first))
+    assert store.reserve_enum_value_id(project, enum_id) > first
+
+
+def test_note_species_id_advances_the_high_water_mark(project):
+    """Migration assigns ids itself; they must not be handed out again."""
+    store.note_species_id(project, 42)
+    assert store.next_species_id(project) == 43
+
+
+def test_note_species_id_never_moves_backwards(project):
+    store.note_species_id(project, 42)
+    store.note_species_id(project, 11)
+    assert store.next_species_id(project) == 43
+
+
+def test_reserve_is_stable_across_reopen(tmp_path):
+    path = str(tmp_path / "project.gpkg")
+    conn = store.open_store(path, store.PROJECT)
+    first = store.reserve_species_id(conn)
+    conn.commit()
+    conn.close()
+
+    conn = store.open_store(path, store.PROJECT)
+    assert store.reserve_species_id(conn) > first
     conn.close()

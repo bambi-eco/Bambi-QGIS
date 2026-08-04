@@ -333,6 +333,10 @@ def migrate_vocabulary(project, target_folder: str,
         project.execute(
             "INSERT OR IGNORE INTO species (species_id, name) VALUES (?, ?)",
             (class_id, name))
+        # These ids are chosen by 5.x, not handed out by the store, so the
+        # high-water mark has to be told about them or a later "Add species"
+        # could reissue one.
+        store.note_species_id(project, class_id)
         report.add("species_custom")
 
     for field in custom_fields:
@@ -630,7 +634,7 @@ def _resolve_enum_value(project, enum_name: str, label: str,
     if match is not None:
         return int(match["value_id"])
 
-    value_id = store.next_enum_value_id(project, enum_id)
+    value_id = store.reserve_enum_value_id(project, enum_id)
     project.execute(
         "INSERT INTO enum_values (enum_id, value_id, label, ordinal) "
         "VALUES (?, ?, ?, ?)", (enum_id, value_id, label, value_id))

@@ -3481,6 +3481,10 @@ class BambiProcessor:
         detection_results = 0
         processed = 0
 
+        # Rows for the 6.0 store, collected alongside the legacy text output so
+        # both paths see exactly the same boxes (dual-write parity, §10).
+        store_rows = []
+
         # Write detection results
         output_file = os.path.join(detections_folder, "detections.txt")
         with open(output_file, 'w', encoding='utf-8') as f:
@@ -3518,12 +3522,36 @@ class BambiProcessor:
                     f.write(f"{idx} {box.start_x:.2f} {box.start_y:.2f} "
                             f"{box.end_x:.2f} {box.end_y:.2f} {box.propability:.4f} "
                             f"{box.label}\n")
+                    store_rows.append({
+                        "frame": idx,
+                        "x1": round(float(box.start_x), 2),
+                        "y1": round(float(box.start_y), 2),
+                        "x2": round(float(box.end_x), 2),
+                        "y2": round(float(box.end_y), 2),
+                        "confidence": round(float(box.propability), 4),
+                        "source_class": str(box.label),
+                    })
 
                 processed += 1
 
                 if progress_fn and processed % 10 == 0:
                     progress = int((processed / len(frame_indices)) * 100)
                     progress_fn(min(progress, 99))
+
+        # Mirror the detections into the 6.0 store. Only this producer's rows
+        # are replaced, so manual labels and TRex imports survive a re-run.
+        from .core import detection_store
+
+        detection_store.record_detections(
+            target_folder, camera_suffix, store_rows,
+            kind=detection_store.DETECTOR,
+            model=os.path.basename(model_path or ""),
+            log_fn=log_fn)
+
+        mismatch = detection_store.compare_with_legacy_text(
+            target_folder, camera_suffix, output_file)
+        if mismatch and log_fn:
+            log_fn(f"Warning: store/text mismatch — {mismatch}")
 
         if log_fn:
             log_fn(f"Detection complete: {detection_results} detections in {processed} frames")
@@ -4006,6 +4034,19 @@ class BambiProcessor:
                         f"{d['confidence']:.4f} {d['class_id']}\n")
         if log_fn:
             log_fn(f"Wrote detections.txt ({len(detections)} rows)")
+
+        # Mirror into the 6.0 store under this producer's own source, so a later
+        # detector run cannot silently discard the imported tracklets.
+        from .core import detection_store
+
+        detection_store.record_detections(
+            target_folder, camera_suffix,
+            [{"frame": d["frame"],
+              "x1": round(d["x1"], 2), "y1": round(d["y1"], 2),
+              "x2": round(d["x2"], 2), "y2": round(d["y2"], 2),
+              "confidence": round(d["confidence"], 4),
+              "source_class": str(d["class_id"])} for d in detections],
+            kind=detection_store.TREX, log_fn=log_fn)
 
         # ---- Step 3: build undistorter (if labels are in raw pixel space) ---------
         # The TRex detections live in raw video pixel space, while the poses/cameras
