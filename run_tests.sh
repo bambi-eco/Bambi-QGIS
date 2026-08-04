@@ -22,11 +22,11 @@ echo "============================================"
 
 # --cov-fail-under is a regression ratchet: raise it as coverage grows
 # (see DECOUPLING_PLAN.md and EXCHANGE_FORMAT_PLAN.md §12.6), never lower it to
-# make a build pass. Raised to 26 by Phase 4 (see EXCHANGE_FORMAT_PLAN.md §12.6).
+# make a build pass. Raised to 27 by Phase 5 (see EXCHANGE_FORMAT_PLAN.md §12.6).
 pytest tests \
     --junitxml="$REPORTS_DIR/pytest.xml" \
     --cov=bambi_wildlife_detection \
     --cov-report=term \
-    --cov-fail-under=26 \
+    --cov-fail-under=27 \
     2>&1 | tee "$REPORTS_DIR/pytest.txt"
 exit "${PIPESTATUS[0]}"

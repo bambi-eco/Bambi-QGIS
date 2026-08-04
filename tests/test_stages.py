@@ -363,3 +363,38 @@ def test_describe_infers_completion_from_the_disk(project):
     _make_output(project, "alfs")
     summary = {row["stage"]: row for row in stages.describe(project, "t")}
     assert summary["alfs"]["state"] == stages.COMPLETE
+
+
+# ---------------------------------------------------------------------------
+# Stages recording their own completion
+# ---------------------------------------------------------------------------
+
+def test_record_stage_marks_complete_and_cascades(project):
+    from bambi_wildlife_detection.bambi_processing import _record_stage
+
+    stages.mark_complete(project, "tracking", "t")
+    messages = []
+    _record_stage({"target_folder": project}, "detection", "t",
+                  row_count=7, log_fn=messages.append)
+
+    recorded = stages.states(project, "t")
+    assert recorded["detection"]["state"] == stages.COMPLETE
+    assert recorded["detection"]["row_count"] == 7
+    assert recorded["tracking"]["state"] == stages.STALE
+    assert any("out of date" in m for m in messages)
+
+
+def test_record_stage_is_a_no_op_without_a_store(tmp_path):
+    """An un-migrated 5.x project must not gain a store as a side effect."""
+    from bambi_wildlife_detection.bambi_processing import _record_stage
+
+    root = str(tmp_path / "legacy")
+    os.makedirs(root, exist_ok=True)
+    _record_stage({"target_folder": root}, "detection", "t")
+    assert not os.path.isfile(store.project_path(root))
+
+
+def test_record_stage_without_a_target_folder():
+    from bambi_wildlife_detection.bambi_processing import _record_stage
+
+    _record_stage({}, "detection", "t")   # must not raise

@@ -241,6 +241,27 @@ def _legacy_text_writer(config: Dict[str, Any], path: str, stack):
     return stack.enter_context(open(path, "w", encoding="utf-8"))
 
 
+def _record_stage(config: Dict[str, Any], stage: str, modality: str,
+                  row_count: Optional[int] = None, log_fn=None) -> None:
+    """Record a finished stage and flag whatever depended on it.
+
+    A no-op on projects without a 6.0 store. Failures are deliberately not
+    recorded: the previous state stays, and reconciliation against the folder
+    is what keeps the answer honest either way (EXCHANGE_FORMAT_PLAN.md §7).
+    """
+    from .core import stages, store
+
+    target_folder = config.get("target_folder", "")
+    if not target_folder or not os.path.isfile(
+            store.project_path(target_folder)):
+        return
+
+    stale = stages.mark_complete(target_folder, stage, modality, row_count)
+    if stale and log_fn:
+        names = ", ".join(stale)
+        log_fn(f"Now out of date after re-running '{stage}': {names}")
+
+
 class CancelledException(Exception):
     """Exception raised when a processing step is cancelled."""
     pass
@@ -3577,6 +3598,9 @@ class BambiProcessor:
         if mismatch and log_fn:
             log_fn(f"Warning: store/text mismatch — {mismatch}")
 
+        _record_stage(config, "detection", camera_suffix,
+                      row_count=detection_results, log_fn=log_fn)
+
         if log_fn:
             log_fn(f"Detection complete: {detection_results} detections in {processed} frames")
 
@@ -3960,6 +3984,9 @@ class BambiProcessor:
             if report["unaccounted"] and log_fn:
                 log_fn(f"Warning: {len(report['unaccounted'])} detection(s) "
                        "neither geo-referenced nor recorded as failures")
+
+        _record_stage(config, "georeference", camera_suffix,
+                      row_count=len(georeferenced), log_fn=log_fn)
 
         if log_fn:
             log_fn(f"Geo-referencing complete: {len(georeferenced)} detections")
@@ -4668,6 +4695,8 @@ class BambiProcessor:
             if tri_mesh is not None:
                 del tri_mesh
 
+        _record_stage(config, "calculate_fov", camera_suffix, log_fn=log_fn)
+
         if log_fn:
             log_fn(f"FoV calculation complete. Output: {output_file}")
 
@@ -5116,6 +5145,9 @@ class BambiProcessor:
 
         # Count unique tracks
         unique_tracks = set(r[1] for r in results)
+
+        _record_stage(config, "tracking", camera_suffix,
+                      row_count=len(unique_tracks), log_fn=log_fn)
 
         if log_fn:
             log_fn(f"Tracking complete: {len(unique_tracks)} tracks, {len(results)} total detections")
