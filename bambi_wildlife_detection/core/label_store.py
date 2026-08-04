@@ -43,6 +43,51 @@ MANUAL_KIND = "manual"
 MANUAL_CONFIDENCE = 1.0
 
 
+#: Base classes in the order they should be offered, rather than by id — the
+#: ids are ``0, -1, -2`` and ascending order would read oddly in a combo box.
+_BASE_SPECIES_ORDER = ("animal", "unknown", "not-an-animal")
+
+
+def vocabulary(target_folder: str) -> dict:
+    """The project's species and enum values, ordered for display.
+
+    Returns ``{}`` when the project has no 6.0 store, which is what lets the
+    labelling tool fall back to its built-in lists on an un-migrated folder.
+    """
+    path = store.project_path(target_folder)
+    if not os.path.isfile(path):
+        return {}
+
+    conn = store.open_store(path, store.PROJECT)
+    try:
+        rows = [dict(row) for row in conn.execute(
+            "SELECT species_id, name, protected FROM species")]
+        base = [r for name in _BASE_SPECIES_ORDER
+                for r in rows if r["name"] == name]
+        concrete = sorted((r for r in rows if not r["protected"]),
+                          key=lambda r: r["species_id"])
+        species = base + concrete
+
+        enums: Dict[str, List[dict]] = {}
+        for row in conn.execute(
+                "SELECT e.name AS enum, v.label AS label, "
+                "v.value_id AS value_id FROM enums e "
+                "JOIN enum_values v USING (enum_id) "
+                "ORDER BY e.name, v.ordinal, v.value_id"):
+            enums.setdefault(row["enum"], []).append(
+                {"value_id": row["value_id"], "label": row["label"]})
+
+        return {
+            "species": species,
+            "species_by_name": {r["name"]: r["species_id"] for r in species},
+            "enums": enums,
+            "enum_ids": {name: {v["label"]: v["value_id"] for v in values}
+                         for name, values in enums.items()},
+        }
+    finally:
+        conn.close()
+
+
 def _labels_conn(target_folder: str, modality: str):
     return store.open_store(
         store.stage_path(target_folder, store.LABELS, modality),

@@ -925,6 +925,40 @@ shared enum value means.
 Pooling itself is `ATTACH` over each project's stage files, which is materially
 simpler than today's parse-and-merge across folders.
 
+#### Consumer audit (done during Phase 4)
+
+Every tool that reads a pipeline output was checked against the legacy file
+list of §1.1. All of them still work, because each stage keeps writing its text
+file — but two findings are worth carrying forward:
+
+| Consumer | Reads | State |
+|---|---|---|
+| Video Creator (`core/video_export.py`) | `tracks_pixel.csv`, `tracks.csv`, `detections.txt`, `georeferenced.txt`, `fov_polygons.txt` | works; **positional alignment**, see below |
+| Click tool (`core/inspection.py`) | `detections.txt`, `georeferenced.txt`, `tracks_pixel.csv` | works |
+| Box projector | `georeferenced.txt` | works |
+| Population / transects | `fov_polygons.txt`, `tracks.csv` | works — moves in Phase 7 (§8.2) |
+| QGIS layer builders | `georeferenced.txt`, `tracks.csv`, `fov_polygons.txt`, segmentation JSON | works — moves in Phase 5 |
+| Labelling tool | `detections.txt`, `tracks_pixel.csv` | reads the store when present (Phase 4) |
+
+**`video_export.load_track_id_rows` pairs `tracks_pixel.csv` rows with
+`detections.txt` rows by position** — the same assumption `track_export.py`
+made, and the same one that breaks when a detection is dropped. It predates
+this rework and is not made worse by it, but it is the last surviving instance
+of the defect §1.2a describes. Move the Video Creator onto the store in Phase 6
+alongside the exporters; a join on `detection_id` replaces the alignment
+outright.
+
+**Legacy projects need `detections.txt` adopted.** Everything downstream of
+detection now resolves through the store, so a `detections.txt` produced by 5.x
+— or by hand, or by an external tool — would reach geo-referencing with nothing
+to work against and silently yield no `tracks_pixel.csv`.
+`detection_store.adopt_legacy_detections()` ingests the detector block on the
+way into geo-referencing. Only that block: rows below `DETECTIONS_MARKER`
+describe label tracks whose identity the text file does not record, and
+adopting them unlinked would strand manual detections the labelling tool does
+not manage. A project tracked without ever passing through a 6.0 stage says so
+and points at "Migrate 5.x…" rather than writing nothing.
+
 #### What does *not* move
 
 Density and coverage rasters stay raster outputs — only their inputs change.
@@ -986,9 +1020,9 @@ Each phase leaves the plugin working.
 | **1** ✅ | 5.x importer (`core/migration.py`) + "Migrate 5.x…" action on the dock widget. Read-only with respect to the legacy files. **Done:** 33 unit tests on golden fixtures, 5 QGIS widget tests, 5 integration tests on flight 6's real output; ratchet 22 → 24. |
 | **2** ✅ | Detection stage, TRex import → write the store (`core/detection_store.py`). `detection_id`, `species` (base classes 0 / -1 / -2), `enums`, `field_schema`, `detection_sources` and `class_mapping` live, plus `core/schema_editor.py` + the *Project Schema* dialog on the Detection tab; **latent bugs 1 and 2 fixed.** Dual-write with a parity check on every detection run. **Done:** +86 unit, +17 QGIS; ratchet 24 → 25. |
 | **3** ✅ | Georeference + tracking read/write the store (`core/track_store.py`), `track_runs` introduced, `georef_failures` populated. **`core/track_export.py` deleted.** **Done:** +28 unit, +6 integration on flight 6; ratchet held at 25 (see below). |
-| **4** ◑ | Labelling tool onto the store (`core/label_store.py`): upsert materialisation (§6.2), manual tracks (§6.5), custom fields into `detections.attributes`. **Done:** +41 unit; ratchet 25 → 26. **Remaining:** binding the tool's combos to the store and opening the shared dialog from its gear button (§6.8), and `origin_*` provenance on import-as-label-track. |
+| **4** ✅ | Labelling tool onto the store (`core/label_store.py`): upsert materialisation (§6.2), manual tracks (§6.5), custom fields into `detections.attributes`, closed vocabulary in every categorical combo (§6.8), `origin_*` provenance on import. Consumer audit done (§8.2). **Done:** +46 unit; ratchet 25 → 26. |
 | **5** | `stages` table wired up, cascade (**latent bug 3 fixed**), `output_inventory` rewrite, Reset-stage UI (incl. locked-file handling), QGIS layer builders read the store into **memory layers** (§11). |
-| **6** | `core/exporters/` — COCO, MOT, YOLO, TRex npz, GeoJSON. |
+| **6** | `core/exporters/` — COCO, MOT, YOLO, TRex npz, GeoJSON. Video Creator onto the store, removing the last positional alignment (§8.2). |
 | **7** | Survey analytics onto the store (§8.2): explicit population filter, species/attribute stratification, perpendicular distances keyed by id, multi-project pooling by label. Route/transect files follow. |
 | **8** | UI reorganisation: split the Processing tab into **Pre-Processing** and **Processing** (§10.1). Last, because it is the only phase that moves things the user has learned where to find. |
 
@@ -1182,7 +1216,7 @@ the labelling tool's combos populate from the store.
 | 1 ✅ | Migration golden files + real 5.x flight-6 folder migrate correctly |
 | 2 ✅ | Dual-write parity for `detections.txt`; species/enum editors round-trip |
 | 3 ✅ | Total accounting + no-orphans + `track_export` regression tests pass |
-| 4 ◑ | Upsert matrix; manual tracks never touch another run's rows |
+| 4 ✅ | Upsert matrix; manual tracks never touch another run's rows |
 | 5 | Cascade correctness; `output_inventory` reconciles a hand-deleted file |
 | 6 | Exporter fixtures, incl. enum resolution and class-id remapping |
 | 7 | Analytics results unchanged vs. the pre-rework baseline on flight 6 |

@@ -1172,12 +1172,27 @@ class LabellingToolDialog(QDialog):
             row.addWidget(combo, 1)
             ag.addLayout(row)
 
+        # Editable only as a fallback: once the project has a 6.0 store the
+        # combo becomes a closed list fed from it, because a species typed here
+        # is exactly how class ids used to become unstable (§6.8).
         self.species_combo = QComboBox()
         self.species_combo.setEditable(True)
         self.species_combo.addItems(SPECIES_CLASSES)
-        # editable combo: react on both selection and manual edit
         self.species_combo.currentTextChanged.connect(self._on_attributes_changed)
-        combo_row("Species:", self.species_combo)
+
+        self.manage_species_btn = QPushButton("…")
+        self.manage_species_btn.setFixedWidth(30)
+        self.manage_species_btn.setToolTip(
+            "Manage the project's species — opens the shared Project Schema "
+            "editor without leaving this tool.")
+        self.manage_species_btn.clicked.connect(self._on_manage_species)
+        self.manage_species_btn.setVisible(False)
+
+        species_row = QHBoxLayout()
+        species_row.addWidget(QLabel("Species:"))
+        species_row.addWidget(self.species_combo, 1)
+        species_row.addWidget(self.manage_species_btn)
+        ag.addLayout(species_row)
 
         self.sex_combo = QComboBox()
         self.sex_combo.addItems(SEX_CLASSES)
@@ -1374,8 +1389,16 @@ class LabellingToolDialog(QDialog):
         if self._store is None:
             QMessageBox.information(
                 self, "BAMBI Labelling Tool",
-                "Load a target folder first — custom fields are stored in the "
-                "flight's labels.json.")
+                "Load a target folder first — custom fields belong to a "
+                "project.")
+            return
+
+        # With a 6.0 store the schema is project-wide, so it is edited in the
+        # one shared editor rather than in a labelling-only dialog (§5.3).
+        from .core import label_store
+
+        if label_store.vocabulary(self._target_folder):
+            self._open_schema_dialog(initial_tab=2)
             return
 
         dialog = _CustomFieldsDialog(self._store.custom_fields, self)
@@ -1429,6 +1452,67 @@ class LabellingToolDialog(QDialog):
                     f"{old.type} value(s) will be converted where possible "
                     "and deleted otherwise.")
         return messages
+
+    def _reload_vocabulary(self):
+        """Feed the categorical combos from the project store.
+
+        With a 6.0 store present the vocabulary is closed: the tool selects
+        species and enum values, it never creates them. That is what removes
+        the last route by which a class id could become unstable (§6.8).
+        Without a store the built-in lists stay, so an un-migrated 5.x flight
+        keeps working exactly as before.
+        """
+        from .core import label_store
+
+        vocabulary = (label_store.vocabulary(self._target_folder)
+                      if self._target_folder else {})
+        self._vocabulary = vocabulary
+        has_store = bool(vocabulary)
+
+        self.manage_species_btn.setVisible(has_store)
+        self.species_combo.setEditable(not has_store)
+
+        def refill(combo, labels):
+            previous = combo.currentText()
+            blocked = combo.blockSignals(True)
+            combo.clear()
+            combo.addItems(labels)
+            if previous in labels:
+                combo.setCurrentText(previous)
+            combo.blockSignals(blocked)
+
+        if has_store:
+            refill(self.species_combo,
+                   [s["name"] for s in vocabulary["species"]])
+            for name, combo in (("sex", self.sex_combo),
+                                ("age", self.age_combo),
+                                ("occlusion", self.occlusion_combo)):
+                values = vocabulary["enums"].get(name)
+                if values:
+                    refill(combo, [v["label"] for v in values])
+        else:
+            refill(self.species_combo, list(SPECIES_CLASSES))
+            refill(self.sex_combo, list(SEX_CLASSES))
+            refill(self.age_combo, list(AGE_CLASSES))
+            refill(self.occlusion_combo, list(OCCLUSION_LEVELS))
+
+    def _on_manage_species(self):
+        """Open the shared Project Schema editor on its Species tab (§5.3)."""
+        self._open_schema_dialog(initial_tab=0)
+
+    def _open_schema_dialog(self, initial_tab: int = 0) -> bool:
+        from .bambi_schema_dialog import BambiSchemaDialog
+
+        if not self._target_folder:
+            return False
+        dialog = BambiSchemaDialog(
+            self._target_folder, parent=self, initial_tab=initial_tab)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+        self._reload_vocabulary()
+        self._rebuild_custom_field_widgets()
+        self._render_frame()
+        return True
 
     def _rebuild_custom_field_widgets(self):
         """Recreate the side-panel editors for the current field schema."""
@@ -1649,8 +1733,7 @@ class LabellingToolDialog(QDialog):
 
         self._detections = _load_detections_by_frame(
             os.path.join(self._target_folder, f"detections_{m}", "detections.txt"))
-        self._pixel_tracks = _load_pixel_tracks(
-            os.path.join(self._target_folder, f"tracks_{m}", "tracks_pixel.csv"))
+        self._pixel_tracks = self._load_pipeline_tracks(m)
 
         self._store = LabelStore(self._target_folder, m)
         try:
@@ -1663,6 +1746,7 @@ class LabellingToolDialog(QDialog):
             # Labels written before / without a schema: start from the fields
             # the user configured last instead of showing none.
             self._store.set_custom_fields(self._default_custom_fields())
+        self._reload_vocabulary()
         self._rebuild_custom_field_widgets()
         self._dirty = False
         self._propagator = None  # modality-specific, rebuild lazily
@@ -2252,6 +2336,31 @@ class LabellingToolDialog(QDialog):
             QApplication.restoreOverrideCursor()
         return True
 
+    def _load_pipeline_tracks(self, modality: str) -> Dict[int, List[dict]]:
+        """Pipeline tracks to offer for import, keyed by track id.
+
+        Read from the store when there is one, because its rows carry a
+        ``detection_id`` — that is what lets an imported label record which
+        detection each key frame came from (§6.3). Falls back to the legacy
+        ``tracks_pixel.csv`` otherwise.
+        """
+        from .core import track_store
+
+        stored = track_store.load_pixel_tracks(self._target_folder, modality)
+        if not stored:
+            return _load_pixel_tracks(os.path.join(
+                self._target_folder, f"tracks_{modality}", "tracks_pixel.csv"))
+
+        tracks: Dict[int, List[dict]] = {}
+        for row in stored:
+            tracks.setdefault(row["track_id"], []).append({
+                "frame": row["frame"],
+                "x1": row["x1"], "y1": row["y1"],
+                "x2": row["x2"], "y2": row["y2"],
+                "detection_id": row["detection_id"],
+            })
+        return tracks
+
     def _import_pixel_track(self, src_tid: int) -> Optional[LabelTrack]:
         """Convert one pipeline track into a label track and add it to the
         store, or return ``None`` if the pipeline track is empty."""
@@ -2260,7 +2369,7 @@ class LabellingToolDialog(QDialog):
             return None
 
         step = self.import_resample_spin.value()
-        track = LabelTrack(self._store.next_track_id())
+        track = LabelTrack(self._store.next_track_id(), origin_track_id=src_tid)
         frames = [d["frame"] for d in entries]
         first, last = frames[0], frames[-1]
         for d in entries:
@@ -2268,6 +2377,9 @@ class LabellingToolDialog(QDialog):
             if f == first or f == last or (f - first) % step == 0:
                 track.set_keyframe(
                     f, (d["x1"], d["y1"], d["x2"], d["y2"]), occlusion="none")
+                # Provenance: which detection this key frame was copied from.
+                if d.get("detection_id") is not None:
+                    track.keyframes[f]["origin_detection_id"] = d["detection_id"]
 
         self._store.tracks[track.track_id] = track
         return track

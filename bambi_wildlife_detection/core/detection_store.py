@@ -187,6 +187,52 @@ def rows_from_legacy_text(path: str) -> List[dict]:
     return rows
 
 
+def adopt_legacy_detections(target_folder: str, modality: str,
+                            log_fn=None) -> int:
+    """Ingest a legacy ``detections.txt`` when the store has none yet.
+
+    Everything downstream of detection now works through the store, so a
+    project whose ``detections.txt`` was produced by 5.x — or written by hand,
+    or by a tool outside the plugin — would otherwise reach geo-referencing
+    with nothing to geo-reference against, and would silently produce no
+    ``tracks_pixel.csv`` for the video creator, click tool or labelling tool.
+
+    Only the detector block is adopted. Rows below the labelling tool's marker
+    describe label tracks whose identity is not recoverable from the text file,
+    and adopting them unlinked would leave stray manual detections that the
+    labelling tool does not manage; re-exporting from that tool recreates them
+    properly. Returns the number of rows adopted (0 when nothing was needed).
+    """
+    path = os.path.join(
+        target_folder, f"detections_{modality}", "detections.txt")
+    if not os.path.isfile(path):
+        return 0
+    if detection_counts(target_folder, modality):
+        return 0   # the store is already populated — nothing to adopt
+
+    from .migration import read_legacy_detections
+
+    detector_rows, label_rows = read_legacy_detections(path)
+    if not detector_rows:
+        return 0
+
+    record_detections(
+        target_folder, modality,
+        [{"frame": row["frame"], "x1": row["x1"], "y1": row["y1"],
+          "x2": row["x2"], "y2": row["y2"], "confidence": row["confidence"],
+          "source_class": str(row["class_id"])} for row in detector_rows],
+        kind=DETECTOR, model="adopted from detections.txt")
+
+    if log_fn:
+        log_fn(f"Adopted {len(detector_rows)} detection(s) from "
+               f"detections_{modality}/detections.txt into the store")
+        if label_rows:
+            log_fn(f"  {len(label_rows)} labelled row(s) were skipped — "
+                   "re-export them from the labelling tool to link them to "
+                   "their label tracks")
+    return len(detector_rows)
+
+
 def compare_with_legacy_text(target_folder: str, modality: str,
                              path: str, kind: str = DETECTOR
                              ) -> Optional[str]:

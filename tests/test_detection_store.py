@@ -240,3 +240,60 @@ def test_rows_from_legacy_text_skips_comments_and_junk(tmp_path):
 def test_every_producer_kind_round_trips(tmp_path, kind):
     detection_store.record_detections(str(tmp_path), "t", _rows(2), kind=kind)
     assert detection_store.detection_counts(str(tmp_path), "t") == {kind: 2}
+
+
+# ---------------------------------------------------------------------------
+# Adopting a legacy detections.txt
+# ---------------------------------------------------------------------------
+
+def _legacy_file(root, body, modality="t"):
+    path = os.path.join(root, f"detections_{modality}", "detections.txt")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(body)
+    return path
+
+
+def test_adopts_a_legacy_detections_file(tmp_path):
+    """Otherwise a 5.x project reaches geo-referencing with nothing to use."""
+    root = str(tmp_path)
+    _legacy_file(root, "# frame x1 y1 x2 y2 confidence class_id\n"
+                       "1 10.0 20.0 30.0 40.0 0.9 0\n"
+                       "2 11.0 21.0 31.0 41.0 0.8 1\n")
+    assert detection_store.adopt_legacy_detections(root, "t") == 2
+    assert detection_store.detection_counts(root, "t") == {"detector": 2}
+
+
+def test_adoption_is_skipped_when_the_store_is_populated(tmp_path):
+    root = str(tmp_path)
+    _legacy_file(root, "1 10.0 20.0 30.0 40.0 0.9 0\n")
+    detection_store.record_detections(root, "t", _rows(3))
+    assert detection_store.adopt_legacy_detections(root, "t") == 0
+    assert detection_store.detection_counts(root, "t") == {"detector": 3}
+
+
+def test_adoption_without_a_legacy_file(tmp_path):
+    assert detection_store.adopt_legacy_detections(str(tmp_path), "t") == 0
+
+
+def test_adoption_skips_the_labelled_block(tmp_path):
+    """Label rows have no recoverable link to their label tracks."""
+    from bambi_wildlife_detection.core.migration import DETECTIONS_MARKER
+
+    root = str(tmp_path)
+    body = "1 10.0 20.0 30.0 40.0 0.9 0\n"
+    body += DETECTIONS_MARKER + "\n"
+    body += "5 50.0 50.0 60.0 60.0 1.0 3\n"
+    _legacy_file(root, body)
+    messages = []
+    assert detection_store.adopt_legacy_detections(
+        root, "t", log_fn=messages.append) == 1
+    assert detection_store.detection_counts(root, "t") == {"detector": 1}
+    assert any("labelled row(s) were skipped" in m for m in messages)
+
+
+def test_adopted_rows_keep_their_raw_class(tmp_path):
+    root = str(tmp_path)
+    _legacy_file(root, "1 10.0 20.0 30.0 40.0 0.9 7\n")
+    detection_store.adopt_legacy_detections(root, "t")
+    assert _stored(root)[0]["source_class"] == "7"

@@ -303,12 +303,17 @@ class LabelTrack:
 
     def __init__(self, track_id: int, species: str = "unknown",
                  sex: str = "unknown", age: str = "unknown",
-                 attributes: Optional[Dict[str, Any]] = None):
+                 attributes: Optional[Dict[str, Any]] = None,
+                 origin_track_id: Optional[int] = None):
         self.track_id = track_id
         self.species = species
         self.sex = sex
         self.age = age
         self.attributes: Dict[str, Any] = dict(attributes or {})
+        #: Pipeline track this label track was imported from, if any. Kept so
+        #: "this label came from track 7" stays answerable (§6.3); today the
+        #: link is lost the moment the import happens.
+        self.origin_track_id = origin_track_id
         self.keyframes: Dict[int, dict] = {}
 
     # -- key frame access ------------------------------------------------
@@ -476,6 +481,8 @@ class LabelTrack:
         }
         if self.attributes:
             d["attributes"] = dict(self.attributes)
+        if self.origin_track_id is not None:
+            d["origin_track_id"] = self.origin_track_id
         return d
 
     @classmethod
@@ -486,6 +493,7 @@ class LabelTrack:
             d.get("sex", "unknown"),
             d.get("age", "unknown"),
             attributes=d.get("attributes") or {},
+            origin_track_id=d.get("origin_track_id"),
         )
         for f, kf in d.get("keyframes", {}).items():
             entry = {
@@ -497,6 +505,8 @@ class LabelTrack:
                 entry["stop"] = True
             if kf.get("attributes"):
                 entry["attributes"] = dict(kf["attributes"])
+            if kf.get("origin_detection_id") is not None:
+                entry["origin_detection_id"] = kf["origin_detection_id"]
             track.keyframes[int(f)] = entry
         return track
 
@@ -773,27 +783,12 @@ class LabelStore:
     def _vocabulary(self) -> dict:
         """Species and enum lookups from the project store, keyed by name.
 
-        Returns empty maps when no project store exists yet, which is what makes
-        the store write a no-op on an un-migrated 5.x folder.
+        Empty when no project store exists yet, which is what makes the store
+        write a no-op on an un-migrated 5.x folder.
         """
-        from . import store
+        from . import label_store
 
-        path = store.project_path(self.target_folder)
-        if not os.path.isfile(path):
-            return {}
-        conn = store.open_store(path, store.PROJECT)
-        try:
-            species = {row["name"]: row["species_id"] for row in conn.execute(
-                "SELECT species_id, name FROM species")}
-            enums: Dict[str, Dict[str, int]] = {}
-            for row in conn.execute(
-                    "SELECT e.name AS enum, v.label AS label, "
-                    "v.value_id AS value_id FROM enums e "
-                    "JOIN enum_values v USING (enum_id)"):
-                enums.setdefault(row["enum"], {})[row["label"]] = row["value_id"]
-            return {"species": species, "enums": enums}
-        finally:
-            conn.close()
+        return label_store.vocabulary(self.target_folder)
 
     def to_store_tracks(self, vocabulary: Optional[dict] = None) -> List[dict]:
         """Convert the in-memory label tracks into store rows.
@@ -804,11 +799,11 @@ class LabelStore:
         from . import store as _store
 
         vocabulary = self._vocabulary() if vocabulary is None else vocabulary
-        species_ids = vocabulary.get("species", {})
-        enums = vocabulary.get("enums", {})
+        species_ids = vocabulary.get("species_by_name", {})
+        enum_ids = vocabulary.get("enum_ids", {})
 
         def enum_value(enum_name: str, label: str):
-            return enums.get(enum_name, {}).get((label or "").strip())
+            return enum_ids.get(enum_name, {}).get((label or "").strip())
 
         rows = []
         for track in sorted(self.tracks.values(), key=lambda t: t.track_id):
@@ -830,6 +825,7 @@ class LabelStore:
                     "x1": entry["x1"], "y1": entry["y1"],
                     "x2": entry["x2"], "y2": entry["y2"],
                     "stop": bool(entry.get("stop")),
+                    "origin_detection_id": entry.get("origin_detection_id"),
                     "attributes": kf_attributes,
                 })
 
@@ -838,6 +834,7 @@ class LabelStore:
                 "label_track_id": track.track_id,
                 "species_id": species_ids.get(
                     species, _store.FALLBACK_SPECIES_ID),
+                "origin_track_id": track.origin_track_id,
                 "attributes": attributes,
                 "keyframes": keyframes,
             })

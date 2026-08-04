@@ -3738,8 +3738,13 @@ class BambiProcessor:
                     })
 
         # Prefer the store: its rows carry a detection_id, so the results can be
-        # keyed on it instead of relying on the two files staying in step.
-        from .core import track_store
+        # keyed on it instead of relying on the two files staying in step. A
+        # detections.txt that never went through the 6.0 detection stage is
+        # adopted first, so every downstream consumer sees the same thing.
+        from .core import detection_store, track_store
+
+        detection_store.adopt_legacy_detections(
+            target_folder, camera_suffix, log_fn=log_fn)
 
         if track_store.has_store(target_folder, camera_suffix):
             stored = track_store.load_detections(target_folder, camera_suffix)
@@ -4801,6 +4806,14 @@ class BambiProcessor:
 
         rows = track_store.load_pixel_tracks(target_folder, camera_suffix)
         if not rows:
+            # Reachable when a 5.x project is tracked without ever passing
+            # through a 6.0 stage — say so, because the video creator, click
+            # tool and labelling tool all read this file.
+            if log_fn and os.path.isfile(os.path.join(
+                    target_folder, f"tracks_{camera_suffix}", "tracks.csv")):
+                log_fn("No pixel tracks written: this project has no 6.0 "
+                       "store, so track membership cannot be resolved. Use "
+                       "'Migrate 5.x…' on the Input tab, then re-run tracking.")
             return ""
 
         os.makedirs(tracks_folder, exist_ok=True)
