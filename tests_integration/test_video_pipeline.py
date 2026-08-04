@@ -258,3 +258,95 @@ class TestAlfs:
                 assert ds.width > 0 and ds.height > 0
                 data = ds.read(1)
                 assert np.count_nonzero(data) > 0, f"ALFS output {name} is empty"
+
+
+# ---------------------------------------------------------------------------
+# 6.0 migration on real pipeline output (EXCHANGE_FORMAT_PLAN.md §9, §12.2)
+# ---------------------------------------------------------------------------
+
+class TestMigrationOnRealOutput:
+    """Migrate the folder this run just produced, and check it accounts for
+    every row the legacy files hold.
+
+    The unit tier proves the mapping against synthetic fixtures; this proves it
+    against text a real pipeline wrote, including whatever the geo-referencing
+    stage decided to drop.
+    """
+
+    @pytest.fixture(scope="class")
+    def migrated(self, georeferenced, target_folder):
+        from bambi_wildlife_detection.core import migration
+        return migration.migrate_project(target_folder, log_fn=print)
+
+    def test_detections_match_the_text_file(
+            self, migrated, target_folder, synthetic_detections):
+        from bambi_wildlife_detection.core import store
+
+        conn = store.open_store(
+            store.stage_path(target_folder, store.DETECTIONS, "t"),
+            store.DETECTIONS, "t")
+        try:
+            n = conn.execute(
+                "SELECT COUNT(*) AS n FROM detections").fetchone()["n"]
+        finally:
+            conn.close()
+        assert n == synthetic_detections["count"]
+
+    def test_every_detection_is_accounted_for(self, migrated, target_folder):
+        """Either geo-referenced or explicitly failed — never silently absent."""
+        from bambi_wildlife_detection.core import store
+
+        det = store.open_store(
+            store.stage_path(target_folder, store.DETECTIONS, "t"),
+            store.DETECTIONS, "t")
+        geo = store.open_store(
+            store.stage_path(target_folder, store.GEOREFERENCED, "t"),
+            store.GEOREFERENCED, "t")
+        try:
+            all_ids = {r["detection_id"] for r in det.execute(
+                "SELECT detection_id FROM detections")}
+            resolved = {r["detection_id"] for r in geo.execute(
+                "SELECT detection_id FROM detections_geo")}
+            failed = {r["detection_id"] for r in geo.execute(
+                "SELECT detection_id FROM georef_failures")}
+        finally:
+            det.close()
+            geo.close()
+
+        unaccounted = all_ids - resolved - failed
+        assert not unaccounted, (
+            f"{len(unaccounted)} detection(s) neither geo-referenced nor "
+            "recorded as failures")
+
+    def test_geo_coordinates_survive_the_round_trip(
+            self, migrated, target_folder, georeferenced):
+        from bambi_wildlife_detection.core import store
+
+        geo = store.open_store(
+            store.stage_path(target_folder, store.GEOREFERENCED, "t"),
+            store.GEOREFERENCED, "t")
+        try:
+            rows = [dict(r) for r in geo.execute(
+                "SELECT gx1, gy1 FROM detections_geo ORDER BY detection_id")]
+        finally:
+            geo.close()
+
+        expected = [(r["x1"], r["y1"]) for r in georeferenced
+                    if r["x1"] >= 0 and r["y1"] >= 0]
+        assert [(r["gx1"], r["gy1"]) for r in rows] == expected
+
+    def test_vocabulary_is_seeded(self, migrated, target_folder):
+        from bambi_wildlife_detection.core import store
+
+        conn = store.open_store(store.project_path(target_folder), store.PROJECT)
+        try:
+            base = {r["name"]: r["species_id"] for r in conn.execute(
+                "SELECT species_id, name FROM species WHERE protected = 1")}
+        finally:
+            conn.close()
+        assert base == {"animal": 0, "unknown": -1, "not-an-animal": -2}
+
+    def test_legacy_files_are_untouched(self, migrated, synthetic_detections):
+        with open(synthetic_detections["file"]) as fh:
+            content = fh.read()
+        assert "# video_size" in content

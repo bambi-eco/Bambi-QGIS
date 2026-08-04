@@ -543,13 +543,11 @@ class BambiProcessor:
         # close to zero while origin holds projected UTM metres (northings up to 10⁷) —
         # feeding those into the WGS84→UTM transformer yields inf and every camera
         # position becomes -Infinity.  Require plausible lon/lat magnitudes first.
-        _origin_looks_like_degrees = (
-            len(origin_list) >= 2
-            and abs(float(origin_list[0])) <= 180.0
-            and abs(float(origin_list[1])) <= 90.0
-        )
-        if (abs(origin_lat) < 0.01 and _origin_looks_like_degrees
-                and abs(float(origin_list[1])) > 0.01):
+        _origin_looks_like_degrees = len(origin_list) >= 2 and all([
+            abs(float(origin_list[0])) <= 180.0,
+            abs(float(origin_list[1])) <= 90.0,
+        ])
+        if abs(origin_lat) < 0.01 and _origin_looks_like_degrees and abs(float(origin_list[1])) > 0.01:
             origin_lon = float(origin_list[0])
             origin_lat = float(origin_list[1])
             origin_alt = float(origin_list[2]) if len(origin_list) > 2 else 0.0

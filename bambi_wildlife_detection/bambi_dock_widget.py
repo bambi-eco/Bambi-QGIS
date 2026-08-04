@@ -690,9 +690,19 @@ class BambiDockWidget(QDockWidget):
         self.target_folder_edit.editingFinished.connect(self._on_target_folder_changed)
         target_browse_btn = QPushButton("Browse...")
         target_browse_btn.clicked.connect(self.browse_target_folder)
+        # Offered only for folders holding 5.x outputs that have not been
+        # migrated yet; see _refresh_migrate_button.
+        self.migrate_btn = QPushButton("Migrate 5.x…")
+        self.migrate_btn.setToolTip(
+            "Import the outputs of this folder into the 6.0 store.\n"
+            "The existing files are only read, never modified."
+        )
+        self.migrate_btn.clicked.connect(self.migrate_legacy_project)
+        self.migrate_btn.setVisible(False)
         target_row = QHBoxLayout()
         target_row.addWidget(self.target_folder_edit)
         target_row.addWidget(target_browse_btn)
+        target_row.addWidget(self.migrate_btn)
         output_layout.addRow("Target Folder:", target_row)
 
         self.target_crs_edit = QLineEdit()
@@ -4823,6 +4833,7 @@ class BambiDockWidget(QDockWidget):
         if folder:
             self.target_folder_edit.setText(folder)
             self._check_existing_outputs(folder)
+            self._refresh_migrate_button()
 
     def browse_trex_npz_dir(self):
         folder = QFileDialog.getExistingDirectory(self, "Select TRex NPZ Folder")
@@ -4971,6 +4982,65 @@ class BambiDockWidget(QDockWidget):
         folder = self.target_folder_edit.text().strip()
         if folder and os.path.isdir(folder):
             self._check_existing_outputs(folder)
+        self._refresh_migrate_button()
+
+    def _refresh_migrate_button(self):
+        """Show 'Migrate 5.x…' only where there is something to migrate."""
+        from .core import migration
+
+        folder = self.target_folder_edit.text().strip()
+        show = bool(folder) and os.path.isdir(folder) and \
+            migration.has_legacy_outputs(folder) and \
+            not migration.is_migrated(folder)
+        self.migrate_btn.setVisible(show)
+
+    def migrate_legacy_project(self):
+        """Import this folder's 5.x outputs into the 6.0 store.
+
+        Additive and read-only with respect to the legacy files, so it is safe
+        to retry: delete the generated stores and run it again.
+        """
+        from qgis.PyQt.QtWidgets import QApplication
+        from .core import migration
+
+        folder = self.target_folder_edit.text().strip()
+        if not folder or not os.path.isdir(folder):
+            QMessageBox.warning(self, "Migrate", "Select a target folder first.")
+            return
+
+        answer = QMessageBox.question(
+            self, "Migrate to the 6.0 format",
+            "Import this project's existing outputs into the new store?\n\n"
+            "The current files are only read — nothing is modified or deleted, "
+            "so the project keeps working exactly as it does now.",
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Ok)
+        if answer != QMessageBox.StandardButton.Ok:
+            return
+
+        self.log("Migrating 5.x outputs into the 6.0 store...")
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            report = migration.migrate_project(folder, log_fn=self.log)
+        except Exception as exc:  # noqa: BLE001 — surfaced to the user below
+            QApplication.restoreOverrideCursor()
+            self.log(f"Migration failed: {exc}")
+            QMessageBox.critical(
+                self, "Migration failed",
+                f"The migration could not be completed:\n\n{exc}\n\n"
+                "The existing outputs are unchanged.")
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        summary = "\n".join(
+            f"  {key}: {value}" for key, value in sorted(report.counts.items()))
+        text = f"Migration finished.\n\n{summary or '  (nothing to import)'}"
+        if report.warnings:
+            text += "\n\nWarnings:\n" + "\n".join(
+                f"  • {w}" for w in report.warnings)
+        QMessageBox.information(self, "Migration finished", text)
+        self._refresh_migrate_button()
 
     def open_correction_wizard(self) -> None:
         """Open the correction calibration wizard as a modal dialog."""
