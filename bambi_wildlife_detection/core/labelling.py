@@ -766,6 +766,97 @@ class LabelStore:
             json.dump(data, fh, indent=2)
         self.schema_defined = True
         self._export_csv()
+        self._save_to_store()
+
+    # -- 6.0 store --------------------------------------------------------
+
+    def _vocabulary(self) -> dict:
+        """Species and enum lookups from the project store, keyed by name.
+
+        Returns empty maps when no project store exists yet, which is what makes
+        the store write a no-op on an un-migrated 5.x folder.
+        """
+        from . import store
+
+        path = store.project_path(self.target_folder)
+        if not os.path.isfile(path):
+            return {}
+        conn = store.open_store(path, store.PROJECT)
+        try:
+            species = {row["name"]: row["species_id"] for row in conn.execute(
+                "SELECT species_id, name FROM species")}
+            enums: Dict[str, Dict[str, int]] = {}
+            for row in conn.execute(
+                    "SELECT e.name AS enum, v.label AS label, "
+                    "v.value_id AS value_id FROM enums e "
+                    "JOIN enum_values v USING (enum_id)"):
+                enums.setdefault(row["enum"], {})[row["label"]] = row["value_id"]
+            return {"species": species, "enums": enums}
+        finally:
+            conn.close()
+
+    def to_store_tracks(self, vocabulary: Optional[dict] = None) -> List[dict]:
+        """Convert the in-memory label tracks into store rows.
+
+        Species and enum values become ids: a later rename then costs nothing,
+        which is the whole reason ids rather than labels are stored (§5.1).
+        """
+        from . import store as _store
+
+        vocabulary = self._vocabulary() if vocabulary is None else vocabulary
+        species_ids = vocabulary.get("species", {})
+        enums = vocabulary.get("enums", {})
+
+        def enum_value(enum_name: str, label: str):
+            return enums.get(enum_name, {}).get((label or "").strip())
+
+        rows = []
+        for track in sorted(self.tracks.values(), key=lambda t: t.track_id):
+            attributes = dict(track.attributes)
+            for name in ("sex", "age"):
+                value_id = enum_value(name, getattr(track, name, ""))
+                if value_id is not None:
+                    attributes[name] = value_id
+
+            keyframes = []
+            for frame in track.frames():
+                entry = track.keyframes[frame]
+                kf_attributes = dict(entry.get("attributes") or {})
+                value_id = enum_value("occlusion", entry.get("occlusion", ""))
+                if value_id is not None:
+                    kf_attributes["occlusion"] = value_id
+                keyframes.append({
+                    "frame": frame,
+                    "x1": entry["x1"], "y1": entry["y1"],
+                    "x2": entry["x2"], "y2": entry["y2"],
+                    "stop": bool(entry.get("stop")),
+                    "attributes": kf_attributes,
+                })
+
+            species = (track.species or "unknown").strip().lower()
+            rows.append({
+                "label_track_id": track.track_id,
+                "species_id": species_ids.get(
+                    species, _store.FALLBACK_SPECIES_ID),
+                "attributes": attributes,
+                "keyframes": keyframes,
+            })
+        return rows
+
+    def _save_to_store(self) -> None:
+        """Mirror the label tracks into ``labels.gpkg``.
+
+        A no-op on projects that have no 6.0 store yet, so the labelling tool
+        keeps working on un-migrated folders.
+        """
+        from . import store
+
+        if not os.path.isfile(store.project_path(self.target_folder)):
+            return
+        from . import label_store
+
+        label_store.save_tracks(
+            self.target_folder, self.modality, self.to_store_tracks())
 
     # -- custom field schema ---------------------------------------------
 
@@ -860,7 +951,9 @@ class LabelStore:
         if existing and not existing[-1].endswith("\n"):
             existing[-1] += "\n"
 
-        return self._write_label_block(det_file, existing)
+        result = self._write_label_block(det_file, existing)
+        self._materialise()
+        return result
 
     def replace_detections(self) -> Tuple[str, int, List[str]]:
         """Replace ``detections.txt`` with the label boxes alone.
@@ -878,6 +971,18 @@ class LabelStore:
         det_file, n_boxes = self._write_label_block(
             det_file, ["# frame x1 y1 x2 y2 confidence class_id\n"])
 
+        # In the store this is one delete plus the normal upsert: the detector's
+        # rows go, the labelling tool's are re-materialised in place, and the
+        # tracking outputs are invalidated by the cascade rather than by hand.
+        from . import store
+
+        if os.path.isfile(store.project_path(self.target_folder)):
+            from . import label_store
+
+            label_store.clear_detector_detections(
+                self.target_folder, self.modality)
+        self._materialise()
+
         removed: List[str] = []
         for name in (f"tracks_{self.modality}",
                      f"tracks_pixel_{self.modality}"):
@@ -886,6 +991,21 @@ class LabelStore:
                 shutil.rmtree(folder)
                 removed.append(folder)
         return det_file, n_boxes, removed
+
+    def _materialise(self) -> dict:
+        """Upsert the interpolated boxes into the store (§6.2).
+
+        Unchanged ``(track, frame)`` pairs keep their ``detection_id``, so
+        editing one key frame does not invalidate the whole flight.
+        """
+        from . import store
+
+        if not os.path.isfile(store.project_path(self.target_folder)):
+            return {}
+        from . import label_store
+
+        return label_store.materialise(
+            self.target_folder, self.modality, self.to_store_tracks())
 
     def _detections_file(self) -> str:
         """Path of this modality's ``detections.txt`` (folder is created)."""
