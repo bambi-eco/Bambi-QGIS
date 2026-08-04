@@ -105,15 +105,26 @@ class TestFindPython:
         assert ops._find_python() == fake_exe
 
 
+_CONFLICT_OUTPUT = (
+    "ERROR: Cannot install bambi-detection because these package versions "
+    "have conflicting dependencies.\n"
+    "    ultralytics 8.3.75 depends on numpy<=2.1.1 and >=1.23.0\n"
+    "    The user requested (constraint) numpy==2.2.6\n"
+    "ERROR: ResolutionImpossible\n"
+)
+
+
 class _FakePopen:
     """Context-manager Popen whose stdout yields canned lines."""
 
     returncode = 0
     lines = ["Collecting pkg\n", "Successfully installed pkg\n"]
     last_cmd = None
+    cmds = []
 
     def __init__(self, cmd, **kwargs):
         type(self).last_cmd = cmd
+        type(self).cmds = type(self).cmds + [cmd]
         self.stdout = io.StringIO("".join(self.lines))
 
     def __enter__(self):
@@ -123,7 +134,21 @@ class _FakePopen:
         return False
 
 
+@pytest.fixture(autouse=True)
+def _reset_fake_popen():
+    _FakePopen.cmds = []
+    _FakePopen.lines = ["Collecting pkg\n", "Successfully installed pkg\n"]
+    yield
+    _FakePopen.cmds = []
+
+
 class TestRunPip:
+    @pytest.fixture(autouse=True)
+    def _no_shadow_repair(self, monkeypatch):
+        """The post-install shadow check spawns its own probe – silence it
+        here; it has its own tests below."""
+        monkeypatch.setattr(ops, "_repair_user_site_shadows", lambda log_fn: None)
+
     def test_streams_output_and_succeeds(self, monkeypatch):
         monkeypatch.setattr(subprocess, "Popen", _FakePopen)
         monkeypatch.setattr(_FakePopen, "returncode", 0)
@@ -169,6 +194,121 @@ class TestRunPip:
                             lambda log_fn: pytest.fail("must not build constraints"))
         ops._run_pip(["uninstall", "torch", "-y"], lambda m: None)
         assert "-c" not in _FakePopen.last_cmd
+
+    def test_unsatisfiable_pin_retries_unpinned(self, monkeypatch):
+        # A dependency capping numpy below the QGIS build (ultralytics) makes
+        # the pinned resolve impossible – the install must still go through.
+        monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+        monkeypatch.setattr(ops, "_write_constraints_file",
+                            lambda log_fn: "/tmp/c.txt")
+
+        def rc_by_call(self):
+            return 1 if len(_FakePopen.cmds) == 1 else 0
+
+        monkeypatch.setattr(_FakePopen, "lines", [_CONFLICT_OUTPUT])
+        monkeypatch.setattr(_FakePopen, "returncode", property(rc_by_call))
+
+        repaired = []
+        monkeypatch.setattr(ops, "_repair_user_site_shadows", repaired.append)
+
+        ops._run_pip(["install", "example"], lambda m: None)
+
+        assert len(_FakePopen.cmds) == 2
+        assert _FakePopen.cmds[0][-2:] == ['-c', '/tmp/c.txt']
+        assert '-c' not in _FakePopen.cmds[1]      # retry drops the pin
+        assert repaired                            # shadows cleaned up after
+
+    def test_unrelated_failure_is_not_retried(self, monkeypatch):
+        monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+        monkeypatch.setattr(_FakePopen, "returncode", 1)
+        monkeypatch.setattr(_FakePopen, "lines", ["ERROR: Network unreachable\n"])
+        monkeypatch.setattr(ops, "_write_constraints_file",
+                            lambda log_fn: "/tmp/c.txt")
+        with pytest.raises(RuntimeError, match="pip exited with code 1"):
+            ops._run_pip(["install", "example"], lambda m: None)
+        assert len(_FakePopen.cmds) == 1
+
+
+class TestUserSiteShadows:
+    def setup_method(self):
+        ops._bundled_versions_cache = {"numpy": "2.2.6", "scipy": "1.13.0"}
+
+    def teardown_method(self):
+        ops._bundled_versions_cache = None
+
+    def _probe_returning(self, stdout):
+        def fake_run(cmd, **kwargs):
+            assert "-s" not in cmd  # user site must stay visible here
+
+            class R:
+                pass
+            R.stdout = stdout
+            return R
+        return fake_run
+
+    def test_reports_only_diverging_user_site_copies(self, monkeypatch):
+        monkeypatch.setattr(
+            subprocess, "run",
+            self._probe_returning("numpy==2.1.1\nscipy==1.13.0\n"))
+        # scipy matches the bundled build -> harmless, must not be reported.
+        assert ops._detect_user_site_shadows() == {"numpy": "2.1.1"}
+
+    def test_no_shadows_when_user_site_is_clean(self, monkeypatch):
+        monkeypatch.setattr(subprocess, "run", self._probe_returning(""))
+        assert ops._detect_user_site_shadows() == {}
+
+    def test_skipped_when_bundled_versions_unknown(self, monkeypatch):
+        ops._bundled_versions_cache = {}
+        monkeypatch.setattr(
+            subprocess, "run",
+            lambda *a, **k: pytest.fail("must not probe without a baseline"))
+        assert ops._detect_user_site_shadows() == {}
+
+    def test_probe_failure_degrades_to_empty(self, monkeypatch):
+        def boom(cmd, **kwargs):
+            raise OSError("no python")
+
+        monkeypatch.setattr(subprocess, "run", boom)
+        assert ops._detect_user_site_shadows(log_fn=lambda m: None) == {}
+
+    def test_repair_uninstalls_the_shadowing_copy(self, monkeypatch):
+        detected = [{"numpy": "2.1.1"}, {}]
+        monkeypatch.setattr(ops, "_detect_user_site_shadows",
+                            lambda log_fn=None: detected.pop(0))
+        calls = []
+        monkeypatch.setattr(ops, "_run_pip",
+                            lambda args, log_fn: calls.append(args))
+        logs = []
+        ops._repair_user_site_shadows(logs.append)
+        assert calls == [["uninstall", "-y", "numpy"]]
+        assert not any("still shadow" in m for m in logs)
+
+    def test_repair_is_a_noop_without_shadows(self, monkeypatch):
+        monkeypatch.setattr(ops, "_detect_user_site_shadows",
+                            lambda log_fn=None: {})
+        monkeypatch.setattr(ops, "_run_pip",
+                            lambda *a, **k: pytest.fail("must not run pip"))
+        ops._repair_user_site_shadows(lambda m: None)
+
+    def test_repair_warns_when_removal_did_not_help(self, monkeypatch):
+        monkeypatch.setattr(ops, "_detect_user_site_shadows",
+                            lambda log_fn=None: {"numpy": "2.1.1"})
+        monkeypatch.setattr(ops, "_run_pip", lambda args, log_fn: None)
+        logs = []
+        ops._repair_user_site_shadows(logs.append)
+        assert any("still shadow" in m for m in logs)
+
+    def test_repair_survives_a_failing_uninstall(self, monkeypatch):
+        monkeypatch.setattr(ops, "_detect_user_site_shadows",
+                            lambda log_fn=None: {"numpy": "2.1.1"})
+
+        def boom(args, log_fn):
+            raise RuntimeError("pip exited with code 1")
+
+        monkeypatch.setattr(ops, "_run_pip", boom)
+        logs = []
+        ops._repair_user_site_shadows(logs.append)  # must not raise
+        assert any("Could not remove" in m for m in logs)
 
 
 class TestBundledVersionPinning:

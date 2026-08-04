@@ -23,8 +23,15 @@ _DJI_SDK_URL = (
 # transitive dependency that pulls a newer numpy/scipy silently *shadows* the
 # bundled build and breaks QGIS at import time (e.g. the numpy 2.1 vs 2.2
 # ``_no_nep50_warning`` skew that killed GeoTIFF export, or a scipy ABI
-# mismatch).  Every install is pinned to the versions QGIS already ships via a
-# pip constraints file so no dependency can move them out from under QGIS.
+# mismatch).  Every install is therefore pinned to the versions QGIS already
+# ships via a pip constraints file so no dependency can move them out from
+# under QGIS.
+#
+# The pin is best-effort, not absolute: some dependency chains genuinely cap
+# these packages below what QGIS bundles (ultralytics 8.3.75 wants
+# ``numpy<=2.1.1`` while QGIS 3.34 ships 2.2.6), which makes the constrained
+# resolve impossible.  In that case we retry unpinned and then remove the
+# shadowing user-site copy again — see ``_repair_user_site_shadows``.
 _BUNDLED_PIN_PACKAGES = ('numpy', 'scipy')
 
 # Cache for _detect_bundled_versions: None = not probed yet, dict = result.
@@ -212,22 +219,90 @@ def _write_constraints_file(log_fn):
     return path
 
 
-def _run_pip(args, log_fn):
+def _detect_user_site_shadows(log_fn=None):
+    """Return ``{pkg: version}`` for the ABI-sensitive packages that currently
+    live in the *user* site-packages with a version differing from the build
+    QGIS bundles — i.e. the copies that shadow (and break) QGIS's own.
+
+    Never cached: this is probed after an install to see what pip just did.
+    Failures degrade to an empty dict (nothing is removed).
+    """
+    bundled = _detect_bundled_versions(log_fn)
+    if not bundled:
+        return {}  # nothing to compare against – stay conservative
+
     python = _find_python()
-    args = list(args)
+    probe = (
+        'import importlib.metadata as m, os, site\n'
+        'try: usr = site.getusersitepackages()\n'
+        'except Exception: usr = ""\n'
+        'dirs = [usr] if isinstance(usr, str) else list(usr)\n'
+        'dirs = [os.path.normcase(os.path.abspath(d)) for d in dirs if d]\n'
+        'for n in {names!r}:\n'
+        '    try:\n'
+        '        d = m.distribution(n)\n'
+        '        p = os.path.normcase(os.path.abspath(str(d.locate_file(""))))\n'
+        '    except Exception:\n'
+        '        continue\n'
+        '    if any(p.startswith(x) for x in dirs):\n'
+        '        print(n + "==" + d.version)\n'
+    ).format(names=list(_BUNDLED_PIN_PACKAGES))
 
-    # Pin the ABI-sensitive bundled packages (numpy/scipy) on every install so a
-    # transitive dependency cannot upgrade them into the user site and shadow
-    # QGIS's own build.  Skipped for a custom --index-url (e.g. the CUDA torch
-    # index), which may not host the pinned versions.
-    if args and args[0] == 'install' and '--index-url' not in args:
-        constraints = _write_constraints_file(log_fn)
-        if constraints:
-            args += ['-c', constraints]
-            log_fn(f'Pinning bundled packages to QGIS versions via {constraints}')
+    shadows = {}
+    try:
+        kwargs = dict(capture_output=True, text=True, timeout=30)
+        if sys.platform == 'win32':
+            kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+        result = subprocess.run([python, '-c', probe], **kwargs)  # nosec B603
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if '==' not in line:
+                continue
+            name, ver = line.split('==', 1)
+            if name in bundled and ver and ver != bundled[name]:
+                shadows[name] = ver
+    except Exception as exc:  # nosec B110
+        if log_fn:
+            log_fn(f'Could not check the user site for shadowing packages ({exc}).')
 
+    return shadows
+
+
+def _repair_user_site_shadows(log_fn):
+    """Uninstall user-site copies of numpy/scipy that shadow QGIS's bundled
+    builds, so QGIS keeps importing the versions it was compiled against."""
+    shadows = _detect_user_site_shadows(log_fn)
+    if not shadows:
+        return
+
+    bundled = _detect_bundled_versions(log_fn)
+    for name, ver in shadows.items():
+        log_fn(f'{name} {ver} was installed into the user site and shadows the '
+               f'QGIS build ({bundled.get(name)}) – removing it again.')
+        try:
+            _run_pip(['uninstall', '-y', name], log_fn)
+        except Exception as exc:  # nosec B110
+            log_fn(f'Could not remove the shadowing {name} ({exc}). '
+                   f'QGIS may fail to import {name} until it is uninstalled '
+                   f'manually.')
+
+    remaining = _detect_user_site_shadows(log_fn)
+    if remaining:
+        names = ', '.join(f'{n} {v}' for n, v in remaining.items())
+        log_fn(f'Warning: these packages still shadow the QGIS builds: {names}')
+
+
+def _is_constraint_conflict(output):
+    """True when pip failed because our numpy/scipy pin was unsatisfiable."""
+    markers = ('ResolutionImpossible', 'conflicting dependencies')
+    return any(marker in output for marker in markers)
+
+
+def _exec_pip(args, log_fn):
+    """Run pip with ``args``, streaming its output.  Returns ``(rc, output)``."""
+    python = _find_python()
     # -u: force unbuffered stdout/stderr so lines arrive in real time
-    cmd = [python, '-u', '-m', 'pip'] + args
+    cmd = [python, '-u', '-m', 'pip'] + list(args)
     log_fn(f'Python: {python}')
     log_fn('$ ' + ' '.join(cmd[1:]))  # omit python path for readability
 
@@ -241,13 +316,47 @@ def _run_pip(args, log_fn):
     if sys.platform == 'win32':
         popen_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
 
+    lines = []
     with subprocess.Popen(cmd, **popen_kwargs) as proc:  # nosec B603
         for line in proc.stdout:
-            log_fn(line.rstrip())
+            line = line.rstrip()
+            lines.append(line)
+            log_fn(line)
 
-    if proc.returncode != 0:
-        raise RuntimeError(f'pip exited with code {proc.returncode}')
+    return proc.returncode, '\n'.join(lines)
+
+
+def _run_pip(args, log_fn):
+    args = list(args)
+    is_install = bool(args) and args[0] == 'install'
+
+    # Pin the ABI-sensitive bundled packages (numpy/scipy) on every install so a
+    # transitive dependency cannot move them into the user site and shadow
+    # QGIS's own build.  Skipped for a custom --index-url (e.g. the CUDA torch
+    # index), which may not host the pinned versions.
+    constraints = None
+    if is_install and '--index-url' not in args:
+        constraints = _write_constraints_file(log_fn)
+        if constraints:
+            log_fn(f'Pinning bundled packages to QGIS versions via {constraints}')
+
+    rc, output = _exec_pip(
+        args + (['-c', constraints] if constraints else []), log_fn)
+
+    if rc != 0 and constraints and _is_constraint_conflict(output):
+        # A dependency caps numpy/scipy below what QGIS ships, so the pinned
+        # resolve is impossible.  Install unpinned and undo the damage after.
+        log_fn('The pinned install is unsatisfiable because a dependency '
+               'requires a different numpy/scipy than QGIS ships – retrying '
+               'without the pin; any shadowing copy is removed afterwards.')
+        rc, output = _exec_pip(args, log_fn)
+
+    if rc != 0:
+        raise RuntimeError(f'pip exited with code {rc}')
     log_fn('pip finished successfully')
+
+    if is_install:
+        _repair_user_site_shadows(log_fn)
 
 
 def _install_github_zip(zip_url, pkg_key, plugins_dir, log_fn):

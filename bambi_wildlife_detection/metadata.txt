@@ -2,7 +2,7 @@
 name=Bambi - QGIS Integration
 qgisMinimumVersion=3.22
 description=Detect and track wildlife in drone videos/photos with geo-referencing
-version=5.2.0
+version=5.2.1
 author=Christoph Praschl, Anna Maschek, David C.Schedl
 email=christoph.praschl@fh-hagenberg.at
 
@@ -24,7 +24,11 @@ about=A comprehensive QGIS plugin for detecting, tracking, and geo-referencing w
     - Built-in dependency manager to install all required and optional packages from within QGIS
     All results are automatically added as styled layers to the QGIS project.
 
-changelog=Version 5.2.0:
+changelog=Version 5.2.1
+    Changed:
+    - Dependency Manager: installs pin numpy/scipy to the versions QGIS ships so a dependency cannot shadow them and break QGIS. Some dependency chains cap these packages below the bundled version (ultralytics requires numpy<=2.1.1 while QGIS 3.34 ships 2.2.6), which made the pinned install abort with "ResolutionImpossible". Such installs now automatically retry without the pin and afterwards remove the user-site numpy/scipy copy that shadows the QGIS build.
+    - Fixing Problems with flight along the Equator (our original detection logic to identify GPS coordinates during initialization phase)
+    Version 5.2.0:
     Added:
     - Thermal tone-curve mapping: both the Thermal Image Viewer and the photo-extraction thermal visualisation now offer a "Curve (custom mapping)" mode as a fine-granular alternative to the lower/upper thresholds — a curve with draggable control points maps a fixed temperature range to display intensity (with a live temperature histogram). The range can be entered manually or determined via "Auto Detect", which scans the flight's thermal images for the actual minimum/maximum temperature. The curve is stored in the QGIS project.
     - Labelling tool: new "Replace detections in project" button that replaces the existing detections/tracks instead of appending to them.

@@ -537,10 +537,32 @@ class BambiProcessor:
         # likely computed incorrectly (e.g. WGS84 degree values were fed into a UTM→WGS84
         # transformer).  Fall back to interpreting the origin field as [longitude, latitude,
         # altitude] in WGS84, which is how the DEM downloader stores the raw bounds corner.
-        if abs(origin_lat) < 0.01 and len(origin_list) >= 2 and abs(float(origin_list[1])) > 0.01:
+        #
+        # The fallback must only fire when the origin field really *is* in degrees.  For
+        # survey areas near the equator a correct origin_wgs84 latitude is legitimately
+        # close to zero while origin holds projected UTM metres (northings up to 10⁷) —
+        # feeding those into the WGS84→UTM transformer yields inf and every camera
+        # position becomes -Infinity.  Require plausible lon/lat magnitudes first.
+        _origin_looks_like_degrees = (
+            len(origin_list) >= 2
+            and abs(float(origin_list[0])) <= 180.0
+            and abs(float(origin_list[1])) <= 90.0
+        )
+        if (abs(origin_lat) < 0.01 and _origin_looks_like_degrees
+                and abs(float(origin_list[1])) > 0.01):
             origin_lon = float(origin_list[0])
             origin_lat = float(origin_list[1])
             origin_alt = float(origin_list[2]) if len(origin_list) > 2 else 0.0
+
+        if not (-90.0 <= origin_lat <= 90.0 and -180.0 <= origin_lon <= 180.0):
+            raise RuntimeError(
+                f"DEM origin resolves to an invalid WGS84 coordinate "
+                f"(lat={origin_lat}, lon={origin_lon}).  Camera positions cannot be "
+                f"computed relative to it.\n\n"
+                f"Check the 'origin_wgs84' / 'origin' fields in "
+                f"{os.path.basename(path_to_dem_json)} — regenerating the DEM mesh "
+                f"(Load/Generate DEM) usually repairs them."
+            )
 
         ad_origin = AirDataFrame()
         ad_origin.latitude = origin_lat
@@ -3511,6 +3533,59 @@ class BambiProcessor:
         if progress_fn:
             progress_fn(100)
 
+    @staticmethod
+    def _classify_projection_miss(camera, label_coords, input_resolution, mesh_bounds):
+        """Explain why a detection's rays failed to intersect the DEM mesh.
+
+        Re-creates the same rays ``pixel_to_world_coord`` casts (camera looks
+        along -Z, NDC scaled by ``tan(fovy/2)``) and tests them against the
+        mesh's mean-height plane.
+
+        :param camera: alfspy ``Camera`` used for the failed projection
+        :param label_coords: flat ``[x1, y1, x2, y1, ...]`` pixel corner list
+        :param input_resolution: ``Resolution`` the pixel coords refer to
+        :param mesh_bounds: ``(x0, x1, y0, y1, z_mean)`` of the mesh
+        :return: Tuple of (reason key, ground range in metres or ``None``)
+        """
+        import numpy as np
+
+        x0, x1, y0, y1, z_mean = mesh_bounds
+        width, height = input_resolution.width, input_resolution.height
+
+        rot = np.asarray(camera.transform.rotation.matrix33, dtype=float)
+        pos = np.asarray(camera.transform.position, dtype=float)
+        tan_fov_y = np.tan(np.deg2rad(camera.fovy) / 2.0)
+
+        corners = list(zip(label_coords[0::2], label_coords[1::2]))
+        saw_up = False
+        best_range = None
+        for px, py in corners:
+            ndc_x = (2.0 * float(px) / width) - 1.0
+            ndc_y = 1.0 - (2.0 * float(py) / height)
+            direction = rot @ np.array([
+                ndc_x * camera.aspect_ratio * tan_fov_y,
+                ndc_y * tan_fov_y,
+                -1.0,
+            ])
+            if direction[2] >= -1e-9:
+                # Ray is level or rising — it can never reach the terrain.
+                saw_up = True
+                continue
+            t = (z_mean - pos[2]) / direction[2]
+            gx = pos[0] + t * direction[0]
+            gy = pos[1] + t * direction[1]
+            ground_range = float(np.hypot(gx - pos[0], gy - pos[1]))
+            if x0 <= gx <= x1 and y0 <= gy <= y1:
+                # Lands inside the footprint: grazing angle, occlusion or a
+                # gap between the flat reference plane and the real surface.
+                return "other", ground_range
+            if best_range is None or ground_range < best_range:
+                best_range = ground_range
+
+        if best_range is not None:
+            return "beyond_mesh", best_range
+        return ("above_horizon", None) if saw_up else ("other", None)
+
     def run_georeference(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Geo-reference detections using DEM.
 
@@ -3676,6 +3751,16 @@ class BambiProcessor:
             georeferenced = []
             total_dets = len(detections)
 
+            # Diagnostics for detections whose rays never reach the DEM.  Without
+            # this the step just reports a smaller number with no explanation.
+            miss_stats = {"above_horizon": 0, "beyond_mesh": 0, "other": 0,
+                          "no_pose": 0}
+            miss_ranges = []
+            _mv = np.asarray(tri_mesh.vertices)
+            _mesh_x0, _mesh_x1 = float(_mv[:, 0].min()), float(_mv[:, 0].max())
+            _mesh_y0, _mesh_y1 = float(_mv[:, 1].min()), float(_mv[:, 1].max())
+            _mesh_z = float(_mv[:, 2].mean())
+
             for idx, det in enumerate(detections):
                 # Check for cancellation
                 if cancel_check and cancel_check():
@@ -3686,6 +3771,7 @@ class BambiProcessor:
                 frame_idx = det["frame"]
 
                 if frame_idx >= len(poses["images"]):
+                    miss_stats["no_pose"] += 1
                     continue
 
                 # Get frame-specific correction factors
@@ -3734,6 +3820,14 @@ class BambiProcessor:
                             "confidence": det["confidence"],
                             "class_id": det["class_id"]
                         })
+                    else:
+                        reason, ground_range = self._classify_projection_miss(
+                            camera, label_coords, input_resolution,
+                            (_mesh_x0, _mesh_x1, _mesh_y0, _mesh_y1, _mesh_z),
+                        )
+                        miss_stats[reason] += 1
+                        if ground_range is not None:
+                            miss_ranges.append(ground_range)
                 except Exception as e:
                     if log_fn:
                         log_fn(f"Warning: Could not geo-reference detection at frame {frame_idx}: {e}")
@@ -3765,9 +3859,44 @@ class BambiProcessor:
 
         if log_fn:
             log_fn(f"Geo-referencing complete: {len(georeferenced)} detections")
+            self._log_projection_miss_summary(
+                miss_stats, miss_ranges, len(detections), log_fn)
 
         if progress_fn:
             progress_fn(100)
+
+    @staticmethod
+    def _log_projection_miss_summary(miss_stats, miss_ranges, total_dets, log_fn):
+        """Report how many detections could not be placed on the DEM, and why."""
+        import numpy as np
+
+        dropped = sum(miss_stats.values())
+        if not dropped or not total_dets:
+            return
+
+        log_fn(f"{dropped} of {total_dets} detections "
+               f"({100.0 * dropped / total_dets:.1f}%) could not be placed on the DEM:")
+
+        if miss_stats["above_horizon"]:
+            log_fn(f"  - {miss_stats['above_horizon']} above the horizon — the camera "
+                   f"was near-horizontal, so these pixels show sky and can never be "
+                   f"geo-referenced.")
+        if miss_stats["beyond_mesh"]:
+            msg = (f"  - {miss_stats['beyond_mesh']} beyond the DEM edge — the view "
+                   f"reached ground that the DEM does not cover.")
+            if miss_ranges:
+                msg += (f" Ground range: median "
+                        f"{float(np.median(miss_ranges)):.0f} m, 90th pct "
+                        f"{float(np.percentile(miss_ranges, 90)):.0f} m.")
+            log_fn(msg)
+            log_fn("    Re-download the DEM with a larger 'Padding' value "
+                   "(Parameters tab) to cover the oblique field of view.")
+        if miss_stats["other"]:
+            log_fn(f"  - {miss_stats['other']} at grazing angles or hidden behind "
+                   f"terrain.")
+        if miss_stats["no_pose"]:
+            log_fn(f"  - {miss_stats['no_pose']} reference frames that have no pose "
+                   f"entry (detection ran on more frames than were extracted).")
 
     def run_trex_import(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Import TRex .npz tracklets and geo-reference them against the DEM.
