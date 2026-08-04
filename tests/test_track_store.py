@@ -332,3 +332,116 @@ def test_orphans_are_detected(project):
 
 def test_orphans_of_an_empty_project(tmp_path):
     assert track_store.track_orphans(str(tmp_path), "t") == []
+
+
+# ---------------------------------------------------------------------------
+# Pooling manual with tracker tracks (§8.2)
+# ---------------------------------------------------------------------------
+
+def _manual_run(project, detection_ids, origin_track_id=None):
+    """Materialise a label track, optionally imported from a tracker track."""
+    from bambi_wildlife_detection.core import label_store
+
+    label_store.save_tracks(project, "t", [{
+        "label_track_id": 1,
+        "species_id": 0,
+        "origin_track_id": origin_track_id,
+        "keyframes": [{"frame": 1, "x1": 1.0, "y1": 1.0, "x2": 2.0, "y2": 2.0}],
+    }])
+    label_store.materialise(project, "t")
+
+
+def test_manual_tracks_are_pooled_with_the_active_run(project):
+    """Labels are usually animals the detector missed, so they add (§8.2)."""
+    ids = _ids(project)
+    track_store.record_tracks(
+        project, "t", [{"track_id": 1, "detection_id": ids[0]}], kind="builtin")
+    _manual_run(project, ids)
+
+    rows = track_store.load_pixel_tracks(project, "t")
+    assert len({row["track_id"] for row in rows}) == 2
+
+
+def test_manual_run_alone_is_still_read(project):
+    ids = _ids(project)
+    _manual_run(project, ids)
+    assert track_store.load_pixel_tracks(project, "t")
+
+
+def test_an_imported_track_supersedes_its_original(project):
+    """Import-as-label-track copies a tracker track; counting both doubles it."""
+    ids = _ids(project)
+    result = track_store.record_tracks(
+        project, "t", [{"track_id": 1, "detection_id": ids[0]}], kind="builtin")
+
+    conn = store.open_store(
+        store.stage_path(project, store.TRACKS, "t"), store.TRACKS, "t")
+    original = conn.execute(
+        "SELECT track_id FROM tracks WHERE run_id = ?",
+        (result["run_id"],)).fetchone()["track_id"]
+    conn.close()
+
+    _manual_run(project, ids, origin_track_id=original)
+
+    rows = track_store.load_pixel_tracks(project, "t")
+    assert original not in {row["track_id"] for row in rows}
+    assert len({row["track_id"] for row in rows}) == 1
+
+
+def test_a_track_drawn_from_scratch_supersedes_nothing(project):
+    ids = _ids(project)
+    track_store.record_tracks(
+        project, "t", [{"track_id": 1, "detection_id": ids[0]}], kind="builtin")
+    _manual_run(project, ids, origin_track_id=None)
+
+    assert track_store.superseded_track_ids(project, "t") == set()
+
+
+def test_superseded_ids_need_a_materialised_label_track(project):
+    """An imported but never-exported label track replaces nothing yet."""
+    from bambi_wildlife_detection.core import label_store
+
+    label_store.save_tracks(project, "t", [{
+        "label_track_id": 1, "species_id": 0, "origin_track_id": 5,
+        "keyframes": [{"frame": 1, "x1": 1.0, "y1": 1.0, "x2": 2.0, "y2": 2.0}],
+    }])
+    assert track_store.superseded_track_ids(project, "t") == set()
+
+
+def test_analysis_runs_pairs_the_active_tracker_with_manual(project):
+    ids = _ids(project)
+    builtin = track_store.record_tracks(
+        project, "t", [{"track_id": 1, "detection_id": ids[0]}], kind="builtin")
+    _manual_run(project, ids)
+
+    runs = track_store.analysis_runs(project, "t")
+    manual = track_store.manual_run(project, "t")
+    assert set(runs) == {builtin["run_id"], manual["run_id"]}
+
+
+def test_analysis_runs_can_exclude_manual(project):
+    ids = _ids(project)
+    track_store.record_tracks(
+        project, "t", [{"track_id": 1, "detection_id": ids[0]}], kind="builtin")
+    _manual_run(project, ids)
+    assert len(track_store.analysis_runs(project, "t", include_manual=False)) == 1
+
+
+def test_only_one_tracker_run_is_active(project):
+    """Tracker runs are alternatives, not additions."""
+    ids = _ids(project)
+    track_store.record_tracks(
+        project, "t", [{"track_id": 1, "detection_id": ids[0]}], kind="builtin")
+    second = track_store.record_tracks(
+        project, "t", [{"track_id": 1, "detection_id": ids[1]}], kind="boxmot")
+    _manual_run(project, ids)
+
+    runs = track_store.analysis_runs(project, "t")
+    assert second["run_id"] in runs
+    assert len(runs) == 2   # the active tracker run plus manual, not all three
+
+
+def test_the_manual_run_is_never_the_active_tracker_run(project):
+    ids = _ids(project)
+    _manual_run(project, ids)
+    assert track_store.active_run(project, "t") is None

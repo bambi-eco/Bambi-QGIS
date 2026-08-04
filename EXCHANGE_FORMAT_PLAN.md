@@ -886,14 +886,26 @@ Three rules, all of which are silent-bias risks if left to chance:
   positive entering a density estimate biases it upward. `unknown` (-1) and
   `animal` (0) both *are* animals and both count — the distinction is
   determinacy, not presence.
-- **Exactly one track run contributes.** With several runs able to coexist
-  (§3.3), pooling two of them would double-count every animal. Analytics read
-  `is_active` unless the user picks a run explicitly.
-- **Manual and detector tracks must not be silently mixed.** If a flight has
-  both, they may cover the same animals. The tool offers an explicit choice —
-  detector run, manual only, or both with a warning — and records which was used
-  in the result. Today this cannot even be asked, because labelled animals only
-  reach analytics if someone re-ran tracking over them (§6.5).
+- **Exactly one *tracker* run contributes.** Builtin, boxmot and TRex are
+  alternative descriptions of the same animals, so pooling two would double-count
+  everything. Analytics read `is_active` unless the user picks a run explicitly.
+- **The manual run is pooled, not chosen between.** Label tracks are usually
+  animals the detector *missed* — false negatives the annotator added — so
+  excluding them undercounts. The labelling tool's run is therefore additive:
+  it contributes alongside whichever tracker run is active.
+
+  The exception is a label track created by "Import as label track", which
+  copies a tracker track and refines it. Both then describe the same animal, and
+  pooling would double it. `label_tracks.origin_track_id` records exactly that
+  provenance, so the original is **superseded** — excluded once the label track
+  has been materialised. A track drawn from scratch has no `origin_track_id`
+  and supersedes nothing.
+
+  *(Revised after Phase 5. The plan originally said manual and detector tracks
+  must never be mixed, on the assumption they described the same animals. That
+  is only true for imported tracks; treating every label that way silently drops
+  the annotator's corrections, which is the more likely mistake. The provenance
+  added in §6.3 is what makes the distinction decidable rather than a guess.)*
 
 #### What they gain
 

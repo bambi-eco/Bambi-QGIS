@@ -335,11 +335,19 @@ def test_a_detector_rerun_never_touches_manual_detections(tmp_path):
     assert manual_after == manual_before
 
 
-def test_manual_run_is_not_active_by_default(tmp_path):
-    """Analytics must not silently pool manual and tracker output (§8.2)."""
+def test_the_manual_run_is_not_a_tracker_run(tmp_path):
+    """It is additive, not an alternative (§8.2).
+
+    Tracker runs are alternatives — builtin, boxmot and TRex describe the same
+    animals differently, so one is active at a time. The labelling tool's run
+    is pooled alongside whichever that is, because its tracks are usually
+    animals the detector missed.
+    """
     root = str(tmp_path)
     label_store.materialise(root, "t", [_track()])
     assert track_store.active_run(root, "t") is None
+    assert track_store.manual_run(root, "t") is not None
+    assert track_store.analysis_runs(root, "t")
 
 
 def test_clear_detector_detections_keeps_the_labels(tmp_path):

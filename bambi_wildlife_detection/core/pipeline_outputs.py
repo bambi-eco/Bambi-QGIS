@@ -146,8 +146,8 @@ def _geo_tracks_from_store(target_folder: str, modality: str) -> Dict[int, list]
 
     from . import gpkg, store, track_store
 
-    run = track_store.active_run(target_folder, modality)
-    if run is None:
+    run_ids = track_store.analysis_runs(target_folder, modality)
+    if not run_ids:
         return {}
 
     det_path = store.stage_path(target_folder, store.DETECTIONS, modality)
@@ -155,6 +155,9 @@ def _geo_tracks_from_store(target_folder: str, modality: str) -> Dict[int, list]
     trk_path = store.stage_path(target_folder, store.TRACKS, modality)
     if not all(os.path.isfile(p) for p in (det_path, geo_path, trk_path)):
         return {}
+
+    superseded = track_store.superseded_track_ids(target_folder, modality)
+    placeholders = ", ".join("?" for _ in run_ids)
 
     conn = store.open_store(det_path, store.DETECTIONS, modality)
     try:
@@ -167,8 +170,8 @@ def _geo_tracks_from_store(target_folder: str, modality: str) -> Dict[int, list]
             "JOIN trk.tracks t ON t.track_id = m.track_id "
             "JOIN detections d ON d.detection_id = m.detection_id "
             "JOIN geo.detections_geo g ON g.detection_id = d.detection_id "
-            "WHERE t.run_id = ? ORDER BY m.track_id, d.frame",
-            (run["run_id"],)).fetchall()
+            f"WHERE t.run_id IN ({placeholders}) "  # nosec B608 — ints only
+            "ORDER BY m.track_id, d.frame", run_ids).fetchall()
         gpkg.detach(conn, "geo")
         gpkg.detach(conn, "trk")
     finally:
@@ -176,6 +179,8 @@ def _geo_tracks_from_store(target_folder: str, modality: str) -> Dict[int, list]
 
     tracks: Dict[int, list] = {}
     for row in rows:
+        if row["track_id"] in superseded:
+            continue
         tracks.setdefault(row["track_id"], []).append({
             "frame": row["frame"],
             "x1": row["gx1"], "y1": row["gy1"], "z1": row["gz1"],

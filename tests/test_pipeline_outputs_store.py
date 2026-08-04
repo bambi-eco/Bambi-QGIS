@@ -115,12 +115,8 @@ def test_geo_tracks_use_the_active_run(populated):
     assert len(tracks) == 2
 
 
-def test_geo_tracks_without_an_active_run_fall_back(populated):
-    """Manual tracks are recorded inactive, so labels alone show no layer.
-
-    That is deliberate (§8.2): pooling manual and tracker output would
-    double-count animals, so it has to be an explicit choice.
-    """
+def test_geo_tracks_without_any_run_fall_back(populated):
+    """No active tracker run and no manual run means nothing to read."""
     conn = store.open_store(
         store.stage_path(populated, store.TRACKS, "t"), store.TRACKS, "t")
     conn.execute("UPDATE track_runs SET is_active = 0")

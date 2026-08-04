@@ -245,6 +245,66 @@ def record_tracks(target_folder: str, modality: str,
             "members": len(members), "generation": generation}
 
 
+def superseded_track_ids(target_folder: str, modality: str) -> set:
+    """Tracker tracks that a label track was imported from, and now replaces.
+
+    "Import as label track" copies a pipeline track into an editable label
+    track; once that label track is materialised, both describe the same
+    animal. Counting them together would double it, so the original is
+    superseded — but *only* that one. A label track drawn from scratch has no
+    ``origin_track_id`` and supersedes nothing (§8.2).
+    """
+    path = store.stage_path(target_folder, store.LABELS, modality)
+    if not os.path.isfile(path):
+        return set()
+
+    conn = store.open_store(path, store.LABELS, modality)
+    try:
+        return {int(row["origin_track_id"]) for row in conn.execute(
+            "SELECT origin_track_id FROM label_tracks "
+            "WHERE origin_track_id IS NOT NULL AND track_id IS NOT NULL")}
+    finally:
+        conn.close()
+
+
+def manual_run(target_folder: str, modality: str) -> Optional[dict]:
+    """The labelling tool's run, if it has materialised anything."""
+    path = store.stage_path(target_folder, store.TRACKS, modality)
+    if not os.path.isfile(path):
+        return None
+    conn = store.open_store(path, store.TRACKS, modality)
+    try:
+        row = conn.execute(
+            "SELECT run_id, kind, tracker, generation, created_at "
+            "FROM track_runs WHERE kind = 'manual' "
+            "ORDER BY run_id DESC LIMIT 1").fetchone()
+        return None if row is None else dict(row)
+    finally:
+        conn.close()
+
+
+def analysis_runs(target_folder: str, modality: str,
+                  include_manual: bool = True) -> List[int]:
+    """Run ids the layers and analytics should read together.
+
+    Tracker runs are *alternatives* — builtin, boxmot and TRex describe the same
+    animals differently — so exactly one is active at a time. The labelling
+    tool's run is *additive*: its tracks are usually animals the detector
+    missed, so it is pooled alongside rather than chosen between. Tracker tracks
+    that a label track superseded are excluded by
+    :func:`superseded_track_ids`, which is what keeps the pooling honest.
+    """
+    runs = []
+    active = active_run(target_folder, modality)
+    if active is not None:
+        runs.append(active["run_id"])
+    if include_manual:
+        manual = manual_run(target_folder, modality)
+        if manual is not None and manual["run_id"] not in runs:
+            runs.append(manual["run_id"])
+    return runs
+
+
 def active_run(target_folder: str, modality: str) -> Optional[dict]:
     """The tracking run the layers and analytics should use."""
     path = store.stage_path(target_folder, store.TRACKS, modality)
@@ -254,7 +314,7 @@ def active_run(target_folder: str, modality: str) -> Optional[dict]:
     try:
         row = conn.execute(
             "SELECT run_id, kind, tracker, generation, created_at "
-            "FROM track_runs WHERE is_active = 1 "
+            "FROM track_runs WHERE is_active = 1 AND kind <> 'manual' "
             "ORDER BY run_id DESC LIMIT 1").fetchone()
         return None if row is None else dict(row)
     finally:
@@ -274,10 +334,14 @@ def load_pixel_tracks(target_folder: str, modality: str,
         return []
 
     if run_id is None:
-        run = active_run(target_folder, modality)
-        if run is None:
-            return []
-        run_id = run["run_id"]
+        run_ids = analysis_runs(target_folder, modality)
+    else:
+        run_ids = [run_id]
+    if not run_ids:
+        return []
+
+    superseded = superseded_track_ids(target_folder, modality)
+    placeholders = ", ".join("?" for _ in run_ids)
 
     conn = store.open_store(det_path, store.DETECTIONS, modality)
     try:
@@ -289,9 +353,10 @@ def load_pixel_tracks(target_folder: str, modality: str,
             "FROM trk.track_members m "
             "JOIN trk.tracks t ON t.track_id = m.track_id "
             "JOIN detections d ON d.detection_id = m.detection_id "
-            "WHERE t.run_id = ? ORDER BY d.frame, m.track_id", (run_id,))]
+            f"WHERE t.run_id IN ({placeholders}) "  # nosec B608 — ints only
+            "ORDER BY d.frame, m.track_id", run_ids)]
         gpkg.detach(conn, "trk")
-        return rows
+        return [row for row in rows if row["track_id"] not in superseded]
     finally:
         conn.close()
 
