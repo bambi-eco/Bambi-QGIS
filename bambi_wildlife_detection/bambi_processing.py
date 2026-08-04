@@ -4452,8 +4452,50 @@ class BambiProcessor:
             log_fn(f"  → {georef_file}")
             log_fn(f"  → {tracks_file}")
 
+        # A tracklet *is* a track, so record the membership as its own run.
+        # Without this the store would hold TRex detections with nothing
+        # grouping them, and the track layers and analytics would silently fall
+        # back to the text files.
+        self._record_trex_tracks(
+            target_folder, camera_suffix, detections, log_fn)
+
+        _record_stage(config, "detection", camera_suffix,
+                      row_count=len(detections), log_fn=log_fn)
+        _record_stage(config, "tracking", camera_suffix, log_fn=log_fn)
+
         if progress_fn:
             progress_fn(100)
+
+    @staticmethod
+    def _record_trex_tracks(target_folder: str, camera_suffix: str,
+                            detections: List[dict], log_fn=None) -> None:
+        """Group imported TRex detections into a ``kind='trex'`` track run.
+
+        The tracklet id travels on each detection, so membership is read
+        straight off the import — nothing is matched back by coordinates. The
+        store rows were written in the same order, which is how each detection
+        finds its id.
+        """
+        from .core import store, track_store
+
+        if not detections or not os.path.isfile(
+                store.project_path(target_folder)):
+            return
+
+        stored = track_store.load_detections(target_folder, camera_suffix)
+        if len(stored) != len(detections):
+            if log_fn:
+                log_fn("Warning: could not record TRex tracks — the store holds "
+                       f"{len(stored)} detection(s), the import produced "
+                       f"{len(detections)}.")
+            return
+
+        track_store.record_tracks(
+            target_folder, camera_suffix,
+            [{"track_id": source["track_id"],
+              "detection_id": row["detection_id"]}
+             for source, row in zip(detections, stored)],
+            kind="trex", tracker="TRex tracklet import", log_fn=log_fn)
 
     def run_calculate_fov(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Calculate and save Field of View (FoV) polygons for each frame.
@@ -4808,6 +4850,18 @@ class BambiProcessor:
         :param log_fn: Logging callback function
         """
         from .tracker_manager import get_tracker_manager
+
+        # A configured TRex tracklet folder means the tracks already exist and
+        # were computed elsewhere. Running a tracker over them as well would
+        # produce a second, competing set for the same animals, so the step
+        # imports and stops. The dock widget routes around this too; the guard
+        # lives here so every caller — worker, script, test — behaves the same.
+        if config.get("trex_npz_dir", "").strip():
+            if log_fn:
+                log_fn("TRex tracklet folder configured — importing tracklets "
+                       "instead of running a tracker.")
+            self.run_trex_import(config, progress_fn, log_fn, cancel_check)
+            return
 
         tracker_id = config.get("tracker_id", "builtin")
 

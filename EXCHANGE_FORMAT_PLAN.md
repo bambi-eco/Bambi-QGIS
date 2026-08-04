@@ -886,6 +886,12 @@ Three rules, all of which are silent-bias risks if left to chance:
   positive entering a density estimate biases it upward. `unknown` (-1) and
   `animal` (0) both *are* animals and both count — the distinction is
   determinacy, not presence.
+- **A TRex tracklet folder replaces tracking entirely.** When one is
+  configured the tracks already exist and were computed elsewhere, so the
+  tracking step imports and stops rather than running a tracker as well. Two
+  runs describing the same animals is precisely what would double a population
+  estimate now that runs are pooled. The guard lives in the processor, not only
+  in the dock widget, so a worker, script or test cannot route around it.
 - **Exactly one *tracker* run contributes.** Builtin, boxmot and TRex are
   alternative descriptions of the same animals, so pooling two would double-count
   everything. Analytics read `is_active` unless the user picks a run explicitly.
