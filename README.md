@@ -39,7 +39,7 @@ Optional capabilities (GPU inference, BoxMOT trackers, camera calibration via Sf
 3. Adjust per-step settings in the **Configuration** tab (detection confidence, tracker backend, thermal colormaps, …)
 4. Run the steps in the **Pre-Processing** tab (**P1. Extract Frames** to
    **P6. Generate Orthomosaic**) and the **Processing** tab (**A1. Detect
-   Animals** to **A4. Geo-Reference Segmentation**). Pre-Processing derives
+   Animals** to **A3. Run SAM3 Segmentation**). Pre-Processing derives
    from the drone poses and the DEM and is independent of any animal;
    Processing depends on the detections, so the two can be run separately
 5. Use the **→ Add … to QGIS** buttons after each step to load the results as styled layers, grouped under the flight's name

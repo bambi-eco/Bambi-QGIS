@@ -62,7 +62,6 @@ PROC_BUTTONS = [
     ("detect_btn", "A1"),
     ("track_btn", "A2"),
     ("sam3_segment_btn", "A3"),
-    ("sam3_georef_btn", "A4"),
 ]
 
 
@@ -81,10 +80,16 @@ def test_no_bare_number_means_two_things(dock):
 
 
 def test_sub_steps_are_still_present(dock):
-    """Geo-referencing has a button; it is a sub-step of detection, not hidden."""
+    """Geo-referencing has a button; it is a sub-step, not a step of its own."""
     assert dock.georef_btn.text().strip().startswith("→")
     assert dock.perpendicular_btn is not None
     assert dock.track_perpendicular_btn is not None
+
+
+def test_segmentation_geo_referencing_is_a_sub_step(dock):
+    """It follows SAM3 segmentation exactly as geo-referencing follows A1."""
+    assert dock.sam3_georef_btn.text().strip().startswith("→")
+    assert dock.sam3_georef_btn.parent() is dock.sam3_segment_btn.parent()
 
 
 def test_pre_processing_steps_share_a_parent(dock):
@@ -158,3 +163,41 @@ def test_config_round_trips_across_the_split(dock, tmp_path):
     assert config["target_folder"] == str(tmp_path)
     assert "detection_camera" in config
     assert "tracking_camera" in config
+
+
+# ---------------------------------------------------------------------------
+# The dock must not be forced wide by a single label
+# ---------------------------------------------------------------------------
+
+def test_long_labels_wrap(dock):
+    """One unwrapped sentence widens every tab, not just its own.
+
+    A QTabWidget sizes to its widest page, so a long non-wrapping label on the
+    Processing tab stretches the Input forms too. Descriptions are word-wrapped;
+    short field labels ("Format:", "Erode px:") are left alone.
+    """
+    from qgis.PyQt.QtWidgets import QLabel
+
+    offenders = [
+        label.text()[:60]
+        for label in dock.findChildren(QLabel)
+        if len(label.text()) > 90 and not label.wordWrap()
+    ]
+    assert not offenders, f"unwrapped long labels: {offenders}"
+
+
+def test_the_dock_has_a_reasonable_size_hint(dock):
+    """Nothing should push the panel beyond a normal docked width."""
+    assert dock.sizeHint().width() < 900
+
+
+def test_the_erode_setting_sits_with_the_configuration(dock):
+    """It is a setting, so it belongs on the config tab, not the step row."""
+    assert dock.geotiff_edge_erosion_spin.parent() is not \
+        dock.export_geotiffs_btn.parent()
+
+
+def test_the_erode_setting_is_still_read(dock, tmp_path):
+    dock.target_folder_edit.setText(str(tmp_path))
+    dock.geotiff_edge_erosion_spin.setValue(4)
+    assert dock.get_config()["geotiff_edge_erosion_px"] == 4

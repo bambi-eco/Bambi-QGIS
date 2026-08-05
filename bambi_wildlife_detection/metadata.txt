@@ -40,7 +40,7 @@ changelog=Version 6.0.0
     - "Reset Step..." deletes one step's outputs and marks everything that depended on it as out of date.
     - Geo-referencing records why a detection could not be placed on the DEM, rather than dropping it silently.
     Changed:
-    - The Processing tab is split into Pre-Processing (P1-P6: frames, flight route, field of view, ALFS, GeoTIFF, orthomosaic) and Processing (A1-A4: detection, tracking, segmentation). The two only look sequential; everything in Pre-Processing is independent of any animal. Steps are renumbered so a bare number no longer means two things.
+    - The Processing tab is split into Pre-Processing (P1-P6: frames, flight route, field of view, ALFS, GeoTIFF, orthomosaic) and Processing (A1-A3: detection, tracking, segmentation). The two only look sequential; everything in Pre-Processing is independent of any animal. Steps are renumbered so a bare number no longer means two things.
     - Configuration is stored with the flight's outputs instead of in the QGIS project, so a target folder describes the settings that produced it. Older projects are converted when first opened.
     - Labelling tool: species, sex, age and occlusion are chosen from the project's vocabulary instead of typed, which is what previously made class ids unstable. Labelled tracks are written as real tracks, so they reach the analytics and exports without re-running tracking.
     - Survey analytics record what they counted - which tracking run, which species, how many false positives were excluded - alongside the result.

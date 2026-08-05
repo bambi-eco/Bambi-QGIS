@@ -1466,9 +1466,12 @@ class BambiDockWidget(QDockWidget):
         # — that is what keeps class ids stable.
         vocabulary_group = QGroupBox("Project Schema")
         vocabulary_layout = QVBoxLayout(vocabulary_group)
-        vocabulary_layout.addWidget(QLabel(
+        vocabulary_info = QLabel(
             "Species, enums and custom fields for this project. Every tool "
-            "picks from these; none of them can invent new ones."))
+            "picks from these; none of them can invent new ones.")
+        vocabulary_info.setWordWrap(True)
+        vocabulary_info.setStyleSheet("color: gray; font-size: 10px;")
+        vocabulary_layout.addWidget(vocabulary_info)
         self.schema_editor_btn = QPushButton("Edit Project Schema…")
         self.schema_editor_btn.clicked.connect(self.open_schema_dialog)
         vocabulary_layout.addWidget(self.schema_editor_btn)
@@ -1988,6 +1991,24 @@ class BambiDockWidget(QDockWidget):
         alfs_layout.addRow("", self.alfs_sampling_widget)
 
         alfs_tab_layout.addWidget(alfs_group)
+
+        # The GeoTIFF export's only setting; it sat on the step row, which is
+        # where the run buttons live rather than their configuration.
+        geotiff_group = QGroupBox("Frame GeoTIFF Export")
+        geotiff_layout = QFormLayout(geotiff_group)
+
+        self.geotiff_edge_erosion_spin = QSpinBox()
+        self.geotiff_edge_erosion_spin.setRange(0, 10)
+        self.geotiff_edge_erosion_spin.setValue(2)
+        self.geotiff_edge_erosion_spin.setFixedWidth(55)
+        self.geotiff_edge_erosion_spin.setToolTip(
+            "Shrink each frame's valid footprint by this many pixels before\n"
+            "saving, to remove the dark antialiased rim at the image border\n"
+            "that otherwise shows as seams in the orthomosaic. 0 disables it."
+        )
+        geotiff_layout.addRow("Edge erosion (px):", self.geotiff_edge_erosion_spin)
+
+        alfs_tab_layout.addWidget(geotiff_group)
         alfs_tab_layout.addStretch()
 
         # ----- Sub-Tab 6: Orthomosaic (merge exported frame GeoTIFFs) -----
@@ -2417,20 +2438,9 @@ class BambiDockWidget(QDockWidget):
         self.geotiff_camera_combo.addItems(["T - Thermal", "W - RGB"])
         self.geotiff_camera_combo.setFixedWidth(100)
         self.geotiff_camera_combo.setToolTip("Select camera source for frames and poses")
-        self.geotiff_edge_erosion_spin = QSpinBox()
-        self.geotiff_edge_erosion_spin.setRange(0, 10)
-        self.geotiff_edge_erosion_spin.setValue(2)
-        self.geotiff_edge_erosion_spin.setFixedWidth(55)
-        self.geotiff_edge_erosion_spin.setToolTip(
-            "Shrink each frame's valid footprint by this many pixels before\n"
-            "saving, to remove the dark antialiased rim at the image border\n"
-            "that otherwise shows as seams in the orthomosaic. 0 disables it."
-        )
         self.export_geotiffs_status = QLabel("⚪ Not started")
         step8_row.addWidget(self.export_geotiffs_btn)
         step8_row.addWidget(self.geotiff_camera_combo)
-        step8_row.addWidget(QLabel("Erode px:"))
-        step8_row.addWidget(self.geotiff_edge_erosion_spin)
         step8_row.addWidget(self.export_geotiffs_status)
         steps_btn_layout.addLayout(step8_row)
 
@@ -2484,9 +2494,9 @@ class BambiDockWidget(QDockWidget):
         step9_row.addWidget(self.sam3_segment_status)
         proc_steps_layout.addLayout(step9_row)
 
-        # ----- A4: Geo-Reference Segmentation -----
+        # ----- -> Geo-Reference Segmentation (sub-step of A3) -----
         step10_row = QHBoxLayout()
-        self.sam3_georef_btn = QPushButton("A4. Geo-Reference Segmentation")
+        self.sam3_georef_btn = QPushButton("   → Geo-Reference Segmentation")
         self.sam3_georef_btn.clicked.connect(self.run_sam3_georeference)
         self.sam3_georef_btn.setToolTip("Convert pixel segmentation masks to world coordinates")
         self.sam3_georef_status = QLabel("⚪ Not started")
@@ -2538,12 +2548,15 @@ class BambiDockWidget(QDockWidget):
 
         export_group = QGroupBox("Export")
         export_layout = QVBoxLayout(export_group)
-        export_layout.addWidget(QLabel(
+        export_info = QLabel(
             "Write the detections, tracks and their attributes out in a "
             "standard format. Custom fields travel with them where the format "
             "has room; species names and enum values are resolved, so nothing "
             "receives an internal id."
-        ))
+        )
+        export_info.setWordWrap(True)
+        export_info.setStyleSheet("color: gray; font-size: 10px;")
+        export_layout.addWidget(export_info)
 
         export_form = QHBoxLayout()
         export_form.addWidget(QLabel("Format:"))
@@ -4088,9 +4101,10 @@ class BambiDockWidget(QDockWidget):
             "Links detections across frames into continuous tracks using the selected "
             "tracking backend. With a TRex tracklet folder configured this imports "
             "those instead, and runs no tracker.<br><br>"
-            "<b>A3 / A4 — Object Segmentation</b><br>"
-            "Segments detected objects using Roboflow SAM3 and projects masks to "
-            "world coordinates.<br><br>"
+            "<b>A3 — Object Segmentation</b><br>"
+            "Segments detected objects using Roboflow SAM3.<br><br>"
+            "<b>→ Geo-Reference Segmentation</b><br>"
+            "Projects the masks onto the DEM to world coordinates.<br><br>"
 
             "The BAMBI plugin is not intended to process multiple flights within "
             "the same QGIS project (and the same output folder), since the result "
@@ -6417,7 +6431,7 @@ class BambiDockWidget(QDockWidget):
                 self,
                 "Missing Prerequisites",
                 f"{camera_label} SAM3 geo-referencing has not been completed.\n"
-                f"Please run Step 10 (Geo-Reference Segmentation) first."
+                f"Please run Geo-Reference Segmentation (under step A3) first."
             )
             return
 

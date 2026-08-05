@@ -104,7 +104,7 @@ The steps live on two tabs, split by what they depend on:
 | Tab | Steps | Depends on |
 |---|---|---|
 | **Pre-Processing** | P1 Extract Frames, P2 Generate Flight Route, P3 Calculate Field of View, P4 Generate ALFS, P5 Export Frames as GeoTIFF, P6 Generate Orthomosaic | the drone poses and the DEM — **no animals involved** |
-| **Processing** | A1 Detect Animals (with geo-referencing and perpendicular distances), A2 Track Animals Or Import, A3/A4 SAM3 Segmentation | the detections |
+| **Processing** | A1 Detect Animals (with geo-referencing and perpendicular distances), A2 Track Animals Or Import, A3 SAM3 Segmentation (with its geo-referencing) | the detections |
 
 The numbering is prefixed so a bare number cannot mean two different steps.
 They are *not* one sequence: only P1 is a prerequisite for the Processing tab.
@@ -339,7 +339,7 @@ segmentation_t/    # or segmentation_w/ depending on camera selection
 └── segmentation_pixel.json    # Pixel-space segmentation masks
 ```
 
-### A4. Geo-Reference Segmentation
+#### → Geo-Reference Segmentation
 
 Projects SAM3 pixel-space segmentation masks to world coordinates using the DEM.
 

@@ -1078,7 +1078,7 @@ Each phase leaves the plugin working.
 | **5** ✅ | `core/stages.py`: dependency graph, cascade (**latent bug 3 fixed**), reconciliation, reset; stages record their own completion; `output_inventory` and the QGIS layer readers prefer the store; "Reset Step…" with locked-file handling. **Done:** +50 unit, +4 inventory, +15 reader, +7 QGIS; ratchet 26 → 27. |
 | **6** ✅ | `core/exporters/` — COCO, MOT, YOLO, TRex npz, GeoJSON, **Camtrap DP and Darwin Core Archive**. Video Creator reads the store, removing the last positional alignment (§8.2). **Done:** +36 exporter, +5 video; ratchet 27 → 28. |
 | **7** ✅ | Survey analytics onto the store (`core/analytics_source.py`): explicit population filter, species filtering and stratification, provenance in every result, perpendicular distances carrying `detection_id`, multi-project pooling matching species by name. **Done:** +26 unit. |
-| **8** ✅ | UI reorganisation: Processing split into **Pre-Processing** and **Processing** (§10.1), steps renumbered `P1–P6` / `A1–A4`, run panel shared below the tabs. **Done:** +19 QGIS. |
+| **8** ✅ | UI reorganisation: Processing split into **Pre-Processing** and **Processing** (§10.1), steps renumbered `P1–P6` / `A1–A3`, run panel shared below the tabs. **Done:** +19 QGIS. |
 | **9** ✅ | Configuration moves into `project.gpkg` (`core/flights.py`); **multi-flight projects** with a flight selector on the Input tab and flight-named layer groups (§10.2). **Done:** +29 unit, +14 QGIS. |
 
 ### 10.1 Phase 8 — splitting the Processing tab
@@ -1089,7 +1089,7 @@ extraction to SAM3 geo-referencing. Split it in two:
 | Tab | Steps |
 |---|---|
 | **Pre-Processing** | 1 Extract Frames · 2 Generate Flight Route · 5 Calculate Field of View · 6 Generate ALFS · 7 Export Frames as GeoTIFF · 8 Generate Orthomosaic |
-| **Processing** | 3 Detect Animals · 3b Import TRex Tracklets · 4 Track Animals · 9 Run SAM3 Segmentation · 10 Geo-Reference Segmentation |
+| **Processing** | 3 Detect Animals · 3b Import TRex Tracklets · 4 Track Animals · 9 Run SAM3 Segmentation (with its geo-referencing) |
 
 The split is not cosmetic — it is the dependency graph of §7 made visible:
 
