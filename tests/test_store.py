@@ -287,3 +287,70 @@ def test_species_id_cannot_be_null(tmp_path):
         conn.execute("INSERT INTO detections (frame, source_id, species_id) "
                      "VALUES (1, 1, NULL)")
     conn.close()
+
+
+# ---------------------------------------------------------------------------
+# In-place schema upgrades (§11)
+# ---------------------------------------------------------------------------
+
+def _downgrade_to_v1(path):
+    """Rebuild the species table in its v1 shape, without the taxonomy columns.
+
+    Done with CREATE/INSERT/DROP/RENAME rather than ALTER TABLE DROP COLUMN,
+    which needs SQLite 3.35+.
+    """
+    conn = store.open_store(path, store.PROJECT)
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute("CREATE TABLE species_v1 (species_id INTEGER PRIMARY KEY, "
+                 "name TEXT UNIQUE NOT NULL, protected INTEGER NOT NULL "
+                 "DEFAULT 0)")
+    conn.execute("INSERT INTO species_v1 SELECT species_id, name, protected "
+                 "FROM species")
+    conn.execute("DROP TABLE species")
+    conn.execute("ALTER TABLE species_v1 RENAME TO species")
+    store.set_meta(conn, "schema_version", 1)
+    conn.commit()
+    conn.close()
+
+
+def test_an_older_store_is_upgraded_in_place(tmp_path):
+    """Additive upgrades only, so an older plugin can still read the file."""
+    path = str(tmp_path / "project.gpkg")
+    store.open_store(path, store.PROJECT).close()
+    _downgrade_to_v1(path)
+
+    conn = store.open_store(path, store.PROJECT)
+    try:
+        assert int(store.get_meta(conn, "schema_version")) == store.SCHEMA_VERSION
+        row = conn.execute(
+            "SELECT scientific_name FROM species WHERE name = 'roe deer'"
+        ).fetchone()
+        assert row["scientific_name"] == "Capreolus capreolus"
+    finally:
+        conn.close()
+
+
+def test_upgrading_does_not_disturb_existing_rows(tmp_path):
+    path = str(tmp_path / "project.gpkg")
+    conn = store.open_store(path, store.PROJECT)
+    conn.execute("INSERT INTO species (species_id, name) VALUES (10, 'wolf')")
+    conn.commit()
+    conn.close()
+    _downgrade_to_v1(path)
+
+    conn = store.open_store(path, store.PROJECT)
+    try:
+        names = {r["name"] for r in conn.execute("SELECT name FROM species")}
+        assert "wolf" in names
+    finally:
+        conn.close()
+
+
+def test_a_current_store_is_not_upgraded(tmp_path):
+    path = str(tmp_path / "project.gpkg")
+    store.open_store(path, store.PROJECT).close()
+    conn = store.open_store(path, store.PROJECT)
+    try:
+        assert int(store.get_meta(conn, "schema_version")) == store.SCHEMA_VERSION
+    finally:
+        conn.close()

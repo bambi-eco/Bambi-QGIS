@@ -43,8 +43,18 @@ def load_vocabulary(target_folder: str) -> dict:
 
     conn = store.open_store(path, store.PROJECT)
     try:
-        species = {row["species_id"]: row["name"] for row in conn.execute(
-            "SELECT species_id, name FROM species")}
+        species = {}
+        taxonomy = {}
+        for row in conn.execute(
+                "SELECT species_id, name, scientific_name, taxon_rank, "
+                "gbif_taxon_key FROM species"):
+            species[row["species_id"]] = row["name"]
+            taxonomy[row["species_id"]] = {
+                "vernacular_name": row["name"],
+                "scientific_name": row["scientific_name"],
+                "taxon_rank": row["taxon_rank"],
+                "gbif_taxon_key": row["gbif_taxon_key"],
+            }
         fields = [dict(row) for row in conn.execute(
             "SELECT name, type, scope, enum_id FROM field_schema")]
         enum_labels: Dict[int, Dict[int, str]] = {}
@@ -57,7 +67,8 @@ def load_vocabulary(target_folder: str) -> dict:
 
     by_field = {field["name"]: enum_labels.get(field["enum_id"], {})
                 for field in fields if field["enum_id"] is not None}
-    return {"species": species, "fields": fields, "enum_labels": by_field}
+    return {"species": species, "taxonomy": taxonomy, "fields": fields,
+            "enum_labels": by_field}
 
 
 def resolve_attributes(raw, enum_by_field: Dict[str, Dict[int, str]]) -> dict:

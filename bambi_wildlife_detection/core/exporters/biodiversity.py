@@ -54,6 +54,23 @@ def _to_wgs84(points, epsg: int):
     return [transformer.transform(x, y) for x, y in points]
 
 
+def _scientific_name(taxonomy: dict) -> str:
+    """The species' scientific name, or ``""`` when it has none.
+
+    ``species.name`` is the working label the user picks in the combo box —
+    "roe deer" — which is a *vernacular* name. Darwin Core and Camtrap DP both
+    want the scientific one, and publishing a vernacular as ``scientificName``
+    leaves GBIF fuzzy-matching a string.
+    """
+    return (taxonomy.get("scientific_name") or "").strip()
+
+
+def _gbif_taxon_id(taxonomy: dict) -> str:
+    """``taxonID`` for a species, from its GBIF taxon key. ``""`` when unset."""
+    key = taxonomy.get("gbif_taxon_key")
+    return GBIF_SPECIES_URL.format(key=key) if key else ""
+
+
 def _timestamp(frames: Dict[int, dict], frame: int) -> str:
     """ISO-8601 capture time of *frame*, or ``""`` when unknown."""
     epoch = frames.get(frame, {}).get("epoch")
@@ -79,6 +96,7 @@ def _track_summary(rows: List[dict], vocabulary: dict) -> List[dict]:
             "track_id": track_id,
             "species_id": first["species_id"],
             "species": vocabulary["species"].get(first["species_id"], ""),
+            "taxonomy": vocabulary["taxonomy"].get(first["species_id"], {}),
             "frame": first["frame"],
             "x": (first["gx1"] + first["gx2"]) / 2.0,
             "y": (first["gy1"] + first["gy2"]) / 2.0,
@@ -105,6 +123,7 @@ def export_camtrap_dp(target_folder: str, modality: str, output_folder: str,
     not silently omit it.
     """
     vocabulary = common.load_vocabulary(target_folder)
+    taxonomy = vocabulary["taxonomy"]
     rows = common.load_detections(target_folder, modality, include_not_an_animal)
     frames = {f["frame"]: f for f in common.load_frames(target_folder, modality)}
     common.ensure_folder(output_folder)
@@ -164,6 +183,7 @@ def export_camtrap_dp(target_folder: str, modality: str, output_folder: str,
         writer.writerow([
             "observationID", "deploymentID", "mediaID", "eventID",
             "observationLevel", "observationType", "scientificName",
+            "vernacularName", "taxonID",
             "count", "latitude", "longitude", "classificationProbability",
         ] + extra_names)
         for row in rows:
@@ -179,8 +199,14 @@ def export_camtrap_dp(target_folder: str, modality: str, output_folder: str,
                  if row.get("track_id") is not None else ""),
                 "media",
                 "blank" if is_blank else "animal",
+                # scientificName only when there is one; the working label goes
+                # to vernacularName, where it belongs.
+                "" if is_blank else _scientific_name(
+                    taxonomy.get(row["species_id"], {})),
                 "" if is_blank else vocabulary["species"].get(
                     row["species_id"], ""),
+                "" if is_blank else _gbif_taxon_id(
+                    taxonomy.get(row["species_id"], {})),
                 1,
                 f"{lat:.7f}" if lat is not None else "",
                 f"{lon:.7f}" if lon is not None else "",
@@ -217,11 +243,16 @@ def export_camtrap_dp(target_folder: str, modality: str, output_folder: str,
 
 #: Terms written to ``occurrence.txt``, in column order.
 DWC_TERMS = [
-    "occurrenceID", "basisOfRecord", "scientificName", "individualCount",
-    "eventDate", "decimalLatitude", "decimalLongitude", "geodeticDatum",
+    "occurrenceID", "basisOfRecord", "scientificName", "vernacularName",
+    "taxonRank", "taxonID", "individualCount", "eventDate",
+    "decimalLatitude", "decimalLongitude", "geodeticDatum",
     "coordinateUncertaintyInMeters", "samplingProtocol", "occurrenceRemarks",
     "identificationVerificationStatus",
 ]
+
+#: A GBIF taxon key resolves against the backbone exactly, instead of leaving
+#: GBIF to match a name string.
+GBIF_SPECIES_URL = "https://www.gbif.org/species/{key}"
 
 _DWC_URI = "http://rs.tdwg.org/dwc/terms/"
 
@@ -249,13 +280,24 @@ def export_darwin_core(target_folder: str, modality: str, output_folder: str,
     frames = {f["frame"]: f for f in common.load_frames(target_folder, modality)}
     summaries = _track_summary(rows, vocabulary)
 
+    # A base class is not a taxon, and neither is a species whose scientific
+    # name has not been filled in — `name` is the working label ("roe deer"),
+    # which is a vernacular name. Publishing it as `scientificName` would leave
+    # GBIF fuzzy-matching a string, so those tracks are held back and counted.
+    def publishable(summary):
+        has_species = summary["species_id"] > 0
+        return has_species and bool(_scientific_name(summary["taxonomy"]))
+
     unnamed = [s for s in summaries if s["species_id"] <= 0]
-    named = [s for s in summaries if s["species_id"] > 0]
+    untyped = [s for s in summaries
+               if s["species_id"] > 0 and not publishable(s)]
+    named = [s for s in summaries if publishable(s)]
     if not named:
         raise common.ExportError(
-            "Nothing to publish: every track is still 'animal' or 'unknown'. "
-            "Darwin Core needs a taxon, so assign species in the labelling "
-            "tool first.")
+            "Nothing to publish. Darwin Core needs a scientific name, and no "
+            "track has one: assign species in the labelling tool, and give "
+            "each species its scientific name (and optionally its GBIF taxon "
+            "key) in the Project Schema editor.")
 
     lonlat = _to_wgs84([(s["x"], s["y"]) for s in named], epsg)
     dataset_name = dataset_name or os.path.basename(
@@ -270,10 +312,15 @@ def export_darwin_core(target_folder: str, modality: str, output_folder: str,
             remarks = ", ".join(
                 f"{key}={value}" for key, value in
                 sorted(summary["attributes"].items()))
+            taxonomy = summary["taxonomy"]
+            gbif_key = taxonomy.get("gbif_taxon_key")
             writer.writerow([
                 f"{dataset_name}-track-{summary['track_id']}",
                 BASIS_OF_RECORD,
+                taxonomy.get("scientific_name") or "",
                 summary["species"],
+                taxonomy.get("taxon_rank") or "",
+                GBIF_SPECIES_URL.format(key=gbif_key) if gbif_key else "",
                 1,
                 _timestamp(frames, summary["frame"]),
                 f"{lat:.7f}", f"{lon:.7f}", "WGS84",
@@ -301,10 +348,17 @@ def export_darwin_core(target_folder: str, modality: str, output_folder: str,
             '</archive>\n')
 
     if log_fn:
+        keyed = sum(1 for s in named if s["taxonomy"].get("gbif_taxon_key"))
         message = (f"Darwin Core: {len(named)} occurrence(s) → "
                    f"{occurrence_path}")
+        if keyed:
+            message += f"; {keyed} carry a GBIF taxon key"
         if unnamed:
             message += (f"; {len(unnamed)} track(s) omitted for having no "
                         "species assigned")
+        if untyped:
+            names = ", ".join(sorted({s["species"] for s in untyped}))
+            message += (f"; {len(untyped)} track(s) omitted because their "
+                        f"species has no scientific name ({names})")
         log_fn(message)
     return output_folder

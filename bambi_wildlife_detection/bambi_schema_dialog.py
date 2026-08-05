@@ -86,14 +86,20 @@ class BambiSchemaDialog(QDialog):
 
         self.species_add_btn = QPushButton("Add…")
         self.species_rename_btn = QPushButton("Rename…")
+        self.species_taxonomy_btn = QPushButton("Taxonomy…")
+        self.species_taxonomy_btn.setToolTip(
+            "Scientific name and GBIF taxon key, used when publishing to "
+            "GBIF or Camtrap DP. Optional otherwise.")
         self.species_delete_btn = QPushButton("Delete")
         self.species_add_btn.clicked.connect(self._add_species)
         self.species_rename_btn.clicked.connect(self._rename_species)
+        self.species_taxonomy_btn.clicked.connect(self._edit_taxonomy)
         self.species_delete_btn.clicked.connect(self._delete_species)
 
         row = QHBoxLayout()
         row.addWidget(self.species_add_btn)
         row.addWidget(self.species_rename_btn)
+        row.addWidget(self.species_taxonomy_btn)
         row.addWidget(self.species_delete_btn)
         row.addStretch()
         layout.addLayout(row)
@@ -105,6 +111,10 @@ class BambiSchemaDialog(QDialog):
             label = f"{species['species_id']:>3}  {species['name']}"
             if species["protected"]:
                 label += "   (base class)"
+            elif species.get("scientific_name"):
+                label += f"   — {species['scientific_name']}"
+                if species.get("gbif_taxon_key"):
+                    label += f" [GBIF {species['gbif_taxon_key']}]"
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, species["species_id"])
             if species["protected"]:
@@ -120,6 +130,7 @@ class BambiSchemaDialog(QDialog):
         species_id = self._selected_species_id()
         editable = species_id is not None and species_id > 0
         self.species_rename_btn.setEnabled(editable)
+        self.species_taxonomy_btn.setEnabled(editable)
         self.species_delete_btn.setEnabled(editable)
 
     def _add_species(self) -> None:
@@ -148,6 +159,45 @@ class BambiSchemaDialog(QDialog):
             self.editor.rename_species(species_id, name)
         except SchemaError as exc:
             self._warn(exc)
+            return
+        self._reload_species()
+
+    def _edit_taxonomy(self) -> None:
+        """Scientific name, rank and GBIF taxon key for the selected species."""
+        species_id = self._selected_species_id()
+        if species_id is None:
+            return
+        current = [s for s in self.editor.species()
+                   if s["species_id"] == species_id][0]
+
+        scientific_name, ok = QInputDialog.getText(
+            self, "Taxonomy",
+            f"Scientific name for '{current['name']}' — Darwin Core publishes "
+            "this; the name above is the vernacular one:",
+            text=current.get("scientific_name") or "")
+        if not ok:
+            return
+
+        rank, ok = QInputDialog.getText(
+            self, "Taxonomy", "Taxon rank (species, genus, class…):",
+            text=current.get("taxon_rank") or "species")
+        if not ok:
+            return
+
+        key_text, ok = QInputDialog.getText(
+            self, "Taxonomy",
+            "GBIF taxon key (optional — the number from the species' page on "
+            "gbif.org):",
+            text=str(current.get("gbif_taxon_key") or ""))
+        if not ok:
+            return
+
+        try:
+            self.editor.set_taxonomy(
+                species_id, scientific_name, rank,
+                int(key_text) if key_text.strip() else None)
+        except (SchemaError, ValueError) as exc:
+            self._warn(SchemaError(str(exc)))
             return
         self._reload_species()
 

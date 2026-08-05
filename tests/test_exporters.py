@@ -325,7 +325,8 @@ def test_camtrap_observations_carry_species_and_fields(survey, tmp_path):
     with open(os.path.join(folder, "observations.csv"), encoding="utf-8") as fh:
         rows = list(csv.DictReader(fh))
     animals = [r for r in rows if r["observationType"] == "animal"]
-    assert animals[0]["scientificName"] == "roe deer"
+    assert animals[0]["scientificName"] == "Capreolus capreolus"
+    assert animals[0]["vernacularName"] == "roe deer"
     assert animals[0]["occlusion"] == "partially"
 
 
@@ -379,7 +380,8 @@ def test_dwca_is_one_occurrence_per_track(survey, tmp_path):
     with open(os.path.join(folder, "occurrence.txt"), encoding="utf-8") as fh:
         rows = list(csv.DictReader(fh, delimiter="\t"))
     assert len(rows) == 2
-    assert {r["scientificName"] for r in rows} == {"roe deer", "chamois"}
+    assert {r["scientificName"] for r in rows} == \
+        {"Capreolus capreolus", "Rupicapra rupicapra"}
 
 
 def test_dwca_marks_machine_observations(survey, tmp_path):
@@ -457,3 +459,97 @@ def test_manual_tracks_are_exported_too(survey, tmp_path):
     with open(path, encoding="utf-8") as fh:
         annotations = json.load(fh)["annotations"]
     assert len(annotations) == 4      # three detector + one manual
+
+
+# ---------------------------------------------------------------------------
+# Taxonomy: scientific names and GBIF keys (§8.1)
+# ---------------------------------------------------------------------------
+
+def _set_taxonomy(root, species_id, scientific_name, rank="species", key=None):
+    from bambi_wildlife_detection.core.schema_editor import SchemaEditor
+
+    with SchemaEditor(root) as editor:
+        editor.set_taxonomy(species_id, scientific_name, rank, key)
+        editor.commit()
+
+
+def test_seeded_species_carry_scientific_names(survey):
+    """The 5.x labels are vernacular; publishing needs the scientific name."""
+    vocabulary = common.load_vocabulary(survey)
+    assert vocabulary["taxonomy"][1]["scientific_name"] == "Capreolus capreolus"
+    assert vocabulary["taxonomy"][5]["scientific_name"] == "Rupicapra rupicapra"
+
+
+def test_no_gbif_keys_are_invented(survey):
+    """An invented identifier would publish confidently wrong data."""
+    vocabulary = common.load_vocabulary(survey)
+    assert all(entry["gbif_taxon_key"] is None
+               for entry in vocabulary["taxonomy"].values())
+
+
+def test_dwca_publishes_the_scientific_name(survey, tmp_path):
+    pytest.importorskip("pyproj")
+    folder = str(tmp_path / "dwca")
+    exporters.export_darwin_core(survey, "t", folder, epsg=32633)
+    with open(os.path.join(folder, "occurrence.txt"), encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh, delimiter="\t"))
+    assert {r["scientificName"] for r in rows} == \
+        {"Capreolus capreolus", "Rupicapra rupicapra"}
+    assert {r["vernacularName"] for r in rows} == {"roe deer", "chamois"}
+
+
+def test_dwca_uses_the_gbif_key_when_present(survey, tmp_path):
+    pytest.importorskip("pyproj")
+    _set_taxonomy(survey, 1, "Capreolus capreolus", "species", 2440947)
+
+    folder = str(tmp_path / "dwca")
+    messages = []
+    exporters.export_darwin_core(
+        survey, "t", folder, epsg=32633, log_fn=messages.append)
+    with open(os.path.join(folder, "occurrence.txt"), encoding="utf-8") as fh:
+        rows = {r["scientificName"]: r
+                for r in csv.DictReader(fh, delimiter="\t")}
+
+    assert rows["Capreolus capreolus"]["taxonID"] == \
+        "https://www.gbif.org/species/2440947"
+    assert rows["Rupicapra rupicapra"]["taxonID"] == ""
+    assert any("carry a GBIF taxon key" in m for m in messages)
+
+
+def test_dwca_holds_back_species_without_a_scientific_name(survey, tmp_path):
+    pytest.importorskip("pyproj")
+    _set_taxonomy(survey, 5, "")
+
+    folder = str(tmp_path / "dwca")
+    messages = []
+    exporters.export_darwin_core(
+        survey, "t", folder, epsg=32633, log_fn=messages.append)
+    with open(os.path.join(folder, "occurrence.txt"), encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh, delimiter="\t"))
+
+    assert len(rows) == 1
+    assert any("no scientific name" in m and "chamois" in m for m in messages)
+
+
+def test_dwca_reports_the_rank(survey, tmp_path):
+    pytest.importorskip("pyproj")
+    folder = str(tmp_path / "dwca")
+    exporters.export_darwin_core(survey, "t", folder, epsg=32633)
+    with open(os.path.join(folder, "occurrence.txt"), encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh, delimiter="\t"))
+    assert all(r["taxonRank"] == "species" for r in rows)
+
+
+def test_camtrap_separates_scientific_from_vernacular(survey, tmp_path):
+    pytest.importorskip("pyproj")
+    _set_taxonomy(survey, 1, "Capreolus capreolus", "species", 2440947)
+
+    folder = str(tmp_path / "camtrap")
+    exporters.export_camtrap_dp(survey, "t", folder, epsg=32633)
+    with open(os.path.join(folder, "observations.csv"), encoding="utf-8") as fh:
+        rows = [r for r in csv.DictReader(fh)
+                if r["observationType"] == "animal"]
+
+    roe = [r for r in rows if r["vernacularName"] == "roe deer"][0]
+    assert roe["scientificName"] == "Capreolus capreolus"
+    assert roe["taxonID"] == "https://www.gbif.org/species/2440947"

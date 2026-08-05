@@ -837,7 +837,15 @@ throwaway files. None of them is an input format.
 | **TRex `.npz`** | write as well as read, closing the loop with the existing importer |
 | **GeoJSON / GPKG** | geo tracks, detections, FoV, transects — as today but from the store |
 | **Camtrap DP** | Frictionless survey package: the flight is a deployment, frames are media, detections are observations. Keeps `not-an-animal` as an observation of type `blank` |
-| **Darwin Core Archive** | GBIF publishing: one occurrence per **track**, not per detection. Excludes tracks with no taxon (`animal`/`unknown`) and says how many |
+| **Darwin Core Archive** | GBIF publishing: one occurrence per **track**, not per detection. Needs a *scientific* name — `species.name` is the working label and is vernacular — plus an optional `gbif_taxon_key`, which lets the backbone resolve exactly instead of matching a string. Tracks whose species has no scientific name are held back and counted |
+
+**Species carry publishing taxonomy** (`scientific_name`, `taxon_rank`,
+`gbif_taxon_key`, all optional). Only Camtrap DP and Darwin Core use them; a
+project that never publishes can ignore them. Scientific names are seeded for
+the built-in taxonomy as editable defaults — "fox" and "hare" assume the
+Central-European species, and "bird" is a class — but **GBIF keys are never
+seeded**, because an invented identifier would publish confidently wrong data.
+Base classes are rejected: `animal` and `unknown` are deliberately not taxa.
 
 **Enum resolution.** Attribute values stored as `value_id` (§5.1) are resolved to
 their labels on export — no consumer should be handed an integer whose meaning

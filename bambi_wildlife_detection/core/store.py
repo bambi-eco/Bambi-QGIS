@@ -34,8 +34,9 @@ from typing import Dict, List, Optional
 
 from . import gpkg
 
-#: Bumped on every schema change. Readers refuse anything newer.
-SCHEMA_VERSION = 1
+#: Bumped on every schema change. Readers refuse anything newer; older files
+#: are upgraded in place by :func:`_upgrade`, which may only *add* things.
+SCHEMA_VERSION = 2
 
 #: Store kinds; each maps to one file and one DDL set.
 PROJECT = "project"
@@ -80,6 +81,23 @@ SEEDED_SPECIES = (
     (5, "chamois"), (6, "fox"), (7, "hare"), (8, "bird"), (9, "other"),
 )
 
+#: Scientific names for the seeded taxonomy, as ``(scientific_name, rank)``.
+#: These are *editable defaults*, not assertions: "fox" and "hare" assume the
+#: Central-European species the plugin is used for, and "bird" is a class
+#: rather than a species. GBIF taxon keys are deliberately **not** seeded —
+#: an invented identifier would publish confidently wrong data, so they are
+#: left for the user to fill in from gbif.org.
+SEEDED_TAXONOMY = {
+    "roe deer": ("Capreolus capreolus", "species"),
+    "red deer": ("Cervus elaphus", "species"),
+    "fallow deer": ("Dama dama", "species"),
+    "wild boar": ("Sus scrofa", "species"),
+    "chamois": ("Rupicapra rupicapra", "species"),
+    "fox": ("Vulpes vulpes", "species"),
+    "hare": ("Lepus europaeus", "species"),
+    "bird": ("Aves", "class"),
+}
+
 #: Enums seeded from the 5.x hardcoded taxonomies, with the fields that use
 #: them: ``(enum_name, values, field_name, field_scope)``. These are ordinary
 #: rows — they are the worked examples a user copies when defining their own.
@@ -105,9 +123,16 @@ CREATE TABLE IF NOT EXISTS bambi_meta (
 
 _PROJECT_DDL = """
 CREATE TABLE species (
-    species_id INTEGER PRIMARY KEY,
-    name       TEXT UNIQUE NOT NULL,
-    protected  INTEGER NOT NULL DEFAULT 0
+    species_id      INTEGER PRIMARY KEY,
+    name            TEXT UNIQUE NOT NULL,
+    protected       INTEGER NOT NULL DEFAULT 0,
+    -- Taxonomy, for publishing (§8.1). `name` is the label the user works with
+    -- and is a *vernacular* name — Darwin Core needs the scientific one, and a
+    -- GBIF taxon key lets the backbone resolve it exactly instead of matching
+    -- a string. Both optional: a project that never publishes needs neither.
+    scientific_name TEXT,
+    taxon_rank      TEXT,
+    gbif_taxon_key  INTEGER
 );
 
 CREATE TABLE enums (
@@ -406,7 +431,42 @@ def open_store(path: str, kind: str, modality: str = "",
         return conn
 
     _check_compatible(conn, path, kind)
+    _upgrade(conn, kind)
     return conn
+
+
+#: Additive-only upgrades, keyed by the version they produce. Each entry is a
+#: list of statements applied to a store of the previous version. They may add
+#: tables, columns or indexes; they may never drop or rewrite anything, because
+#: an older plugin must still be able to read the file afterwards.
+_UPGRADES = {
+    2: {
+        PROJECT: [
+            "ALTER TABLE species ADD COLUMN scientific_name TEXT",
+            "ALTER TABLE species ADD COLUMN taxon_rank TEXT",
+            "ALTER TABLE species ADD COLUMN gbif_taxon_key INTEGER",
+        ],
+    },
+}
+
+
+def _upgrade(conn: sqlite3.Connection, kind: str) -> None:
+    """Bring an older store up to :data:`SCHEMA_VERSION` in place."""
+    raw = _read_meta(conn, "schema_version")
+    try:
+        version = int(raw)
+    except (TypeError, ValueError):
+        return
+    if version >= SCHEMA_VERSION:
+        return
+
+    with transaction(conn):
+        for target in range(version + 1, SCHEMA_VERSION + 1):
+            for statement in _UPGRADES.get(target, {}).get(kind, []):
+                conn.execute(statement)
+        set_meta(conn, "schema_version", SCHEMA_VERSION)
+        if kind == PROJECT:
+            seed_vocabulary(conn)
 
 
 def _check_compatible(conn: sqlite3.Connection, path: str, kind: str) -> None:
@@ -467,6 +527,12 @@ def seed_vocabulary(conn: sqlite3.Connection) -> None:
     conn.executemany(
         "INSERT OR IGNORE INTO species (species_id, name, protected) "
         "VALUES (?, ?, 0)", SEEDED_SPECIES)
+    # Only fill taxonomy that is still blank, so a user's corrections survive.
+    for name, (scientific_name, rank) in SEEDED_TAXONOMY.items():
+        conn.execute(
+            "UPDATE species SET scientific_name = ?, taxon_rank = ? "
+            "WHERE name = ? AND scientific_name IS NULL",
+            (scientific_name, rank, name))
 
     for enum_name, values, field_name, field_scope in SEEDED_ENUMS:
         conn.execute(

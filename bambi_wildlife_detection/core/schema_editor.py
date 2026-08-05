@@ -95,14 +95,54 @@ class SchemaEditor:
     def species(self) -> List[dict]:
         """Every species, base classes first, then concrete ones by id."""
         return [dict(row) for row in self.conn.execute(
-            "SELECT species_id, name, protected FROM species "
-            "ORDER BY species_id")]
+            "SELECT species_id, name, protected, scientific_name, taxon_rank, "
+            "gbif_taxon_key FROM species ORDER BY species_id")]
 
     def species_by_name(self, name: str) -> Optional[dict]:
         row = self.conn.execute(
-            "SELECT species_id, name, protected FROM species WHERE name = ?",
+            "SELECT species_id, name, protected, scientific_name, taxon_rank, "
+            "gbif_taxon_key FROM species WHERE name = ?",
             (name.strip(),)).fetchone()
         return None if row is None else dict(row)
+
+    def set_taxonomy(self, species_id: int, scientific_name: str = "",
+                     taxon_rank: str = "",
+                     gbif_taxon_key: Optional[int] = None) -> None:
+        """Attach publishing taxonomy to a species.
+
+        Only these two formats care (§8.1): Darwin Core needs
+        ``scientificName``, and a GBIF taxon key lets the backbone resolve the
+        record exactly instead of matching a name string. A project that never
+        publishes can leave both empty.
+
+        Base classes are rejected — ``animal`` and ``unknown`` are deliberately
+        *not* taxa, and giving them one would publish nonsense.
+        """
+        row = self.conn.execute(
+            "SELECT protected FROM species WHERE species_id = ?",
+            (species_id,)).fetchone()
+        if row is None:
+            raise SchemaError(f"No species with id {species_id}.")
+        if row["protected"]:
+            raise SchemaError(
+                "The base classes are not taxa, so they cannot carry a "
+                "scientific name or a GBIF key.")
+        if gbif_taxon_key is not None:
+            try:
+                gbif_taxon_key = int(gbif_taxon_key)
+            except (TypeError, ValueError):
+                raise SchemaError(
+                    "A GBIF taxon key is the number from the species' page on "
+                    "gbif.org, e.g. 2440947.")
+            if gbif_taxon_key <= 0:
+                raise SchemaError("A GBIF taxon key must be positive.")
+
+        self.conn.execute(
+            "UPDATE species SET scientific_name = ?, taxon_rank = ?, "
+            "gbif_taxon_key = ? WHERE species_id = ?",
+            ((scientific_name or "").strip() or None,
+             (taxon_rank or "").strip() or None,
+             gbif_taxon_key, species_id))
 
     def add_species(self, name: str) -> int:
         """Add a concrete species, returning its new (never reused) id."""

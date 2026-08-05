@@ -453,3 +453,55 @@ def test_editor_works_on_a_project_without_stage_files(tmp_path):
         wolf = ed.add_species("wolf")
         assert ed.species_usage(wolf) == {}
         ed.delete_species(wolf)
+
+
+# ---------------------------------------------------------------------------
+# Publishing taxonomy (§8.1)
+# ---------------------------------------------------------------------------
+
+def test_seeded_species_have_editable_scientific_names(editor):
+    roe = editor.species_by_name("roe deer")
+    assert roe["scientific_name"] == "Capreolus capreolus"
+    assert roe["taxon_rank"] == "species"
+    assert roe["gbif_taxon_key"] is None
+
+
+def test_set_taxonomy_round_trips(editor):
+    wolf = editor.add_species("wolf")
+    editor.set_taxonomy(wolf, "Canis lupus", "species", 5219173)
+    stored = editor.species_by_name("wolf")
+    assert stored["scientific_name"] == "Canis lupus"
+    assert stored["gbif_taxon_key"] == 5219173
+
+
+def test_taxonomy_can_be_cleared(editor):
+    roe = editor.species_by_name("roe deer")["species_id"]
+    editor.set_taxonomy(roe, "")
+    assert editor.species_by_name("roe deer")["scientific_name"] is None
+
+
+@pytest.mark.parametrize("name", ["animal", "unknown", "not-an-animal"])
+def test_base_classes_cannot_carry_a_taxon(editor, name):
+    """'animal' is deliberately not a taxon; publishing it as one is nonsense."""
+    species_id = editor.species_by_name(name)["species_id"]
+    with pytest.raises(SchemaError, match="not taxa"):
+        editor.set_taxonomy(species_id, "Animalia")
+
+
+def test_a_non_numeric_gbif_key_is_rejected(editor):
+    wolf = editor.add_species("wolf")
+    with pytest.raises(SchemaError, match="gbif.org"):
+        editor.set_taxonomy(wolf, "Canis lupus", "species", "not-a-key")
+
+
+def test_a_negative_gbif_key_is_rejected(editor):
+    wolf = editor.add_species("wolf")
+    with pytest.raises(SchemaError, match="positive"):
+        editor.set_taxonomy(wolf, "Canis lupus", "species", -1)
+
+
+def test_renaming_a_species_keeps_its_taxonomy(editor):
+    wolf = editor.add_species("wolf")
+    editor.set_taxonomy(wolf, "Canis lupus", "species", 5219173)
+    editor.rename_species(wolf, "grey wolf")
+    assert editor.species_by_name("grey wolf")["gbif_taxon_key"] == 5219173
