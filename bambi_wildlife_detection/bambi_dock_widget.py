@@ -2503,6 +2503,49 @@ class BambiDockWidget(QDockWidget):
         animal_info.setStyleSheet("color: gray; font-size: 10px;")
         animal_layout.addWidget(animal_info)
         animal_layout.addWidget(proc_steps_group)
+
+        # ----- Export -----
+        from .core import exporters as _exporters
+
+        export_group = QGroupBox("Export")
+        export_layout = QVBoxLayout(export_group)
+        export_layout.addWidget(QLabel(
+            "Write the detections, tracks and their attributes out in a "
+            "standard format. Custom fields travel with them where the format "
+            "has room; species names and enum values are resolved, so nothing "
+            "receives an internal id."
+        ))
+
+        export_form = QHBoxLayout()
+        export_form.addWidget(QLabel("Format:"))
+        self.export_format_combo = QComboBox()
+        for key, (label, _fn, _folder) in _exporters.EXPORTERS.items():
+            self.export_format_combo.addItem(label, key)
+        self.export_format_combo.currentIndexChanged.connect(
+            self._on_export_format_changed)
+        export_form.addWidget(self.export_format_combo, 1)
+
+        self.export_camera_combo = QComboBox()
+        self.export_camera_combo.addItems(["T - Thermal", "W - RGB"])
+        self.export_camera_combo.setFixedWidth(100)
+        export_form.addWidget(self.export_camera_combo)
+        export_layout.addLayout(export_form)
+
+        self.export_false_positives_check = QCheckBox(
+            "Include detections labelled 'not-an-animal'")
+        self.export_false_positives_check.setToolTip(
+            "Survey formats keep them as a record of what was looked at and "
+            "rejected; training formats drop them. Darwin Core always excludes "
+            "them — a rejected detection is not an occurrence of anything."
+        )
+        export_layout.addWidget(self.export_false_positives_check)
+
+        self.export_btn = QPushButton("Export…")
+        self.export_btn.clicked.connect(self.run_export)
+        export_layout.addWidget(self.export_btn)
+
+        animal_layout.addWidget(export_group)
+        self._on_export_format_changed()
         animal_layout.addStretch()
 
         # ---------------------------------------------------------------------
@@ -5146,6 +5189,83 @@ class BambiDockWidget(QDockWidget):
         "density": "Density Map",
         "coverage": "Coverage Map",
     }
+
+    def _on_export_format_changed(self):
+        """Reflect the chosen format's own defaults in the options."""
+        from .core import exporters
+
+        key = self.export_format_combo.currentData()
+        if key is None:
+            return
+        # Darwin Core has no say in this, so the checkbox is disabled rather
+        # than silently ignored.
+        is_dwca = key == "dwca"
+        self.export_false_positives_check.setEnabled(not is_dwca)
+        self.export_false_positives_check.setChecked(
+            (not is_dwca) and key not in exporters.TRAINING_FORMATS)
+
+    def run_export(self):
+        """Write the current project out in the selected format (§8.1)."""
+        from qgis.PyQt.QtWidgets import QApplication
+
+        from .core import exporters
+
+        folder = self.target_folder_edit.text().strip()
+        if not folder or not os.path.isdir(folder):
+            QMessageBox.warning(self, "Export", "Select a target folder first.")
+            return
+
+        key = self.export_format_combo.currentData()
+        label, _function, is_folder = exporters.EXPORTERS[key]
+        modality = "t" if self.export_camera_combo.currentIndex() == 0 else "w"
+
+        epsg = None
+        if key in exporters.NEEDS_CRS:
+            epsg = self._parse_epsg_from_text(
+                self.target_crs_edit.text().strip().upper())
+            if not epsg:
+                QMessageBox.warning(
+                    self, "Export",
+                    f"{label} publishes latitude/longitude, so the target CRS "
+                    "must be set before exporting.")
+                return
+
+        if is_folder:
+            output = QFileDialog.getExistingDirectory(
+                self, f"Export {label} — choose a folder", folder)
+        else:
+            suggested = os.path.join(
+                folder, exporters.DEFAULT_FILENAME.get(key, "export.json"))
+            output, _filter = QFileDialog.getSaveFileName(
+                self, f"Export {label}", suggested)
+        if not output:
+            return
+
+        self.log(f"Exporting {label} ({'thermal' if modality == 't' else 'RGB'})…")
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            exporters.run_export(
+                key, folder, modality, output, epsg=epsg,
+                include_not_an_animal=(
+                    self.export_false_positives_check.isChecked()
+                    if self.export_false_positives_check.isEnabled() else None),
+                log_fn=self.log)
+        except exporters.ExportError as exc:
+            QApplication.restoreOverrideCursor()
+            self.log(f"Export failed: {exc}")
+            QMessageBox.warning(self, "Export", str(exc))
+            return
+        except Exception as exc:  # noqa: BLE001 — surfaced to the user below
+            QApplication.restoreOverrideCursor()
+            self.log(f"Export failed: {exc}")
+            QMessageBox.critical(
+                self, "Export", f"The export could not be completed:\n\n{exc}")
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        QMessageBox.information(
+            self, "Export", f"{label} written to:\n{output}")
 
     def reset_stage(self):
         """Delete one step's outputs and flag what depended on it.

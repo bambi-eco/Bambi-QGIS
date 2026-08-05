@@ -847,6 +847,14 @@ Central-European species, and "bird" is a class — but **GBIF keys are never
 seeded**, because an invented identifier would publish confidently wrong data.
 Base classes are rejected: `animal` and `unknown` are deliberately not taxa.
 
+**Reached from the Processing tab.** An *Export* group offers every format with
+a modality selector and one option — whether to include `not-an-animal`. The
+checkbox reflects each format's own default rather than applying it silently
+(training formats unticked, survey formats ticked), and is disabled for Darwin
+Core, which never publishes a rejected detection whatever the caller asks.
+Formats needing the project CRS refuse *before* the file dialog opens, so no
+one picks a destination only to be told the coordinates cannot be written.
+
 **Enum resolution.** Attribute values stored as `value_id` (§5.1) are resolved to
 their labels on export — no consumer should be handed an integer whose meaning
 lives in a table it does not have. Where the target format supports a controlled

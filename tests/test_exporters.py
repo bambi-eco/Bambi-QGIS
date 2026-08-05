@@ -553,3 +553,62 @@ def test_camtrap_separates_scientific_from_vernacular(survey, tmp_path):
     roe = [r for r in rows if r["vernacularName"] == "roe deer"][0]
     assert roe["scientificName"] == "Capreolus capreolus"
     assert roe["taxonID"] == "https://www.gbif.org/species/2440947"
+
+
+# ---------------------------------------------------------------------------
+# The dispatch used by the export UI
+# ---------------------------------------------------------------------------
+
+def test_run_export_rejects_an_unknown_format(survey, tmp_path):
+    with pytest.raises(common.ExportError, match="Unknown export format"):
+        exporters.run_export("parquet", survey, "t", str(tmp_path))
+
+
+def test_run_export_passes_the_crs_where_it_is_needed(survey, tmp_path):
+    pytest.importorskip("pyproj")
+    folder = str(tmp_path / "camtrap")
+    exporters.run_export("camtrap", survey, "t", folder, epsg=32633)
+    assert os.path.isfile(os.path.join(folder, "observations.csv"))
+
+
+def test_run_export_does_not_pass_a_crs_to_formats_without_one(survey, tmp_path):
+    """COCO has no coordinate system; passing epsg would be a TypeError."""
+    path = str(tmp_path / "coco.json")
+    exporters.run_export("coco", survey, "t", path, epsg=32633,
+                         image_size=SIZE)
+    assert os.path.isfile(path)
+
+
+def test_run_export_says_what_is_missing_without_frames(survey, tmp_path):
+    """A clear message beats a traceback when frames were never extracted."""
+    with pytest.raises(common.ExportError, match="Extract frames first"):
+        exporters.run_export("coco", survey, "t", str(tmp_path / "coco.json"))
+
+
+@pytest.mark.parametrize("key", ["coco", "yolo", "mot", "trex"])
+def test_training_formats_drop_false_positives_by_default(key, survey, tmp_path):
+    assert key in exporters.TRAINING_FORMATS
+
+
+@pytest.mark.parametrize("key", ["geojson", "camtrap"])
+def test_survey_formats_keep_false_positives_by_default(key):
+    assert key not in exporters.TRAINING_FORMATS
+
+
+def test_darwin_core_ignores_the_false_positive_option(survey, tmp_path):
+    """A rejected detection is not an occurrence, whatever the caller asks."""
+    pytest.importorskip("pyproj")
+    folder = str(tmp_path / "dwca")
+    exporters.run_export("dwca", survey, "t", folder, epsg=32633,
+                         include_not_an_animal=True)
+    with open(os.path.join(folder, "occurrence.txt"), encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh, delimiter="\t"))
+    assert all(r["scientificName"] for r in rows)
+
+
+def test_every_registered_format_declares_its_output_shape():
+    for key, (label, function, is_folder) in exporters.EXPORTERS.items():
+        assert label and callable(function)
+        assert isinstance(is_folder, bool)
+        if not is_folder:
+            assert key in exporters.DEFAULT_FILENAME

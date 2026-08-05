@@ -31,8 +31,56 @@ EXPORTERS = {
     "dwca": ("Darwin Core Archive (GBIF)", export_darwin_core, True),
 }
 
+#: Default file name offered for the single-file formats.
+DEFAULT_FILENAME = {"coco": "detections_coco.json",
+                    "geojson": "detections.geojson"}
+
+#: Formats that publish latitude/longitude and therefore need the project CRS.
+NEEDS_CRS = frozenset({"geojson", "camtrap", "dwca"})
+
+#: Formats describing boxes for training or tracking, which drop
+#: ``not-an-animal`` by default. The rest are survey records and keep it (§8.1).
+TRAINING_FORMATS = frozenset({"coco", "yolo", "mot", "trex"})
+
+#: Formats needing the frame size to normalise or declare image dimensions.
+NEEDS_FRAME_SIZE = frozenset({"coco", "yolo"})
+
+
+def run_export(key: str, target_folder: str, modality: str, output: str,
+               epsg=None, include_not_an_animal=None, image_size=None,
+               log_fn=None):
+    """Run one exporter, passing only the arguments it accepts.
+
+    The formats differ in what they can carry, so the caller should not have to
+    know which takes an ``epsg``, which needs the frame size, or which drops
+    false positives by default — those are the per-format decisions of §8.1,
+    made here once.
+
+    *image_size* is optional even for the formats that need it: they fall back
+    to probing an extracted frame, and say so clearly if there is none.
+    """
+    if key not in EXPORTERS:
+        raise ExportError(f"Unknown export format '{key}'.")
+    _label, function, _is_folder = EXPORTERS[key]
+
+    kwargs = {"log_fn": log_fn}
+    if key in NEEDS_CRS:
+        kwargs["epsg"] = epsg
+    if key in NEEDS_FRAME_SIZE and image_size is not None:
+        kwargs["image_size"] = image_size
+    if key != "dwca":
+        # Darwin Core always excludes false positives: a rejected detection is
+        # by definition not an occurrence of anything.
+        if include_not_an_animal is None:
+            include_not_an_animal = key not in TRAINING_FORMATS
+        kwargs["include_not_an_animal"] = include_not_an_animal
+
+    return function(target_folder, modality, output, **kwargs)
+
+
 __all__ = [
-    "EXPORTERS", "ExportError",
+    "DEFAULT_FILENAME", "EXPORTERS", "ExportError", "NEEDS_CRS",
+    "NEEDS_FRAME_SIZE", "TRAINING_FORMATS", "run_export",
     "export_camtrap_dp", "export_coco", "export_darwin_core",
     "export_geojson", "export_mot", "export_trex_npz", "export_yolo",
 ]
