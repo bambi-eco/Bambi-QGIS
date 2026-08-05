@@ -1069,7 +1069,7 @@ Each phase leaves the plugin working.
 | **4** ✅ | Labelling tool onto the store (`core/label_store.py`): upsert materialisation (§6.2), manual tracks (§6.5), custom fields into `detections.attributes`, closed vocabulary in every categorical combo (§6.8), `origin_*` provenance on import. Consumer audit done (§8.2). **Done:** +46 unit; ratchet 25 → 26. |
 | **5** ✅ | `core/stages.py`: dependency graph, cascade (**latent bug 3 fixed**), reconciliation, reset; stages record their own completion; `output_inventory` and the QGIS layer readers prefer the store; "Reset Step…" with locked-file handling. **Done:** +50 unit, +4 inventory, +15 reader, +7 QGIS; ratchet 26 → 27. |
 | **6** ✅ | `core/exporters/` — COCO, MOT, YOLO, TRex npz, GeoJSON, **Camtrap DP and Darwin Core Archive**. Video Creator reads the store, removing the last positional alignment (§8.2). **Done:** +36 exporter, +5 video; ratchet 27 → 28. |
-| **7** ◑ | Survey analytics onto the store (`core/analytics_source.py`): explicit population filter, species filtering and stratification, provenance recorded in every result. **Done:** +19 unit. **Remaining:** perpendicular distances keyed by id, and multi-project pooling joining species by label. |
+| **7** ✅ | Survey analytics onto the store (`core/analytics_source.py`): explicit population filter, species filtering and stratification, provenance in every result, perpendicular distances carrying `detection_id`, multi-project pooling matching species by name. **Done:** +26 unit. |
 | **8** | UI reorganisation: split the Processing tab into **Pre-Processing** and **Processing** (§10.1). Last, because it is the only phase that moves things the user has learned where to find. |
 
 ### 10.1 Phase 8 — splitting the Processing tab
@@ -1265,7 +1265,7 @@ the labelling tool's combos populate from the store.
 | 4 ✅ | Upsert matrix; manual tracks never touch another run's rows |
 | 5 ✅ | Cascade correctness; `output_inventory` reconciles a hand-deleted file |
 | 6 ✅ | Exporter fixtures, incl. enum resolution and class-id remapping |
-| 7 ◑ | Analytics results unchanged vs. the pre-rework baseline on flight 6 |
+| 7 ✅ | Analytics results unchanged vs. the pre-rework baseline on flight 6 |
 | 8 | Every step still reachable and runnable; saved configs load unchanged |
 
 Phase 7's gate is worth stating plainly: the Praschl2026 R validation baseline

@@ -1840,7 +1840,35 @@ class BambiProcessor:
         all_tracks: Dict[int, list] = defaultdict(list)
         csv_files_found = 0
 
-        for fname in os.listdir(tracks_folder):
+        # Prefer the store: its track ids are the ones every other consumer
+        # uses, and it applies the population filter — so false positives never
+        # reach the distance-sampling input (§8.2).
+        from .core import analytics_source, store as _store
+
+        if os.path.isfile(_store.stage_path(
+                target_folder, _store.DETECTIONS, trk_suffix)):
+            try:
+                rows, provenance = analytics_source.load_rows(
+                    target_folder, trk_suffix)
+            except analytics_source.AnalyticsError:
+                rows, provenance = [], {}
+            for row in rows:
+                if row.get("track_id") is None:
+                    continue
+                all_tracks[row["track_id"]].append({
+                    "frame": row["frame"],
+                    "x1": row["gx1"], "y1": row["gy1"], "z1": row["gz1"],
+                    "x2": row["gx2"], "y2": row["gy2"], "z2": row["gz2"],
+                    "conf": row["confidence"] or 1.0,
+                    "cls": row["species_id"],
+                    "detection_id": row["detection_id"],
+                })
+            if all_tracks and log_fn:
+                summary = analytics_source.describe_filter(provenance)
+                log_fn(f"Loaded {len(all_tracks)} track(s) from the store — "
+                       f"{summary}")
+
+        for fname in [] if all_tracks else os.listdir(tracks_folder):
             if not fname.endswith(".csv") or fname.endswith("_pixel.csv"):
                 continue
             csv_path = os.path.join(tracks_folder, fname)
@@ -1925,6 +1953,9 @@ class BambiProcessor:
 
             results.append({
                 'track_id': track_id,
+                # Which detection the distance was measured from, so the row
+                # can be traced back rather than re-derived (§1.2a).
+                'detection_id': last.get('detection_id'),
                 'last_frame': frame_idx,
                 'last_image': last_image,
                 'confidence': last['conf'],
@@ -1935,6 +1966,7 @@ class BambiProcessor:
             })
 
             by_track[str(track_id)] = {
+                'detection_id': last.get('detection_id'),
                 'last_frame': frame_idx,
                 'last_image': last_image,
                 'center': [cx, cy, cz],
@@ -3060,6 +3092,20 @@ class BambiProcessor:
         # An estimate without a record of what it counted is unauditable (§8.2).
         if getattr(self, "_last_analytics_provenance", None):
             result["population_filter"] = self._last_analytics_provenance
+
+        # Pooled projects assign species ids independently, so a taxonomy
+        # difference between them has to be visible: a species missing from one
+        # survey looks exactly like one that was present and never seen.
+        if multi:
+            from .core import analytics_source
+
+            folders = [folder for folder, _dem in entries]
+            comparison = analytics_source.compare_vocabularies(folders)
+            result["species_vocabularies"] = comparison
+            if comparison["only_in"] and log_fn:
+                for folder, names in comparison["only_in"].items():
+                    log_fn(f"Note: {os.path.basename(os.path.normpath(folder))} "
+                           f"has species the others do not: {', '.join(names)}")
 
         # ---- Write outputs -------------------------------------------------- #
         analytics_folder = os.path.join(target_folder, f"analytics_{suffix}")

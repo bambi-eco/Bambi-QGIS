@@ -233,3 +233,71 @@ def test_describe_filter_is_readable(survey):
 def test_describe_filter_without_a_tracker_run(tmp_path):
     text = analytics_source.describe_filter({"tracker_run": None})
     assert "no tracker run" in text
+
+
+# ---------------------------------------------------------------------------
+# Multi-project pooling: match species by name, never by id (§8.2)
+# ---------------------------------------------------------------------------
+
+def _project_with(tmp_path, name, extra_species=()):
+    from bambi_wildlife_detection.core.schema_editor import SchemaEditor
+
+    root = str(tmp_path / name)
+    with SchemaEditor(root) as editor:
+        for species in extra_species:
+            editor.add_species(species)
+        editor.commit()
+    return root
+
+
+def test_species_names_resolve_to_this_projects_ids(tmp_path):
+    a = _project_with(tmp_path, "a", ["wolf"])
+    ids, missing = analytics_source.resolve_species_names(a, ["roe deer", "wolf"])
+    assert ids == [1, 10]
+    assert missing == []
+
+
+def test_unknown_species_names_are_reported(tmp_path):
+    a = _project_with(tmp_path, "a")
+    ids, missing = analytics_source.resolve_species_names(a, ["roe deer", "wolf"])
+    assert ids == [1]
+    assert missing == ["wolf"]
+
+
+def test_the_same_name_maps_to_different_ids_per_project(tmp_path):
+    """Why pooling must translate rather than carry an id across."""
+    a = _project_with(tmp_path, "a", ["wolf"])
+    b = _project_with(tmp_path, "b", ["badger", "wolf"])
+
+    a_ids, _ = analytics_source.resolve_species_names(a, ["wolf"])
+    b_ids, _ = analytics_source.resolve_species_names(b, ["wolf"])
+    assert a_ids != b_ids          # 10 in one project, 11 in the other
+
+
+def test_vocabulary_comparison_reports_the_difference(tmp_path):
+    a = _project_with(tmp_path, "a", ["wolf"])
+    b = _project_with(tmp_path, "b", ["badger"])
+
+    comparison = analytics_source.compare_vocabularies([a, b])
+    assert "roe deer" in comparison["shared"]
+    assert comparison["only_in"][a] == ["wolf"]
+    assert comparison["only_in"][b] == ["badger"]
+
+
+def test_identical_vocabularies_report_no_difference(tmp_path):
+    a = _project_with(tmp_path, "a", ["wolf"])
+    b = _project_with(tmp_path, "b", ["wolf"])
+    assert analytics_source.compare_vocabularies([a, b])["only_in"] == {}
+
+
+def test_vocabulary_comparison_ignores_the_false_positive_class(tmp_path):
+    a = _project_with(tmp_path, "a")
+    comparison = analytics_source.compare_vocabularies([a])
+    assert "not-an-animal" not in comparison["all"]
+
+
+def test_vocabulary_comparison_of_a_project_without_a_store(tmp_path):
+    a = _project_with(tmp_path, "a")
+    comparison = analytics_source.compare_vocabularies(
+        [a, str(tmp_path / "never-run")])
+    assert "roe deer" in comparison["shared"]

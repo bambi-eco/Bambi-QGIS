@@ -187,6 +187,58 @@ def load_points_by_species(target_folder: str, modality: str,
     return strata, provenance
 
 
+def resolve_species_names(target_folder: str,
+                          names: Sequence[str]) -> Tuple[List[int], List[str]]:
+    """Translate species *names* into this project's ids.
+
+    Returns ``(ids, missing)``. Ids are assigned per project (§3.1), so
+    project A's species 12 is unrelated to project B's — anything pooling
+    several projects must match on the name and translate, never carry an id
+    across. ``missing`` names are reported rather than silently dropped.
+    """
+    from . import label_store
+
+    vocabulary = label_store.vocabulary(target_folder)
+    by_name = {entry["name"]: entry["species_id"]
+               for entry in vocabulary.get("species", [])}
+    ids, missing = [], []
+    for name in names:
+        if name in by_name:
+            ids.append(by_name[name])
+        else:
+            missing.append(name)
+    return sorted(set(ids)), missing
+
+
+def compare_vocabularies(target_folders: Sequence[str]) -> dict:
+    """Report how the species vocabularies of several projects differ.
+
+    Pooling projects whose taxonomies disagree is legitimate — one survey may
+    simply not have seen wild boar — but it has to be visible, because a
+    species missing from one project looks identical to a species that was
+    present and never detected.
+    """
+    from . import label_store
+
+    per_project = {}
+    for folder in target_folders:
+        vocabulary = label_store.vocabulary(folder)
+        per_project[folder] = {
+            entry["name"] for entry in vocabulary.get("species", [])
+            if entry["species_id"] not in EXCLUDED_SPECIES}
+
+    known = [names for names in per_project.values() if names]
+    shared = set.intersection(*known) if known else set()
+    everything = set.union(*known) if known else set()
+    return {
+        "shared": sorted(shared),
+        "only_in": {folder: sorted(names - shared)
+                    for folder, names in per_project.items()
+                    if names - shared},
+        "all": sorted(everything),
+    }
+
+
 def describe_filter(provenance: dict) -> str:
     """One-line summary of what an analytic counted, for the log."""
     parts = []
