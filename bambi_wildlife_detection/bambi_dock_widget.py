@@ -2533,14 +2533,6 @@ class BambiDockWidget(QDockWidget):
         animal_layout = QVBoxLayout(animal_tab)
         main_tabs.addTab(animal_tab, "Processing")
 
-        animal_info = QLabel(
-            "Steps that work on animals: detection, geo-referencing, tracking "
-            "and segmentation. Everything here depends on the detections, so "
-            "re-running an earlier step marks these out of date."
-        )
-        animal_info.setWordWrap(True)
-        animal_info.setStyleSheet("color: gray; font-size: 10px;")
-        animal_layout.addWidget(animal_info)
         animal_layout.addWidget(proc_steps_group)
 
         # ----- Export -----
