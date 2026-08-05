@@ -203,6 +203,54 @@ def find_by_folder(flights: List[dict], folder: str) -> Optional[int]:
     return None
 
 
+#: Config key holding a flight's DEM metadata JSON, needed by the analytics
+#: that place transects.
+DEM_METADATA_KEY = "Input/DemMetadataPath"
+DEM_PATH_KEY = "Input/DemPath"
+
+
+def dem_metadata_path(target_folder: str) -> str:
+    """The DEM metadata JSON a flight was processed with, or ``""``.
+
+    Read from the flight's own stored configuration, which is the point of
+    putting it there: adding a flight to a multi-project analysis no longer
+    means remembering which ``dem.json`` went with which folder (§10.2).
+    Falls back to the mesh path with its extension swapped, the convention the
+    rest of the plugin already uses.
+    """
+    config = load_config(target_folder)
+    explicit = (config.get(DEM_METADATA_KEY) or "").strip()
+    if explicit:
+        return explicit
+
+    mesh = (config.get(DEM_PATH_KEY) or "").strip()
+    if not mesh:
+        return ""
+    guess = mesh.replace(".gltf", ".json").replace(".glb", ".json")
+    return guess if guess != mesh and os.path.isfile(guess) else ""
+
+
+def analysis_entries(flights: List[dict], exclude: Optional[str] = None
+                     ) -> List[dict]:
+    """Flights as ``{name, target_folder, dem}`` rows for the analytics pickers.
+
+    *exclude* drops one folder — normally the active flight, which those tools
+    add separately via their "Add current project" tick.
+    """
+    skip = normalise(exclude) if exclude else ""
+    entries = []
+    for flight in flights:
+        folder = flight.get("target_folder", "")
+        if not folder or (skip and normalise(folder) == skip):
+            continue
+        entries.append({
+            "name": flight.get("name") or default_name(folder),
+            "target_folder": folder,
+            "dem": dem_metadata_path(folder),
+        })
+    return entries
+
+
 def group_name(flight: dict) -> str:
     """QGIS layer-group name for a flight — its name, and nothing derived.
 

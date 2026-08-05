@@ -225,3 +225,64 @@ def test_find_by_folder(tmp_path):
     existing = flights.add_flight(existing, "Forest", str(tmp_path / "b"))
     assert flights.find_by_folder(existing, str(tmp_path / "b")) == 1
     assert flights.find_by_folder(existing, str(tmp_path / "z")) is None
+
+
+# ---------------------------------------------------------------------------
+# Adding a flight to a multi-project analysis (§10.2)
+# ---------------------------------------------------------------------------
+
+def test_dem_metadata_comes_from_the_flights_own_config(tmp_path):
+    """The point of storing config with the outputs: no path to remember."""
+    root = str(tmp_path)
+    flights.save_config(root, {"Input/DemMetadataPath": "/data/dem.json"})
+    assert flights.dem_metadata_path(root) == "/data/dem.json"
+
+
+def test_dem_metadata_falls_back_to_the_mesh_sibling(tmp_path):
+    root = str(tmp_path)
+    mesh = tmp_path / "dem.glb"
+    mesh.write_text("x")
+    (tmp_path / "dem.json").write_text("{}")
+    flights.save_config(root, {"Input/DemPath": str(mesh)})
+    assert flights.dem_metadata_path(root).endswith("dem.json")
+
+
+def test_dem_metadata_is_empty_when_the_sibling_is_missing(tmp_path):
+    root = str(tmp_path)
+    flights.save_config(root, {"Input/DemPath": str(tmp_path / "dem.glb")})
+    assert flights.dem_metadata_path(root) == ""
+
+
+def test_dem_metadata_of_a_flight_without_config(tmp_path):
+    assert flights.dem_metadata_path(str(tmp_path / "nothing")) == ""
+
+
+def test_analysis_entries_describe_each_flight(tmp_path):
+    a = str(tmp_path / "a")
+    b = str(tmp_path / "b")
+    flights.save_config(a, {"Input/DemMetadataPath": "/data/a.json"})
+    entries = flights.analysis_entries(
+        [{"name": "Meadow", "target_folder": a},
+         {"name": "Forest", "target_folder": b}])
+
+    assert [e["name"] for e in entries] == ["Meadow", "Forest"]
+    assert entries[0]["dem"] == "/data/a.json"
+    assert entries[1]["dem"] == ""
+
+
+def test_analysis_entries_exclude_the_active_flight(tmp_path):
+    """The analytics tools add the current project separately."""
+    a = str(tmp_path / "a")
+    b = str(tmp_path / "b")
+    entries = flights.analysis_entries(
+        [{"name": "Meadow", "target_folder": a},
+         {"name": "Forest", "target_folder": b}], exclude=a)
+    assert [e["name"] for e in entries] == ["Forest"]
+
+
+def test_analysis_entries_skip_flights_without_a_folder():
+    assert flights.analysis_entries([{"name": "Ghost", "target_folder": ""}]) == []
+
+
+def test_analysis_entries_of_an_empty_project():
+    assert flights.analysis_entries([]) == []

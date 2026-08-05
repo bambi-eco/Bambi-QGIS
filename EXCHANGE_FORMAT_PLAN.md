@@ -1168,6 +1168,16 @@ parent group named after the flight, with the existing per-stage groups
 beneath. **Renaming a flight renames its group**, rather than orphaning it and
 accumulating stale ones — cheap to do at rename, awkward to retrofit later.
 
+**Multi-project analytics gain a shortcut.** Distance sampling and population
+estimation have always pooled several target folders, and still do — flights
+and projects can stay separate if that is how someone works. What is new is
+`+ Add Flight…` beside `+ Add Folder…`: for flights the project already knows
+about, the target folder and the DEM are looked up rather than browsed for. The
+DEM comes from the flight's own stored configuration, which is precisely what
+moving the configuration into the store bought — no remembering which
+`dem.json` went with which folder. A flight with no DEM recorded is refused
+where one is required, rather than added and failing later.
+
 **Migration.** Existing projects keep their configuration in the `.qgz`. On
 first open it is imported into the active flight's `project.gpkg`, the same
 shape as the 5.x migration, with `config_schema` serving as the single mapping

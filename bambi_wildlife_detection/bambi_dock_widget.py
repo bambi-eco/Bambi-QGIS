@@ -3489,10 +3489,20 @@ class BambiDockWidget(QDockWidget):
             add_btn.clicked.connect(lambda: self._add_project_with_dem(prefix))
         else:
             add_btn.clicked.connect(lambda: self._add_project_folder(prefix))
+        add_flight_btn = QPushButton("+ Add Flight…")
+        add_flight_btn.setToolTip(
+            "Add another flight from this QGIS project. Its target folder — "
+            "and its DEM — come from the flight itself, so there are no paths "
+            "to find.")
+        add_flight_btn.clicked.connect(
+            lambda: self._add_project_from_flight(prefix, with_dem))
+        setattr(self, f"{prefix}_add_flight_btn", add_flight_btn)
+
         remove_btn = QPushButton("− Remove Selected")
         remove_btn.setToolTip("Remove the selected project(s) from the list.")
         remove_btn.clicked.connect(lambda: self._remove_project_folders(prefix))
         btn_row.addWidget(add_btn)
+        btn_row.addWidget(add_flight_btn)
         btn_row.addWidget(remove_btn)
         btn_row.addStretch()
 
@@ -3534,6 +3544,45 @@ class BambiDockWidget(QDockWidget):
             self, "Select BAMBI Target Folder")
         if folder:
             self._append_project_item(prefix, folder)
+
+    def _add_project_from_flight(self, prefix: str, with_dem: bool):
+        """Add one of this project's other flights, without browsing for it.
+
+        Pointing the analytics at separate target folders has always worked and
+        still does; this is the shortcut for flights the project already knows
+        about, where the folder and the DEM can simply be looked up (§10.2).
+        """
+        from .core import flights as flights_core
+
+        current = self.target_folder_edit.text().strip()
+        entries = flights_core.analysis_entries(self._flights(), exclude=current)
+        if not entries:
+            QMessageBox.information(
+                self, "Add Flight",
+                "This project has no other flights yet. Add one on the Input "
+                "tab, or use 'Add Folder' to point at a target folder outside "
+                "this project.")
+            return
+
+        labels = [f"{entry['name']}  —  {entry['target_folder']}"
+                  for entry in entries]
+        choice, ok = QInputDialog.getItem(
+            self, "Add Flight", "Flight:", labels, 0, False)
+        if not ok:
+            return
+
+        entry = entries[labels.index(choice)]
+        if with_dem and not entry["dem"]:
+            QMessageBox.warning(
+                self, "Add Flight",
+                f"'{entry['name']}' has no DEM metadata recorded, which this "
+                "analysis needs to place its transects. Open that flight and "
+                "set its DEM, or add it with 'Add Project…' instead.")
+            return
+
+        self._append_project_item(
+            prefix, entry["target_folder"], entry["dem"] if with_dem else "")
+        self.log(f"Added flight '{entry['name']}' to the analysis")
 
     def _add_project_with_dem(self, prefix: str):
         """Prompt for a target folder + its dem.json, then add the project."""

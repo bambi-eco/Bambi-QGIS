@@ -231,3 +231,82 @@ def test_renaming_onto_an_existing_name_is_refused(dock, quiet, monkeypatch,
     dock.rename_flight()
     assert quiet["warn"]
     assert dock._active_flight()["name"] == "Forest"
+
+
+# ---------------------------------------------------------------------------
+# Adding a flight to a multi-project analysis
+# ---------------------------------------------------------------------------
+
+def _flight_entries(dock, prefix):
+    from qgis.PyQt.QtCore import Qt
+
+    lst = getattr(dock, f"{prefix}_projects_list")
+    return [lst.item(i).data(Qt.ItemDataRole.UserRole) or {}
+            for i in range(lst.count())]
+
+
+def test_the_add_flight_button_exists_on_both_tools(dock):
+    assert dock.ds_add_flight_btn is not None
+    assert dock.pop_add_flight_btn is not None
+
+
+def test_adding_a_flight_needs_no_path(dock, quiet, monkeypatch, two_flights):
+    a, b = two_flights
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    _add(dock, monkeypatch, b, "Forest")
+    dock.flight_combo.setCurrentIndex(0)          # back to the meadow
+
+    monkeypatch.setattr(QInputDialog, "getItem",
+                        lambda *a_, **k: ("Forest  —  " + b, True))
+    dock._add_project_from_flight("ds", with_dem=False)
+
+    assert [e.get("target") for e in _flight_entries(dock, "ds")] == [b]
+
+
+def test_the_active_flight_is_not_offered(dock, quiet, monkeypatch,
+                                          two_flights):
+    """It is added separately by 'Add current project'."""
+    a, _b = two_flights
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+
+    dock._add_project_from_flight("ds", with_dem=False)
+    assert quiet["info"], "with no other flights the user should be told"
+
+
+def test_the_dem_comes_from_the_flights_own_config(dock, quiet, monkeypatch,
+                                                   two_flights, tmp_path):
+    a, b = two_flights
+    dem = str(tmp_path / "dem.json")
+    open(dem, "w").close()
+
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    _add(dock, monkeypatch, b, "Forest")
+    dock.dem_metadata_path_edit.setText(dem)
+    dock.save_config_to_project()
+    dock.flight_combo.setCurrentIndex(0)
+
+    monkeypatch.setattr(QInputDialog, "getItem",
+                        lambda *a_, **k: ("Forest  —  " + b, True))
+    dock._add_project_from_flight("pop", with_dem=True)
+
+    entries = _flight_entries(dock, "pop")
+    assert entries and entries[0].get("dem") == dem
+
+
+def test_a_flight_without_a_dem_is_refused_where_one_is_needed(
+        dock, quiet, monkeypatch, two_flights):
+    a, b = two_flights
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    _add(dock, monkeypatch, b, "Forest")
+    dock.flight_combo.setCurrentIndex(0)
+
+    monkeypatch.setattr(QInputDialog, "getItem",
+                        lambda *a_, **k: ("Forest  —  " + b, True))
+    dock._add_project_from_flight("pop", with_dem=True)
+
+    assert quiet["warn"]
+    assert not _flight_entries(dock, "pop")
