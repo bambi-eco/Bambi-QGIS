@@ -5489,21 +5489,74 @@ class BambiDockWidget(QDockWidget):
             QMessageBox.warning(self, "Flight", str(exc))
             return
 
+        copy_configuration = self._ask_new_flight_configuration()
+        if copy_configuration is None:
+            return
+
+        from .core.config_schema import WIDGET_BINDINGS
+
         self.save_config_to_project()
+        current = {key: self._config_widget_value(attr, role)
+                   for key, (attr, role) in WIDGET_BINDINGS.items()}
+
         self._flight_list = updated
         self._active_flight_index = len(updated) - 1
         self._refresh_flight_combo()
 
         self._switching_flight = True
         try:
-            self.target_folder_edit.setText(folder)
-            self.load_config_from_project(restore_flights=False)
+            self._apply_flight_values(
+                flights_core.new_flight_values(current, copy_configuration))
             self.target_folder_edit.setText(folder)
         finally:
             self._switching_flight = False
 
-        self.log(f"Added flight '{updated[-1]['name']}' → {folder}")
+        how = "copied" if copy_configuration else "default"
+        self.log(f"Added flight '{updated[-1]['name']}' → {folder} "
+                 f"({how} configuration, inputs cleared)")
+        self.save_config_to_project()
         self._check_existing_outputs(folder)
+
+    def _ask_new_flight_configuration(self):
+        """Copy the current configuration into the new flight, or start clean?
+
+        Returns True to copy, False for defaults, or None when cancelled. The
+        recordings are cleared either way — the choice is only about the
+        processing settings (§10.2).
+        """
+        box = QMessageBox(self)
+        box.setWindowTitle("New flight")
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setText(
+            "A new flight starts with <b>no input files</b> — the videos, "
+            "photos, flight log, calibrations, DEM and correction are cleared, "
+            "so the previous flight's recordings are not processed again into "
+            "the new folder.<br><br>"
+            "What should happen to the <b>processing settings</b> — detection "
+            "confidence, tracker, extraction, ALFS and the rest?"
+        )
+        copy_btn = box.addButton("Ok (copy configurations)",
+                                 QMessageBox.ButtonRole.AcceptRole)
+        default_btn = box.addButton("Ok (default configurations)",
+                                    QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(copy_btn)
+        box.exec()
+
+        clicked = box.clickedButton()
+        if clicked is copy_btn:
+            return True
+        if clicked is default_btn:
+            return False
+        return None
+
+    def _apply_flight_values(self, values):
+        """Push a full set of config values into the form widgets."""
+        from .core.config_schema import WIDGET_BINDINGS
+
+        for key, (attr, role) in WIDGET_BINDINGS.items():
+            if key in values:
+                self._apply_config_value(attr, role, values[key])
 
     def rename_flight(self):
         """Rename the active flight, and its QGIS layer group with it."""

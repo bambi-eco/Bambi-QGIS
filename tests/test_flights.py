@@ -286,3 +286,89 @@ def test_analysis_entries_skip_flights_without_a_folder():
 
 def test_analysis_entries_of_an_empty_project():
     assert flights.analysis_entries([]) == []
+
+
+# ---------------------------------------------------------------------------
+# What a new flight starts with (§10.2)
+# ---------------------------------------------------------------------------
+
+RECORDINGS = ["Input/ThermalVideoPaths", "Input/RgbVideoPaths",
+              "Input/AirdataPath", "Input/DemPath", "Input/CorrectionPath",
+              "Input/ThermalCalibrationPath"]
+
+
+def _current():
+    values = {entry.key: entry.default for entry in config_schema.CONFIG_ENTRIES}
+    values.update({key: "/previous/flight/file" for key in RECORDINGS})
+    values["Detection/Confidence"] = 0.77
+    values["Input/TargetCrs"] = "EPSG:32633"
+    return values
+
+
+@pytest.mark.parametrize("copy_configuration", [True, False])
+def test_recordings_are_always_cleared(copy_configuration):
+    """A new flight is new data; inheriting paths would process it twice."""
+    values = flights.new_flight_values(_current(), copy_configuration)
+    for key in RECORDINGS:
+        assert values[key] == "", key
+
+
+def test_copying_keeps_the_processing_settings():
+    values = flights.new_flight_values(_current(), copy_configuration=True)
+    assert values["Detection/Confidence"] == 0.77
+
+
+def test_defaults_reset_the_processing_settings():
+    values = flights.new_flight_values(_current(), copy_configuration=False)
+    entry = [e for e in config_schema.CONFIG_ENTRIES
+             if e.key == "Detection/Confidence"][0]
+    assert values["Detection/Confidence"] == entry.default
+
+
+def test_the_crs_is_a_setting_not_a_recording():
+    """Blanking it on every new flight would only have to be retyped."""
+    assert not flights.is_recording_input("Input/TargetCrs")
+    values = flights.new_flight_values(_current(), copy_configuration=True)
+    assert values["Input/TargetCrs"] == "EPSG:32633"
+
+
+def test_the_target_folder_is_not_treated_as_a_recording():
+    """The new flight sets it itself."""
+    assert not flights.is_recording_input("Input/TargetFolder")
+
+
+def test_the_legacy_toggle_follows_the_configuration_choice():
+    assert not flights.is_recording_input("Input/WriteLegacyTextOutputs")
+
+
+@pytest.mark.parametrize("key", RECORDINGS)
+def test_recording_inputs_are_recognised(key):
+    assert flights.is_recording_input(key)
+
+
+def test_non_input_keys_are_never_recordings():
+    assert not flights.is_recording_input("Detection/Confidence")
+    assert not flights.is_recording_input("ALFS/TileSize")
+
+
+def test_every_schema_key_gets_a_value():
+    """The form is fully written, so nothing keeps the old flight's value."""
+    values = flights.new_flight_values({}, copy_configuration=False)
+    assert set(values) == {e.key for e in config_schema.CONFIG_ENTRIES}
+
+
+@pytest.mark.parametrize("kind,expected", [
+    ("str", ""), ("bool", False), ("bool01", False),
+    ("int_str", 0), ("int_double", 0), ("double", 0.0),
+])
+def test_empty_values_match_the_widget_kind(kind, expected):
+    """A checkbox cannot be handed an empty string."""
+    entry = config_schema.ConfigEntry("Scope/Key", kind, None)
+    assert flights._entry_default(entry) == expected
+    assert type(flights._entry_default(entry)) is type(expected)
+
+
+def test_declared_defaults_win_over_the_typed_empty():
+    entry = [e for e in config_schema.CONFIG_ENTRIES
+             if e.key == "Detection/Confidence"][0]
+    assert flights._entry_default(entry) == entry.default

@@ -251,6 +251,70 @@ def analysis_entries(flights: List[dict], exclude: Optional[str] = None
     return entries
 
 
+#: Config keys describing *what was recorded* — the videos, photos, flight log,
+#: calibrations, DEM and correction. A new flight is a different recording, so
+#: these start empty: carrying them over would invite reprocessing the previous
+#: flight's data into the new folder (§10.2).
+INPUT_SCOPE = "Input/"
+
+#: Keys inside the Input scope that are settings rather than recordings, and so
+#: follow the configuration choice instead of always being cleared. Blanking the
+#: CRS on every new flight would just have to be retyped, and the target folder
+#: is set by the new flight itself.
+NOT_RECORDING_INPUTS = frozenset({
+    "Input/TargetFolder",
+    "Input/TargetCrs",
+    "Input/WriteLegacyTextOutputs",
+})
+
+
+def is_recording_input(key: str) -> bool:
+    """True when *key* describes the recorded data rather than a setting."""
+    return key.startswith(INPUT_SCOPE) and key not in NOT_RECORDING_INPUTS
+
+
+def new_flight_values(current: Dict[str, object], copy_configuration: bool
+                      ) -> Dict[str, object]:
+    """Form values for a newly added flight.
+
+    The recordings are always cleared — a new flight is new data, and inheriting
+    the previous flight's paths would quietly process it twice. The rest is the
+    caller's choice: *copy_configuration* keeps the current detection, tracking
+    and output settings, otherwise everything returns to its default.
+    """
+    from .config_schema import CONFIG_ENTRIES
+
+    values: Dict[str, object] = {}
+    for entry in CONFIG_ENTRIES:
+        default = _entry_default(entry)
+        if is_recording_input(entry.key):
+            values[entry.key] = default
+        elif copy_configuration:
+            values[entry.key] = current.get(entry.key, default)
+        else:
+            values[entry.key] = default
+    return values
+
+
+def _entry_default(entry) -> object:
+    """The value a config entry should hold when a flight starts clean.
+
+    ``entry.default`` of ``None`` means "leave the widget alone" when *loading*
+    a project, but a new flight is written in full, so a typed empty value is
+    needed — and it has to match the widget, since a checkbox cannot be handed
+    an empty string.
+    """
+    if entry.default is not None:
+        return entry.default
+    if entry.kind in ("bool", "bool01"):
+        return False
+    if entry.kind in ("int_str", "int_double"):
+        return 0
+    if entry.kind == "double":
+        return 0.0
+    return ""
+
+
 def group_name(flight: dict) -> str:
     """QGIS layer-group name for a flight — its name, and nothing derived.
 

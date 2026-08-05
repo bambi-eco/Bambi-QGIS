@@ -39,10 +39,12 @@ def quiet(monkeypatch):
     return shown
 
 
-def _add(dock, monkeypatch, folder, name):
+def _add(dock, monkeypatch, folder, name, copy_configuration=True):
     monkeypatch.setattr(QFileDialog, "getExistingDirectory",
                         lambda *a, **k: folder)
     monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: (name, True))
+    monkeypatch.setattr(type(dock), "_ask_new_flight_configuration",
+                        lambda self: copy_configuration)
     dock.add_flight()
 
 
@@ -310,3 +312,77 @@ def test_a_flight_without_a_dem_is_refused_where_one_is_needed(
 
     assert quiet["warn"]
     assert not _flight_entries(dock, "pop")
+
+
+# ---------------------------------------------------------------------------
+# What a new flight starts with
+# ---------------------------------------------------------------------------
+
+def test_a_new_flight_clears_the_recordings(dock, quiet, monkeypatch,
+                                            two_flights):
+    """Otherwise the previous flight's data is processed again (§10.2)."""
+    a, b = two_flights
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    dock.airdata_path_edit.setText("/previous/airdata.csv")
+    dock.dem_path_edit.setText("/previous/dem.glb")
+
+    _add(dock, monkeypatch, b, "Forest")
+
+    assert dock.airdata_path_edit.text() == ""
+    assert dock.dem_path_edit.text() == ""
+
+
+def test_copying_keeps_the_processing_settings(dock, quiet, monkeypatch,
+                                               two_flights):
+    a, b = two_flights
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    dock.confidence_spin.setValue(0.33)
+
+    _add(dock, monkeypatch, b, "Forest", copy_configuration=True)
+    assert dock.confidence_spin.value() == pytest.approx(0.33)
+
+
+def test_defaults_reset_the_processing_settings(dock, quiet, monkeypatch,
+                                                two_flights):
+    a, b = two_flights
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    dock.confidence_spin.setValue(0.33)
+
+    _add(dock, monkeypatch, b, "Forest", copy_configuration=False)
+    assert dock.confidence_spin.value() != pytest.approx(0.33)
+
+
+def test_cancelling_the_configuration_prompt_adds_nothing(dock, quiet,
+                                                          monkeypatch,
+                                                          two_flights):
+    a, b = two_flights
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+
+    _add(dock, monkeypatch, b, "Forest", copy_configuration=None)
+    assert len(dock._flights()) == 1
+    assert dock.target_folder_edit.text() == a
+
+
+def test_the_new_flight_keeps_its_own_target_folder(dock, quiet, monkeypatch,
+                                                    two_flights):
+    """Clearing the inputs must not clear the folder that was just chosen."""
+    a, b = two_flights
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+
+    _add(dock, monkeypatch, b, "Forest")
+    assert dock.target_folder_edit.text() == b
+
+
+def test_the_prompt_offers_three_choices(dock):
+    """Copy, default, cancel — cancel must not read as "use defaults"."""
+    import inspect
+
+    source = inspect.getsource(type(dock)._ask_new_flight_configuration)
+    assert "copy configurations" in source
+    assert "default configurations" in source
+    assert "Cancel" in source
