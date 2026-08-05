@@ -12,7 +12,7 @@ import math
 import tempfile
 from collections import defaultdict
 from typing import Optional, Dict, Any, List
-from qgis.PyQt.QtCore import Qt, QThread
+from qgis.PyQt.QtCore import Qt, QThread, QSize
 from qgis.PyQt.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QGroupBox, QPushButton, QLineEdit, QSpinBox, QDoubleSpinBox,
@@ -288,6 +288,37 @@ class FrameRangeDialog(QDialog):
         return start, end
 
 
+class _FittedTabWidget(QTabWidget):
+    """A tab widget only as tall as the page currently shown.
+
+    ``QTabWidget.sizeHint()`` is the maximum over every page, so one tall tab —
+    Survey Analytics is roughly twice the height of Pre-Processing — leaves a
+    large empty gap below all the others. Setting an ignored size policy on the
+    hidden pages does *not* help: the hint is computed from the pages' own
+    hints, not from their policies.
+
+    Reporting the current page's height instead keeps this a hint rather than a
+    cap, so a page that grows later (a tracker list filling in, say) is still
+    given the room it asks for.
+    """
+
+    def sizeHint(self):
+        hint = super().sizeHint()
+        page = self.currentWidget()
+        if page is None:
+            return hint
+        height = page.sizeHint().height() + self.tabBar().sizeHint().height()
+        return QSize(hint.width(), height + 8)
+
+    def minimumSizeHint(self):
+        hint = super().minimumSizeHint()
+        page = self.currentWidget()
+        if page is None:
+            return hint
+        return QSize(hint.width(),
+                     min(hint.height(), self.sizeHint().height()))
+
+
 class BambiDockWidget(QDockWidget):
     """Main dock widget for the BAMBI Wildlife Detection plugin."""
 
@@ -372,7 +403,9 @@ class BambiDockWidget(QDockWidget):
         main_layout.addWidget(scroll_area)
 
         # Create main tab widget
-        main_tabs = QTabWidget()
+        main_tabs = _FittedTabWidget()
+        main_tabs.currentChanged.connect(self._fit_tab_height)
+        self._main_tabs = main_tabs
         scroll_layout.addWidget(main_tabs)
 
         # =====================================================================
@@ -2990,14 +3023,10 @@ class BambiDockWidget(QDockWidget):
         pop_layout.addLayout(pop_add_row)
 
         analytics_tab_layout.addWidget(pop_group)
-
-        # Progress mirror for analytics runs (main log lives on the Processing tab)
-        self.analytics_progress_bar = QProgressBar()
-        self.analytics_progress_bar.setRange(0, 100)
-        self.analytics_progress_bar.setValue(0)
-        analytics_tab_layout.addWidget(self.analytics_progress_bar)
-
         analytics_tab_layout.addStretch()
+
+        # Every tab exists now, so the first one can be sized to itself.
+        self._fit_tab_height(main_tabs.currentIndex())
 
     def _populate_tracker_backends(self):
         """Populate the tracker backend dropdown with available trackers."""
@@ -4068,6 +4097,16 @@ class BambiDockWidget(QDockWidget):
         msg.setText(text)
         msg.setIcon(QMessageBox.Icon.Information)
         msg.exec()
+
+    def _fit_tab_height(self, index: int) -> None:
+        """Re-measure after a tab switch, so the panel follows the new page."""
+        tabs = getattr(self, "_main_tabs", None)
+        if tabs is None:
+            return
+        current = tabs.widget(index)
+        if current is not None:
+            current.adjustSize()
+        tabs.updateGeometry()
 
     def _make_info_button(self, slot) -> QToolButton:
         """A round "?" button opening *slot*, styled like the original one."""
@@ -7874,8 +7913,6 @@ class BambiDockWidget(QDockWidget):
         self.abort_btn.setEnabled(True)  # Enable abort button during processing
         self.update_status(step, "🟡 Running...")
         self.progress_bar.setValue(0)
-        if hasattr(self, 'analytics_progress_bar'):
-            self.analytics_progress_bar.setValue(0)
 
         self.log(f"Starting {step}...")
         self.worker_thread.start()
@@ -7890,8 +7927,6 @@ class BambiDockWidget(QDockWidget):
             self.update_status(step, "🟢 Completed")
             self.log(f"{step} completed successfully!")
             self.progress_bar.setValue(100)
-            if hasattr(self, 'analytics_progress_bar'):
-                self.analytics_progress_bar.setValue(100)
 
             # Show the distance-sampling summary dialog on completion.
             if step == "distance_sampling":
@@ -7948,8 +7983,6 @@ class BambiDockWidget(QDockWidget):
     def on_worker_progress(self, value: int):
         """Update progress bar."""
         self.progress_bar.setValue(value)
-        if hasattr(self, 'analytics_progress_bar'):
-            self.analytics_progress_bar.setValue(value)
 
     def _abort_current_process(self):
         """Abort the currently running process."""
