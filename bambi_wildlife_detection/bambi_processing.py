@@ -1998,6 +1998,32 @@ class BambiProcessor:
         target_folder = config["target_folder"]
         points = []
 
+        # Prefer the store: it applies the population filter of §8.2 — false
+        # positives excluded, one tracker run plus the manual one, superseded
+        # tracks dropped — and reports what it counted, so the number can be
+        # traced back to the rows behind it.
+        from .core import store as _store
+
+        camera_key = "tracking_camera" if source == "tracks" else "detection_camera"
+        suffix = "t" if config.get(camera_key, "T") == "T" else "w"
+        if os.path.isfile(_store.stage_path(
+                target_folder, _store.DETECTIONS, suffix)):
+            from .core import analytics_source
+
+            try:
+                points, provenance = analytics_source.load_points(
+                    target_folder, suffix, source,
+                    species_ids=config.get("analytics_species_ids"),
+                    include_manual=config.get("analytics_include_manual", True))
+            except analytics_source.AnalyticsError:
+                points = []
+            if points:
+                self._last_analytics_provenance = provenance
+                if log_fn:
+                    summary = analytics_source.describe_filter(provenance)
+                    log_fn(f"Counted: {summary}")
+                return points, suffix
+
         if source == "tracks":
             trk_camera = config.get("tracking_camera", "T")
             suffix = "t" if trk_camera == "T" else "w"
@@ -2176,6 +2202,9 @@ class BambiProcessor:
             "mean_density": float(valid.mean()) if valid.size else 0.0,
             "raster": out_file,
         }
+        # What went into the number, so it can be traced back (§8.2).
+        if getattr(self, "_last_analytics_provenance", None):
+            stats["population_filter"] = self._last_analytics_provenance
         with open(os.path.join(analytics_folder, f"density_{source}.json"),
                   'w', encoding='utf-8') as f:
             json.dump(stats, f, indent=2)
@@ -2425,6 +2454,8 @@ class BambiProcessor:
                 int((covered >= 2).sum()) * px_area_m2 / 10000.0),
             "raster": output_file,
         }
+        if getattr(self, "_last_analytics_provenance", None):
+            stats["population_filter"] = self._last_analytics_provenance
         with open(os.path.join(analytics_folder, "coverage_map.json"),
                   'w', encoding='utf-8') as f:
             json.dump(stats, f, indent=2)
@@ -3026,6 +3057,9 @@ class BambiProcessor:
             "transects": combined_rows,
             "notes": notes,
         })
+        # An estimate without a record of what it counted is unauditable (§8.2).
+        if getattr(self, "_last_analytics_provenance", None):
+            result["population_filter"] = self._last_analytics_provenance
 
         # ---- Write outputs -------------------------------------------------- #
         analytics_folder = os.path.join(target_folder, f"analytics_{suffix}")
