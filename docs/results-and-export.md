@@ -86,6 +86,23 @@ Input tab shows the active one, `+` adds another, **Rename…** renames it and
 - **Exactly one flight is active.** Everything else in the plugin reads that
   one flight, so nothing changes about how the steps work.
 
+### Adding a flight that was processed before
+
+Because a target folder describes itself, a folder that has already been
+through the pipeline can simply be added back. Pick it with `+`: the plugin
+notices the `project.gpkg` and result stores, lists what it found, and asks
+before adding.
+
+- Its **stored configuration is loaded**, so the inputs and settings come back
+  as they were — the copy/default question is not asked, because neither
+  answer applies.
+- Nothing is recomputed or overwritten. Steps that already ran show as done.
+- A folder with results but no stored configuration (a migrated 5.x project,
+  say) is still adopted; the settings are left as they are, so check the
+  inputs before running anything.
+
+This is also what happens when you add back a flight you removed.
+
 Removing a flight (🗑) takes it out of the project and removes its layer group,
 after a confirmation. **Nothing on disk is deleted** — the target folder keeps
 its frames, detections, tracks and configuration, so pointing a flight at the

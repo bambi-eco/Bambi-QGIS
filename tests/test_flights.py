@@ -442,3 +442,66 @@ def test_removing_the_last_flight_reports_none_active():
 
 def test_removing_the_final_flight_in_the_list_stays_in_range():
     assert flights.active_after_removal(3, 2, 2) == 1
+
+
+# ---------------------------------------------------------------------------
+# Adopting a folder that was processed before
+# ---------------------------------------------------------------------------
+
+def _stage(root, kind, modality):
+    path = store.stage_path(root, kind, modality)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    store.open_store(path, kind, modality).close()
+
+
+def test_an_empty_folder_is_not_a_flight(tmp_path):
+    found = flights.describe_existing(str(tmp_path))
+    assert found["is_flight"] is False
+    assert found["results"] == []
+
+
+def test_a_folder_that_does_not_exist_is_not_a_flight(tmp_path):
+    assert flights.describe_existing(
+        str(tmp_path / "nope"))["is_flight"] is False
+
+
+def test_no_folder_at_all_is_not_a_flight():
+    assert flights.describe_existing("")["is_flight"] is False
+
+
+def test_a_stored_configuration_makes_it_a_flight(tmp_path):
+    root = str(tmp_path)
+    flights.save_config(root, {"Detection/Confidence": 0.4})
+
+    found = flights.describe_existing(root)
+    assert found["configured"] is True
+    assert found["is_flight"] is True
+
+
+def test_results_alone_make_it_a_flight(tmp_path):
+    """A folder can hold outputs without a configuration — a 5.x project that
+    was migrated, for instance."""
+    root = str(tmp_path)
+    _stage(root, store.DETECTIONS, "t")
+
+    found = flights.describe_existing(root)
+    assert found["configured"] is False
+    assert found["is_flight"] is True
+
+
+def test_the_results_are_described_per_kind_and_modality(tmp_path):
+    root = str(tmp_path)
+    _stage(root, store.DETECTIONS, "t")
+    _stage(root, store.DETECTIONS, "w")
+    _stage(root, store.TRACKS, "t")
+
+    results = flights.describe_existing(root)["results"]
+    assert "detections (thermal, RGB)" in results
+    assert "tracks (thermal)" in results
+
+
+def test_an_empty_configuration_does_not_count_as_configured(tmp_path):
+    """save_config with nothing in it leaves a store but no settings."""
+    root = str(tmp_path)
+    flights.save_config(root, {})
+    assert flights.describe_existing(root)["configured"] is False

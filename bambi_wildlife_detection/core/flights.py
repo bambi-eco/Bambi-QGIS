@@ -184,6 +184,48 @@ def rename_flight(flights: List[dict], index: int, name: str) -> List[dict]:
     return updated
 
 
+#: How each store kind reads in the "this folder already holds a flight" list.
+_KIND_LABELS = {
+    store.DETECTIONS: "detections",
+    store.GEOREFERENCED: "geo-referenced detections",
+    store.TRACKS: "tracks",
+    store.FOV: "fields of view",
+    store.LABELS: "labels",
+    store.SEGMENTATION: "segmentations",
+}
+
+_MODALITY_LABELS = {"t": "thermal", "w": "RGB"}
+
+
+def describe_existing(target_folder: str) -> dict:
+    """What a folder already holds, for adding a flight processed earlier.
+
+    A target folder is self-describing by design (§10.2), so a folder that has
+    been through the pipeline can simply be added back to a project — its
+    configuration and results are already there and are read rather than
+    overwritten. Returns ``configured``, a ``results`` summary per kind, and
+    ``is_flight`` for "there is something here worth adopting".
+    """
+    if not target_folder or not os.path.isdir(target_folder):
+        return {"configured": False, "results": [], "is_flight": False}
+
+    configured = has_config(target_folder)
+
+    results = []
+    for kind in store.STAGE_KINDS:
+        modalities = [m for m in store.MODALITIES
+                      if os.path.isfile(store.stage_path(target_folder, kind, m))]
+        if modalities:
+            names = ", ".join(_MODALITY_LABELS.get(m, m) for m in modalities)
+            results.append(f"{_KIND_LABELS.get(kind, kind)} ({names})")
+
+    return {
+        "configured": configured,
+        "results": results,
+        "is_flight": configured or bool(results),
+    }
+
+
 def remove_flight(flights: List[dict], index: int) -> List[dict]:
     """Return *flights* without the one at *index*.
 

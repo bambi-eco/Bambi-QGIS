@@ -17,7 +17,7 @@ import pytest
 from qgis.core import QgsProject
 from qgis.PyQt.QtWidgets import QFileDialog, QInputDialog, QMessageBox
 
-from bambi_wildlife_detection.core import flights
+from bambi_wildlife_detection.core import flights, store
 
 
 @pytest.fixture
@@ -445,6 +445,8 @@ def test_removing_leaves_the_target_folder_on_disk(dock, quiet, monkeypatch,
 
 def test_the_removed_flights_folder_can_be_added_again(dock, quiet, monkeypatch,
                                                        two_flights):
+    """It comes back as an existing flight, because removing it left the
+    folder and its configuration alone."""
     a, b = two_flights
     dock.target_folder_edit.setText(a)
     dock._on_target_folder_changed()
@@ -452,8 +454,9 @@ def test_the_removed_flights_folder_can_be_added_again(dock, quiet, monkeypatch,
     _confirm(monkeypatch, dock, True)
     dock.remove_flight()
 
-    _add(dock, monkeypatch, b, "Forest again")
+    _add_existing(dock, monkeypatch, b, "Forest again")
     assert len(dock._flights()) == 2
+    assert dock.target_folder_edit.text() == b
 
 
 def test_removing_switches_to_the_remaining_flight(dock, quiet, monkeypatch,
@@ -557,3 +560,142 @@ def test_the_confirmation_states_that_nothing_is_deleted(dock):
     source = inspect.getsource(type(dock)._confirm_remove_flight)
     assert "Nothing on disk is deleted" in source
     assert "Cancel" in source
+
+
+# ---------------------------------------------------------------------------
+# Adding a flight that was processed before
+# ---------------------------------------------------------------------------
+
+def _add_existing(dock, monkeypatch, folder, name, accept=True):
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory",
+                        lambda *a, **k: folder)
+    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: (name, True))
+    monkeypatch.setattr(type(dock), "_confirm_existing_flight",
+                        lambda self, folder, existing: accept)
+    dock.add_flight()
+
+
+def test_an_existing_folder_is_adopted_with_its_configuration(dock, quiet,
+                                                              monkeypatch,
+                                                              two_flights):
+    """The whole point of storing configuration beside the results: the
+    settings that produced them come back with the folder."""
+    a, b = two_flights
+    flights.save_config(b, {"Input/TargetFolder": b,
+                            "Detection/Confidence": "0.42"})
+
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    dock.confidence_spin.setValue(0.9)
+
+    _add_existing(dock, monkeypatch, b, "Forest")
+
+    assert dock.confidence_spin.value() == pytest.approx(0.42)
+    assert dock.target_folder_edit.text() == b
+
+
+def test_an_existing_folder_skips_the_copy_or_default_prompt(dock, quiet,
+                                                             monkeypatch,
+                                                             two_flights):
+    """Neither answer applies: the folder brings its own configuration."""
+    a, b = two_flights
+    flights.save_config(b, {"Detection/Confidence": "0.42"})
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+
+    asked = []
+    monkeypatch.setattr(type(dock), "_ask_new_flight_configuration",
+                        lambda self: asked.append(True) or True)
+    _add_existing(dock, monkeypatch, b, "Forest")
+
+    assert asked == []
+    assert len(dock._flights()) == 2
+
+
+def test_declining_adds_nothing(dock, quiet, monkeypatch, two_flights):
+    a, b = two_flights
+    flights.save_config(b, {"Detection/Confidence": "0.42"})
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+
+    _add_existing(dock, monkeypatch, b, "Forest", accept=False)
+
+    assert len(dock._flights()) == 1
+    assert dock.target_folder_edit.text() == a
+
+
+def test_adopting_does_not_overwrite_the_stored_configuration(dock, quiet,
+                                                              monkeypatch,
+                                                              two_flights):
+    a, b = two_flights
+    flights.save_config(b, {"Input/TargetFolder": b,
+                            "Detection/Confidence": "0.42"})
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    dock.confidence_spin.setValue(0.9)
+
+    _add_existing(dock, monkeypatch, b, "Forest")
+
+    assert flights.load_config(b)["Detection/Confidence"] == "0.42"
+
+
+def test_results_without_a_configuration_are_still_adopted(dock, quiet,
+                                                           monkeypatch,
+                                                           two_flights):
+    """A migrated 5.x folder has stores but no stored settings."""
+    a, b = two_flights
+    os.makedirs(os.path.join(b, "bambi_t"), exist_ok=True)
+    store.open_store(store.stage_path(b, store.DETECTIONS, "t"),
+                     store.DETECTIONS, "t").close()
+
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    dock.confidence_spin.setValue(0.9)
+
+    _add_existing(dock, monkeypatch, b, "Forest")
+
+    assert len(dock._flights()) == 2
+    assert dock.target_folder_edit.text() == b
+    # Nothing to load, so the settings are left exactly as they were rather
+    # than pulled from the previous flight via the QGIS project.
+    assert dock.confidence_spin.value() == pytest.approx(0.9)
+
+
+def test_an_empty_folder_takes_the_new_flight_path(dock, quiet, monkeypatch,
+                                                   two_flights):
+    """Unprocessed folders must still clear the inputs and ask about the
+    configuration."""
+    a, b = two_flights
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    dock.airdata_path_edit.setText("C:/somewhere/flight.csv")
+
+    _add(dock, monkeypatch, b, "Forest")
+
+    assert dock.airdata_path_edit.text() == ""
+
+
+def test_a_folder_already_used_by_a_flight_is_still_refused(dock, quiet,
+                                                            monkeypatch,
+                                                            two_flights):
+    """Adopting must not become a way around the one-folder-one-flight rule."""
+    a, _b = two_flights
+    flights.save_config(a, {"Detection/Confidence": "0.42"})
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+
+    _add_existing(dock, monkeypatch, a, "Meadow again")
+
+    assert len(dock._flights()) == 1
+    assert quiet["warn"]
+
+
+def test_the_confirmation_lists_what_was_found(dock, two_flights):
+    a, _b = two_flights
+    flights.save_config(a, {"Detection/Confidence": "0.42"})
+    store.open_store(store.stage_path(a, store.TRACKS, "t"),
+                     store.TRACKS, "t").close()
+
+    found = flights.describe_existing(a)
+    assert found["is_flight"] is True
+    assert "tracks (thermal)" in found["results"]

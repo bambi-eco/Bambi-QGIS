@@ -5491,6 +5491,15 @@ class BambiDockWidget(QDockWidget):
             QMessageBox.warning(self, "Flight", str(exc))
             return
 
+        # A folder that has already been processed describes itself, so it is
+        # adopted as it stands rather than started from scratch (§10.2).
+        existing = flights_core.describe_existing(folder)
+        if existing["is_flight"]:
+            if not self._confirm_existing_flight(folder, existing):
+                return
+            self._adopt_existing_flight(updated, folder, existing["configured"])
+            return
+
         copy_configuration = self._ask_new_flight_configuration()
         if copy_configuration is None:
             return
@@ -5518,6 +5527,61 @@ class BambiDockWidget(QDockWidget):
                  f"({how} configuration, inputs cleared)")
         self.save_config_to_project()
         self._check_existing_outputs(folder)
+
+    def _confirm_existing_flight(self, folder: str, existing: dict) -> bool:
+        """Confirm adopting a folder that has been processed before."""
+        if existing["results"]:
+            items = "</li><li>".join(existing["results"])
+            found = f"It already contains:<ul><li>{items}</li></ul>"
+        else:
+            found = "It already contains a saved configuration.<br><br>"
+
+        if existing["configured"]:
+            settings = ("Its stored configuration is loaded, so the inputs "
+                        "and settings come back as they were.")
+        else:
+            settings = ("It has no stored configuration, so the settings stay "
+                        "as they are — check the inputs before running "
+                        "anything.")
+
+        box = QMessageBox(self)
+        box.setWindowTitle("Add existing flight")
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setText(f"<b>{folder}</b> has been processed before.")
+        box.setInformativeText(
+            f"{found}{settings}<br><br>Nothing is recomputed and nothing is "
+            "overwritten. Steps that already ran are shown as done.")
+        add_btn = box.addButton("Add flight", QMessageBox.ButtonRole.AcceptRole)
+        cancel = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(add_btn)
+        box.exec()
+        return box.clickedButton() is not cancel
+
+    def _adopt_existing_flight(self, updated, folder: str, configured: bool):
+        """Add a previously processed folder and load what it already holds."""
+        self.save_config_to_project()
+
+        self._flight_list = updated
+        self._active_flight_index = len(updated) - 1
+
+        self._switching_flight = True
+        try:
+            self._refresh_flight_combo()
+            if configured:
+                # Reads the flight's own project.gpkg, which is the point: the
+                # settings that produced those results come with the folder.
+                self.load_config_from_project(restore_flights=False)
+            # With no stored configuration there is nothing to load: falling
+            # back to the QGIS project would pull in the *previous* flight's
+            # settings, which is not "left as they are". Only the folder moves.
+            self.target_folder_edit.setText(folder)
+        finally:
+            self._switching_flight = False
+
+        self.log(f"Added existing flight '{updated[-1]['name']}' → {folder}")
+        self.save_config_to_project()
+        self._check_existing_outputs(folder)
+        return True
 
     def _ask_new_flight_configuration(self):
         """Copy the current configuration into the new flight, or start clean?
