@@ -184,6 +184,35 @@ def rename_flight(flights: List[dict], index: int, name: str) -> List[dict]:
     return updated
 
 
+def remove_flight(flights: List[dict], index: int) -> List[dict]:
+    """Return *flights* without the one at *index*.
+
+    Only the project's list changes. The target folder keeps everything it
+    holds — a flight represents days of processing, and removing it from a
+    project is not a statement about the outputs on disk.
+    """
+    if not 0 <= index < len(flights):
+        raise FlightError("No such flight.")
+    return [dict(flight) for i, flight in enumerate(flights) if i != index]
+
+
+def active_after_removal(count: int, removed: int, active: int) -> int:
+    """Which flight is active once the one at *removed* is gone.
+
+    Returns ``-1`` when none are left, the state a project starts in. Removing
+    the flight being looked at falls back to its neighbour rather than to the
+    first, so deleting several in a row walks the list instead of jumping.
+    """
+    remaining = count - 1
+    if remaining <= 0:
+        return -1
+    if active > removed:
+        return active - 1
+    if active < removed:
+        return active
+    return min(removed, remaining - 1)
+
+
 def set_folder(flights: List[dict], index: int, folder: str) -> List[dict]:
     """Return *flights* with the flight at *index* pointed at *folder*."""
     if not 0 <= index < len(flights):

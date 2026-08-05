@@ -386,3 +386,174 @@ def test_the_prompt_offers_three_choices(dock):
     assert "copy configurations" in source
     assert "default configurations" in source
     assert "Cancel" in source
+
+
+# ---------------------------------------------------------------------------
+# Removing a flight
+# ---------------------------------------------------------------------------
+
+def _confirm(monkeypatch, dock, answer):
+    monkeypatch.setattr(type(dock), "_confirm_remove_flight",
+                        lambda self, flight: answer)
+
+
+def test_removing_takes_the_flight_out_of_the_project(dock, quiet, monkeypatch,
+                                                      two_flights):
+    a, b = two_flights
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    _add(dock, monkeypatch, b, "Forest")
+
+    _confirm(monkeypatch, dock, True)
+    dock.remove_flight()
+
+    assert [f["name"] for f in dock._flights()] == ["meadow"]
+
+
+def test_removing_needs_the_confirmation(dock, quiet, monkeypatch,
+                                         two_flights):
+    """The pop-up is the whole safeguard, so declining must change nothing."""
+    a, b = two_flights
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    _add(dock, monkeypatch, b, "Forest")
+
+    _confirm(monkeypatch, dock, False)
+    dock.remove_flight()
+
+    assert len(dock._flights()) == 2
+    assert dock.target_folder_edit.text() == b
+
+
+def test_removing_leaves_the_target_folder_on_disk(dock, quiet, monkeypatch,
+                                                   two_flights):
+    """A flight is days of processing; removing it from a project says
+    nothing about the outputs."""
+    a, b = two_flights
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    _add(dock, monkeypatch, b, "Forest")
+    dock.save_config_to_project()
+    assert flights.has_config(b)
+
+    _confirm(monkeypatch, dock, True)
+    dock.remove_flight()
+
+    assert os.path.isdir(b)
+    assert flights.has_config(b)
+
+
+def test_the_removed_flights_folder_can_be_added_again(dock, quiet, monkeypatch,
+                                                       two_flights):
+    a, b = two_flights
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    _add(dock, monkeypatch, b, "Forest")
+    _confirm(monkeypatch, dock, True)
+    dock.remove_flight()
+
+    _add(dock, monkeypatch, b, "Forest again")
+    assert len(dock._flights()) == 2
+
+
+def test_removing_switches_to_the_remaining_flight(dock, quiet, monkeypatch,
+                                                   two_flights):
+    a, b = two_flights
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    _add(dock, monkeypatch, b, "Forest")
+
+    _confirm(monkeypatch, dock, True)
+    dock.remove_flight()
+
+    assert dock._active_flight()["target_folder"] == a
+    assert dock.target_folder_edit.text() == a
+
+
+def test_removing_takes_the_layer_group_with_it(dock, quiet, monkeypatch,
+                                                two_flights):
+    a, b = two_flights
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    _add(dock, monkeypatch, b, "Forest")
+    root = QgsProject.instance().layerTreeRoot()
+    root.addGroup("Forest")
+
+    _confirm(monkeypatch, dock, True)
+    dock.remove_flight()
+
+    assert root.findGroup("Forest") is None
+
+
+def test_the_other_flights_group_is_left_alone(dock, quiet, monkeypatch,
+                                               two_flights):
+    a, b = two_flights
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    _add(dock, monkeypatch, b, "Forest")
+    root = QgsProject.instance().layerTreeRoot()
+    root.addGroup("meadow")
+    root.addGroup("Forest")
+
+    _confirm(monkeypatch, dock, True)
+    dock.remove_flight()
+
+    assert root.findGroup("meadow") is not None
+
+
+def test_removing_the_last_flight_clears_the_target_folder(dock, quiet,
+                                                           monkeypatch,
+                                                           two_flights):
+    """Otherwise the next save would write straight back into the folder
+    that was just removed."""
+    a, _b = two_flights
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+
+    _confirm(monkeypatch, dock, True)
+    dock.remove_flight()
+
+    assert dock._flights() == []
+    assert dock.target_folder_edit.text() == ""
+
+
+def test_removing_is_refused_while_a_step_runs(dock, quiet, monkeypatch,
+                                               two_flights):
+    a, _b = two_flights
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    dock.current_worker = object()
+    _confirm(monkeypatch, dock, True)
+    try:
+        dock.remove_flight()
+    finally:
+        dock.current_worker = None
+
+    assert len(dock._flights()) == 1
+    assert quiet["info"]
+
+
+def test_removing_nothing_says_so(dock, quiet, monkeypatch):
+    _confirm(monkeypatch, dock, True)
+    dock.remove_flight()
+    assert quiet["info"]
+
+
+def test_the_button_is_disabled_without_a_flight(dock):
+    assert dock.flight_remove_btn.isEnabled() is False
+
+
+def test_the_button_is_enabled_once_a_flight_exists(dock, two_flights):
+    a, _b = two_flights
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    assert dock.flight_remove_btn.isEnabled() is True
+
+
+def test_the_confirmation_states_that_nothing_is_deleted(dock):
+    """The dialog is the only place a user learns the folder survives."""
+    import inspect
+
+    source = inspect.getsource(type(dock)._confirm_remove_flight)
+    assert "Nothing on disk is deleted" in source
+    assert "Cancel" in source

@@ -73,7 +73,8 @@ Two limits of 5.x data, both reported when they apply:
 ## Flights
 
 A QGIS project can hold several flights. The **Flight** box at the top of the
-Input tab shows the active one, `+` adds another, and **Rename…** renames it.
+Input tab shows the active one, `+` adds another, **Rename…** renames it and
+🗑 removes it.
 
 - Each flight has **its own target folder**. This is enforced: the result files
   are per folder, so two flights sharing one would overwrite each other's
@@ -85,7 +86,14 @@ Input tab shows the active one, `+` adds another, and **Rename…** renames it.
 - **Exactly one flight is active.** Everything else in the plugin reads that
   one flight, so nothing changes about how the steps work.
 
-Switching flights is blocked while a step is running.
+Removing a flight (🗑) takes it out of the project and removes its layer group,
+after a confirmation. **Nothing on disk is deleted** — the target folder keeps
+its frames, detections, tracks and configuration, so pointing a flight at the
+folder again picks up exactly where it left off. To delete the results
+themselves, delete the folder in a file manager, or reset individual stages
+with **Reset Step**.
+
+Switching and removing flights are blocked while a step is running.
 
 Projects from earlier versions become a single flight named after their target
 folder, and behave exactly as before.

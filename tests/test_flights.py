@@ -372,3 +372,73 @@ def test_declared_defaults_win_over_the_typed_empty():
     entry = [e for e in config_schema.CONFIG_ENTRIES
              if e.key == "Detection/Confidence"][0]
     assert flights._entry_default(entry) == entry.default
+
+
+# ---------------------------------------------------------------------------
+# Removing a flight
+# ---------------------------------------------------------------------------
+
+def test_remove_flight_drops_only_that_one():
+    listed = [{"name": "A", "target_folder": "/a"},
+              {"name": "B", "target_folder": "/b"},
+              {"name": "C", "target_folder": "/c"}]
+    assert [f["name"] for f in flights.remove_flight(listed, 1)] == \
+        ["A", "C"]
+
+
+def test_remove_flight_leaves_the_original_alone():
+    listed = [{"name": "A", "target_folder": "/a"},
+              {"name": "B", "target_folder": "/b"}]
+    flights.remove_flight(listed, 0)
+    assert len(listed) == 2
+
+
+def test_remove_flight_rejects_an_unknown_index():
+    listed = [{"name": "A", "target_folder": "/a"}]
+    for index in (-1, 1, 99):
+        with pytest.raises(flights.FlightError):
+            flights.remove_flight(listed, index)
+
+
+def test_removing_the_only_flight_empties_the_list():
+    assert flights.remove_flight(
+        [{"name": "A", "target_folder": "/a"}], 0) == []
+
+
+def test_the_folder_becomes_free_again_after_removal():
+    """The refusal to share folders must not outlive the flight."""
+    listed = [{"name": "A", "target_folder": "/a"}]
+    remaining = flights.remove_flight(listed, 0)
+    flights.validate_folder("/a", remaining)  # no raise
+    assert flights.add_flight(remaining, "A2", "/a")
+
+
+def test_the_name_becomes_free_again_after_removal():
+    listed = [{"name": "A", "target_folder": "/a"},
+              {"name": "B", "target_folder": "/b"}]
+    remaining = flights.remove_flight(listed, 0)
+    assert flights.add_flight(remaining, "A", "/c")
+
+
+# -- which flight is active afterwards --------------------------------------
+
+def test_removing_an_earlier_flight_keeps_the_active_one():
+    assert flights.active_after_removal(3, 0, 2) == 1
+
+
+def test_removing_a_later_flight_leaves_the_active_index_alone():
+    assert flights.active_after_removal(3, 2, 0) == 0
+
+
+def test_removing_the_active_flight_falls_back_to_its_neighbour():
+    """Not to the first, so deleting several in a row walks the list."""
+    assert flights.active_after_removal(3, 1, 1) == 1
+    assert flights.active_after_removal(2, 1, 1) == 0
+
+
+def test_removing_the_last_flight_reports_none_active():
+    assert flights.active_after_removal(1, 0, 0) == -1
+
+
+def test_removing_the_final_flight_in_the_list_stays_in_range():
+    assert flights.active_after_removal(3, 2, 2) == 1
