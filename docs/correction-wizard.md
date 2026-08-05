@@ -4,7 +4,7 @@ The Correction Calibration Wizard helps you find and store the positional and ro
 
 ![Correction Wizard Toolbar Button](../images/correction_wizard_toolbar.png)
 
-> **Prerequisite**: Frames must be extracted first ([step 1](pipeline.md#1-extract-frames)) so that `poses_t.json` / `poses_w.json` exist in the target folder.
+> **Prerequisite**: Frames must be extracted first ([P1](pipeline.md#p1-extract-frames)) so that `poses_t.json` / `poses_w.json` exist in the target folder.
 
 ## Step 1: Select corresponding ground points
 

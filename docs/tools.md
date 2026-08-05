@@ -50,7 +50,7 @@ Point it at a processing **target folder** (the one containing `frames_t/` / `fr
 
 ### Reviewing existing results
 
-Detections (`detections_{t,w}/detections.txt`) and tracks (`tracks_{t,w}/tracks_pixel.csv`) are drawn as read-only overlays (toggleable via checkboxes). An existing pipeline track can be converted into an editable label track with **Import as label track**; the **Resample** value controls how many key frames are kept (`1` = every frame of the track becomes a key frame, `N` = only every N-th frame plus the first and last). **Import all as label tracks** converts every pipeline track at once, applying the same Resample setting to each.
+Detections and tracks from the pipeline are drawn as read-only overlays (toggleable via checkboxes). An existing pipeline track can be converted into an editable label track with **Import as label track**; the **Resample** value controls how many key frames are kept (`1` = every frame of the track becomes a key frame, `N` = only every N-th frame plus the first and last). **Import all as label tracks** converts every pipeline track at once, applying the same Resample setting to each.
 
 **Copy labels from _&lt;other modality&gt;_** imports the label tracks you already made on the other camera (RGB ↔ thermal) into the current one — see [Cross-modality copy](#cross-modality-copy) below.
 
@@ -85,18 +85,41 @@ Each key-frame box of every track in the other modality is projected onto this m
 
 The projected boxes are added as **new label tracks** (species/sex/age/occlusion and stop flags are carried over) rather than merged into existing ones, because — like single-frame propagation — they typically need small manual adaptions before export. A summary reports how many tracks and key frames were copied and how many were skipped (no DEM intersection, projected outside the target frame, or no time-matched frame). The other modality must already have been processed far enough to have `poses_<other>.json`, extracted frames, and `labels_<other>/labels.json`.
 
+### Species, sex, age and custom fields
+
+Since 6.0 the categorical inputs are **chosen from the project's vocabulary**,
+not typed. Species, `sex`, `age` and `occlusion` come from the
+[Project Schema](results-and-export.md#the-project-schema), and the **…** button
+beside the species list — like the gear button — opens that editor without
+leaving the tool. Adding a species there is a single step and does not disturb
+anything already labelled.
+
+This is what makes labels durable: species and enum values are referenced by
+identity, so renaming one never changes the meaning of work already done. In
+5.x a species typed into the box could renumber the others.
+
+Free-text fields are still available — define a `string` custom field for
+notes or collar ids. Unlike 5.x, custom fields are **not** confined to
+`labels.json`: they travel through geo-referencing and tracking and reach the
+exports.
+
 ### Saving & pipeline export
 
 **Save Labels** (or the **Autosave** checkbox, which saves automatically shortly after every change) writes per modality:
 
 | File                       | Contents                                                                                            |
 |----------------------------|-----------------------------------------------------------------------------------------------------|
-| `labels_{t,w}/labels.json` | Key-frame label tracks (source of truth, re-loaded on opening)                                      |
+| `bambi_{t,w}/labels.gpkg`  | Key-frame label tracks and their attributes (source of truth since 6.0)                             |
+| `labels_{t,w}/labels.json` | The same tracks in the 5.x format, still written                                                    |
 | `labels_{t,w}/labels.csv`  | Per-frame interpolated export: `frame,track_id,x1,y1,x2,y2,species,sex,age,occlusion,keyframe`      |
 
-**Add detections to project** additionally merges the interpolated label boxes into `detections_{t,w}/detections.txt` in the exact format of the **Detect Animals** step (`frame x1 y1 x2 y2 confidence class_id`, confidence `1.0000` for manual labels) so the rest of the pipeline can consume them. Detector output is preserved: the labels are appended as a marked block that is replaced on re-export, and the species → `class_id` mapping is documented as a comment inside the block. Re-run **Geo-Reference Detections** (and tracking, if needed) afterwards to update the QGIS layers.
+**Add detections to project** turns the interpolated label boxes into detections the rest of the pipeline consumes. The detector's output is untouched — each producer owns its own rows — so the two can coexist and either can be re-run without disturbing the other.
 
-**Replace detections in project** is the destructive variant: after a confirmation dialog it overwrites `detections_{t,w}/detections.txt` with the label boxes **alone** (all detector output is discarded) and deletes the tracking outputs derived from the previous detections (`tracks_{t,w}/`, `tracks_pixel_{t,w}/`). Use it when the manual labels should fully supersede the detector run; re-run **Geo-Reference Detections** and **Track Animals** afterwards to rebuild the QGIS layers from the labels.
+Editing a label and exporting again **re-uses the detections it already produced**: a box you did not move keeps its identity, and only boxes that actually moved need geo-referencing again. Without that, one key-frame edit would invalidate the whole flight, which is why 5.x export was an all-or-nothing rewrite.
+
+Label tracks are also written as **real tracks**, so labelled animals reach the survey analytics and the exports without re-running tracking. A track imported with *Import as label track* replaces the pipeline track it came from, so refining a detector track does not count the animal twice.
+
+**Replace detections in project** is the destructive variant: after a confirmation dialog the detector's detections are removed and the labels remain. Re-run **Geo-Reference Detections** and **Track Animals** afterwards to rebuild the QGIS layers from the labels.
 
 ### Controls
 

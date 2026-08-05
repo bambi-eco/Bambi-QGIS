@@ -8,6 +8,11 @@ This guide covers the main workflow of the plugin: configuring inputs, running t
 - [Input file formats](#input-file-formats)
 - [Output structure](#output-structure)
 
+> **New in 6.0.** Results are stored in GeoPackages rather than text files, a
+> QGIS project can hold several flights, and the steps are split across two
+> tabs. See [Results, Flights and Export](results-and-export.md) for the
+> concepts; this page covers the steps themselves.
+
 ## Input
 
 Open the dock widget via the **BAMBI** toolbar icon and select the **input mode** (Video or Photo) in the **Input** tab.
@@ -94,11 +99,25 @@ If you have already tracked animals externally with [TRex](https://trex.run), th
 
 ## Processing steps
 
-Execute the steps in order using the **Processing** tab. The **→** buttons below each step load the corresponding results into QGIS as styled layers, or compute derived products.
+The steps live on two tabs, split by what they depend on:
+
+| Tab | Steps | Depends on |
+|---|---|---|
+| **Pre-Processing** | P1 Extract Frames, P2 Generate Flight Route, P3 Calculate Field of View, P4 Generate ALFS, P5 Export Frames as GeoTIFF, P6 Generate Orthomosaic | the drone poses and the DEM — **no animals involved** |
+| **Processing** | A1 Detect Animals (with geo-referencing and perpendicular distances), A2 Track Animals Or Import, A3/A4 SAM3 Segmentation | the detections |
+
+The numbering is prefixed so a bare number cannot mean two different steps.
+They are *not* one sequence: only P1 is a prerequisite for the Processing tab.
+Re-running detection marks the Processing steps out of date and leaves the ALFS
+and orthomosaic alone.
+
+The **→** buttons below each step load the corresponding results into QGIS as styled layers, or compute derived products. Layers are grouped under the active flight's name.
+
+Progress, the abort button and the log sit below the tabs, so they are visible whichever tab a step was started from.
 
 ![Processing Tab](../images/processing_tab.png)
 
-### 1. Extract Frames
+### P1. Extract Frames
 
 Extracts, undistorts, and geo-tags frames from the input data.
 
@@ -117,7 +136,7 @@ mask_W.png         # Undistortion mask (RGB)
 
 > **Note:** For large datasets or long videos this step may take several minutes. Progress is updated between frames.
 
-### 2. Generate Flight Route
+### P2. Generate Flight Route
 
 Builds two complementary vector layers from the mission data:
 
@@ -133,11 +152,11 @@ flight_route_t/    # or flight_route_w/ depending on camera selection
 
 Use **→ Add Flight Route to QGIS** to load both layers with styling applied.
 
-> **Note:** Frame extraction (Step 1) is optional for this step. If no `poses.json` exists yet, only the AirData-based flight route line is generated (a warning is shown), which is useful for a quick overview of the flight before running any extraction. Camera positions, frame/distance markers and image labels require Step 1; re-run this step after extraction to add them.
+> **Note:** Frame extraction (P1) is optional for this step. If no `poses.json` exists yet, only the AirData-based flight route line is generated (a warning is shown), which is useful for a quick overview of the flight before running any extraction. Camera positions, frame/distance markers and image labels require P1; re-run this step after extraction to add them.
 
 ![Flight Route](../images/route.png)
 
-### 3. Detect Animals
+### A1. Detect Animals
 
 Runs YOLO-based detection on all extracted frames. Separate model paths can be configured for the thermal and the RGB modality; the model matching the selected camera is used. The default wildlife detection model for each modality is downloaded automatically from HuggingFace on first use.
 
@@ -147,7 +166,12 @@ detections_t/    # or detections_w/ depending on camera selection
 └── detections.txt    # Bounding box detections (frame, x1, y1, x2, y2, confidence, class)
 ```
 
-Manual annotations created with the [Labelling Tool](tools.md#labelling-tool) can be merged into the same `detections.txt` (via its **Add detections to project** button) — or can fully replace the detector output and the derived tracking results (via **Replace detections in project**, after confirmation) — so they flow through geo-referencing and tracking like regular detections.
+Manual annotations created with the [Labelling Tool](tools.md#labelling-tool) can be added alongside the detector's output (via its **Add detections to project** button) — or can replace it entirely (via **Replace detections in project**, after confirmation) — so they flow through geo-referencing and tracking like regular detections.
+
+Since 6.0 the two never interfere: each producer owns its own rows, so
+re-running the detector leaves manual labels untouched and vice versa. Editing
+a label re-uses the detections it already produced, so only the boxes that
+actually moved need geo-referencing again.
 
 #### → Geo-Reference Detections
 
@@ -162,6 +186,10 @@ georeferenced_t/    # or georeferenced_w/, follows the detection camera selectio
 Use **→ Add Detections to QGIS** to load per-frame detection layers.
 
 ![Detection Results](../images/detection_results.png)
+
+Detections whose ray never reaches the DEM — sky above the horizon, ground
+beyond the DEM edge, a frame with no pose — are recorded with the reason rather
+than dropped, so every detection is accounted for afterwards.
 
 #### → Calculate Perpendicular
 
@@ -197,7 +225,7 @@ Use **→ Add Perpendicular Lines to QGIS** to visualize the connections as line
 
 ![Perpendicular Distances](../images/perpendicular_distances.png)
 
-### 4. Track Animals Or Import
+### A2. Track Animals Or Import
 
 Associates detections across frames into continuous tracks using the selected tracking backend. If a TRex NPZ folder is configured (see [TRex tracklet import](#trex-tracklet-import)), the pre-computed TRex tracklets are imported and geo-referenced instead.
 
@@ -241,7 +269,7 @@ flight_route_t/    # or flight_route_w/, uses the flight route camera selection
 
 Use **→ Add Track Perpendicular Lines to QGIS** to visualize as line features.
 
-### 5. Calculate Field of View
+### P3. Calculate Field of View
 
 Computes the camera footprint polygon on the ground for each frame (or a subset), using the DEM for accurate terrain-following projection.
 
@@ -256,7 +284,7 @@ fov_t/    # or fov_w/ depending on camera selection
 
 ![Merged Flight FoV](../images/flight_fov.png)
 
-### 6. Generate ALFS
+### P4. Generate ALFS
 
 Creates a georeferenced Airborne Light Field Sampling (ALFS) by projecting all (or a subset of) frames onto the DEM surface and blending them together. Output is a Cloud-Optimized GeoTIFF.
 
@@ -268,7 +296,7 @@ alfs_t/    # or alfs_w/ depending on camera selection
 
 ![ALFS Output](../images/alfs.png)
 
-### 7. Export Frames as GeoTIFF
+### P5. Export Frames as GeoTIFF
 
 Exports individual frames as georeferenced GeoTIFFs, suitable for import into GIS tools or for detailed per-frame analysis.
 
@@ -281,9 +309,9 @@ geotiffs_t/    # or geotiffs_w/ depending on camera selection
 
 ![GeoTIFF Export](../images/geotiff.png)
 
-### 8. Generate Orthomosaic
+### P6. Generate Orthomosaic
 
-Builds a **true orthomosaic** by mosaicking the individually orthorectified frame GeoTIFFs from step 7 into a single georeferenced raster. Unlike the ALFS product (an integral light-field image), this merges the exported GeoTIFFs with `rasterio`, so step 7 must be run first for the selected camera.
+Builds a **true orthomosaic** by mosaicking the individually orthorectified frame GeoTIFFs from P5 into a single georeferenced raster. Unlike the ALFS product (an integral light-field image), this merges the exported GeoTIFFs with `rasterio`, so P5 must be run first for the selected camera.
 
 Like the other steps you can use **all** exported GeoTIFFs or restrict to a **frame-index range**, choose the **camera** (Thermal / RGB), and pick the **merge mode** that resolves overlapping pixels:
 
@@ -299,7 +327,7 @@ orthomosaic_t/    # or orthomosaic_w/ depending on camera selection
 └── orthomosaic.tif    # Merged georeferenced orthomosaic (LZW GeoTIFF with overviews)
 ```
 
-### 9. Run SAM3 Segmentation
+### A3. Run SAM3 Segmentation
 
 Segments individual detected objects from aerial images using Roboflow's SAM3 API. Recommended for RGB imagery.
 
@@ -311,7 +339,7 @@ segmentation_t/    # or segmentation_w/ depending on camera selection
 └── segmentation_pixel.json    # Pixel-space segmentation masks
 ```
 
-### 10. Geo-Reference Segmentation
+### A4. Geo-Reference Segmentation
 
 Projects SAM3 pixel-space segmentation masks to world coordinates using the DEM.
 
@@ -325,11 +353,26 @@ segmentation_t/    # or segmentation_w/ depending on camera selection
 
 ## Survey analytics
 
-The **Survey Analytics** tab (next to *Processing*) turns geo-referenced detections, tracks, or exported frames into population-level products. The point-based tools (density heatmap, distance sampling) let you pick the **source**: *Detections* uses every geo-referenced bounding box, while *Tracks* uses one representative point per track (so an animal followed across many frames is counted once); their camera (thermal/RGB) follows the existing Detection / Tracking camera selectors on the Processing tab. The coverage map instead combines the exported frame GeoTIFFs and has its own camera selector. Results are written to a new `analytics_t/` or `analytics_w/` folder, and the run log for these steps appears on the Processing tab.
+The **Survey Analytics** tab (next to *Processing*) turns geo-referenced detections, tracks, or exported frames into population-level products. The point-based tools (density heatmap, distance sampling) let you pick the **source**: *Detections* uses every geo-referenced bounding box, while *Tracks* uses one representative point per track (so an animal followed across many frames is counted once); their camera (thermal/RGB) follows the existing Detection / Tracking camera selectors. The coverage map instead combines the exported frame GeoTIFFs and has its own camera selector. Results are written to a new `analytics_t/` or `analytics_w/` folder, and the run log for these steps appears below the tabs.
+
+Each result records **what it counted** — the tracking run used, whether manual
+tracks were included, the species filter, and how many detections labelled
+`not-an-animal` were excluded — so a figure can be traced back to the rows
+behind it. Two rules apply throughout: one tracker run contributes (built-in,
+BoxMOT and TRex describe the same animals, so pooling two would double-count),
+and manual tracks are *added* to it, since labels are usually animals the
+detector missed. A label created with *Import as label track* replaces the
+tracker track it came from instead of adding to it. See
+[Results, Flights and Export](results-and-export.md#what-the-analytics-counted).
 
 **Analysing several flights together.** *Distance sampling* and *Population estimation* each carry a **Projects** selector: add one or more BAMBI projects and/or keep **Add current project** ticked, and the analysis runs on every project and combines the results into a single estimate (distance sampling pools the perpendicular distances and sums the flight-route effort *L*; population estimation pools all the transects into one count/area sample set). Leaving the list empty with only *Add current project* ticked reproduces the single-project behaviour. Before running, each project is checked for its required files — if anything is missing the run is aborted and a message names what is missing in which project(s). The combined result is written to the **active project's** `analytics_*` folder, while each pooled project keeps its own per-transect CSV/GeoJSON in its own folder.
 
-For distance sampling an added project is just a target folder. For population estimation the transects must be georeferenced with the right DEM origin, so its **+ Add Project…** button opens a small dialog with **two pickers** — the project's target folder and its **`dem.json`** (DEM metadata JSON). The active project reuses the DEM configured on the Processing tab; every *added* project supplies its own `dem.json`, and the results dialog shows each project's DEM-origin source (`config` for the active project, `provided` for added ones).
+**+ Add Flight…** is the shortcut for flights this QGIS project already holds:
+the target folder and the DEM are taken from the flight itself, so there is
+nothing to look up. Pointing at unrelated target folders still works exactly as
+before.
+
+For distance sampling an added project is just a target folder. For population estimation the transects must be georeferenced with the right DEM origin, so its **+ Add Project…** button opens a small dialog with **two pickers** — the project's target folder and its **`dem.json`** (DEM metadata JSON). The active project reuses the DEM configured for the active flight; every *added* project supplies its own `dem.json`, and the results dialog shows each project's DEM-origin source (`config` for the active project, `provided` for added ones).
 
 ### Density heatmap
 
@@ -432,7 +475,29 @@ Use **→ Add Coverage Map to QGIS** to load the raster with a graduated colour 
 
 ## Output structure
 
-Each stage writes to a camera-specific subfolder (`_t` for thermal, `_w` for RGB), so thermal and RGB results coexist without overwriting each other. A complete run produces:
+Each stage writes to a camera-specific subfolder (`_t` for thermal, `_w` for RGB), so thermal and RGB results coexist without overwriting each other.
+
+Since 6.0 the results themselves live in GeoPackages, with the text files below
+written alongside for compatibility — see
+[Results, Flights and Export](results-and-export.md):
+
+```
+target_folder/
+├── project.gpkg                             # Species, enums, custom fields,
+│                                            # configuration, step status
+├── bambi_t/                                 # Thermal results, one file per step
+│   ├── detections.gpkg
+│   ├── georeferenced.gpkg                   # …plus why a detection was dropped
+│   ├── tracks.gpkg                          # Track membership by detection id
+│   ├── fov.gpkg
+│   ├── labels.gpkg
+│   └── segmentation.gpkg
+├── bambi_w/                                 # RGB, same set
+│   └── ...
+```
+
+The text outputs below are still produced, and can be switched off under
+**Output Configuration** once nothing of yours reads them:
 
 ```
 target_folder/

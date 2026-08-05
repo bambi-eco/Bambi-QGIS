@@ -36,7 +36,7 @@ See [Installation problems](installation.md#installation-problems) for Git/PATH 
 
 - Lower the detection confidence threshold
 - Adjust the IoU threshold for tracking
-- Verify that detections were successfully generated in step 3
+- Verify that detections were successfully generated in step A1
 
 ## Perpendicular distances not calculated
 

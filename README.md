@@ -17,6 +17,9 @@ Detect, track, and geo-reference wildlife in aerial drone recordings, directly i
 - **Survey analytics**: perpendicular distance sampling from detections/tracks to the flight route, per-frame camera field-of-view footprints, coverage areas, kernel-density heatmaps of animal locations, and line-transect distance-sampling density/abundance estimation with confidence intervals
 - **Map products**: georeferenced per-frame GeoTIFFs, true orthomosaics, and Airborne Light Field Sampling (ALFS) mosaics
 - **Calibration wizards**: guided workflows for camera intrinsics (single-camera SfM or stereo RGB+thermal) and per-flight positional/rotational corrections
+- **Results that carry their own meaning**: every detection has an identity the later steps refer to, so a track knows which detections it is made of and a geo-referencing failure is recorded rather than silently dropped; user-defined fields travel through the whole pipeline
+- **Export & publish**: COCO, YOLO, MOT, TRex tracklets, GeoJSON, Camtrap DP, and Darwin Core Archive for GBIF
+- **Several flights per project**: each with its own target folder, configuration and QGIS layer group
 - **Companion tools**: video creator for shareable result videos, radiometric thermal image viewer, randomized transect flight planner, interactive map-canvas inspectors, and a built-in dependency manager
 
 ## Installation
@@ -39,7 +42,10 @@ Optional capabilities (GPU inference, BoxMOT trackers, camera calibration via Sf
    Animals** to **A4. Geo-Reference Segmentation**). Pre-Processing derives
    from the drone poses and the DEM and is independent of any animal;
    Processing depends on the detections, so the two can be run separately
-5. Use the **→ Add … to QGIS** buttons after each step to load the results as styled layers
+5. Use the **→ Add … to QGIS** buttons after each step to load the results as styled layers, grouped under the flight's name
+6. Export the results — COCO, YOLO, MOT, GeoJSON, Camtrap DP or a Darwin Core Archive for GBIF — from the **Export** box on the Processing tab
+
+Upgrading from 5.x? Open your existing project and use **Migrate 5.x…** beside the target folder; the existing files are only read, never modified. See [Results, Flights and Export](docs/results-and-export.md).
 
 What you need as input: MP4 videos + SRT subtitle files (video mode) *or* a folder of still images (photo mode), an AirData flight log CSV, a camera calibration JSON, and a DEM. The plugin can download DEMs automatically (Austria), convert any GeoTIFF DEM, or generate a flat surface mesh for aquatic surveys, and the calibration JSON can be created with the built-in Camera Calibration Wizard.
 
@@ -49,6 +55,7 @@ What you need as input: MP4 videos + SRT subtitle files (video mode) *or* a fold
 |-------|----------|
 | [Installation & Dependencies](docs/installation.md) | Install methods, Dependency Manager, optional packages, GPU support, DJI Thermal SDK |
 | [Processing Pipeline](docs/pipeline.md) | Input modes and file formats, configuration, all processing steps, output folder structure |
+| [Results, Flights & Export](docs/results-and-export.md) | Where results are stored, migrating a 5.x project, several flights per project, the project schema (species, enums, custom fields), and the export formats |
 | [DEM Import & Conversion](docs/dem.md) | Automatic download (Austria), GeoTIFF conversion, manual DEMs, flat surface meshes for aquatic surveys |
 | [Correction Wizard](docs/correction-wizard.md) | Finding per-flight positional/rotational correction factors |
 | [Camera Calibration Wizard](docs/camera-calibration.md) | Estimating camera intrinsics for single cameras (SfM) and stereo RGB+thermal setups |

@@ -21,10 +21,36 @@ about=A comprehensive QGIS plugin for detecting, tracking, and geo-referencing w
     - Companion tools: result video creator, radiometric thermal image viewer (DJI Thermal SDK), randomized transect flight planner, and interactive map-canvas inspectors
     - Key-frame based labelling tool: review detections/tracks on extracted frames (thermal or RGB), draw and edit track bounding boxes with species/sex/age/occlusion classes, interpolate between key frames, and propagate boxes of one or several tracks across frames via DEM geo-referencing
     - Transect splitting tool: split a flight into named transects (frame ranges) on the extracted frames, with a flight-route overview map, flight-path length measurement and an "end after X metres" helper
+    - Results stored in GeoPackages that carry their own meaning: every detection has an id the later steps refer to, user-defined fields travel through the whole pipeline, and each step records what it produced and what it invalidated
+    - Export to COCO, YOLO, MOT, TRex tracklets, GeoJSON, Camtrap DP and Darwin Core Archive (GBIF publishing)
+    - Several flights per QGIS project, each with its own target folder, configuration and layer group
     - Built-in dependency manager to install all required and optional packages from within QGIS
-    All results are automatically added as styled layers to the QGIS project.
+    All results are automatically added as styled layers to the QGIS project, grouped per flight.
 
-changelog=Version 5.2.1
+changelog=Version 6.0.0
+    This release replaces the text files used between processing steps with a relational store, so that results carry their own meaning instead of being reconstructed from row order. Existing projects are migrated on opening; the 5.x text files are still written alongside, and can be switched off under Output Configuration.
+    Added:
+    - Exchange format: detections, geo-referencing, tracks, field of view, labels and segmentations are stored in GeoPackages under bambi_t/ and bambi_w/, with a project.gpkg holding the project's species, enums, custom fields and step status. Every detection has an id that the later steps refer to, so nothing is matched back by coordinates.
+    - "Migrate 5.x..." on the Input tab imports an existing project's outputs into the new format. The existing files are only read, never modified.
+    - Project Schema editor (Detection tab, and the labelling tool's gear button): species, reusable enums and custom fields for the whole project. Species and enum values are referenced by id, so renaming one is free and cannot change the meaning of data already recorded.
+    - Three base classes in every project: animal (what the detector reports), unknown (not yet determined) and not-an-animal (a labelled false positive, excluded from every survey analytic).
+    - Custom fields now travel through the whole pipeline instead of staying in labels.json, and reach the exports.
+    - Export (Processing tab): COCO, YOLO, MOT, TRex tracklets, GeoJSON, Camtrap DP and Darwin Core Archive for GBIF publishing. Species can carry a scientific name and a GBIF taxon key for the two publishing formats.
+    - Multi-flight projects: a flight selector on the Input tab, each flight with its own target folder, configuration and QGIS layer group. Survey analytics can add another flight of the project directly, without hunting for its folder and DEM.
+    - "Reset Step..." deletes one step's outputs and marks everything that depended on it as out of date.
+    - Geo-referencing records why a detection could not be placed on the DEM, rather than dropping it silently.
+    Changed:
+    - The Processing tab is split into Pre-Processing (P1-P6: frames, flight route, field of view, ALFS, GeoTIFF, orthomosaic) and Processing (A1-A4: detection, tracking, segmentation). The two only look sequential; everything in Pre-Processing is independent of any animal. Steps are renumbered so a bare number no longer means two things.
+    - Configuration is stored with the flight's outputs instead of in the QGIS project, so a target folder describes the settings that produced it. Older projects are converted when first opened.
+    - Labelling tool: species, sex, age and occlusion are chosen from the project's vocabulary instead of typed, which is what previously made class ids unstable. Labelled tracks are written as real tracks, so they reach the analytics and exports without re-running tracking.
+    - Survey analytics record what they counted - which tracking run, which species, how many false positives were excluded - alongside the result.
+    - Manual and detector tracks are counted together, since labels are usually animals the detector missed; a label imported from a tracker track replaces that track rather than adding to it.
+    - A configured TRex tracklet folder now replaces tracking entirely instead of running a tracker as well.
+    Fixed:
+    - Adding a species no longer renumbers the others, which previously changed the meaning of detections already exported.
+    - A detection that cannot be geo-referenced no longer costs the other detections in its frame their tracks.
+    - Re-running a step now marks the perpendicular distances, population estimates and exported media that depended on it as out of date; previously only the tracking folders were cleaned up.
+    Version 5.2.1
     Changed:
     - Dependency Manager: installs pin numpy/scipy to the versions QGIS ships so a dependency cannot shadow them and break QGIS. Some dependency chains cap these packages below the bundled version (ultralytics requires numpy<=2.1.1 while QGIS 3.34 ships 2.2.6), which made the pinned install abort with "ResolutionImpossible". Such installs now automatically retry without the pin and afterwards remove the user-site numpy/scipy copy that shadows the QGIS build.
     - Fixing Problems with flight along the Equator (our original detection logic to identify GPS coordinates during initialization phase)
