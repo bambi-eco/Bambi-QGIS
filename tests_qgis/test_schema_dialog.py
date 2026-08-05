@@ -4,7 +4,7 @@
 The vocabulary rules are covered headlessly in ``tests/test_schema_editor.py``;
 what needs a real QGIS is that the dialog presents them — that base classes are
 not editable through the UI, that accepting persists and cancelling does not,
-and that the Detection tab can open it.
+and that the Project tab can open it.
 
 Run via the QGIS image only::
 
@@ -177,7 +177,7 @@ def test_moving_past_the_end_is_a_no_op(project_folder):
 
 
 # ---------------------------------------------------------------------------
-# Reached from the Detection tab
+# Reached from the dock
 # ---------------------------------------------------------------------------
 
 def test_dock_refuses_to_open_the_schema_without_a_folder(dock, monkeypatch):
@@ -194,3 +194,44 @@ def test_dock_refuses_to_open_the_schema_without_a_folder(dock, monkeypatch):
 
 def test_dock_has_the_schema_button(dock):
     assert dock.schema_editor_btn is not None
+
+
+# ---------------------------------------------------------------------------
+# Where the editor is reached from
+# ---------------------------------------------------------------------------
+
+def _config_tabs(dock):
+    from qgis.PyQt.QtWidgets import QTabWidget
+
+    for widget in dock.findChildren(QTabWidget):
+        names = [widget.tabText(i) for i in range(widget.count())]
+        if "Extraction" in names:
+            return widget
+    raise AssertionError("configuration tab widget not found")
+
+
+def test_the_project_tab_comes_first(dock):
+    """The schema describes the survey, so it precedes the steps using it."""
+    tabs = _config_tabs(dock)
+    assert tabs.tabText(0) == "Project"
+
+
+def test_the_schema_button_lives_on_the_project_tab(dock):
+    tabs = _config_tabs(dock)
+    project = tabs.widget(0)
+    assert project.isAncestorOf(dock.schema_editor_btn)
+
+
+def test_the_schema_button_left_the_detection_tab(dock):
+    tabs = _config_tabs(dock)
+    names = [tabs.tabText(i) for i in range(tabs.count())]
+    detection = tabs.widget(names.index("Detection"))
+    assert not detection.isAncestorOf(dock.schema_editor_btn)
+
+
+def test_the_detection_settings_are_untouched(dock):
+    tabs = _config_tabs(dock)
+    names = [tabs.tabText(i) for i in range(tabs.count())]
+    detection = tabs.widget(names.index("Detection"))
+    assert detection.isAncestorOf(dock.confidence_spin)
+    assert detection.isAncestorOf(dock.thermal_model_path_edit)

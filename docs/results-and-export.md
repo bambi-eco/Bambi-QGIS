@@ -102,7 +102,7 @@ for.
 
 ## The project schema
 
-**Edit Project Schema…** on the Detection tab (also reachable from the
+**Edit Project Schema…** on the **Project** configuration tab (also reachable from the
 labelling tool's gear button and from *Manage species…* beside any species
 list) edits three things that belong to the whole project.
 

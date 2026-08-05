@@ -994,6 +994,31 @@ class BambiDockWidget(QDockWidget):
         config_sub_tabs = QTabWidget()
         config_layout.addWidget(config_sub_tabs)
 
+        # ----- Sub-Tab: Project -----
+        # Settings that describe the survey rather than one processing step,
+        # so they come before the steps that consume them.
+        project_tab = QWidget()
+        project_tab_layout = QVBoxLayout(project_tab)
+        config_sub_tabs.addTab(project_tab, "Project")
+
+        # Species are a property of the survey rather than of whichever tool is
+        # open, and they are edited here and only here — that is what keeps
+        # class ids stable.
+        vocabulary_group = QGroupBox("Project Schema")
+        vocabulary_layout = QVBoxLayout(vocabulary_group)
+        vocabulary_info = QLabel(
+            "Species, enums and custom fields for this project. Every tool "
+            "picks from these; none of them can invent new ones.")
+        vocabulary_info.setWordWrap(True)
+        vocabulary_info.setStyleSheet("color: gray; font-size: 10px;")
+        vocabulary_layout.addWidget(vocabulary_info)
+        self.schema_editor_btn = QPushButton("Edit Project Schema…")
+        self.schema_editor_btn.clicked.connect(self.open_schema_dialog)
+        vocabulary_layout.addWidget(self.schema_editor_btn)
+
+        project_tab_layout.addWidget(vocabulary_group)
+        project_tab_layout.addStretch()
+
         # ----- Sub-Tab: Extraction -----
         extraction_tab = QWidget()
         extraction_tab_layout = QVBoxLayout(extraction_tab)
@@ -1460,22 +1485,6 @@ class BambiDockWidget(QDockWidget):
         detection_layout.addRow("Sample Rate:", self.detect_sample_rate_spin)
 
         detect_tab_layout.addWidget(detection_group)
-
-        # Project vocabulary. Species are a property of the survey rather than
-        # of whichever tool is open, so they are configured here and only here
-        # — that is what keeps class ids stable.
-        vocabulary_group = QGroupBox("Project Schema")
-        vocabulary_layout = QVBoxLayout(vocabulary_group)
-        vocabulary_info = QLabel(
-            "Species, enums and custom fields for this project. Every tool "
-            "picks from these; none of them can invent new ones.")
-        vocabulary_info.setWordWrap(True)
-        vocabulary_info.setStyleSheet("color: gray; font-size: 10px;")
-        vocabulary_layout.addWidget(vocabulary_info)
-        self.schema_editor_btn = QPushButton("Edit Project Schema…")
-        self.schema_editor_btn.clicked.connect(self.open_schema_dialog)
-        vocabulary_layout.addWidget(self.schema_editor_btn)
-        detect_tab_layout.addWidget(vocabulary_group)
 
         detect_tab_layout.addStretch()
 
@@ -2169,26 +2178,14 @@ class BambiDockWidget(QDockWidget):
         processing_layout = QVBoxLayout(processing_tab)
         main_tabs.addTab(processing_tab, "Pre-Processing")
 
-        # Info button row
-        self._processing_info_btn = QToolButton()
-        self._processing_info_btn.setText("?")
-        self._processing_info_btn.setFixedSize(20, 20)
-        self._processing_info_btn.setStyleSheet(
-            "QToolButton {"
-            "  border-radius: 10px;"
-            "  border: 1px solid palette(mid);"
-            "  background: palette(button);"
-            "  font-weight: bold;"
-            "  font-size: 11px;"
-            "}"
-            "QToolButton:hover { background: palette(light); }"
-            "QToolButton:pressed { background: palette(mid); }"
-        )
-        self._processing_info_btn.clicked.connect(self._show_processing_info)
+        # Info button row. Each tab explains its own steps, so the popup does
+        # not describe steps that live on the other one.
+        self._preprocessing_info_btn = self._make_info_button(
+            self._show_preprocessing_info)
         processing_info_row = QHBoxLayout()
         processing_info_row.setContentsMargins(0, 0, 0, 0)
         processing_info_row.addStretch()
-        processing_info_row.addWidget(self._processing_info_btn)
+        processing_info_row.addWidget(self._preprocessing_info_btn)
         processing_layout.addLayout(processing_info_row)
 
         # Step buttons. The split mirrors the dependency graph of
@@ -2532,6 +2529,14 @@ class BambiDockWidget(QDockWidget):
         animal_tab = QWidget()
         animal_layout = QVBoxLayout(animal_tab)
         main_tabs.addTab(animal_tab, "Processing")
+
+        self._processing_info_btn = self._make_info_button(
+            self._show_processing_info)
+        animal_info_row = QHBoxLayout()
+        animal_info_row.setContentsMargins(0, 0, 0, 0)
+        animal_info_row.addStretch()
+        animal_info_row.addWidget(self._processing_info_btn)
+        animal_layout.addLayout(animal_info_row)
 
         animal_layout.addWidget(proc_steps_group)
 
@@ -4046,20 +4051,42 @@ class BambiDockWidget(QDockWidget):
         msg.setIcon(QMessageBox.Icon.Information)
         msg.exec()
 
-    def _show_processing_info(self):
-        """Show an info popup describing the processing pipeline."""
+    def _make_info_button(self, slot) -> QToolButton:
+        """A round "?" button opening *slot*, styled like the original one."""
+        button = QToolButton()
+        button.setText("?")
+        button.setFixedSize(20, 20)
+        button.setStyleSheet(
+            "QToolButton {"
+            "  border-radius: 10px;"
+            "  border: 1px solid palette(mid);"
+            "  background: palette(button);"
+            "  font-weight: bold;"
+            "  font-size: 11px;"
+            "}"
+            "QToolButton:hover { background: palette(light); }"
+            "QToolButton:pressed { background: palette(mid); }"
+        )
+        button.clicked.connect(slot)
+        return button
+
+    #: Shared opening for both pipeline info popups: the two tabs are split by
+    #: what they depend on, not by an order they have to be run in.
+    _PIPELINE_INTRO = (
+        "The steps are split across two tabs, following what they depend on. "
+        "<b>Pre-Processing</b> derives from the drone poses and the DEM and is "
+        "independent of any animal; <b>Processing</b> depends on the "
+        "detections. Only frame extraction is a prerequisite for both — "
+        "re-running detection marks the Processing steps out of date and "
+        "leaves the ALFS and orthomosaic alone.<br><br>"
+    )
+
+    def _show_preprocessing_info(self):
+        """Info popup for the Pre-Processing steps."""
         msg = QMessageBox(self)
-        msg.setWindowTitle("Processing Pipeline")
+        msg.setWindowTitle("Pre-Processing")
         msg.setIcon(QMessageBox.Icon.Information)
-        msg.setText(
-            "<b>Processing Pipeline</b><br><br>"
-            "The steps are split across two tabs, following what they depend "
-            "on. <b>Pre-Processing</b> derives from the drone poses and the "
-            "DEM and is independent of any animal; <b>Processing</b> depends "
-            "on the detections. The two branches can be run independently — "
-            "re-running detection marks the Processing steps out of date and "
-            "leaves the Pre-Processing ones alone.<br><br>"
-            "<b>Pre-Processing</b><br><br>"
+        body = (
             "<b>P1 — Extract Frames</b><br>"
             "Decodes and undistorts frames for the selected camera (thermal or RGB); "
             "matches GPS positions from the AirData log via SRT timestamps (video) or "
@@ -4078,7 +4105,23 @@ class BambiDockWidget(QDockWidget):
             "Merges the exported frame GeoTIFFs (P5) into a single true "
             "orthomosaic, using all frames or a selected range and a configurable "
             "overlap merge mode.<br><br>"
-            "<b>Processing</b><br><br>"
+
+            "<b>Several flights in one project</b><br>"
+            "Each flight needs its own target folder — the result files are per "
+            "folder, so two flights sharing one would overwrite each other. Add "
+            "them with the <b>+</b> button beside the flight selector on the "
+            "Input tab; each keeps its own configuration and its own QGIS layer "
+            "group, and the Survey Analytics tools can combine them."
+        )
+        msg.setText(f"<b>Pre-Processing</b><br><br>{self._PIPELINE_INTRO}{body}")
+        msg.exec()
+
+    def _show_processing_info(self):
+        """Info popup for the animal-specific steps."""
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Processing")
+        msg.setIcon(QMessageBox.Icon.Information)
+        body = (
             "<b>A1 — Detect Animals</b><br>"
             "Runs YOLO-based detection on every extracted frame. The thermal model is "
             "downloaded automatically on first use.<br><br>"
@@ -4093,21 +4136,18 @@ class BambiDockWidget(QDockWidget):
             "Links detections across frames into continuous tracks using the selected "
             "tracking backend. With a TRex tracklet folder configured this imports "
             "those instead, and runs no tracker.<br><br>"
-            "<b>A3 — Object Segmentation</b><br>"
+            "<b>A3 — Run SAM3 Segmentation</b><br>"
             "Segments detected objects using Roboflow SAM3.<br><br>"
             "<b>→ Geo-Reference Segmentation</b><br>"
             "Projects the masks onto the DEM to world coordinates.<br><br>"
 
-            "The BAMBI plugin is not intended to process multiple flights within "
-            "the same QGIS project (and the same output folder), since the result "
-            "files in the output folder will be replaced after additional runs. "
-            "If you want to combine multiple results, it is recommended to run "
-            "processing independently with (1) different output folders (don't "
-            "foregt to add all layers to QGIS before changing the output folder, "
-            "otherwise you will have to change it back again!) or (2) group all "
-            "layers of interest, export them as 'Layer Definition File' and import "
-            "it again to QGIS."
+            "<b>Export</b><br>"
+            "Writes the detections and tracks out as COCO, YOLO, MOT, TRex "
+            "tracklets, GeoJSON, a Camtrap DP package or a Darwin Core Archive "
+            "for GBIF. Species names, enum values and custom fields are "
+            "resolved, so nothing receives an internal id."
         )
+        msg.setText(f"<b>Processing</b><br><br>{self._PIPELINE_INTRO}{body}")
         msg.exec()
 
     def _on_thermal_calib_preset_changed(self, index: int):

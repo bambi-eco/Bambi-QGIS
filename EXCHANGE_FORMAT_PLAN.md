@@ -231,16 +231,16 @@ species get `max(species_id)+1` at first use and are never renumbered.
 #### Where species are configured
 
 The `species` table is **authoritative for a project**, and it is edited in
-exactly one place: the **Detection configuration tab**. Species are a property of
+exactly one place: the **Project** configuration tab. Species are a property of
 the survey, not of whichever tool happens to be open, and confining creation to
 one editor is what actually fixes latent bug 1 — `species_class_ids()` can no
 longer mint an id from an arbitrary string typed into a combo box.
 
-- The editor is a standalone dialog (`bambi_species_editor.py`) over a headless
-  model (`core/species.py`), hosted by the Detection tab and openable from
-  anywhere else that needs it.
-- The detector's `class_mapping` (§3.1) is edited in the same tab — it is
-  detector configuration, so it belongs next to the model selection.
+- The editor is a standalone dialog (`bambi_schema_dialog.py`) over a headless
+  model (`core/schema_editor.py`), hosted by the **Project** configuration tab
+  and openable from anywhere else that needs it.
+- The detector's `class_mapping` (§3.1) is edited in the same dialog — it maps a
+  producer's raw classes onto the project's species, so it belongs with them.
 - `core/config_schema.py` carries the species list only as a **preset** for
   seeding new projects or sharing a taxonomy between flights. The store wins for
   an existing project; the config never silently overwrites it.
@@ -549,8 +549,8 @@ they share **one editor** — a *Project Schema* dialog with three tabs
 
 It has two entry points and no duplicated logic:
 
-- the **Detection configuration tab** hosts it (species and `class_mapping` are
-  detection configuration);
+- the **Project** configuration tab hosts it — the schema describes the survey
+  rather than one step, so it comes before the steps that consume it;
 - the **labelling tool's gear button** opens the same dialog, so an annotator can
   add a species, extend an enum or define a field without switching tools —
   the requirement that already applied to species, generalised.
@@ -738,8 +738,8 @@ the mechanism that made class ids unstable.
 Because that would otherwise force a round trip through another tab
 mid-annotation, the combo gets an adjacent **"Manage species…"** button that
 opens the shared *Project Schema* dialog (§5.3) on its Species tab — the same
-dialog the gear button opens on Custom fields, and the same one the Detection tab
-hosts. One editor, three entry points. It is modal over the labelling dialog, and
+dialog the gear button opens on Custom fields, and the same one the Project
+configuration tab hosts. One editor, three entry points. It is modal over the labelling dialog, and
 on close every combo repopulates with the current selection preserved by id.
 
 The same applies to enum-typed fields: the `sex`, `age` and `occlusion` combos
@@ -1072,7 +1072,7 @@ Each phase leaves the plugin working.
 |---|---|
 | **0** ✅ | `core/gpkg.py` (aspatial GPKG boilerplate, stdlib sqlite3) + `core/store.py` (schema, vocabulary seeding, invariant triggers). No stage uses it yet. **Done:** 95 unit tests + 14 QGIS spikes; GPKG layout confirmed; ratchet 20 → 22. |
 | **1** ✅ | 5.x importer (`core/migration.py`) + "Migrate 5.x…" action on the dock widget. Read-only with respect to the legacy files. **Done:** 33 unit tests on golden fixtures, 5 QGIS widget tests, 5 integration tests on flight 6's real output; ratchet 22 → 24. |
-| **2** ✅ | Detection stage, TRex import → write the store (`core/detection_store.py`). `detection_id`, `species` (base classes 0 / -1 / -2), `enums`, `field_schema`, `detection_sources` and `class_mapping` live, plus `core/schema_editor.py` + the *Project Schema* dialog on the Detection tab; **latent bugs 1 and 2 fixed.** Dual-write with a parity check on every detection run, behind `Input/WriteLegacyTextOutputs` (§9). **Done:** +86 unit, +17 QGIS, +11 toggle; ratchet 24 → 25. |
+| **2** ✅ | Detection stage, TRex import → write the store (`core/detection_store.py`). `detection_id`, `species` (base classes 0 / -1 / -2), `enums`, `field_schema`, `detection_sources` and `class_mapping` live, plus `core/schema_editor.py` + the *Project Schema* dialog; **latent bugs 1 and 2 fixed.** Dual-write with a parity check on every detection run, behind `Input/WriteLegacyTextOutputs` (§9). **Done:** +86 unit, +17 QGIS, +11 toggle; ratchet 24 → 25. |
 | **3** ✅ | Georeference + tracking read/write the store (`core/track_store.py`), `track_runs` introduced, `georef_failures` populated. **`core/track_export.py` deleted.** **Done:** +28 unit, +6 integration on flight 6; ratchet held at 25 (see below). |
 | **4** ✅ | Labelling tool onto the store (`core/label_store.py`): upsert materialisation (§6.2), manual tracks (§6.5), custom fields into `detections.attributes`, closed vocabulary in every categorical combo (§6.8), `origin_*` provenance on import. Consumer audit done (§8.2). **Done:** +46 unit; ratchet 25 → 26. |
 | **5** ✅ | `core/stages.py`: dependency graph, cascade (**latent bug 3 fixed**), reconciliation, reset; stages record their own completion; `output_inventory` and the QGIS layer readers prefer the store; "Reset Step…" with locked-file handling. **Done:** +50 unit, +4 inventory, +15 reader, +7 QGIS; ratchet 26 → 27. |

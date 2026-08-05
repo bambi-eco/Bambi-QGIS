@@ -201,3 +201,70 @@ def test_the_erode_setting_is_still_read(dock, tmp_path):
     dock.target_folder_edit.setText(str(tmp_path))
     dock.geotiff_edge_erosion_spin.setValue(4)
     assert dock.get_config()["geotiff_edge_erosion_px"] == 4
+
+
+# ---------------------------------------------------------------------------
+# Each tab explains its own steps
+# ---------------------------------------------------------------------------
+
+def test_each_tab_has_its_own_info_button(dock):
+    assert dock._preprocessing_info_btn is not None
+    assert dock._processing_info_btn is not None
+    assert dock._preprocessing_info_btn is not dock._processing_info_btn
+
+
+def test_the_info_buttons_sit_on_their_own_tabs(dock):
+    tabs = _main_tabs(dock)
+    names = [tabs.tabText(i) for i in range(tabs.count())]
+    pre = tabs.widget(names.index("Pre-Processing"))
+    proc = tabs.widget(names.index("Processing"))
+
+    assert pre.isAncestorOf(dock._preprocessing_info_btn)
+    assert proc.isAncestorOf(dock._processing_info_btn)
+
+
+def test_each_popup_describes_only_its_own_steps(dock, monkeypatch):
+    """A popup listing the other tab's steps is what prompted the split."""
+    from qgis.PyQt.QtWidgets import QMessageBox
+
+    shown = []
+    monkeypatch.setattr(QMessageBox, "setText",
+                        lambda self, text: shown.append(text))
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: None)
+
+    dock._show_preprocessing_info()
+    pre_text = shown[-1]
+    dock._show_processing_info()
+    proc_text = shown[-1]
+
+    for step in ("P1 —", "P6 —"):
+        assert step in pre_text and step not in proc_text
+    for step in ("A1 —", "A3 —"):
+        assert step in proc_text and step not in pre_text
+
+
+def test_both_popups_explain_how_the_tabs_relate(dock, monkeypatch):
+    from qgis.PyQt.QtWidgets import QMessageBox
+
+    shown = []
+    monkeypatch.setattr(QMessageBox, "setText",
+                        lambda self, text: shown.append(text))
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: None)
+
+    dock._show_preprocessing_info()
+    dock._show_processing_info()
+    assert all("independent of any animal" in text for text in shown)
+
+
+def test_the_multi_flight_advice_is_current(dock, monkeypatch):
+    """5.x warned against several flights per project; 6.0 supports them."""
+    from qgis.PyQt.QtWidgets import QMessageBox
+
+    shown = []
+    monkeypatch.setattr(QMessageBox, "setText",
+                        lambda self, text: shown.append(text))
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: None)
+
+    dock._show_preprocessing_info()
+    assert "not intended to process multiple flights" not in shown[-1]
+    assert "its own target folder" in shown[-1]
