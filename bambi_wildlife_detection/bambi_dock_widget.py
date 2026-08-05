@@ -12,7 +12,7 @@ import math
 import tempfile
 from collections import defaultdict
 from typing import Optional, Dict, Any, List
-from qgis.PyQt.QtCore import Qt, QThread, QSize
+from qgis.PyQt.QtCore import Qt, QThread
 from qgis.PyQt.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QGroupBox, QPushButton, QLineEdit, QSpinBox, QDoubleSpinBox,
@@ -288,37 +288,6 @@ class FrameRangeDialog(QDialog):
         return start, end
 
 
-class _FittedTabWidget(QTabWidget):
-    """A tab widget only as tall as the page currently shown.
-
-    ``QTabWidget.sizeHint()`` is the maximum over every page, so one tall tab —
-    Survey Analytics is roughly twice the height of Pre-Processing — leaves a
-    large empty gap below all the others. Setting an ignored size policy on the
-    hidden pages does *not* help: the hint is computed from the pages' own
-    hints, not from their policies.
-
-    Reporting the current page's height instead keeps this a hint rather than a
-    cap, so a page that grows later (a tracker list filling in, say) is still
-    given the room it asks for.
-    """
-
-    def sizeHint(self):
-        hint = super().sizeHint()
-        page = self.currentWidget()
-        if page is None:
-            return hint
-        height = page.sizeHint().height() + self.tabBar().sizeHint().height()
-        return QSize(hint.width(), height + 8)
-
-    def minimumSizeHint(self):
-        hint = super().minimumSizeHint()
-        page = self.currentWidget()
-        if page is None:
-            return hint
-        return QSize(hint.width(),
-                     min(hint.height(), self.sizeHint().height()))
-
-
 class BambiDockWidget(QDockWidget):
     """Main dock widget for the BAMBI Wildlife Detection plugin."""
 
@@ -403,9 +372,7 @@ class BambiDockWidget(QDockWidget):
         main_layout.addWidget(scroll_area)
 
         # Create main tab widget
-        main_tabs = _FittedTabWidget()
-        main_tabs.currentChanged.connect(self._fit_tab_height)
-        self._main_tabs = main_tabs
+        main_tabs = QTabWidget()
         scroll_layout.addWidget(main_tabs)
 
         # =====================================================================
@@ -442,6 +409,14 @@ class BambiDockWidget(QDockWidget):
             "Rename this flight. Its QGIS layer group is renamed with it.")
         self.flight_rename_btn.clicked.connect(self.rename_flight)
         flight_row.addWidget(self.flight_rename_btn)
+
+        self.flight_remove_btn = QPushButton("🗑")
+        self.flight_remove_btn.setFixedWidth(30)
+        self.flight_remove_btn.setToolTip(
+            "Remove this flight from the project. Its target folder and "
+            "everything in it are left untouched.")
+        self.flight_remove_btn.clicked.connect(self.remove_flight)
+        flight_row.addWidget(self.flight_remove_btn)
         flight_box.addLayout(flight_row)
         input_layout.addWidget(flight_group)
 
@@ -3025,9 +3000,6 @@ class BambiDockWidget(QDockWidget):
         analytics_tab_layout.addWidget(pop_group)
         analytics_tab_layout.addStretch()
 
-        # Every tab exists now, so the first one can be sized to itself.
-        self._fit_tab_height(main_tabs.currentIndex())
-
     def _populate_tracker_backends(self):
         """Populate the tracker backend dropdown with available trackers."""
         from .tracker_manager import get_tracker_manager
@@ -4097,16 +4069,6 @@ class BambiDockWidget(QDockWidget):
         msg.setText(text)
         msg.setIcon(QMessageBox.Icon.Information)
         msg.exec()
-
-    def _fit_tab_height(self, index: int) -> None:
-        """Re-measure after a tab switch, so the panel follows the new page."""
-        tabs = getattr(self, "_main_tabs", None)
-        if tabs is None:
-            return
-        current = tabs.widget(index)
-        if current is not None:
-            current.adjustSize()
-        tabs.updateGeometry()
 
     def _make_info_button(self, slot) -> QToolButton:
         """A round "?" button opening *slot*, styled like the original one."""
@@ -5441,6 +5403,7 @@ class BambiDockWidget(QDockWidget):
         several = self.flight_combo.count() > 1
         self.flight_combo.setEnabled(several)
         self.flight_rename_btn.setEnabled(self.flight_combo.count() > 0)
+        self.flight_remove_btn.setEnabled(self.flight_combo.count() > 0)
 
     def _adopt_target_folder(self, folder: str):
         """Keep the flight list in step with a target folder chosen by hand.
@@ -5629,6 +5592,82 @@ class BambiDockWidget(QDockWidget):
             group.setName(flights_core.group_name(updated[
                 self._active_flight_index]))
         self.log(f"Renamed flight to '{updated[self._active_flight_index]['name']}'")
+
+    def remove_flight(self):
+        """Remove the active flight from the project, once confirmed."""
+        from .core import flights as flights_core
+
+        flight = self._active_flight()
+        if flight is None:
+            QMessageBox.information(
+                self, "Flight", "There is no flight to remove.")
+            return
+        if getattr(self, "current_worker", None) is not None:
+            QMessageBox.information(
+                self, "Flight",
+                "A step is running. Wait for it to finish before removing a "
+                "flight.")
+            return
+
+        if not self._confirm_remove_flight(flight):
+            return
+
+        index = self._active_flight_index
+        name = flights_core.group_name(flight)
+        updated = flights_core.remove_flight(self._flights(), index)
+        active = flights_core.active_after_removal(
+            len(self._flights()), index, index)
+
+        # Drop the layer group; the layers only describe the flight that is
+        # going away. The files they read stay where they are.
+        group = QgsProject.instance().layerTreeRoot().findGroup(name)
+        if group is not None:
+            group.parent().removeChildNode(group)
+
+        self._flight_list = updated
+        self._active_flight_index = max(0, active)
+
+        self._switching_flight = True
+        try:
+            self._refresh_flight_combo()
+            if active < 0:
+                # Nothing left to describe, so the form must stop pointing at
+                # the folder that was just removed — otherwise the next save
+                # would write straight back into it.
+                self.target_folder_edit.setText("")
+            else:
+                self.load_config_from_project(restore_flights=False)
+        finally:
+            self._switching_flight = False
+
+        self.log(f"Removed flight '{name}' from the project "
+                 f"({flight.get('target_folder', '')} was not deleted)")
+        self.save_config_to_project()
+        return True
+
+    def _confirm_remove_flight(self, flight) -> bool:
+        """Ask before removing, and be exact about what is and is not deleted."""
+        from .core import flights as flights_core
+
+        folder = flight.get("target_folder", "") or "(no folder)"
+        box = QMessageBox(self)
+        box.setWindowTitle("Remove flight")
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setText(
+            f"Remove the flight <b>{flights_core.group_name(flight)}</b> from "
+            "this project?")
+        box.setInformativeText(
+            "Its QGIS layer group is removed and the project stops listing "
+            "it.<br><br>"
+            f"<b>Nothing on disk is deleted.</b> {folder} keeps its frames, "
+            "detections, tracks and configuration, so adding the flight back "
+            "later picks up exactly where it left off.")
+        remove_btn = box.addButton("Remove flight",
+                                   QMessageBox.ButtonRole.DestructiveRole)
+        cancel_btn = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(cancel_btn)
+        box.exec()
+        return box.clickedButton() is remove_btn
 
     def _on_export_format_changed(self):
         """Reflect the chosen format's own defaults in the options."""

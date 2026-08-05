@@ -271,43 +271,8 @@ def test_the_multi_flight_advice_is_current(dock, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# The panel is only as tall as the tab being shown
+# One progress bar, not two
 # ---------------------------------------------------------------------------
-
-def test_the_panel_is_as_tall_as_the_page_being_shown(dock):
-    """Not as tall as the tallest page, which is what QTabWidget does by
-    default and what left a gap below every tab but Survey Analytics."""
-    tabs = _main_tabs(dock)
-    for index in range(tabs.count()):
-        tabs.setCurrentIndex(index)
-        page = tabs.widget(index).sizeHint().height()
-        panel = tabs.sizeHint().height()
-        assert page <= panel <= page + 60, tabs.tabText(index)
-
-
-def test_switching_tabs_moves_the_height_with_it(dock):
-    tabs = _main_tabs(dock)
-    names = [tabs.tabText(i) for i in range(tabs.count())]
-
-    tabs.setCurrentIndex(names.index("Survey Analytics"))
-    tall = tabs.sizeHint().height()
-    tabs.setCurrentIndex(names.index("Configuration"))
-    assert tabs.sizeHint().height() < tall
-    tabs.setCurrentIndex(names.index("Survey Analytics"))
-    assert tabs.sizeHint().height() == tall
-
-
-def test_a_small_tab_is_not_as_tall_as_the_largest(dock):
-    tabs = _main_tabs(dock)
-    names = [tabs.tabText(i) for i in range(tabs.count())]
-
-    tabs.setCurrentIndex(names.index("Survey Analytics"))
-    tall = tabs.sizeHint().height()
-    tabs.setCurrentIndex(names.index("Processing"))
-    short = tabs.sizeHint().height()
-
-    assert short < tall
-
 
 def test_the_analytics_tab_has_no_second_progress_bar(dock):
     """It mirrored the Processing tab's; the shared run panel replaced it."""
