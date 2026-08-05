@@ -1079,6 +1079,7 @@ Each phase leaves the plugin working.
 | **6** ✅ | `core/exporters/` — COCO, MOT, YOLO, TRex npz, GeoJSON, **Camtrap DP and Darwin Core Archive**. Video Creator reads the store, removing the last positional alignment (§8.2). **Done:** +36 exporter, +5 video; ratchet 27 → 28. |
 | **7** ✅ | Survey analytics onto the store (`core/analytics_source.py`): explicit population filter, species filtering and stratification, provenance in every result, perpendicular distances carrying `detection_id`, multi-project pooling matching species by name. **Done:** +26 unit. |
 | **8** ✅ | UI reorganisation: Processing split into **Pre-Processing** and **Processing** (§10.1), steps renumbered `P1–P6` / `A1–A4`, run panel shared below the tabs. **Done:** +19 QGIS. |
+| **9** ✅ | Configuration moves into `project.gpkg` (`core/flights.py`); **multi-flight projects** with a flight selector on the Input tab and flight-named layer groups (§10.2). **Done:** +29 unit, +14 QGIS. |
 
 ### 10.1 Phase 8 — splitting the Processing tab
 
@@ -1122,6 +1123,60 @@ Three things to settle when it lands:
 
 Config keys, step ids and `output_inventory` keys stay unchanged — this is a
 presentation change only, so a saved configuration keeps working.
+
+### 10.2 Phase 9 — configuration in the store, and multi-flight projects
+
+Today the 112 form values live in the QGIS project as `QgsProject` entries, and
+a `.qgz` describes exactly one flight. Two changes, the second only possible
+because of the first.
+
+**Configuration moves into `project.gpkg`.** It is cheaper than it looks:
+`save_config_entries` / `load_config_entries` already take injected
+reader/writer callables, so swapping `QgsProject` for a store table is a matter
+of passing different functions — every entry comes along unchanged.
+
+| Holds | What |
+|---|---|
+| QGIS project | the flight list (`name → target folder`) and which flight is active |
+| `<flight>/project.gpkg` | that flight's 112 config values, beside its species, enums and stage state |
+
+This makes a flight folder **self-describing**: hand someone the folder and the
+settings that produced it come with it, which is not true today. The honest
+cost is the mirror image — if a folder goes missing its configuration goes with
+it, where today it survives in the `.qgz`. That is the right trade for a format
+whose whole point is that outputs carry their own meaning, but it is a change
+in behaviour, not a free win.
+
+**One flight is one target folder.** This is a constraint, not a convention:
+`bambi_{m}/detections.gpkg` and its siblings are per folder and modality, with
+no flight dimension, so two flights sharing a folder would overwrite each
+other's detections. The existing `<input>/qgis` default already produces
+distinct folders in practice; Phase 9 adds the check that makes it guaranteed
+rather than likely.
+
+**The flight selector** sits at the top of the Input tab: a name field, a `+`
+to add a flight, and a drop-down to switch. Exactly one flight is active at a
+time, so everything downstream — `get_config()`, the processing stages, the
+status labels — keeps reading a single configuration and needs no changes. The
+selector is disabled while a step runs: workers capture their config at start
+so they are safe, but a log describing a flight you are no longer looking at is
+not.
+
+**Layers gain a flight group.** Layers already carry a `bambi_target_folder`
+custom property, so the grouping is derivable rather than new bookkeeping: a
+parent group named after the flight, with the existing per-stage groups
+beneath. **Renaming a flight renames its group**, rather than orphaning it and
+accumulating stale ones — cheap to do at rename, awkward to retrofit later.
+
+**Migration.** Existing projects keep their configuration in the `.qgz`. On
+first open it is imported into the active flight's `project.gpkg`, the same
+shape as the 5.x migration, with `config_schema` serving as the single mapping
+in both directions.
+
+Two things deliberately stay in the QGIS project: the additional-corrections
+list and the thermal curve, which are bound to a dialog and a list widget
+rather than value widgets, and the SAM3 API key, which is never persisted at
+all.
 
 Phases 2–4 are the bulk. Phase 3 is where the payoff lands.
 
@@ -1276,6 +1331,7 @@ the labelling tool's combos populate from the store.
 | 6 ✅ | Exporter fixtures, incl. enum resolution and class-id remapping |
 | 7 ✅ | Analytics results unchanged vs. the pre-rework baseline on flight 6 |
 | 8 ✅ | Every step still reachable and runnable; saved configs load unchanged |
+| 9 ✅ | Existing `.qgz` configs migrate; two flights cannot share a folder; renaming a flight renames its layer group |
 
 Phase 7's gate is worth stating plainly: the Praschl2026 R validation baseline
 must still reproduce. A data-plumbing release that quietly changes a population

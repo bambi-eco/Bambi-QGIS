@@ -383,6 +383,35 @@ class BambiDockWidget(QDockWidget):
         input_layout = QVBoxLayout(input_tab)
         main_tabs.addTab(input_tab, "Input")
 
+        # --- Flights ---
+        # A QGIS project can hold several flights; exactly one is active, so
+        # everything downstream still reads a single configuration (§10.2).
+        flight_group = QGroupBox("Flight")
+        flight_box = QVBoxLayout(flight_group)
+        flight_row = QHBoxLayout()
+        flight_row.addWidget(QLabel("Active:"))
+
+        self.flight_combo = QComboBox()
+        self.flight_combo.setToolTip(
+            "Each flight has its own target folder, configuration and layer "
+            "group. Switching flights loads that flight's settings.")
+        self.flight_combo.currentIndexChanged.connect(self._on_flight_changed)
+        flight_row.addWidget(self.flight_combo, 1)
+
+        self.flight_add_btn = QPushButton("+")
+        self.flight_add_btn.setFixedWidth(30)
+        self.flight_add_btn.setToolTip("Add another flight to this project")
+        self.flight_add_btn.clicked.connect(self.add_flight)
+        flight_row.addWidget(self.flight_add_btn)
+
+        self.flight_rename_btn = QPushButton("Rename…")
+        self.flight_rename_btn.setToolTip(
+            "Rename this flight. Its QGIS layer group is renamed with it.")
+        self.flight_rename_btn.clicked.connect(self.rename_flight)
+        flight_row.addWidget(self.flight_rename_btn)
+        flight_box.addLayout(flight_row)
+        input_layout.addWidget(flight_group)
+
         # --- Input mode toggle ---
         self.video_mode_check = QCheckBox("Video Mode")
         self.video_mode_check.setChecked(True)
@@ -4961,6 +4990,7 @@ class BambiDockWidget(QDockWidget):
         if folder:
             self.target_folder_edit.setText(folder)
             self._check_existing_outputs(folder)
+            self._adopt_target_folder(folder)
             self._refresh_migrate_button()
 
     def browse_trex_npz_dir(self):
@@ -5110,6 +5140,8 @@ class BambiDockWidget(QDockWidget):
         folder = self.target_folder_edit.text().strip()
         if folder and os.path.isdir(folder):
             self._check_existing_outputs(folder)
+        if not getattr(self, "_switching_flight", False):
+            self._adopt_target_folder(folder)
         self._refresh_migrate_button()
 
     def _refresh_migrate_button(self):
@@ -5189,6 +5221,209 @@ class BambiDockWidget(QDockWidget):
         "density": "Density Map",
         "coverage": "Coverage Map",
     }
+
+    # ------------------------------------------------------------------
+    # Flights (§10.2)
+    # ------------------------------------------------------------------
+
+    def _restore_flights(self, project) -> None:
+        """Read the flight list from the QGIS project.
+
+        A project written before 6.0 has none, so the target folder it stored
+        becomes the first flight — that keeps a single-flight project working
+        exactly as before, with the list simply describing what was already
+        true.
+        """
+        from .core import flights as flights_core
+
+        raw, _ok = project.readEntry(PLUGIN_SCOPE, "Flights/List", "")
+        try:
+            restored = json.loads(raw) if raw else []
+        except ValueError:
+            restored = []
+        restored = [f for f in restored
+                    if isinstance(f, dict) and f.get("target_folder")]
+
+        if not restored:
+            folder, _ok = project.readEntry(
+                PLUGIN_SCOPE, "Input/TargetFolder", "")
+            folder = (folder or "").strip()
+            restored = [{"name": flights_core.default_name(folder),
+                         "target_folder": folder}] if folder else []
+
+        index_text, _ok = project.readEntry(PLUGIN_SCOPE, "Flights/Active", "0")
+        try:
+            index = int(index_text)
+        except (TypeError, ValueError):
+            index = 0
+
+        self._flight_list = restored
+        if restored:
+            self._active_flight_index = max(0, min(index, len(restored) - 1))
+        else:
+            self._active_flight_index = 0
+        self._refresh_flight_combo()
+
+    def _flights(self) -> List[dict]:
+        return list(getattr(self, "_flight_list", []) or [])
+
+    def _active_flight(self) -> Optional[dict]:
+        flights = self._flights()
+        index = getattr(self, "_active_flight_index", 0)
+        if 0 <= index < len(flights):
+            return flights[index]
+        return None
+
+    def _refresh_flight_combo(self):
+        from .core import flights as flights_core
+
+        blocked = self.flight_combo.blockSignals(True)
+        self.flight_combo.clear()
+        for flight in self._flights():
+            self.flight_combo.addItem(flights_core.group_name(flight))
+        index = getattr(self, "_active_flight_index", 0)
+        if 0 <= index < self.flight_combo.count():
+            self.flight_combo.setCurrentIndex(index)
+        self.flight_combo.blockSignals(blocked)
+
+        several = self.flight_combo.count() > 1
+        self.flight_combo.setEnabled(several)
+        self.flight_rename_btn.setEnabled(self.flight_combo.count() > 0)
+
+    def _adopt_target_folder(self, folder: str):
+        """Keep the flight list in step with a target folder chosen by hand.
+
+        The folder is the flight's identity, so setting one on a project with
+        no flights creates the first, and changing it moves the active flight
+        rather than silently detaching it from its outputs.
+        """
+        from .core import flights as flights_core
+
+        folder = (folder or "").strip()
+        if not folder:
+            return
+        existing = self._flights()
+
+        if not existing:
+            self._flight_list = [{
+                "name": flights_core.default_name(folder),
+                "target_folder": folder,
+            }]
+            self._active_flight_index = 0
+            self._refresh_flight_combo()
+            return
+
+        found = flights_core.find_by_folder(existing, folder)
+        if found is not None:
+            self._active_flight_index = found
+            self._refresh_flight_combo()
+            return
+
+        index = getattr(self, "_active_flight_index", 0)
+        try:
+            self._flight_list = flights_core.set_folder(existing, index, folder)
+        except flights_core.FlightError as exc:
+            QMessageBox.warning(self, "Flight", str(exc))
+            return
+        self._refresh_flight_combo()
+
+    def _on_flight_changed(self, index: int):
+        """Switch flights: save the current configuration, load the new one."""
+        if index < 0 or index >= len(self._flights()):
+            return
+        if getattr(self, "_switching_flight", False):
+            return
+        if getattr(self, "current_worker", None) is not None:
+            QMessageBox.information(
+                self, "Flight",
+                "A step is running. Wait for it to finish before switching "
+                "flights — otherwise the log and status would describe a "
+                "flight you are no longer looking at.")
+            self._refresh_flight_combo()
+            return
+
+        self._switching_flight = True
+        try:
+            self.save_config_to_project()
+            self._active_flight_index = index
+            self.load_config_from_project(restore_flights=False)
+        finally:
+            self._switching_flight = False
+
+        flight = self._active_flight()
+        if flight:
+            self.log(f"Switched to flight '{flight['name']}'")
+            self._check_existing_outputs(flight.get("target_folder", ""))
+
+    def add_flight(self):
+        """Add another flight to this project and switch to it."""
+        from .core import flights as flights_core
+
+        folder = QFileDialog.getExistingDirectory(
+            self, "Target folder for the new flight")
+        if not folder:
+            return
+
+        name, ok = QInputDialog.getText(
+            self, "New flight", "Flight name:",
+            text=flights_core.default_name(folder))
+        if not ok:
+            return
+
+        try:
+            updated = flights_core.add_flight(self._flights(), name, folder)
+        except flights_core.FlightError as exc:
+            QMessageBox.warning(self, "Flight", str(exc))
+            return
+
+        self.save_config_to_project()
+        self._flight_list = updated
+        self._active_flight_index = len(updated) - 1
+        self._refresh_flight_combo()
+
+        self._switching_flight = True
+        try:
+            self.target_folder_edit.setText(folder)
+            self.load_config_from_project(restore_flights=False)
+            self.target_folder_edit.setText(folder)
+        finally:
+            self._switching_flight = False
+
+        self.log(f"Added flight '{updated[-1]['name']}' → {folder}")
+        self._check_existing_outputs(folder)
+
+    def rename_flight(self):
+        """Rename the active flight, and its QGIS layer group with it."""
+        from .core import flights as flights_core
+
+        flight = self._active_flight()
+        if flight is None:
+            QMessageBox.information(
+                self, "Flight", "There is no flight to rename yet.")
+            return
+
+        previous = flights_core.group_name(flight)
+        name, ok = QInputDialog.getText(
+            self, "Rename flight", "Flight name:", text=flight["name"])
+        if not ok:
+            return
+
+        try:
+            updated = flights_core.rename_flight(
+                self._flights(), self._active_flight_index, name)
+        except flights_core.FlightError as exc:
+            QMessageBox.warning(self, "Flight", str(exc))
+            return
+
+        self._flight_list = updated
+        self._refresh_flight_combo()
+
+        # Rename the group rather than leaving a stale one behind.
+        group = QgsProject.instance().layerTreeRoot().findGroup(previous)
+        if group is not None:
+            group.setName(flights_core.group_name(updated[
+                self._active_flight_index]))
+        self.log(f"Renamed flight to '{updated[self._active_flight_index]['name']}'")
 
     def _on_export_format_changed(self):
         """Reflect the chosen format's own defaults in the options."""
@@ -9969,18 +10204,43 @@ class BambiDockWidget(QDockWidget):
             raise ValueError(f"Unknown config role {role!r}")
 
     def save_config_to_project(self):
-        """Save all configuration to the QGIS project (core.config_schema)."""
+        """Save the configuration of the active flight (§10.2).
+
+        The form values go to the flight's own ``project.gpkg``, so the folder
+        is self-describing; the QGIS project keeps only the flight list and
+        which one is active.
+        """
+        from .core import flights as flights_core
         from .core.config_schema import WIDGET_BINDINGS, save_config_entries
         project = QgsProject.instance()
 
         values = {key: self._config_widget_value(attr, role)
                   for key, (attr, role) in WIDGET_BINDINGS.items()}
-        save_config_entries(
-            values,
-            lambda k, v: project.writeEntry(PLUGIN_SCOPE, k, v),
-            lambda k, v: project.writeEntryDouble(PLUGIN_SCOPE, k, v),
-            lambda k, v: project.writeEntryBool(PLUGIN_SCOPE, k, v),
-        )
+
+        target_folder = self.target_folder_edit.text().strip()
+        if target_folder and os.path.isdir(target_folder):
+            stored = {}
+            write = flights_core.config_writers(stored)
+            save_config_entries(values, *write)
+            try:
+                flights_core.save_config(target_folder, stored)
+            except Exception as exc:  # noqa: BLE001 — never lose a save
+                self.log(f"Warning: could not save configuration to the "
+                         f"store: {exc}")
+        else:
+            # No folder yet, so there is nowhere to put it — the QGIS project
+            # carries it until one is chosen.
+            save_config_entries(
+                values,
+                lambda k, v: project.writeEntry(PLUGIN_SCOPE, k, v),
+                lambda k, v: project.writeEntryDouble(PLUGIN_SCOPE, k, v),
+                lambda k, v: project.writeEntryBool(PLUGIN_SCOPE, k, v),
+            )
+
+        project.writeEntry(PLUGIN_SCOPE, "Flights/List",
+                           json.dumps(self._flights()))
+        project.writeEntry(PLUGIN_SCOPE, "Flights/Active",
+                           str(getattr(self, "_active_flight_index", 0)))
 
         # Additional corrections are bound to a list widget, not a value
         # widget, so they are saved separately. The SAM3 API key is
@@ -10006,28 +10266,50 @@ class BambiDockWidget(QDockWidget):
 
         self.log("Configuration saved to project")
 
-    def load_config_from_project(self):
-        """Load all configuration from the QGIS project (core.config_schema)."""
+    def load_config_from_project(self, restore_flights: bool = True):
+        """Load the active flight's configuration (core.config_schema).
+
+        *restore_flights* is False when switching or adding a flight: the list
+        in memory is already newer than the one in the QGIS project, which is
+        only written on save.
+        """
         from .core.config_schema import WIDGET_BINDINGS, load_config_entries
         project = QgsProject.instance()
 
-        def read_str(key: str, default: str = "") -> str:
-            value, ok = project.readEntry(PLUGIN_SCOPE, key, default)
-            return value if ok else default
+        # Which flight is active decides where the configuration is read from
+        # (§10.2), so the list has to be settled first.
+        if restore_flights:
+            self._restore_flights(project)
 
-        def read_double(key: str, default: float = 0.0) -> float:
-            value, ok = project.readDoubleEntry(PLUGIN_SCOPE, key, default)
-            return value if ok else default
+        # Prefer the active flight's own store; fall back to the QGIS project,
+        # which is where projects written before 6.0 keep everything.
+        from .core import flights as flights_core
 
-        def read_bool(key: str, default: bool = False) -> bool:
-            value, ok = project.readBoolEntry(PLUGIN_SCOPE, key, default)
-            return value if ok else default
+        flight = self._active_flight()
+        folder = (flight or {}).get("target_folder", "")
+        stored = flights_core.load_config(folder) if folder else {}
+        migrated_from_project = False
 
-        # Check if there's any saved config
-        _test_value, has_config = project.readEntry(
-            PLUGIN_SCOPE, "Input/TargetFolder", "")
-        if not has_config:
-            return  # No saved config in this project
+        if stored:
+            read_str, read_double, read_bool = flights_core.config_readers(stored)
+        else:
+            _test_value, has_config = project.readEntry(
+                PLUGIN_SCOPE, "Input/TargetFolder", "")
+            if not has_config:
+                return  # No saved config anywhere
+            migrated_from_project = bool(folder)
+
+            def read_str(key: str, default: str = "") -> str:
+                value, ok = project.readEntry(PLUGIN_SCOPE, key, default)
+                return value if ok else default
+
+            def read_double(key: str, default: float = 0.0) -> float:
+                value, ok = project.readDoubleEntry(PLUGIN_SCOPE, key, default)
+                return value if ok else default
+
+            def read_bool(key: str, default: bool = False) -> bool:
+                value, ok = project.readBoolEntry(PLUGIN_SCOPE, key, default)
+                return value if ok else default
 
         for key, value in load_config_entries(read_str, read_double, read_bool):
             attr, role = WIDGET_BINDINGS[key]
@@ -10038,6 +10320,13 @@ class BambiDockWidget(QDockWidget):
         legacy_model_path = read_str("Detection/ModelPath", "")
         if legacy_model_path and not self.thermal_model_path_edit.text():
             self.thermal_model_path_edit.setText(legacy_model_path)
+
+        # A project written before 6.0 keeps its configuration in the .qgz;
+        # move it into the flight's store once, so the folder becomes
+        # self-describing from here on (§10.2).
+        if migrated_from_project:
+            self.save_config_to_project()
+            self.log("Configuration moved into the flight's project.gpkg")
 
         # Additional corrections (bound to a list widget, loaded separately)
         corrections_json = read_str("Correction/AdditionalCorrections", "[]")
@@ -10065,13 +10354,34 @@ class BambiDockWidget(QDockWidget):
 
         self.log("Configuration loaded from project")
 
+    def _flight_group(self, create: bool = True):
+        """The layer group of the active flight, or the tree root.
+
+        Layers are grouped per flight so it is obvious which outputs belong
+        together (§10.2). Renaming a flight renames this group rather than
+        leaving a stale one behind, which is why it is looked up by the current
+        name every time instead of being cached.
+        """
+        from .core import flights
+
+        root = QgsProject.instance().layerTreeRoot()
+        flight = self._active_flight()
+        if not flight:
+            return root
+
+        name = flights.group_name(flight)
+        group = root.findGroup(name)
+        if group is None and create:
+            group = root.insertGroup(0, name)
+        return group or root
+
     def _remove_layer_group(self, group_name: str) -> bool:
         """Remove a layer group and every layer in it from the project.
 
         Re-adding a group would otherwise duplicate it, and its layers hold
         their GeoPackages open — which on Windows blocks rewriting them.
         """
-        root = QgsProject.instance().layerTreeRoot()
+        root = self._flight_group(create=False)
         group = root.findGroup(group_name)
         if group is None:
             return False
@@ -10090,7 +10400,7 @@ class BambiDockWidget(QDockWidget):
         :param at_top: If True, insert at top of layer tree; if False, append at bottom
         :return: The created QgsLayerTreeGroup
         """
-        root = QgsProject.instance().layerTreeRoot()
+        root = self._flight_group()
         group = QgsLayerTreeGroup(group_name)
 
         if at_top:

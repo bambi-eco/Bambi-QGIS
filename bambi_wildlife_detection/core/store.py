@@ -36,7 +36,7 @@ from . import gpkg
 
 #: Bumped on every schema change. Readers refuse anything newer; older files
 #: are upgraded in place by :func:`_upgrade`, which may only *add* things.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 #: Store kinds; each maps to one file and one DDL set.
 PROJECT = "project"
@@ -180,6 +180,14 @@ CREATE TABLE class_mapping (
     source_class TEXT NOT NULL,
     species_id   INTEGER NOT NULL DEFAULT 0 REFERENCES species(species_id),
     PRIMARY KEY (source_id, source_class)
+);
+
+-- The form values that produced this flight's outputs (§10.2). Keeping them
+-- beside the outputs makes the folder self-describing: hand someone the folder
+-- and the settings that produced it come with it.
+CREATE TABLE config (
+    key   TEXT PRIMARY KEY,
+    value TEXT
 );
 
 CREATE TABLE stages (
@@ -440,6 +448,12 @@ def open_store(path: str, kind: str, modality: str = "",
 #: tables, columns or indexes; they may never drop or rewrite anything, because
 #: an older plugin must still be able to read the file afterwards.
 _UPGRADES = {
+    3: {
+        PROJECT: [
+            "CREATE TABLE IF NOT EXISTS config "
+            "(key TEXT PRIMARY KEY, value TEXT)",
+        ],
+    },
     2: {
         PROJECT: [
             "ALTER TABLE species ADD COLUMN scientific_name TEXT",
