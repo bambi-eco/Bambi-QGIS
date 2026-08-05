@@ -250,3 +250,25 @@ def tracks_of(rows: List[dict]) -> Dict[int, List[dict]]:
 def ensure_folder(path: str) -> str:
     os.makedirs(path, exist_ok=True)
     return path
+
+
+def no_tracks_hint(target_folder: str, modality: str) -> str:
+    """Why a track-based export found nothing, when the answer is knowable.
+
+    "0 rows" is true but useless: the usual cause is a tracking run that never
+    reached the store, and the tracks file on disk makes it look as though
+    tracking worked. This turns the symptom into the next action.
+    """
+    from .. import track_store
+
+    if not track_store.analysis_runs(target_folder, modality):
+        legacy = os.path.join(target_folder, f"tracks_{modality}", "tracks.csv")
+        if os.path.isfile(legacy):
+            return (" — no tracking run is recorded in the store, although "
+                    f"{legacy} exists. It was written by a tracker that read "
+                    "the legacy text files. Re-run 'Geo-reference detections' "
+                    "and then tracking.")
+        return (" — no tracking run is recorded for this modality. Run "
+                "tracking first.")
+    return (" — a tracking run exists but none of these detections belong to "
+            "it. Re-run tracking if the detections changed since.")

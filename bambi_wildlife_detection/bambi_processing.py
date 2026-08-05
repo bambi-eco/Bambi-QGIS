@@ -5109,6 +5109,20 @@ class BambiProcessor:
 
         stored_geo = track_store.load_georeferenced(target_folder, camera_suffix)
         from_store = bool(stored_geo)
+
+        # Falling back to georeferenced.txt when the project *has* a store is
+        # not a harmless compatibility path: the text file carries no
+        # detection_id, so the run cannot be recorded, and every export and
+        # analytic reads the store. It would look like it worked — tracks.csv
+        # appears — while MOT, GeoJSON, TRex and the analytics all see nothing.
+        if not from_store and track_store.has_store(target_folder,
+                                                    camera_suffix):
+            raise RuntimeError(
+                "Geo-referenced detections are missing from the store, so "
+                "tracking would have to fall back to georeferenced.txt — and "
+                "tracks built from it cannot be linked back to the "
+                "detections. Run 'Geo-reference detections' again, then "
+                "tracking.")
         for row in stored_geo:
             frames[row["frame"]].append(Detection(
                 source_id=row["detection_id"],
@@ -5314,6 +5328,11 @@ class BambiProcessor:
             y2: float
             conf: float
             cls: int
+            #: Store row this track box came from, when it is known. BoxMOT
+            #: reports which input detection produced each output track, so
+            #: membership travels through instead of being matched back by
+            #: coordinates afterwards.
+            source_id: Optional[int] = None
 
         target_folder = config["target_folder"]
         tracker_id = config.get("tracker_id", "builtin")
@@ -5388,29 +5407,50 @@ class BambiProcessor:
 
         frames_pixel: Dict[int, List] = defaultdict(list)
 
-        with open(detections_file, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
-                parts = line.split()
-                if len(parts) >= 6:
-                    try:
-                        frame = int(parts[0])
-                        frames_pixel[frame].append({
-                            'x1': float(parts[1]),
-                            'y1': float(parts[2]),
-                            'x2': float(parts[3]),
-                            'y2': float(parts[4]),
-                            'conf': float(parts[5]),
-                            'cls': int(parts[6]) if len(parts) > 6 else 0
-                        })
-                    except (ValueError, IndexError):
+        # Prefer the store for the same reason the built-in tracker does: its
+        # rows carry a detection_id, so the run can be recorded and the exports
+        # and analytics can see the tracks. detections.txt has no such id.
+        from .core import track_store
+
+        stored_dets = (track_store.load_detections(target_folder, camera_suffix)
+                       if track_store.has_store(target_folder, camera_suffix)
+                       else [])
+        for row in stored_dets:
+            frames_pixel[row["frame"]].append({
+                'detection_id': row["detection_id"],
+                'x1': row["x1"], 'y1': row["y1"],
+                'x2': row["x2"], 'y2': row["y2"],
+                'conf': row["confidence"] if row["confidence"] is not None else 1.0,
+                'cls': int(row["source_class"] or 0),
+            })
+
+        if not stored_dets:
+            with open(detections_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
                         continue
+                    parts = line.split()
+                    if len(parts) >= 6:
+                        try:
+                            frame = int(parts[0])
+                            frames_pixel[frame].append({
+                                'detection_id': None,
+                                'x1': float(parts[1]),
+                                'y1': float(parts[2]),
+                                'x2': float(parts[3]),
+                                'y2': float(parts[4]),
+                                'conf': float(parts[5]),
+                                'cls': int(parts[6]) if len(parts) > 6 else 0
+                            })
+                        except (ValueError, IndexError):
+                            continue
 
         if log_fn:
             log_fn(
                 f"Loaded {sum(len(v) for v in frames_pixel.values())} pixel detections in {len(frames_pixel)} frames")
+            if stored_dets:
+                log_fn("Using detections from the store")
 
         # Check if this is a geo-referenced tracker that needs geodets
         is_geo_tracker = backend in [TrackerBackend.GEOREF_NATIVE, TrackerBackend.GEOREF_HYBRID]
@@ -5520,6 +5560,15 @@ class BambiProcessor:
             if len(tracks) > 0:
                 for track in tracks:
                     if len(track) >= 7:
+                        # BoxMOT's eighth column is the index of the detection
+                        # this track box came from, which is what lets the
+                        # store row be identified exactly.
+                        source_id = None
+                        if len(track) >= 8:
+                            det_index = int(track[7])
+                            if 0 <= det_index < len(pixel_dets):
+                                source_id = pixel_dets[det_index].get(
+                                    'detection_id')
                         pixel_tracks.append(PixelTrack(
                             frame=frame_num,
                             track_id=int(track[4]),
@@ -5528,7 +5577,8 @@ class BambiProcessor:
                             x2=float(track[2]),
                             y2=float(track[3]),
                             conf=float(track[5]),
-                            cls=int(track[6])
+                            cls=int(track[6]),
+                            source_id=source_id
                         ))
 
             if progress_fn and fidx % 50 == 0:
@@ -5559,6 +5609,22 @@ class BambiProcessor:
                 interp = getattr(t, 'interpolated', 0)
                 f.write(f"{t.frame},{t.track_id},{t.x1:.2f},{t.y1:.2f},"
                         f"{t.x2:.2f},{t.y2:.2f},{t.conf:.4f},{t.cls},{interp}\n")
+
+        # Record the run in the store. Without this the tracks exist only in
+        # tracks_pixel.csv, and every export and analytic — which read the
+        # store — reports the detections as untracked.
+        members = [{"track_id": t.track_id, "detection_id": t.source_id,
+                    "interpolated": int(getattr(t, "interpolated", 0))}
+                   for t in pixel_tracks if t.source_id is not None]
+        if members:
+            track_store.record_tracks(
+                target_folder, camera_suffix, members,
+                kind="boxmot", tracker=tracker_id, log_fn=log_fn)
+        elif stored_dets and log_fn:
+            log_fn("Warning: this tracker did not report which detection each "
+                   "track came from, so the run could not be recorded in the "
+                   "store. tracks_pixel.csv is written, but the exports and "
+                   "analytics will show the detections as untracked.")
 
         # Count unique tracks
         unique_tracks = set(t.track_id for t in pixel_tracks)

@@ -205,6 +205,93 @@ def test_yolo_needs_a_frame_size(survey, tmp_path):
         exporters.export_yolo(survey, "t", str(tmp_path / "yolo"))
 
 
+def _with_frames(root, names=("frame_000000.jpg", "frame_000001.jpg")):
+    """Give the survey the extracted frames its detections refer to."""
+    folder = os.path.join(root, "frames_t")
+    os.makedirs(folder, exist_ok=True)
+    for name in names:
+        with open(os.path.join(folder, name), "wb") as fh:
+            fh.write(b"not really a jpeg, but it only has to be copied")
+    return folder
+
+
+def test_yolo_copies_the_images_the_labels_refer_to(survey, tmp_path):
+    """Without them the export is unusable: a YOLO dataset is a folder
+    layout, and nothing in it names the images."""
+    _with_frames(survey)
+    folder = str(tmp_path / "yolo")
+    exporters.export_yolo(survey, "t", folder, image_size=SIZE)
+
+    assert sorted(os.listdir(os.path.join(folder, "images"))) == [
+        "frame_000000.jpg", "frame_000001.jpg"]
+
+
+def test_yolo_pairs_every_label_with_an_image(survey, tmp_path):
+    """YOLO finds a label by swapping "images" for "labels" in the path, so
+    the stems have to match exactly."""
+    _with_frames(survey)
+    folder = str(tmp_path / "yolo")
+    exporters.export_yolo(survey, "t", folder, image_size=SIZE)
+
+    images = {os.path.splitext(n)[0]
+              for n in os.listdir(os.path.join(folder, "images"))}
+    labels = {os.path.splitext(n)[0]
+              for n in os.listdir(os.path.join(folder, "labels"))}
+    assert labels and labels == images
+
+
+def test_yolo_yaml_points_at_the_folder_it_wrote(survey, tmp_path):
+    """It used to name images_t, which was never created."""
+    _with_frames(survey)
+    folder = str(tmp_path / "yolo")
+    exporters.export_yolo(survey, "t", folder, image_size=SIZE)
+
+    with open(os.path.join(folder, "data.yaml"), encoding="utf-8") as fh:
+        content = fh.read()
+    lines = content.splitlines()
+    assert "train: images" in lines
+    assert "images_t" not in content
+
+    for line in lines:
+        if line.startswith(("path:", "train:", "val:")):
+            value = line.partition(": ")[2].strip()
+            if value:
+                assert os.path.isdir(os.path.join(folder, value))
+
+
+def test_yolo_can_skip_copying(survey, tmp_path):
+    _with_frames(survey)
+    folder = str(tmp_path / "yolo")
+    exporters.export_yolo(survey, "t", folder, image_size=SIZE,
+                          copy_images=False)
+
+    assert os.listdir(os.path.join(folder, "images")) == []
+    assert os.listdir(os.path.join(folder, "labels"))
+
+
+def test_yolo_reports_frames_it_could_not_find(survey, tmp_path):
+    """Labels without an image are silently ignored by YOLO, so the export
+    has to say so rather than look complete."""
+    _with_frames(survey, names=("frame_000000.jpg",))
+    folder = str(tmp_path / "yolo")
+    messages = []
+    exporters.export_yolo(survey, "t", folder, image_size=SIZE,
+                          log_fn=messages.append)
+
+    assert any("frame_000001.jpg" in m for m in messages)
+    assert any("copied 1 image" in m for m in messages)
+
+
+def test_yolo_copies_nothing_it_was_not_asked_for(survey, tmp_path):
+    """Only frames carrying a detection — not the whole flight."""
+    _with_frames(survey, names=("frame_000000.jpg", "frame_000001.jpg",
+                                "frame_000002.jpg", "frame_000003.jpg"))
+    folder = str(tmp_path / "yolo")
+    exporters.export_yolo(survey, "t", folder, image_size=SIZE)
+
+    assert len(os.listdir(os.path.join(folder, "images"))) == 2
+
+
 # ---------------------------------------------------------------------------
 # MOT
 # ---------------------------------------------------------------------------
@@ -612,3 +699,88 @@ def test_every_registered_format_declares_its_output_shape():
         assert isinstance(is_folder, bool)
         if not is_folder:
             assert key in exporters.DEFAULT_FILENAME
+
+
+# ---------------------------------------------------------------------------
+# Why a track export came back empty
+# ---------------------------------------------------------------------------
+
+def _untracked(tmp_path):
+    """Detections in the store, but no tracking run — the state a project is
+    left in when a tracker read the legacy text files instead."""
+    root = str(tmp_path / "untracked")
+    os.makedirs(root, exist_ok=True)
+    store.open_store(store.project_path(root), store.PROJECT).close()
+    detection_store.record_detections(root, "t", [
+        {"frame": 0, "x1": 1.0, "y1": 1.0, "x2": 2.0, "y2": 2.0,
+         "confidence": 0.9, "source_class": "0"},
+    ])
+    return root
+
+
+def test_mot_explains_an_empty_export(tmp_path):
+    """"0 rows" is true but useless — the usual cause is a tracking run that
+    never reached the store."""
+    root = _untracked(tmp_path)
+    messages = []
+    exporters.export_mot(root, "t", str(tmp_path / "mot"),
+                         log_fn=messages.append)
+
+    assert any("0 row(s)" in m for m in messages)
+    assert any("Run tracking first" in m for m in messages)
+
+
+def test_a_successful_export_is_not_second_guessed(survey, tmp_path):
+    messages = []
+    exporters.export_mot(survey, "t", str(tmp_path / "mot"),
+                         log_fn=messages.append)
+    assert not any("Run tracking" in m or "Re-run" in m for m in messages)
+
+
+def test_the_hint_names_the_legacy_tracks_file(tmp_path):
+    """It is what makes tracking look as though it worked."""
+    root = _untracked(tmp_path)
+    folder = os.path.join(root, "tracks_t")
+    os.makedirs(folder, exist_ok=True)
+    with open(os.path.join(folder, "tracks.csv"), "w", encoding="utf-8") as fh:
+        fh.write("0,1,2,3")
+
+    hint = common.no_tracks_hint(root, "t")
+    assert "tracks.csv" in hint
+    assert "Geo-reference" in hint
+
+
+def test_the_hint_without_a_tracks_file_says_run_tracking(tmp_path):
+    assert "Run tracking first" in common.no_tracks_hint(
+        str(tmp_path / "empty"), "t")
+
+
+def test_the_hint_notices_a_run_that_does_not_cover_these_rows(survey):
+    """A run exists, so the advice is to re-run tracking, not to run it."""
+    assert "Re-run tracking" in common.no_tracks_hint(survey, "t")
+
+
+def test_geojson_reports_detections_that_were_never_geo_referenced(tmp_path):
+    """The state the user's project was in: detections but no geo store."""
+    root = _untracked(tmp_path)
+    messages = []
+    exporters.export_geojson(root, "t", str(tmp_path / "t.geojson"),
+                             log_fn=messages.append)
+    assert any("Geo-reference" in m for m in messages)
+
+
+def test_geojson_tracks_explain_an_empty_export(survey, tmp_path):
+    """Geo-referenced, but the tracking run is gone."""
+    trk = store.stage_path(survey, store.TRACKS, "t")
+    os.remove(trk)
+
+    messages = []
+    exporters.export_geojson(survey, "t", str(tmp_path / "t.geojson"),
+                             tracks_only=True, log_fn=messages.append)
+    assert any("Run tracking first" in m for m in messages)
+
+
+def test_trex_explains_an_empty_export(tmp_path):
+    root = _untracked(tmp_path)
+    with pytest.raises(common.ExportError, match="Run tracking first"):
+        exporters.export_trex_npz(root, "t", str(tmp_path / "trex"))

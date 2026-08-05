@@ -209,7 +209,7 @@ receives an internal id, and custom fields travel where the format has room.
 | Format | For | `not-an-animal` |
 |---|---|---|
 | **COCO** | detection training; carries custom fields as annotation attributes | dropped |
-| **YOLO** | training labels plus `data.yaml` | dropped |
+| **YOLO** | training dataset: `images/`, `labels/` and `data.yaml` | dropped |
 | **MOT** | tracking benchmarks, with a sidecar for what the columns cannot hold | dropped |
 | **TRex `.npz`** | back to TRex | dropped |
 | **GeoJSON** | detections or tracks in the project CRS | kept |
@@ -225,6 +225,17 @@ Two things worth knowing:
 - **GeoJSON, Camtrap DP and Darwin Core need the target CRS**, and refuse
   before asking where to save rather than writing coordinates in the wrong
   reference system.
+- **YOLO copies the frames in.** A YOLO dataset is a folder layout rather than
+  a manifest — nothing in it names the images, and labels are found by swapping
+  `images` for `labels` in the path — so the export is only usable if the
+  images travel with it. Only frames carrying a detection are copied. `val`
+  names the training images so the file is valid as written; split it before
+  believing any validation number.
+
+If a track export comes back empty it says why. The usual cause is a tracking
+run that never reached the store: `tracks.csv` exists, so tracking looks as
+though it worked, but the exports and analytics read the store. Re-run
+**Geo-reference detections** and then tracking.
 
 ---
 

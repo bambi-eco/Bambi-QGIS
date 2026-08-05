@@ -13,6 +13,7 @@ sidecar keyed by ``(frame, track_id)``.
 
 import json
 import os
+import shutil
 from typing import Dict, List, Optional, Tuple
 
 from . import common
@@ -90,12 +91,18 @@ def export_coco(target_folder: str, modality: str, output_path: str,
 def export_yolo(target_folder: str, modality: str, output_folder: str,
                 include_not_an_animal: bool = False,
                 image_size: Optional[Tuple[int, int]] = None,
-                log_fn=None) -> str:
-    """Write YOLO label files plus ``data.yaml``.
+                copy_images: bool = True, log_fn=None) -> str:
+    """Write a YOLO dataset: ``images/``, ``labels/`` and ``data.yaml``.
 
     One ``.txt`` per frame that has detections, named after the frame image, in
     normalised ``cls cx cy w h``. Custom fields have nowhere to go in this
     format and are deliberately not smuggled into it — use COCO for those.
+
+    The frames themselves are copied in, because a YOLO dataset is a folder
+    layout rather than a manifest: there is no field naming the images, so the
+    labels are only found through ``images``/``labels`` siblings. Only frames
+    carrying a detection are copied. *copy_images* turns that off for callers
+    that already have the images arranged.
     """
     vocabulary = common.load_vocabulary(target_folder)
     rows = common.load_detections(
@@ -107,14 +114,31 @@ def export_yolo(target_folder: str, modality: str, output_folder: str,
     mapping, names = common.class_map(
         (row["species_id"] for row in rows), vocabulary["species"])
 
+    # ``images`` and ``labels`` must be siblings with matching stems: YOLO
+    # finds a label by swapping the last "images" segment of the image path for
+    # "labels". Nothing declares that mapping, so the layout is the contract.
+    images_folder = common.ensure_folder(os.path.join(output_folder, "images"))
     labels_folder = common.ensure_folder(os.path.join(output_folder, "labels"))
     by_frame: Dict[int, List[dict]] = {}
     for row in rows:
         by_frame.setdefault(row["frame"], []).append(row)
 
-    for frame, frame_rows in by_frame.items():
-        stem = os.path.splitext(frames.get(frame, {}).get(
-            "imagefile", f"frame_{frame:06d}.jpg"))[0]
+    source_folder = os.path.join(target_folder, f"frames_{modality}")
+    copied, missing = 0, []
+
+    for frame, frame_rows in sorted(by_frame.items()):
+        imagefile = frames.get(frame, {}).get(
+            "imagefile", f"frame_{frame:06d}.jpg")
+        stem = os.path.splitext(imagefile)[0]
+
+        if copy_images:
+            source = os.path.join(source_folder, imagefile)
+            if os.path.isfile(source):
+                shutil.copy2(source, os.path.join(images_folder, imagefile))
+                copied += 1
+            else:
+                missing.append(imagefile)
+
         with open(os.path.join(labels_folder, f"{stem}.txt"),
                   "w", encoding="utf-8") as fh:
             for row in frame_rows:
@@ -128,8 +152,11 @@ def export_yolo(target_folder: str, modality: str, output_folder: str,
     yaml_path = os.path.join(output_folder, "data.yaml")
     with open(yaml_path, "w", encoding="utf-8") as fh:
         fh.write(f"path: {output_folder}\n")
-        fh.write(f"train: images_{modality}\n")
-        fh.write("val: \n")
+        fh.write("train: images\n")
+        # Everything exported has labels, so there is no held-out set to point
+        # at. Naming the training images keeps the file valid for a training
+        # run; split it properly before believing any validation number.
+        fh.write("val: images\n")
         fh.write(f"nc: {len(names)}\n")
         fh.write("names:\n")
         for index, name in enumerate(names):
@@ -137,7 +164,18 @@ def export_yolo(target_folder: str, modality: str, output_folder: str,
 
     if log_fn:
         log_fn(f"YOLO: {len(rows)} box(es) over {len(by_frame)} frame(s) "
-               f"→ {labels_folder}")
+               f"→ {output_folder}")
+        if copy_images:
+            log_fn(f"YOLO: copied {copied} image(s) into {images_folder}")
+        else:
+            log_fn("YOLO: images not copied — point 'train' at the frames "
+                   "yourself, or the labels will not be found.")
+        if missing:
+            shown = ", ".join(missing[:3])
+            more = f" (+{len(missing) - 3} more)" if len(missing) > 3 else ""
+            log_fn(f"YOLO: warning — {len(missing)} labelled frame(s) had no "
+                   f"image in {source_folder}: {shown}{more}. Those labels "
+                   "will be ignored by YOLO.")
     return output_folder
 
 
@@ -198,5 +236,7 @@ def export_mot(target_folder: str, modality: str, output_folder: str,
         message = f"MOT: {len(tracked)} row(s) → {gt_path}"
         if skipped:
             message += f" ({skipped} untracked detection(s) omitted)"
+        if not tracked and rows:
+            message += common.no_tracks_hint(target_folder, modality)
         log_fn(message)
     return output_folder

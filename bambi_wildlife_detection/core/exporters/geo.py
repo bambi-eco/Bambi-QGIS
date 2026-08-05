@@ -27,9 +27,9 @@ def export_geojson(target_folder: str, modality: str, output_path: str,
     land in ``properties`` with enum values resolved to labels.
     """
     vocabulary = common.load_vocabulary(target_folder)
-    rows = [row for row in common.load_detections(
+    all_rows = common.load_detections(
         target_folder, modality, include_not_an_animal)
-        if row.get("gx1") is not None]
+    rows = [row for row in all_rows if row.get("gx1") is not None]
 
     features = []
     if tracks_only:
@@ -87,7 +87,15 @@ def export_geojson(target_folder: str, modality: str, output_path: str,
         json.dump(document, fh, indent=2)
 
     if log_fn:
-        log_fn(f"GeoJSON: {len(features)} feature(s) → {output_path}")
+        message = f"GeoJSON: {len(features)} feature(s) → {output_path}"
+        if not features and all_rows:
+            if not rows:
+                # Everything was dropped before tracks were even considered.
+                message += (f" — none of the {len(all_rows)} detection(s) are "
+                            "geo-referenced. Run 'Geo-reference detections'.")
+            elif tracks_only:
+                message += common.no_tracks_hint(target_folder, modality)
+        log_fn(message)
     return output_path
 
 
@@ -105,8 +113,8 @@ def export_trex_npz(target_folder: str, modality: str, output_folder: str,
         target_folder, modality, include_not_an_animal, include_geo=False)
     grouped = common.tracks_of(rows)
     if not grouped:
-        raise common.ExportError(
-            "No tracks to export — run tracking (or import tracklets) first.")
+        hint = common.no_tracks_hint(target_folder, modality)
+        raise common.ExportError(f"No tracks to export.{hint}")
 
     common.ensure_folder(output_folder)
     written = []
