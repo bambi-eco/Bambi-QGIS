@@ -495,6 +495,36 @@ class SchemaEditor:
             "SELECT source_class, species_id FROM class_mapping "
             "WHERE source_id = ? ORDER BY source_class", (source_id,))]
 
+    def observed_source_classes(self, source_id: int) -> List[dict]:
+        """Raw classes this producer actually emitted, with their counts.
+
+        A mapping table built only from ``class_mapping`` shows nothing until
+        someone has already guessed the vocabulary. Reading the classes back
+        off the detections means the table lists what the model really
+        produced, including the ones still resolving to ``animal``.
+        """
+        counts: Dict[str, int] = {}
+        for path in self._stage_files(store.DETECTIONS):
+            conn = store.open_store(path, store.DETECTIONS)
+            try:
+                for row in conn.execute(
+                        "SELECT source_class, COUNT(*) AS n FROM detections "
+                        "WHERE source_id = ? AND source_class IS NOT NULL "
+                        "GROUP BY source_class", (source_id,)):
+                    counts[row["source_class"]] = \
+                        counts.get(row["source_class"], 0) + int(row["n"])
+            finally:
+                conn.close()
+
+        mapped = {row["source_class"]: row["species_id"]
+                  for row in self.class_mapping(source_id)}
+        classes = sorted(set(counts) | set(mapped), key=_class_sort_key)
+        return [{"source_class": name,
+                 "species_id": mapped.get(name, store.FALLBACK_SPECIES_ID),
+                 "mapped": name in mapped,
+                 "detections": counts.get(name, 0)}
+                for name in classes]
+
     def set_class_mapping(self, source_id: int, source_class: str,
                           species_id: int) -> None:
         """Point one of a producer's raw classes at a species.
@@ -540,6 +570,18 @@ class SchemaEditor:
             finally:
                 conn.close()
         return changed
+
+
+def _class_sort_key(name: str):
+    """Sort raw classes numerically where they are numbers, else by name.
+
+    Detector classes are usually "0", "1", "2" …, which sort wrongly as text
+    once there are ten of them.
+    """
+    try:
+        return (0, int(name), "")
+    except (TypeError, ValueError):
+        return (1, 0, str(name))
 
 
 def _load_attributes(raw) -> dict:

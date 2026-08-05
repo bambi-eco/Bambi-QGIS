@@ -1486,6 +1486,24 @@ class BambiDockWidget(QDockWidget):
 
         detect_tab_layout.addWidget(detection_group)
 
+        # The mapping belongs with the model rather than with the project's
+        # species: it describes what these weights report, so a different model
+        # needs a different mapping even for the same species.
+        mapping_group = QGroupBox("Class Mapping")
+        mapping_layout = QVBoxLayout(mapping_group)
+        mapping_info = QLabel(
+            "Map the classes this detector reports onto the project's species. "
+            "Unmapped classes count as 'animal', so a single-class model needs "
+            "nothing here.")
+        mapping_info.setWordWrap(True)
+        mapping_info.setStyleSheet("color: gray; font-size: 10px;")
+        mapping_layout.addWidget(mapping_info)
+
+        self.class_mapping_btn = QPushButton("Edit Class Mapping…")
+        self.class_mapping_btn.clicked.connect(self.open_class_mapping_dialog)
+        mapping_layout.addWidget(self.class_mapping_btn)
+        detect_tab_layout.addWidget(mapping_group)
+
         detect_tab_layout.addStretch()
 
         # ----- Sub-Tab 2: Position Correction -----
@@ -5662,6 +5680,34 @@ class BambiDockWidget(QDockWidget):
         QMessageBox.information(
             self, "Reset Step",
             f"Removed {len(result['removed'])} output(s).\n{stale_note}")
+
+    def open_class_mapping_dialog(self) -> bool:
+        """Map the detector's raw classes onto the project's species (§3.1)."""
+        from .bambi_class_mapping_dialog import BambiClassMappingDialog
+
+        folder = self.target_folder_edit.text().strip()
+        if not folder or not os.path.isdir(folder):
+            QMessageBox.warning(
+                self, "Class Mapping",
+                "Select a target folder first — the mapping belongs to a "
+                "project.")
+            return False
+
+        dialog = BambiClassMappingDialog(folder, parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+
+        if dialog.rows_changed:
+            # Boxes did not move, so nothing upstream is invalidated; only the
+            # species-dependent analytics are now out of date (§3.1).
+            self.log(f"Class mapping applied: {dialog.rows_changed} detection(s) "
+                     "re-assigned to a different species")
+            QMessageBox.information(
+                self, "Class Mapping",
+                f"{dialog.rows_changed} stored detection(s) were re-assigned. "
+                "The boxes are unchanged, so geo-referencing and tracking stay "
+                "valid; re-run the survey analytics to pick up the new species.")
+        return True
 
     def open_schema_dialog(self, initial_tab: int = 0) -> bool:
         """Open the Project Schema editor for the current target folder.

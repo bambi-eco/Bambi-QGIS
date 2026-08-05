@@ -132,6 +132,23 @@ pre-filled for the built-in species as editable starting points; GBIF keys are
 not, because a wrong identifier publishes confidently wrong data — take them
 from the species' page on gbif.org.
 
+### Detector class mapping
+
+A detector reports whatever classes its weights were trained on — `0`, `1`, `2`,
+or names of its own — and those are not the project's species. **Edit Class
+Mapping…** on the **Detection** configuration tab connects the two. It sits with
+the model rather than with the species, because the mapping describes *these
+weights*: a different model needs a different mapping even for the same species.
+
+The table lists the classes the detector actually reported, with how often each
+one occurred, so there is nothing to guess. Anything left unmapped counts as
+`animal`, which is why a single-class detector needs no configuration at all.
+
+Applying a change **re-reads the detections already stored** — every detection
+keeps the raw class it was reported with, so correcting a mapping never means
+running the detector again. The boxes do not move, so geo-referencing and
+tracking stay valid; only the species-dependent analytics need re-running.
+
 ### Enums and custom fields
 
 An **enum** is a reusable list of values — `sex`, `age` and `occlusion` are

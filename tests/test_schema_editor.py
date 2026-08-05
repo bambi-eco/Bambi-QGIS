@@ -505,3 +505,53 @@ def test_renaming_a_species_keeps_its_taxonomy(editor):
     editor.set_taxonomy(wolf, "Canis lupus", "species", 5219173)
     editor.rename_species(wolf, "grey wolf")
     assert editor.species_by_name("grey wolf")["gbif_taxon_key"] == 5219173
+
+
+# ---------------------------------------------------------------------------
+# What the detector actually emitted (§3.1)
+# ---------------------------------------------------------------------------
+
+def test_observed_classes_come_from_the_detections(editor_with_data):
+    """A table built only from class_mapping shows nothing until someone guesses."""
+    observed = editor_with_data.observed_source_classes(1)
+    assert [row["source_class"] for row in observed] == ["7"]
+    assert observed[0]["detections"] == 1
+    assert observed[0]["mapped"] is False
+    assert observed[0]["species_id"] == store.FALLBACK_SPECIES_ID
+
+
+def test_observed_classes_include_mapped_ones_never_seen(editor_with_data):
+    editor_with_data.conn.execute(
+        "INSERT INTO detection_sources (source_id, kind, created_at) "
+        "VALUES (1, 'detector', '')")
+    wolf = editor_with_data.species_by_name("wolf")["species_id"]
+    editor_with_data.set_class_mapping(1, "9", wolf)
+    observed = {row["source_class"]: row for row in
+                editor_with_data.observed_source_classes(1)}
+    assert observed["9"]["mapped"] is True
+    assert observed["9"]["detections"] == 0
+
+
+def test_observed_classes_report_the_mapped_species(editor_with_data):
+    editor_with_data.conn.execute(
+        "INSERT INTO detection_sources (source_id, kind, created_at) "
+        "VALUES (1, 'detector', '')")
+    wolf = editor_with_data.species_by_name("wolf")["species_id"]
+    editor_with_data.set_class_mapping(1, "7", wolf)
+    observed = editor_with_data.observed_source_classes(1)
+    assert observed[0]["species_id"] == wolf
+    assert observed[0]["mapped"] is True
+
+
+def test_observed_classes_sort_numerically(editor):
+    editor.conn.execute(
+        "INSERT INTO detection_sources (source_id, kind, created_at) "
+        "VALUES (1, 'detector', '')")
+    for name in ("10", "2", "1", "bird"):
+        editor.set_class_mapping(1, name, 0)
+    names = [row["source_class"] for row in editor.observed_source_classes(1)]
+    assert names == ["1", "2", "10", "bird"]
+
+
+def test_observed_classes_of_a_project_without_detections(editor):
+    assert editor.observed_source_classes(1) == []

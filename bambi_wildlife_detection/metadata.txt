@@ -35,6 +35,7 @@ changelog=Version 6.0.0
     - Project Schema editor (Detection tab, and the labelling tool's gear button): species, reusable enums and custom fields for the whole project. Species and enum values are referenced by id, so renaming one is free and cannot change the meaning of data already recorded.
     - Three base classes in every project: animal (what the detector reports), unknown (not yet determined) and not-an-animal (a labelled false positive, excluded from every survey analytic).
     - Custom fields now travel through the whole pipeline instead of staying in labels.json, and reach the exports.
+    - Detector class mapping (Detection tab): map the classes a model reports onto the project's species. The table lists what the detector actually reported and how often; unmapped classes count as animal, so a single-class model needs nothing. Applying a change re-reads the detections already stored instead of requiring the detector to run again.
     - Export (Processing tab): COCO, YOLO, MOT, TRex tracklets, GeoJSON, Camtrap DP and Darwin Core Archive for GBIF publishing. Species can carry a scientific name and a GBIF taxon key for the two publishing formats.
     - Multi-flight projects: a flight selector on the Input tab, each flight with its own target folder, configuration and QGIS layer group. Survey analytics can add another flight of the project directly, without hunting for its folder and DEM.
     - "Reset Step..." deletes one step's outputs and marks everything that depended on it as out of date.
