@@ -1070,7 +1070,7 @@ Each phase leaves the plugin working.
 | **5** ✅ | `core/stages.py`: dependency graph, cascade (**latent bug 3 fixed**), reconciliation, reset; stages record their own completion; `output_inventory` and the QGIS layer readers prefer the store; "Reset Step…" with locked-file handling. **Done:** +50 unit, +4 inventory, +15 reader, +7 QGIS; ratchet 26 → 27. |
 | **6** ✅ | `core/exporters/` — COCO, MOT, YOLO, TRex npz, GeoJSON, **Camtrap DP and Darwin Core Archive**. Video Creator reads the store, removing the last positional alignment (§8.2). **Done:** +36 exporter, +5 video; ratchet 27 → 28. |
 | **7** ✅ | Survey analytics onto the store (`core/analytics_source.py`): explicit population filter, species filtering and stratification, provenance in every result, perpendicular distances carrying `detection_id`, multi-project pooling matching species by name. **Done:** +26 unit. |
-| **8** | UI reorganisation: split the Processing tab into **Pre-Processing** and **Processing** (§10.1). Last, because it is the only phase that moves things the user has learned where to find. |
+| **8** ✅ | UI reorganisation: Processing split into **Pre-Processing** and **Processing** (§10.1), steps renumbered `P1–P6` / `A1–A4`, run panel shared below the tabs. **Done:** +19 QGIS. |
 
 ### 10.1 Phase 8 — splitting the Processing tab
 
@@ -1097,14 +1097,15 @@ a sequence that does not exist.
 
 Three things to settle when it lands:
 
-- **Renumber or keep the numbers?** Keeping `1, 2, 5, 6, 7, 8` in one tab and
-  `3, 4, 9, 10` in the other is confusing; renumbering breaks every screenshot,
-  tutorial and support answer that refers to "step 7". Suggest renumbering
-  within each tab (`P1…P6`, `A1…A5`) so no bare number means two things.
-- **Where does geo-referencing appear?** It has no button today — it runs as
-  part of the detection flow — but it is a distinct stage in the store, with
-  its own `georef_failures`. Phase 3 gives it real status; Phase 8 should
-  surface it in Processing rather than leave it invisible.
+- ~~**Renumber or keep the numbers?**~~ **Resolved: renumbered** `P1–P6` and
+  `A1–A4`, so no bare number means two things. Screenshots and older support
+  answers referring to "step 7" go stale, which is the cost; the alternative
+  was leaving `1, 2, 5, 6, 7, 8` in one tab and `3, 4, 9, 10` in the other.
+- ~~**Where does geo-referencing appear?**~~ **Resolved:** it already had a
+  `→ Geo-Reference Detections` sub-button under Detect Animals — the plan was
+  wrong to say it had none — so it simply moved to Processing with its parent
+  step. The perpendicular-distance sub-steps went with it, since they measure
+  from detections and tracks.
 - **SAM3 sits in Processing.** It is genuinely dual-use — the same prompts can
   segment animals or scene content — but it is placed with the animal steps
   because that is its dominant use here, and because a step that could sit in
@@ -1266,7 +1267,7 @@ the labelling tool's combos populate from the store.
 | 5 ✅ | Cascade correctness; `output_inventory` reconciles a hand-deleted file |
 | 6 ✅ | Exporter fixtures, incl. enum resolution and class-id remapping |
 | 7 ✅ | Analytics results unchanged vs. the pre-rework baseline on flight 6 |
-| 8 | Every step still reachable and runnable; saved configs load unchanged |
+| 8 ✅ | Every step still reachable and runnable; saved configs load unchanged |
 
 Phase 7's gate is worth stating plainly: the Praschl2026 R validation baseline
 must still reproduce. A data-plumbing release that quietly changes a population

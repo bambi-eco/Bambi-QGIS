@@ -2117,7 +2117,7 @@ class BambiDockWidget(QDockWidget):
         # =====================================================================
         processing_tab = QWidget()
         processing_layout = QVBoxLayout(processing_tab)
-        main_tabs.addTab(processing_tab, "Processing")
+        main_tabs.addTab(processing_tab, "Pre-Processing")
 
         # Info button row
         self._processing_info_btn = QToolButton()
@@ -2141,13 +2141,20 @@ class BambiDockWidget(QDockWidget):
         processing_info_row.addWidget(self._processing_info_btn)
         processing_layout.addLayout(processing_info_row)
 
-        # Step buttons
-        steps_group = QGroupBox("Processing Steps")
+        # Step buttons. The split mirrors the dependency graph of
+        # EXCHANGE_FORMAT_PLAN.md §7: everything here derives from the poses and
+        # the DEM and is independent of any animal, while the Processing tab
+        # holds everything that depends on detections. Presenting them as one
+        # numbered list implied a sequence that does not exist.
+        steps_group = QGroupBox("Pre-Processing Steps")
         steps_btn_layout = QVBoxLayout(steps_group)
 
-        # ----- Step 1: Extract Frames -----
+        proc_steps_group = QGroupBox("Processing Steps")
+        proc_steps_layout = QVBoxLayout(proc_steps_group)
+
+        # ----- P1: Extract Frames -----
         step1_row = QHBoxLayout()
-        self.extract_btn = QPushButton("1. Extract Frames")
+        self.extract_btn = QPushButton("P1. Extract Frames")
         self.extract_btn.clicked.connect(self.run_extract_frames)
         self.extract_btn.setToolTip(
             "Extract frames from the selected camera's videos:\n"
@@ -2177,9 +2184,9 @@ class BambiDockWidget(QDockWidget):
         separator1.setFrameShadow(QFrame.Shadow.Sunken)
         steps_btn_layout.addWidget(separator1)
 
-        # ----- Step 2: Generate Flight Route -----
+        # ----- P2: Generate Flight Route -----
         step2_row = QHBoxLayout()
-        self.flight_route_btn = QPushButton("2. Generate Flight Route")
+        self.flight_route_btn = QPushButton("P2. Generate Flight Route")
         self.flight_route_btn.clicked.connect(self.run_flight_route)
         self.flight_route_btn.setToolTip("Generate flight route polyline from camera positions")
         self.flight_route_camera_combo = QComboBox()
@@ -2201,9 +2208,9 @@ class BambiDockWidget(QDockWidget):
         add_flight_route_row.addWidget(self.add_flight_route_status)
         steps_btn_layout.addLayout(add_flight_route_row)
 
-        # ----- Step 3: Detect Animals -----
+        # ----- A1: Detect Animals -----
         step3_row = QHBoxLayout()
-        self.detect_btn = QPushButton("3. Detect Animals")
+        self.detect_btn = QPushButton("A1. Detect Animals")
         self.detect_btn.clicked.connect(self.run_detection)
         self.detection_camera_combo = QComboBox()
         self.detection_camera_combo.addItems(["T - Thermal", "W - RGB"])
@@ -2213,7 +2220,7 @@ class BambiDockWidget(QDockWidget):
         step3_row.addWidget(self.detect_btn)
         step3_row.addWidget(self.detection_camera_combo)
         step3_row.addWidget(self.detect_status)
-        steps_btn_layout.addLayout(step3_row)
+        proc_steps_layout.addLayout(step3_row)
 
         # -> Geo-Reference Detections (sub-step of detection)
         step4_row = QHBoxLayout()
@@ -2222,7 +2229,7 @@ class BambiDockWidget(QDockWidget):
         self.georef_status = QLabel("⚪ Not started")
         step4_row.addWidget(self.georef_btn)
         step4_row.addWidget(self.georef_status)
-        steps_btn_layout.addLayout(step4_row)
+        proc_steps_layout.addLayout(step4_row)
 
         # -> Add Detections to QGIS
         add_detections_row = QHBoxLayout()
@@ -2232,7 +2239,7 @@ class BambiDockWidget(QDockWidget):
         self.frame_detections_status = QLabel("⚪")
         add_detections_row.addWidget(self.add_frame_detections_btn)
         add_detections_row.addWidget(self.frame_detections_status)
-        steps_btn_layout.addLayout(add_detections_row)
+        proc_steps_layout.addLayout(add_detections_row)
 
         # -> Calculate Perpendicular
         perp_calc_row = QHBoxLayout()
@@ -2246,7 +2253,7 @@ class BambiDockWidget(QDockWidget):
         self.perpendicular_status = QLabel("⚪")
         perp_calc_row.addWidget(self.perpendicular_btn)
         perp_calc_row.addWidget(self.perpendicular_status)
-        steps_btn_layout.addLayout(perp_calc_row)
+        proc_steps_layout.addLayout(perp_calc_row)
 
         # -> Add Perpendicular Lines to QGIS
         perp_add_row = QHBoxLayout()
@@ -2258,11 +2265,11 @@ class BambiDockWidget(QDockWidget):
         self.add_perpendicular_status = QLabel("⚪")
         perp_add_row.addWidget(self.add_perpendicular_btn)
         perp_add_row.addWidget(self.add_perpendicular_status)
-        steps_btn_layout.addLayout(perp_add_row)
+        proc_steps_layout.addLayout(perp_add_row)
 
-        # ----- Step 4: Track Animals Or Import -----
+        # ----- A2: Track Animals Or Import -----
         step5_row = QHBoxLayout()
-        self.track_btn = QPushButton("4. Track Animals Or Import")
+        self.track_btn = QPushButton("A2. Track Animals Or Import")
         self.track_btn.setToolTip(
             "Track geo-referenced detections.\n"
             "If a TRex NPZ folder is set (Config → Tracking tab), the pre-computed\n"
@@ -2277,7 +2284,7 @@ class BambiDockWidget(QDockWidget):
         step5_row.addWidget(self.track_btn)
         step5_row.addWidget(self.tracking_camera_combo)
         step5_row.addWidget(self.track_status)
-        steps_btn_layout.addLayout(step5_row)
+        proc_steps_layout.addLayout(step5_row)
 
         # -> Add Tracks to QGIS
         add_tracks_row = QHBoxLayout()
@@ -2286,7 +2293,7 @@ class BambiDockWidget(QDockWidget):
         self.layers_status = QLabel("⚪")
         add_tracks_row.addWidget(self.add_layers_btn)
         add_tracks_row.addWidget(self.layers_status)
-        steps_btn_layout.addLayout(add_tracks_row)
+        proc_steps_layout.addLayout(add_tracks_row)
 
         # -> Calculate Track Perpendicular
         track_perp_calc_row = QHBoxLayout()
@@ -2300,7 +2307,7 @@ class BambiDockWidget(QDockWidget):
         self.track_perpendicular_status = QLabel("⚪")
         track_perp_calc_row.addWidget(self.track_perpendicular_btn)
         track_perp_calc_row.addWidget(self.track_perpendicular_status)
-        steps_btn_layout.addLayout(track_perp_calc_row)
+        proc_steps_layout.addLayout(track_perp_calc_row)
 
         # -> Add Track Perpendicular Lines to QGIS
         track_perp_add_row = QHBoxLayout()
@@ -2313,11 +2320,11 @@ class BambiDockWidget(QDockWidget):
         self.add_track_perpendicular_status = QLabel("⚪")
         track_perp_add_row.addWidget(self.add_track_perpendicular_btn)
         track_perp_add_row.addWidget(self.add_track_perpendicular_status)
-        steps_btn_layout.addLayout(track_perp_add_row)
+        proc_steps_layout.addLayout(track_perp_add_row)
 
-        # ----- Step 5: Calculate Field of View -----
+        # ----- P3: Calculate Field of View -----
         step6_row = QHBoxLayout()
-        self.calculate_fov_btn = QPushButton("5. Calculate Field of View")
+        self.calculate_fov_btn = QPushButton("P3. Calculate Field of View")
         self.calculate_fov_btn.clicked.connect(self.run_calculate_fov)
         self.calculate_fov_btn.setToolTip("Calculate and save camera FoV footprints for each frame")
         self.fov_camera_combo = QComboBox()
@@ -2350,9 +2357,9 @@ class BambiDockWidget(QDockWidget):
         add_merged_fov_row.addWidget(self.add_merged_fov_status)
         steps_btn_layout.addLayout(add_merged_fov_row)
 
-        # ----- Step 6: Generate ALFS -----
+        # ----- P4: Generate ALFS -----
         step7_row = QHBoxLayout()
-        self.alfs_btn = QPushButton("6. Generate ALFS")
+        self.alfs_btn = QPushButton("P4. Generate ALFS")
         self.alfs_btn.clicked.connect(self.run_alfs)
         self.alfs_camera_combo = QComboBox()
         self.alfs_camera_combo.addItems(["T - Thermal", "W - RGB"])
@@ -2373,9 +2380,9 @@ class BambiDockWidget(QDockWidget):
         add_alfs_row.addWidget(self.add_alfs_status)
         steps_btn_layout.addLayout(add_alfs_row)
 
-        # ----- Step 7: Export Frames as GeoTIFF -----
+        # ----- P5: Export Frames as GeoTIFF -----
         step8_row = QHBoxLayout()
-        self.export_geotiffs_btn = QPushButton("7. Export Frames as GeoTIFF")
+        self.export_geotiffs_btn = QPushButton("P5. Export Frames as GeoTIFF")
         self.export_geotiffs_btn.clicked.connect(self.run_export_geotiffs)
         self.geotiff_camera_combo = QComboBox()
         self.geotiff_camera_combo.addItems(["T - Thermal", "W - RGB"])
@@ -2407,11 +2414,11 @@ class BambiDockWidget(QDockWidget):
         add_geotiffs_row.addWidget(self.add_geotiffs_status)
         steps_btn_layout.addLayout(add_geotiffs_row)
 
-        # ----- Step 8: Generate Orthomosaic (merge exported GeoTIFFs) -----
+        # ----- P6: Generate Orthomosaic (merge exported GeoTIFFs) -----
         ortho_step_row = QHBoxLayout()
-        self.orthomosaic_btn = QPushButton("8. Generate Orthomosaic")
+        self.orthomosaic_btn = QPushButton("P6. Generate Orthomosaic")
         self.orthomosaic_btn.setToolTip(
-            "Merge the exported frame GeoTIFFs (Step 7) into a single orthomosaic"
+            "Merge the exported frame GeoTIFFs (P5) into a single orthomosaic"
         )
         self.orthomosaic_btn.clicked.connect(self.run_orthomosaic)
         self.ortho_camera_combo = QComboBox()
@@ -2433,9 +2440,9 @@ class BambiDockWidget(QDockWidget):
         add_ortho_row.addWidget(self.add_orthomosaic_status)
         steps_btn_layout.addLayout(add_ortho_row)
 
-        # ----- Step 9: Run SAM3 Segmentation -----
+        # ----- A3: Run SAM3 Segmentation -----
         step9_row = QHBoxLayout()
-        self.sam3_segment_btn = QPushButton("9. Run SAM3 Segmentation")
+        self.sam3_segment_btn = QPushButton("A3. Run SAM3 Segmentation")
         self.sam3_segment_btn.clicked.connect(self.run_sam3_segmentation)
         self.sam3_segment_btn.setToolTip("Run SAM3 segmentation on extracted frames using Roboflow API")
         self.sam3_camera_combo = QComboBox()
@@ -2446,17 +2453,17 @@ class BambiDockWidget(QDockWidget):
         step9_row.addWidget(self.sam3_segment_btn)
         step9_row.addWidget(self.sam3_camera_combo)
         step9_row.addWidget(self.sam3_segment_status)
-        steps_btn_layout.addLayout(step9_row)
+        proc_steps_layout.addLayout(step9_row)
 
-        # ----- Step 10: Geo-Reference Segmentation -----
+        # ----- A4: Geo-Reference Segmentation -----
         step10_row = QHBoxLayout()
-        self.sam3_georef_btn = QPushButton("10. Geo-Reference Segmentation")
+        self.sam3_georef_btn = QPushButton("A4. Geo-Reference Segmentation")
         self.sam3_georef_btn.clicked.connect(self.run_sam3_georeference)
         self.sam3_georef_btn.setToolTip("Convert pixel segmentation masks to world coordinates")
         self.sam3_georef_status = QLabel("⚪ Not started")
         step10_row.addWidget(self.sam3_georef_btn)
         step10_row.addWidget(self.sam3_georef_status)
-        steps_btn_layout.addLayout(step10_row)
+        proc_steps_layout.addLayout(step10_row)
 
         # -> Add SAM3 Segmentation to QGIS
         add_sam3_row = QHBoxLayout()
@@ -2466,7 +2473,7 @@ class BambiDockWidget(QDockWidget):
         self.add_sam3_status = QLabel("⚪")
         add_sam3_row.addWidget(self.add_sam3_btn)
         add_sam3_row.addWidget(self.add_sam3_status)
-        steps_btn_layout.addLayout(add_sam3_row)
+        proc_steps_layout.addLayout(add_sam3_row)
 
         # Re-evaluate step statuses when a camera selection changes so the
         # indicators always reflect the selected modality's outputs.
@@ -2478,6 +2485,33 @@ class BambiDockWidget(QDockWidget):
             camera_combo.currentIndexChanged.connect(self._on_step_camera_changed)
 
         processing_layout.addWidget(steps_group)
+        processing_layout.addStretch()
+
+        # =====================================================================
+        # MAIN TAB 3b: PROCESSING (animal-specific steps)
+        # =====================================================================
+        animal_tab = QWidget()
+        animal_layout = QVBoxLayout(animal_tab)
+        main_tabs.addTab(animal_tab, "Processing")
+
+        animal_info = QLabel(
+            "Steps that work on animals: detection, geo-referencing, tracking "
+            "and segmentation. Everything here depends on the detections, so "
+            "re-running an earlier step marks these out of date."
+        )
+        animal_info.setWordWrap(True)
+        animal_info.setStyleSheet("color: gray; font-size: 10px;")
+        animal_layout.addWidget(animal_info)
+        animal_layout.addWidget(proc_steps_group)
+        animal_layout.addStretch()
+
+        # ---------------------------------------------------------------------
+        # Shared run panel — below the tabs, so progress and the log are visible
+        # whichever tab a step was started from.
+        # ---------------------------------------------------------------------
+        run_panel = QWidget()
+        run_layout = QVBoxLayout(run_panel)
+        run_layout.setContentsMargins(0, 0, 0, 0)
 
         # Progress bar with abort button
         progress_layout = QHBoxLayout()
@@ -2493,7 +2527,7 @@ class BambiDockWidget(QDockWidget):
         self.abort_btn.clicked.connect(self._abort_current_process)
         progress_layout.addWidget(self.abort_btn)
 
-        processing_layout.addLayout(progress_layout)
+        run_layout.addLayout(progress_layout)
 
         # Refresh / Reset
         status_row = QHBoxLayout()
@@ -2509,7 +2543,7 @@ class BambiDockWidget(QDockWidget):
         )
         self.reset_stage_btn.clicked.connect(self.reset_stage)
         status_row.addWidget(self.reset_stage_btn)
-        processing_layout.addLayout(status_row)
+        run_layout.addLayout(status_row)
 
         # Log output
         log_group = QGroupBox("Log Output")
@@ -2526,8 +2560,8 @@ class BambiDockWidget(QDockWidget):
         clear_log_btn.clicked.connect(self.log_text.clear)
         log_layout.addWidget(clear_log_btn)
 
-        processing_layout.addWidget(log_group)
-        processing_layout.addStretch()
+        run_layout.addWidget(log_group)
+        scroll_layout.addWidget(run_panel)
 
         # =====================================================================
         # MAIN TAB 4: SURVEY ANALYTICS
@@ -2539,7 +2573,7 @@ class BambiDockWidget(QDockWidget):
         analytics_info = QLabel(
             "Population-level products derived from geo-referenced detections or "
             "tracks. Tracks count each animal once; detections use every box. "
-            "The full run log is shown on the Processing tab."
+            "The run log is shown below the tabs."
         )
         analytics_info.setWordWrap(True)
         analytics_info.setStyleSheet("color: gray; font-size: 10px;")
@@ -3893,39 +3927,47 @@ class BambiDockWidget(QDockWidget):
         msg.setIcon(QMessageBox.Icon.Information)
         msg.setText(
             "<b>Processing Pipeline</b><br><br>"
-            "Execute the steps below in order. Each step builds on the outputs of the "
-            "previous one.<br><br>"
-            "<b>1 — Extract Frames</b><br>"
+            "The steps are split across two tabs, following what they depend "
+            "on. <b>Pre-Processing</b> derives from the drone poses and the "
+            "DEM and is independent of any animal; <b>Processing</b> depends "
+            "on the detections. The two branches can be run independently — "
+            "re-running detection marks the Processing steps out of date and "
+            "leaves the Pre-Processing ones alone.<br><br>"
+            "<b>Pre-Processing</b><br><br>"
+            "<b>P1 — Extract Frames</b><br>"
             "Decodes and undistorts frames for the selected camera (thermal or RGB); "
             "matches GPS positions from the AirData log via SRT timestamps (video) or "
             "EXIF timestamps (photo). Run once per camera you need.<br><br>"
-            "<b>2 — Generate Flight Route</b><br>"
+            "<b>P2 — Generate Flight Route</b><br>"
             "Creates a GPS flight-path line layer and per-frame camera-position points "
             "from the extracted pose data.<br><br>"
-            "<b>3 — Detect Animals</b><br>"
+            "<b>P3 — Calculate Field of View</b><br>"
+            "Computes per-frame camera footprint polygons on the ground using the DEM.<br><br>"
+            "<b>P4 — Generate ALFS</b><br>"
+            "Projects all frames onto the DEM surface and blends them into a "
+            "georeferenced GeoTIFF mosaic.<br><br>"
+            "<b>P5 — Export Frames as GeoTIFF</b><br>"
+            "Exports individual frames as separate georeferenced GeoTIFFs.<br><br>"
+            "<b>P6 — Generate Orthomosaic</b><br>"
+            "Merges the exported frame GeoTIFFs (P5) into a single true "
+            "orthomosaic, using all frames or a selected range and a configurable "
+            "overlap merge mode.<br><br>"
+            "<b>Processing</b><br><br>"
+            "<b>A1 — Detect Animals</b><br>"
             "Runs YOLO-based detection on every extracted frame. The thermal model is "
             "downloaded automatically on first use.<br><br>"
             "<b>→ Geo-Reference Detections</b><br>"
             "Projects pixel-space bounding boxes to UTM coordinates by ray-casting "
-            "against the DEM mesh.<br><br>"
+            "against the DEM mesh. A detection that cannot be placed is recorded "
+            "with the reason rather than dropped.<br><br>"
             "<b>→ Calculate Perpendicular</b><br>"
             "Measures the perpendicular distance from each geo-referenced detection "
             "to the flight route line — useful for transect-based surveys.<br><br>"
-            "<b>4 — Track Animals</b><br>"
+            "<b>A2 — Track Animals Or Import</b><br>"
             "Links detections across frames into continuous tracks using the selected "
-            "tracking backend.<br><br>"
-            "<b>5 — Calculate Field of View</b><br>"
-            "Computes per-frame camera footprint polygons on the ground using the DEM.<br><br>"
-            "<b>6 — Generate ALFS</b><br>"
-            "Projects all frames onto the DEM surface and blends them into a "
-            "georeferenced GeoTIFF mosaic.<br><br>"
-            "<b>7 — Export Frames as GeoTIFF</b><br>"
-            "Exports individual frames as separate georeferenced GeoTIFFs.<br><br>"
-            "<b>8 — Generate Orthomosaic</b><br>"
-            "Merges the exported frame GeoTIFFs (Step 7) into a single true "
-            "orthomosaic, using all frames or a selected range and a configurable "
-            "overlap merge mode.<br><br>"
-            "<b>9 / 10 — Object Segmentation</b><br>"
+            "tracking backend. With a TRex tracklet folder configured this imports "
+            "those instead, and runs no tracker.<br><br>"
+            "<b>A3 / A4 — Object Segmentation</b><br>"
             "Segments detected objects using Roboflow SAM3 and projects masks to "
             "world coordinates.<br><br>"
 
@@ -5772,7 +5814,7 @@ class BambiDockWidget(QDockWidget):
                 self,
                 "Missing Prerequisites",
                 f"{camera_name} geo-referencing has not been completed.\n"
-                f"Please run Geo-Reference Detections (under Step 3) first."
+                f"Please run Geo-Reference Detections (under step A1) first."
             )
             return
 
@@ -7779,7 +7821,7 @@ class BambiDockWidget(QDockWidget):
             QMessageBox.warning(
                 self,
                 "Missing Prerequisites",
-                f"{camera_label} tracking has not been completed.\nPlease run Step 4 (Track Animals Or Import) first."
+                f"{camera_label} tracking has not been completed.\nPlease run step A2 (Track Animals Or Import) first."
             )
             return
 
@@ -8442,7 +8484,7 @@ class BambiDockWidget(QDockWidget):
                 self,
                 "Missing Data",
                 f"{camera_label} geo-referencing has not been completed.\n"
-                f"Please run Geo-Reference Detections (under Step 3) first."
+                f"Please run Geo-Reference Detections (under step A1) first."
             )
             return
 

@@ -34,7 +34,11 @@ Optional capabilities (GPU inference, BoxMOT trackers, camera calibration via Sf
 1. Click the **BAMBI** icon in the toolbar to open the dock widget
 2. In the **Input** tab, choose **Video** or **Photo** mode and select your recordings, camera calibration, AirData flight log, DEM, target CRS, and output folder
 3. Adjust per-step settings in the **Configuration** tab (detection confidence, tracker backend, thermal colormaps, …)
-4. Run the steps in order in the **Processing** tab, from **1. Extract Frames** to **10. Geo-Reference Segmentation**
+4. Run the steps in the **Pre-Processing** tab (**P1. Extract Frames** to
+   **P6. Generate Orthomosaic**) and the **Processing** tab (**A1. Detect
+   Animals** to **A4. Geo-Reference Segmentation**). Pre-Processing derives
+   from the drone poses and the DEM and is independent of any animal;
+   Processing depends on the detections, so the two can be run separately
 5. Use the **→ Add … to QGIS** buttons after each step to load the results as styled layers
 
 What you need as input: MP4 videos + SRT subtitle files (video mode) *or* a folder of still images (photo mode), an AirData flight log CSV, a camera calibration JSON, and a DEM. The plugin can download DEMs automatically (Austria), convert any GeoTIFF DEM, or generate a flat surface mesh for aquatic surveys, and the calibration JSON can be created with the built-in Camera Calibration Wizard.
