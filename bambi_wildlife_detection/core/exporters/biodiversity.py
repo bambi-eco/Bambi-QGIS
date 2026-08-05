@@ -115,12 +115,17 @@ def export_camtrap_dp(target_folder: str, modality: str, output_folder: str,
                       epsg: Optional[int] = None,
                       deployment_id: str = "",
                       include_not_an_animal: bool = True,
-                      log_fn=None) -> str:
+                      include_images: bool = True, log_fn=None) -> str:
     """Write a Camtrap DP package: deployments, media, observations.
 
     ``not-an-animal`` is kept by default and published as an observation of
     type ``blank``: a survey record should say what was looked at and rejected,
     not silently omit it.
+
+    *include_images* copies the frames into ``media/`` and points ``filePath``
+    there, which is what makes the package self-contained. Without it the paths
+    stay relative to the target folder, so the package only resolves next to
+    the flight it came from.
     """
     vocabulary = common.load_vocabulary(target_folder)
     taxonomy = vocabulary["taxonomy"]
@@ -158,19 +163,28 @@ def export_camtrap_dp(target_folder: str, modality: str, output_folder: str,
             f"BAMBI drone survey ({'thermal' if modality == 't' else 'RGB'})",
             "Aerial survey exported from the BAMBI QGIS plugin"])
 
+    used_frames = sorted({row["frame"] for row in rows})
+    used_names = [frames.get(frame, {}).get(
+        "imagefile", f"frame_{frame:06d}.jpg") for frame in used_frames]
+
+    copied = None
+    if include_images:
+        copied = common.copy_frames(target_folder, modality, used_names,
+                                    os.path.join(output_folder, "media"))
+
     media_path = os.path.join(output_folder, "media.csv")
     with open(media_path, "w", encoding="utf-8", newline="") as fh:
         writer = csv.writer(fh)
         writer.writerow(["mediaID", "deploymentID", "timestamp",
                          "filePath", "fileName", "captureMethod"])
-        for frame in sorted({row["frame"] for row in rows}):
-            info = frames.get(frame, {})
-            name = info.get("imagefile", f"frame_{frame:06d}.jpg")
+        for frame, name in zip(used_frames, used_names):
+            # The path has to describe where the file actually is, so it
+            # follows whether the media travelled with the package.
+            path = os.path.join("media" if include_images
+                                else f"frames_{modality}", name)
             writer.writerow([
                 f"{deployment_id}-{frame}", deployment_id,
-                _timestamp(frames, frame),
-                os.path.join(f"frames_{modality}", name), name,
-                "timeLapse"])
+                _timestamp(frames, frame), path, name, "timeLapse"])
 
     extra_names = sorted({
         key for row in rows
@@ -234,6 +248,8 @@ def export_camtrap_dp(target_folder: str, modality: str, output_folder: str,
 
     if log_fn:
         log_fn(f"Camtrap DP: {len(rows)} observation(s) → {output_folder}")
+        for line in common.describe_copy(copied) if copied else []:
+            log_fn(f"Camtrap DP: {line}")
     return output_folder
 
 

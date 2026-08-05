@@ -2605,6 +2605,19 @@ class BambiDockWidget(QDockWidget):
         )
         export_layout.addWidget(self.export_false_positives_check)
 
+        self.export_images_check = QCheckBox("Include images")
+        self.export_images_check.setChecked(True)
+        self.export_images_check.setToolTip(
+            "Copy the frames the export refers to alongside it. YOLO and MOT "
+            "are folder layouts that do not resolve without their images, and "
+            "a Camtrap DP package is only self-contained with its media — but "
+            "the frames are usually the heaviest part of a project, so turn "
+            "this off when the annotations are all you need. Only frames "
+            "carrying a detection are copied. Formats that reference no image "
+            "(GeoJSON, TRex) ignore it."
+        )
+        export_layout.addWidget(self.export_images_check)
+
         self.export_btn = QPushButton("Export…")
         self.export_btn.clicked.connect(self.run_export)
         export_layout.addWidget(self.export_btn)
@@ -5747,6 +5760,11 @@ class BambiDockWidget(QDockWidget):
         self.export_false_positives_check.setChecked(
             (not is_dwca) and key not in exporters.TRAINING_FORMATS)
 
+        # Disabled rather than hidden, so it is visible that this format
+        # references no image at all rather than that the option was missed.
+        self.export_images_check.setEnabled(
+            key in exporters.SUPPORTS_IMAGES)
+
     def run_export(self):
         """Write the current project out in the selected format (§8.1)."""
         from qgis.PyQt.QtWidgets import QApplication
@@ -5792,6 +5810,7 @@ class BambiDockWidget(QDockWidget):
                 include_not_an_animal=(
                     self.export_false_positives_check.isChecked()
                     if self.export_false_positives_check.isEnabled() else None),
+                include_images=self.export_images_check.isChecked(),
                 log_fn=self.log)
         except exporters.ExportError as exc:
             QApplication.restoreOverrideCursor()

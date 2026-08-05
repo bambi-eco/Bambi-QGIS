@@ -217,3 +217,43 @@ def test_the_store_is_untouched_by_exporting(dock, quiet, monkeypatch,
             "SELECT COUNT(*) AS n FROM detections").fetchone()["n"] == 1
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# "Include images"
+# ---------------------------------------------------------------------------
+
+def test_the_images_option_is_on_by_default(dock):
+    """An export that references images is incomplete without them."""
+    assert dock.export_images_check.isChecked() is True
+
+
+def test_the_option_is_disabled_for_formats_without_images(dock):
+    """Disabled rather than hidden: it should read as "this format has no
+    images", not as a missing option."""
+    from bambi_wildlife_detection.core import exporters
+
+    for index in range(dock.export_format_combo.count()):
+        dock.export_format_combo.setCurrentIndex(index)
+        key = dock.export_format_combo.currentData()
+        assert dock.export_images_check.isEnabled() == (
+            key in exporters.SUPPORTS_IMAGES), key
+
+
+def test_the_choice_reaches_the_exporter(dock, quiet, monkeypatch,
+                                         project_folder, tmp_path):
+    seen = {}
+    monkeypatch.setattr(exporters, "run_export",
+                        lambda *a, **k: seen.update(k) or str(tmp_path))
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory",
+                        lambda *a, **k: str(tmp_path / "out"))
+    dock.target_folder_edit.setText(project_folder)
+    _select(dock, "yolo")
+
+    dock.export_images_check.setChecked(False)
+    dock.run_export()
+    assert seen["include_images"] is False
+
+    dock.export_images_check.setChecked(True)
+    dock.run_export()
+    assert seen["include_images"] is True

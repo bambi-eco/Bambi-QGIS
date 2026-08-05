@@ -45,10 +45,17 @@ TRAINING_FORMATS = frozenset({"coco", "yolo", "mot", "trex"})
 #: Formats needing the frame size to normalise or declare image dimensions.
 NEEDS_FRAME_SIZE = frozenset({"coco", "yolo"})
 
+#: Formats that reference the frames, and can therefore carry them. The frames
+#: are the heaviest thing a project owns, so copying them is always a choice —
+#: but YOLO and MOT are folder layouts that do not resolve without them, and a
+#: Camtrap DP package is only self-contained with its media. GeoJSON and the
+#: TRex ``.npz`` reference no image at all and are absent for that reason.
+SUPPORTS_IMAGES = frozenset({"coco", "yolo", "mot", "camtrap"})
+
 
 def run_export(key: str, target_folder: str, modality: str, output: str,
                epsg=None, include_not_an_animal=None, image_size=None,
-               log_fn=None):
+               include_images=None, log_fn=None):
     """Run one exporter, passing only the arguments it accepts.
 
     The formats differ in what they can carry, so the caller should not have to
@@ -58,6 +65,8 @@ def run_export(key: str, target_folder: str, modality: str, output: str,
 
     *image_size* is optional even for the formats that need it: they fall back
     to probing an extracted frame, and say so clearly if there is none.
+
+    *include_images* is ignored by formats that reference no image.
     """
     if key not in EXPORTERS:
         raise ExportError(f"Unknown export format '{key}'.")
@@ -68,6 +77,8 @@ def run_export(key: str, target_folder: str, modality: str, output: str,
         kwargs["epsg"] = epsg
     if key in NEEDS_FRAME_SIZE and image_size is not None:
         kwargs["image_size"] = image_size
+    if key in SUPPORTS_IMAGES and include_images is not None:
+        kwargs["include_images"] = include_images
     if key != "dwca":
         # Darwin Core always excludes false positives: a rejected detection is
         # by definition not an occurrence of anything.
@@ -80,7 +91,7 @@ def run_export(key: str, target_folder: str, modality: str, output: str,
 
 __all__ = [
     "DEFAULT_FILENAME", "EXPORTERS", "ExportError", "NEEDS_CRS",
-    "NEEDS_FRAME_SIZE", "TRAINING_FORMATS", "run_export",
+    "NEEDS_FRAME_SIZE", "SUPPORTS_IMAGES", "TRAINING_FORMATS", "run_export",
     "export_camtrap_dp", "export_coco", "export_darwin_core",
     "export_geojson", "export_mot", "export_trex_npz", "export_yolo",
 ]

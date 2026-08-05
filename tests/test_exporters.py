@@ -263,7 +263,7 @@ def test_yolo_can_skip_copying(survey, tmp_path):
     _with_frames(survey)
     folder = str(tmp_path / "yolo")
     exporters.export_yolo(survey, "t", folder, image_size=SIZE,
-                          copy_images=False)
+                          include_images=False)
 
     assert os.listdir(os.path.join(folder, "images")) == []
     assert os.listdir(os.path.join(folder, "labels"))
@@ -784,3 +784,99 @@ def test_trex_explains_an_empty_export(tmp_path):
     root = _untracked(tmp_path)
     with pytest.raises(common.ExportError, match="Run tracking first"):
         exporters.export_trex_npz(root, "t", str(tmp_path / "trex"))
+
+
+# ---------------------------------------------------------------------------
+# "Include images" — the frames are the heaviest thing a project owns
+# ---------------------------------------------------------------------------
+
+def test_the_formats_that_can_carry_images_are_the_ones_that_name_them():
+    """GeoJSON and TRex reference no image, so the option would be a lie."""
+    assert exporters.SUPPORTS_IMAGES == {"coco", "yolo", "mot", "camtrap"}
+
+
+def test_coco_puts_the_images_beside_the_json(survey, tmp_path):
+    _with_frames(survey)
+    path = str(tmp_path / "out" / "coco.json")
+    exporters.export_coco(survey, "t", path, image_size=SIZE)
+
+    folder = os.path.join(os.path.dirname(path), "images")
+    assert sorted(os.listdir(folder)) == ["frame_000000.jpg",
+                                          "frame_000001.jpg"]
+
+
+def test_coco_without_images_writes_only_the_json(survey, tmp_path):
+    _with_frames(survey)
+    path = str(tmp_path / "out" / "coco.json")
+    exporters.export_coco(survey, "t", path, image_size=SIZE,
+                          include_images=False)
+
+    assert os.listdir(os.path.dirname(path)) == ["coco.json"]
+
+
+def test_mot_fills_the_img1_folder(survey, tmp_path):
+    """MOTChallenge sequences keep their frames in img1."""
+    _with_frames(survey)
+    folder = str(tmp_path / "mot")
+    exporters.export_mot(survey, "t", folder)
+
+    assert sorted(os.listdir(os.path.join(folder, "img1"))) == [
+        "frame_000000.jpg", "frame_000001.jpg"]
+
+
+def test_mot_without_images_writes_no_img1(survey, tmp_path):
+    _with_frames(survey)
+    folder = str(tmp_path / "mot")
+    exporters.export_mot(survey, "t", folder, include_images=False)
+
+    assert not os.path.exists(os.path.join(folder, "img1"))
+    assert os.path.exists(os.path.join(folder, "gt.txt"))
+
+
+def test_camtrap_media_paths_follow_the_files(survey, tmp_path):
+    """filePath has to describe where the file actually is."""
+    _with_frames(survey)
+    folder = str(tmp_path / "camtrap")
+    exporters.export_camtrap_dp(survey, "t", folder, epsg=32633)
+
+    with open(os.path.join(folder, "media.csv"), encoding="utf-8") as fh:
+        paths = [row["filePath"] for row in csv.DictReader(fh)]
+    assert all(p.startswith("media") for p in paths)
+    assert os.listdir(os.path.join(folder, "media"))
+
+
+def test_camtrap_without_media_points_back_at_the_flight(survey, tmp_path):
+    _with_frames(survey)
+    folder = str(tmp_path / "camtrap")
+    exporters.export_camtrap_dp(survey, "t", folder, epsg=32633,
+                                include_images=False)
+
+    with open(os.path.join(folder, "media.csv"), encoding="utf-8") as fh:
+        paths = [row["filePath"] for row in csv.DictReader(fh)]
+    assert all(p.startswith("frames_t") for p in paths)
+    assert not os.path.exists(os.path.join(folder, "media"))
+
+
+def test_run_export_ignores_images_for_formats_without_them(survey, tmp_path):
+    """Passing it must not become a TypeError on GeoJSON or TRex."""
+    exporters.run_export("geojson", survey, "t",
+                         str(tmp_path / "t.geojson"), epsg=32633,
+                         include_images=True)
+    exporters.run_export("trex", survey, "t", str(tmp_path / "trex"),
+                         include_images=True)
+
+
+def test_run_export_passes_the_choice_through(survey, tmp_path):
+    _with_frames(survey)
+    folder = str(tmp_path / "yolo")
+    exporters.run_export("yolo", survey, "t", folder, image_size=SIZE,
+                         include_images=False)
+    assert os.listdir(os.path.join(folder, "images")) == []
+
+
+def test_a_missing_frame_is_reported_not_hidden(survey, tmp_path):
+    _with_frames(survey, names=("frame_000000.jpg",))
+    messages = []
+    exporters.export_coco(survey, "t", str(tmp_path / "c.json"),
+                          image_size=SIZE, log_fn=messages.append)
+    assert any("frame_000001.jpg" in m for m in messages)

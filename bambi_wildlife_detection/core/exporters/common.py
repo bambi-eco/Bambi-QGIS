@@ -252,6 +252,46 @@ def ensure_folder(path: str) -> str:
     return path
 
 
+def copy_frames(target_folder: str, modality: str, imagefiles,
+                destination: str) -> dict:
+    """Copy the named extracted frames into *destination*.
+
+    Formats that reference images are only usable when the images travel with
+    them, but the frames are the heaviest thing a project owns — so this is
+    always a caller's choice, never implied. Returns what happened, because a
+    label with no image is ignored in silence by every consumer.
+    """
+    import shutil
+
+    source_folder = os.path.join(target_folder, f"frames_{modality}")
+    ensure_folder(destination)
+
+    copied, missing = 0, []
+    for name in imagefiles:
+        source = os.path.join(source_folder, name)
+        if os.path.isfile(source):
+            shutil.copy2(source, os.path.join(destination, name))
+            copied += 1
+        else:
+            missing.append(name)
+    return {"copied": copied, "missing": missing, "source": source_folder,
+            "destination": destination}
+
+
+def describe_copy(result: dict) -> List[str]:
+    """Log lines for a :func:`copy_frames` result — one, or two if any failed."""
+    lines = [f"copied {result['copied']} image(s) into "
+             f"{result['destination']}"]
+    missing = result["missing"]
+    if missing:
+        shown = ", ".join(missing[:3])
+        more = f" (+{len(missing) - 3} more)" if len(missing) > 3 else ""
+        lines.append(f"warning — {len(missing)} frame(s) had no image in "
+                     f"{result['source']}: {shown}{more}. Consumers ignore an "
+                     "annotation whose image is absent.")
+    return lines
+
+
 def no_tracks_hint(target_folder: str, modality: str) -> str:
     """Why a track-based export found nothing, when the answer is knowable.
 

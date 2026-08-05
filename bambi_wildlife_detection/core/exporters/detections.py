@@ -13,7 +13,6 @@ sidecar keyed by ``(frame, track_id)``.
 
 import json
 import os
-import shutil
 from typing import Dict, List, Optional, Tuple
 
 from . import common
@@ -22,12 +21,16 @@ from . import common
 def export_coco(target_folder: str, modality: str, output_path: str,
                 include_not_an_animal: bool = False,
                 image_size: Optional[Tuple[int, int]] = None,
-                log_fn=None) -> str:
-    """Write a COCO detection JSON.
+                include_images: bool = True, log_fn=None) -> str:
+    """Write a COCO detection JSON, and optionally the images beside it.
 
     The reference export: COCO permits extra keys on an annotation, so every
     custom field travels with its detection instead of being dropped the way
     ``labels.csv`` dropped them (§1.2b).
+
+    ``file_name`` is a bare name, which readers resolve against an image root
+    they are told about separately. *include_images* copies the frames into an
+    ``images`` folder next to the JSON so that root is the export itself.
     """
     vocabulary = common.load_vocabulary(target_folder)
     rows = common.load_detections(
@@ -78,31 +81,41 @@ def export_coco(target_folder: str, modality: str, output_path: str,
                        for index, name in enumerate(names)],
     }
 
-    common.ensure_folder(os.path.dirname(os.path.abspath(output_path)))
+    folder = os.path.dirname(os.path.abspath(output_path))
+    common.ensure_folder(folder)
     with open(output_path, "w", encoding="utf-8") as fh:
         json.dump(document, fh, indent=2)
+
+    copied = None
+    if include_images:
+        copied = common.copy_frames(
+            target_folder, modality, [image["file_name"] for image in images],
+            os.path.join(folder, "images"))
 
     if log_fn:
         log_fn(f"COCO: {len(annotations)} annotation(s) over "
                f"{len(images)} image(s) → {output_path}")
+        for line in common.describe_copy(copied) if copied else []:
+            log_fn(f"COCO: {line}")
     return output_path
 
 
 def export_yolo(target_folder: str, modality: str, output_folder: str,
                 include_not_an_animal: bool = False,
                 image_size: Optional[Tuple[int, int]] = None,
-                copy_images: bool = True, log_fn=None) -> str:
+                include_images: bool = True, log_fn=None) -> str:
     """Write a YOLO dataset: ``images/``, ``labels/`` and ``data.yaml``.
 
     One ``.txt`` per frame that has detections, named after the frame image, in
     normalised ``cls cx cy w h``. Custom fields have nowhere to go in this
     format and are deliberately not smuggled into it — use COCO for those.
 
-    The frames themselves are copied in, because a YOLO dataset is a folder
-    layout rather than a manifest: there is no field naming the images, so the
-    labels are only found through ``images``/``labels`` siblings. Only frames
-    carrying a detection are copied. *copy_images* turns that off for callers
-    that already have the images arranged.
+    With *include_images* the frames are copied in, because a YOLO dataset is a
+    folder layout rather than a manifest: there is no field naming the images,
+    so the labels are only found through ``images``/``labels`` siblings. Only
+    frames carrying a detection are copied. Turning it off leaves the labels
+    alone for callers who already have the images arranged — and saves
+    duplicating what is usually the heaviest part of a project.
     """
     vocabulary = common.load_vocabulary(target_folder)
     rows = common.load_detections(
@@ -123,21 +136,13 @@ def export_yolo(target_folder: str, modality: str, output_folder: str,
     for row in rows:
         by_frame.setdefault(row["frame"], []).append(row)
 
-    source_folder = os.path.join(target_folder, f"frames_{modality}")
-    copied, missing = 0, []
+    used = [frames.get(frame, {}).get("imagefile", f"frame_{frame:06d}.jpg")
+            for frame in sorted(by_frame)]
 
     for frame, frame_rows in sorted(by_frame.items()):
         imagefile = frames.get(frame, {}).get(
             "imagefile", f"frame_{frame:06d}.jpg")
         stem = os.path.splitext(imagefile)[0]
-
-        if copy_images:
-            source = os.path.join(source_folder, imagefile)
-            if os.path.isfile(source):
-                shutil.copy2(source, os.path.join(images_folder, imagefile))
-                copied += 1
-            else:
-                missing.append(imagefile)
 
         with open(os.path.join(labels_folder, f"{stem}.txt"),
                   "w", encoding="utf-8") as fh:
@@ -162,31 +167,35 @@ def export_yolo(target_folder: str, modality: str, output_folder: str,
         for index, name in enumerate(names):
             fh.write(f"  {index}: {name}\n")
 
+    copied = None
+    if include_images:
+        copied = common.copy_frames(target_folder, modality, used,
+                                    images_folder)
+
     if log_fn:
         log_fn(f"YOLO: {len(rows)} box(es) over {len(by_frame)} frame(s) "
                f"→ {output_folder}")
-        if copy_images:
-            log_fn(f"YOLO: copied {copied} image(s) into {images_folder}")
+        if copied is not None:
+            for line in common.describe_copy(copied):
+                log_fn(f"YOLO: {line}")
         else:
-            log_fn("YOLO: images not copied — point 'train' at the frames "
+            log_fn("YOLO: images not included — point 'train' at the frames "
                    "yourself, or the labels will not be found.")
-        if missing:
-            shown = ", ".join(missing[:3])
-            more = f" (+{len(missing) - 3} more)" if len(missing) > 3 else ""
-            log_fn(f"YOLO: warning — {len(missing)} labelled frame(s) had no "
-                   f"image in {source_folder}: {shown}{more}. Those labels "
-                   "will be ignored by YOLO.")
     return output_folder
 
 
 def export_mot(target_folder: str, modality: str, output_folder: str,
-               include_not_an_animal: bool = False, log_fn=None) -> str:
+               include_not_an_animal: bool = False,
+               include_images: bool = True, log_fn=None) -> str:
     """Write MOT ``gt.txt`` plus a sidecar for anything the format cannot hold.
 
     Columns are ``frame,id,bb_left,bb_top,bb_width,bb_height,conf,x,y,z`` with
     1-based frame numbers, as MOT expects. Only detections belonging to a track
     are written — MOT is a tracking format, and a detection with no track has no
     id to give.
+
+    *include_images* fills the ``img1`` folder MOTChallenge sequences use, which
+    is what makes the export a sequence rather than a bare ground truth file.
     """
     vocabulary = common.load_vocabulary(target_folder)
     rows = common.load_detections(
@@ -231,6 +240,16 @@ def export_mot(target_folder: str, modality: str, output_folder: str,
         for index, name in enumerate(names):
             fh.write(f"{index} {name}\n")
 
+    copied = None
+    if include_images and tracked:
+        frames = {f["frame"]: f for f in common.load_frames(
+            target_folder, modality)}
+        copied = common.copy_frames(
+            target_folder, modality,
+            [frames.get(frame, {}).get("imagefile", f"frame_{frame:06d}.jpg")
+             for frame in sorted({row["frame"] for row in tracked})],
+            os.path.join(output_folder, "img1"))
+
     if log_fn:
         skipped = len(rows) - len(tracked)
         message = f"MOT: {len(tracked)} row(s) → {gt_path}"
@@ -239,4 +258,6 @@ def export_mot(target_folder: str, modality: str, output_folder: str,
         if not tracked and rows:
             message += common.no_tracks_hint(target_folder, modality)
         log_fn(message)
+        for line in common.describe_copy(copied) if copied else []:
+            log_fn(f"MOT: {line}")
     return output_folder

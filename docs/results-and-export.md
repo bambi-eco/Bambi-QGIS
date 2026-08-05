@@ -225,12 +225,31 @@ Two things worth knowing:
 - **GeoJSON, Camtrap DP and Darwin Core need the target CRS**, and refuse
   before asking where to save rather than writing coordinates in the wrong
   reference system.
-- **YOLO copies the frames in.** A YOLO dataset is a folder layout rather than
-  a manifest — nothing in it names the images, and labels are found by swapping
-  `images` for `labels` in the path — so the export is only usable if the
-  images travel with it. Only frames carrying a detection are copied. `val`
-  names the training images so the file is valid as written; split it before
-  believing any validation number.
+- **"Include images"** copies the frames the export refers to alongside it.
+  It is on by default and applies to the four formats that name images:
+
+  | Format | Where the images land |
+  |---|---|
+  | COCO | `images/` next to the JSON |
+  | YOLO | `images/`, beside `labels/` |
+  | MOT | `img1/`, the MOTChallenge layout |
+  | Camtrap DP | `media/`, and `filePath` points there |
+
+  Only frames carrying a detection are copied, and frames with no image on
+  disk are reported rather than silently skipped. Turn it off when the
+  annotations are all you need — the frames are usually the heaviest part of a
+  project. GeoJSON and TRex `.npz` reference no image, so the option is
+  disabled for them.
+
+  Two consequences worth knowing. YOLO is a folder layout rather than a
+  manifest — nothing in it names the images, and a label is found by swapping
+  `images` for `labels` in the path — so without the images the dataset does
+  not resolve at all. Camtrap DP's `filePath` follows the choice: with media it
+  points at `media/`, without it stays relative to the target folder, so the
+  package only resolves next to the flight it came from.
+
+  `val` in `data.yaml` names the training images so the file is valid as
+  written; split it before believing any validation number.
 
 If a track export comes back empty it says why. The usual cause is a tracking
 run that never reached the store: `tracks.csv` exists, so tracking looks as
