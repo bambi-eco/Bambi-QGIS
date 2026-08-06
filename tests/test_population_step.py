@@ -11,6 +11,14 @@ import os
 
 import pytest
 
+from bambi_wildlife_detection.core import fov_store, store
+
+
+def _square(cx, cy, half=10.0):
+    """A 20x20 m footprint centred on (cx, cy), as the FoV step records it."""
+    return [(cx - half, cy - half, 0.0), (cx + half, cy - half, 0.0),
+            (cx + half, cy + half, 0.0), (cx - half, cy + half, 0.0)]
+
 
 @pytest.fixture
 def flight(tmp_path):
@@ -49,16 +57,10 @@ def flight(tmp_path):
     }))
 
     # ---- FoV footprints: a 20x20 m square under every frame (world CRS) ---
-    (folder / "fov_t").mkdir()
-    lines = ["# FoV polygon georeferenced data\n"]
-    for idx, img in enumerate(images):
-        cx = img["location"][0] + origin[0]
-        cy = img["location"][1] + origin[1]
-        corners = [(cx - 10, cy - 10), (cx + 10, cy - 10),
-                   (cx + 10, cy + 10), (cx - 10, cy + 10)]
-        coords = " ".join(f"{x:.6f} {y:.6f} 0.000000" for x, y in corners)
-        lines.append(f"{idx} 4 {coords}\n")
-    (folder / "fov_t" / "fov_polygons.txt").write_text("".join(lines))
+    fov_store.record_fov(str(folder), "t", {
+        idx: _square(img["location"][0] + origin[0],
+                     img["location"][1] + origin[1])
+        for idx, img in enumerate(images)})
 
     # ---- track perpendicular distances (world CRS) ------------------------
     # 3 tracks near transect A, 1 near transect B, 1 far from both (600 m north)
@@ -240,17 +242,10 @@ class TestStudyArea:
             json.dump(poses, fh)
 
         origin = 5000000.0
-        lines = ["# FoV polygon georeferenced data\n"]
-        for idx, img in enumerate(poses["images"]):
-            cx = img["location"][0] + 500000.0
-            cy = img["location"][1] + origin
-            corners = [(cx - 10, cy - 10), (cx + 10, cy - 10),
-                       (cx + 10, cy + 10), (cx - 10, cy + 10)]
-            coords = " ".join(f"{x:.6f} {y:.6f} 0.000000" for x, y in corners)
-            lines.append(f"{idx} 4 {coords}\n")
-        with open(os.path.join(folder, "fov_t", "fov_polygons.txt"), "w",
-                  encoding="utf-8") as fh:
-            fh.write("".join(lines))
+        fov_store.record_fov(folder, "t", {
+            idx: _square(img["location"][0] + 500000.0,
+                         img["location"][1] + origin)
+            for idx, img in enumerate(poses["images"])})
 
         processor.run_population_estimation(flight)
         result = _read_json(os.path.join(
@@ -321,8 +316,9 @@ class TestStudyArea:
             processor.run_population_estimation(flight)
 
     def test_missing_fov_is_a_clear_error(self, processor, flight):
-        os.remove(os.path.join(
-            flight["target_folder"], "fov_t", "fov_polygons.txt"))
+        """The store is what the step reads; the text file is not consulted."""
+        os.remove(store.stage_path(
+            flight["target_folder"], store.FOV, "t"))
         with pytest.raises(FileNotFoundError, match="Calculate Field of View"):
             processor.run_population_estimation(flight)
 
@@ -364,18 +360,10 @@ def _write_second_flight(folder, origin):
             {"id": 2, "name": "", "start_frame": 20, "end_frame": 39},
         ]}, fh)
 
-    os.makedirs(os.path.join(folder, "fov_t"), exist_ok=True)
-    lines = ["# FoV polygon georeferenced data\n"]
-    for idx, img in enumerate(images):
-        cx = img["location"][0] + origin[0]
-        cy = img["location"][1] + origin[1]
-        corners = [(cx - 10, cy - 10), (cx + 10, cy - 10),
-                   (cx + 10, cy + 10), (cx - 10, cy + 10)]
-        coords = " ".join(f"{x:.6f} {y:.6f} 0.000000" for x, y in corners)
-        lines.append(f"{idx} 4 {coords}\n")
-    with open(os.path.join(folder, "fov_t", "fov_polygons.txt"),
-              "w", encoding="utf-8") as fh:
-        fh.write("".join(lines))
+    fov_store.record_fov(folder, "t", {
+        idx: _square(img["location"][0] + origin[0],
+                     img["location"][1] + origin[1])
+        for idx, img in enumerate(images)})
 
     # 3 tracks near transect A, 1 near transect B, 1 far from both.
     tracks = [

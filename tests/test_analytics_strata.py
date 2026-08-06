@@ -227,23 +227,28 @@ def test_the_pooled_run_may_still_fall_back(processor, survey):
     assert points
 
 
-def test_provenance_does_not_survive_into_a_legacy_run(processor, survey,
-                                                       tmp_path):
+def test_provenance_does_not_survive_a_run_that_counted_nothing(processor,
+                                                                survey):
     """It described the previous run, not this one."""
     processor._collect_analytics_points(_config(survey), "detections")
     assert processor._last_analytics_provenance is not None
 
+    with pytest.raises(RuntimeError):
+        processor._collect_analytics_points(
+            _config(survey, analytics_species_ids=[999]), "detections")
+    assert processor._last_analytics_provenance is None
+
+
+def test_a_project_without_a_store_is_told_to_migrate(processor, tmp_path):
+    """The legacy files are not read, so "no store" is the whole answer."""
     legacy = str(tmp_path / "legacy")
     os.makedirs(os.path.join(legacy, "tracks_t"), exist_ok=True)
     with open(os.path.join(legacy, "tracks_t", "tracks.csv"), "w",
               encoding="utf-8") as fh:
-        fh.write("00000000,1,1.0,2.0,3.0,4.0,5.0,6.0,0.9,0,0\n")
+        fh.write("00000000,1,1.0,2.0,3.0,4.0,5.0,6.0,0.9,0,0")
 
-    try:
+    with pytest.raises(FileNotFoundError, match="Migrate"):
         processor._collect_analytics_points(_config(legacy), "tracks")
-    except Exception:  # noqa: BLE001 — the reset is what is under test
-        pass
-    assert processor._last_analytics_provenance is None
 
 
 def test_the_coverage_map_records_no_population_filter(processor, survey):

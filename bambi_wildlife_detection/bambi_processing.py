@@ -1593,77 +1593,46 @@ class BambiProcessor:
         if progress_fn:
             progress_fn(20)
 
-        # Load georeferenced detections (camera-specific folder)
-        georef_file = os.path.join(target_folder, f"georeferenced_{det_suffix}", "georeferenced.txt")
-        if not os.path.exists(georef_file):
-            raise FileNotFoundError(
-                "georeferenced.txt not found. Please run 'Geo-Reference Detections' first."
-            )
-
-        detections = []
-
-        # Prefer the store, for two reasons: it applies the population filter
-        # (false positives and unselected species never reach the distance
-        # sampling that reads these distances), and its class is the resolved
-        # species rather than the raw detector class georeferenced.txt carries.
+        # Geo-referenced detections come from the store. It applies the
+        # population filter (false positives and unselected species never reach
+        # the distance sampling that reads these distances) and its class is
+        # the resolved species, which georeferenced.txt never carried.
         from .core import analytics_source, store as _store
 
-        from_store = os.path.isfile(_store.stage_path(
-            target_folder, _store.DETECTIONS, det_suffix))
-        if from_store:
-            try:
-                rows, provenance = analytics_source.load_rows(
-                    target_folder, det_suffix,
-                    species_ids=config.get("analytics_species_ids"))
-            except analytics_source.AnalyticsError:
-                rows, provenance = [], {}
-            for row in rows:
-                detections.append({
-                    'idx': row["detection_id"],
-                    'frame': row["frame"],
-                    'x1': row["gx1"], 'y1': row["gy1"], 'z1': row["gz1"],
-                    'x2': row["gx2"], 'y2': row["gy2"], 'z2': row["gz2"],
-                    'confidence': row["confidence"] or 1.0,
-                    'class_id': row["species_id"],
-                })
-            if detections and log_fn:
-                summary = analytics_source.describe_filter(provenance)
-                log_fn(f"Loaded {len(detections)} detection(s) from the "
-                       f"store — {summary}")
+        self._require_store(target_folder, _store.GEOREFERENCED, det_suffix,
+                            "Geo-Reference Detections")
 
-        if from_store and not detections:
-            # Falling back to the text file here would quietly ignore the
-            # species filter that just excluded everything.
-            raise RuntimeError(
-                "No geo-referenced detections match the current species "
-                "filter. Choose 'All species' on the Survey Analytics tab, or "
-                "tick a species that this flight actually recorded.")
+        detections = []
+        try:
+            rows, provenance = analytics_source.load_rows(
+                target_folder, det_suffix,
+                species_ids=config.get("analytics_species_ids"))
+        except analytics_source.AnalyticsError:
+            rows, provenance = [], {}
+        for row in rows:
+            detections.append({
+                'idx': row["detection_id"],
+                'frame': row["frame"],
+                'x1': row["gx1"], 'y1': row["gy1"], 'z1': row["gz1"],
+                'x2': row["gx2"], 'y2': row["gy2"], 'z2': row["gz2"],
+                'confidence': row["confidence"] or 1.0,
+                'class_id': row["species_id"],
+            })
 
         if not detections:
-            with open(georef_file, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith('#'):
-                        continue
-                    parts = line.split()
-                    if len(parts) >= 10:
-                        try:
-                            detections.append({
-                                'idx': int(parts[0]),
-                                'frame': int(parts[1]),
-                                'x1': float(parts[2]), 'y1': float(parts[3]), 'z1': float(parts[4]),
-                                'x2': float(parts[5]), 'y2': float(parts[6]), 'z2': float(parts[7]),
-                                'confidence': float(parts[8]),
-                                'class_id': int(parts[9])
-                            })
-                        except (ValueError, IndexError):
-                            continue
+            if config.get("analytics_species_ids") is not None:
+                raise RuntimeError(
+                    "No geo-referenced detections match the current species "
+                    "filter. Choose 'All species' on the Survey Analytics "
+                    "tab, or tick a species that this flight recorded.")
+            raise RuntimeError(
+                "No geo-referenced detections found. Run 'Geo-Reference "
+                "Detections' first.")
 
-            if not detections:
-                raise RuntimeError("No valid georeferenced detections found.")
-
-            if log_fn:
-                log_fn(f"Loaded {len(detections)} georeferenced detections")
+        if log_fn:
+            summary = analytics_source.describe_filter(provenance)
+            log_fn(f"Loaded {len(detections)} detection(s) from the store — "
+                   f"{summary}")
 
         if progress_fn:
             progress_fn(40)
@@ -2066,6 +2035,28 @@ class BambiProcessor:
     # ------------------------------------------------------------------ #
 
     @staticmethod
+    def _require_store(target_folder: str, kind: str, modality: str,
+                       step: str) -> str:
+        """The path of a stage store, or an error naming the step that makes it.
+
+        Every step reads its input from the store. The 5.x text files are no
+        longer read — they are written for external scripts, and a project can
+        turn that off — so "the text file is there" says nothing about whether
+        the step can run (EXCHANGE_FORMAT_PLAN.md §11).
+        """
+        from .core import store as _store
+
+        path = _store.stage_path(target_folder, kind, modality)
+        if not os.path.isfile(path):
+            camera = "thermal" if modality == "t" else "RGB"
+            raise FileNotFoundError(
+                f"No {kind} results for the {camera} camera in "
+                f"{target_folder}. Run '{step}' first. (A 5.x project needs "
+                "'Migrate 5.x…' on the Input tab once; the text files "
+                "themselves are no longer read.)")
+        return path
+
+    @staticmethod
     def species_slug(name: str) -> str:
         """A species name as a filename fragment: 'roe deer' → 'roe-deer'."""
         keep = [c.lower() if c.isalnum() else "-" for c in (name or "")]
@@ -2137,113 +2128,51 @@ class BambiProcessor:
         return strata
 
     def _collect_analytics_points(self, config, source, log_fn=None):
-        """Collect world-coordinate (UTM) point locations for analytics.
+        """World-coordinate (UTM) point locations for the analytics.
 
-        For ``source == "detections"`` every geo-referenced detection centre is
-        returned. For ``source == "tracks"`` one representative point per track
-        (the centroid of that track's bounding-box centres) is returned, so a
-        single animal followed across many frames counts once.
+        For ``source == "detections"`` every geo-referenced detection centre;
+        for ``"tracks"`` one point per track (the centroid of its box centres),
+        so an animal followed across many frames counts once.
+
+        Read from the store, which applies the population filter of §8.2 —
+        false positives excluded, one tracker run plus the manual one,
+        superseded tracks dropped — and reports what it counted, so the number
+        can be traced back to the rows behind it. The 5.x text files carry none
+        of that and are not read.
 
         :returns: (points, suffix) where points is a list of (x, y) tuples and
                   suffix is the camera folder suffix the data came from.
         """
+        from .core import analytics_source, store as _store
+
         target_folder = config["target_folder"]
-        points = []
-
-        # Prefer the store: it applies the population filter of §8.2 — false
-        # positives excluded, one tracker run plus the manual one, superseded
-        # tracks dropped — and reports what it counted, so the number can be
-        # traced back to the rows behind it.
-        from .core import store as _store
-
         camera_key = "tracking_camera" if source == "tracks" else "detection_camera"
         suffix = "t" if config.get(camera_key, "T") == "T" else "w"
-        if os.path.isfile(_store.stage_path(
-                target_folder, _store.DETECTIONS, suffix)):
-            from .core import analytics_source
+        step = "Track Animals" if source == "tracks" else "Geo-Reference Detections"
+        self._require_store(target_folder, _store.GEOREFERENCED, suffix, step)
 
-            species_ids = config.get("analytics_species_ids")
-            try:
-                points, provenance = analytics_source.load_points(
-                    target_folder, suffix, source,
-                    species_ids=species_ids,
-                    include_manual=config.get("analytics_include_manual", True))
-            except analytics_source.AnalyticsError:
-                points = []
-            if points:
-                self._last_analytics_provenance = provenance
-                if log_fn:
-                    summary = analytics_source.describe_filter(provenance)
-                    log_fn(f"Counted: {summary}")
-                return points, suffix
-            if species_ids is not None:
-                # The legacy files know nothing about species, so falling back
-                # would answer with every animal under one species' name.
+        try:
+            points, provenance = analytics_source.load_points(
+                target_folder, suffix, source,
+                species_ids=config.get("analytics_species_ids"),
+                include_manual=config.get("analytics_include_manual", True))
+        except analytics_source.AnalyticsError as exc:
+            raise RuntimeError(str(exc))
+
+        if not points:
+            self._last_analytics_provenance = None
+            if config.get("analytics_species_ids") is not None:
                 raise RuntimeError(
                     "No geo-referenced points match the selected species. "
                     "Choose 'All species' on the Survey Analytics tab, or "
-                    "tick a species that this flight actually recorded.")
+                    "tick a species that this flight recorded.")
+            raise RuntimeError(
+                f"No {source} points available. Run '{step}' first.")
 
-        # Whatever follows did not come from the store, so the provenance of a
-        # previous run must not be attached to it (§8.2).
-        self._last_analytics_provenance = None
-
-        if source == "tracks":
-            trk_camera = config.get("tracking_camera", "T")
-            suffix = "t" if trk_camera == "T" else "w"
-            tracks_folder = os.path.join(target_folder, f"tracks_{suffix}")
-            if not os.path.isdir(tracks_folder):
-                raise FileNotFoundError(
-                    f"tracks_{suffix}/ folder not found. Please run 'Track Animals' first."
-                )
-            from collections import defaultdict
-            centres = defaultdict(list)
-            for fname in os.listdir(tracks_folder):
-                if not fname.endswith(".csv") or fname.endswith("_pixel.csv"):
-                    continue
-                with open(os.path.join(tracks_folder, fname), 'r', encoding='utf-8') as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line or line.startswith('#'):
-                            continue
-                        parts = line.split(',')
-                        if len(parts) >= 8:
-                            try:
-                                tid = int(parts[1])
-                                cx = (float(parts[2]) + float(parts[5])) / 2.0
-                                cy = (float(parts[3]) + float(parts[6])) / 2.0
-                            except (ValueError, IndexError):
-                                continue
-                            centres[tid].append((cx, cy))
-            for tid, pts in centres.items():
-                mx = sum(p[0] for p in pts) / len(pts)
-                my = sum(p[1] for p in pts) / len(pts)
-                points.append((mx, my))
-        else:
-            det_camera = config.get("detection_camera", "T")
-            suffix = "t" if det_camera == "T" else "w"
-            georef_file = os.path.join(
-                target_folder, f"georeferenced_{suffix}", "georeferenced.txt")
-            if not os.path.exists(georef_file):
-                raise FileNotFoundError(
-                    "georeferenced.txt not found. Please run 'Geo-Reference Detections' first."
-                )
-            with open(georef_file, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith('#'):
-                        continue
-                    parts = line.split()
-                    if len(parts) >= 8:
-                        try:
-                            cx = (float(parts[2]) + float(parts[5])) / 2.0
-                            cy = (float(parts[3]) + float(parts[6])) / 2.0
-                        except (ValueError, IndexError):
-                            continue
-                        points.append((cx, cy))
-
+        self._last_analytics_provenance = provenance
         if log_fn:
-            log_fn(f"Collected {len(points)} {source} point(s) from {suffix} outputs")
+            summary = analytics_source.describe_filter(provenance)
+            log_fn(f"Counted: {summary}")
         return points, suffix
 
     def run_density_heatmap(self, config: Dict[str, Any], progress_fn=None,
@@ -3448,6 +3377,7 @@ class BambiProcessor:
             ``mismatched``), ``total_count``/``total_ha`` over the usable
             transects and ``origin_source``.
         """
+        from .core import store as _store_kinds
         from .core.pipeline_outputs import load_fov_polygons_3d
         from .core.population import (
             assign_tracks, geometry_to_rings, merged_fov_area,
@@ -3536,16 +3466,16 @@ class BambiProcessor:
         # ---- Monitored area per transect (union of the frame FoVs) --------- #
         # Computed before the assignment: a track only counts towards a
         # transect whose footprint contains it, so the areas are needed first.
+        # The path locates the project; load_fov_polygons_3d reads the store
+        # beside it, never the text file (see core.pipeline_outputs).
         fov_file = os.path.join(target_folder, f"fov_{suffix}", "fov_polygons.txt")
-        if not os.path.exists(fov_file):
-            raise FileNotFoundError(
-                f"fov_{suffix}/fov_polygons.txt not found in {target_folder}. "
-                "Please run 'Calculate Field of View' first."
-            )
+        self._require_store(target_folder, _store_kinds.FOV, suffix,
+                            "Calculate Field of View")
         fov_polygons = load_fov_polygons_3d(fov_file, log_fn)
         if not fov_polygons:
             raise RuntimeError(
-                f"The FoV file in {target_folder} contains no polygons.")
+                f"No field-of-view polygons stored for {target_folder}. "
+                "Run 'Calculate Field of View' again.")
 
         cum = cumulative_distances(flight_positions(images))
         areas: Dict[int, object] = {}
@@ -4106,66 +4036,30 @@ class BambiProcessor:
             if log_fn:
                 log_fn(f"Using configured resolution: {res_width}x{res_height}")
 
-        # Load detections (camera-specific folder)
-        detections_file = os.path.join(target_folder, f"detections_{camera_suffix}", "detections.txt")
-        if not os.path.exists(detections_file):
-            raise FileNotFoundError("Detections file not found")
-
-        detections = []
-        with open(detections_file, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                if line.startswith('#'):
-                    # Parse optional metadata headers embedded as comments
-                    if line.startswith('# video_size'):
-                        parts = line.split()
-                        if len(parts) >= 4:
-                            try:
-                                det_w, det_h = int(parts[2]), int(parts[3])
-                                input_resolution = Resolution(det_w, det_h)
-                                if log_fn:
-                                    log_fn(
-                                        f"Detection frame size from detections.txt: {det_w}x{det_h}"
-                                    )
-                            except ValueError:
-                                pass
-                    continue
-                parts = line.split()
-                if len(parts) >= 6:
-                    detections.append({
-                        "frame": int(parts[0]),
-                        "x1": float(parts[1]),
-                        "y1": float(parts[2]),
-                        "x2": float(parts[3]),
-                        "y2": float(parts[4]),
-                        "confidence": float(parts[5]),
-                        "class_id": int(parts[6]) if len(parts) > 6 else 0
-                    })
-
-        # Prefer the store: its rows carry a detection_id, so the results can be
-        # keyed on it instead of relying on the two files staying in step. A
-        # detections.txt that never went through the 6.0 detection stage is
-        # adopted first, so every downstream consumer sees the same thing.
-        from .core import detection_store, track_store
+        # Detections come from the store: its rows carry a detection_id, so the
+        # results are keyed on it instead of relying on two files staying in
+        # step. A detections.txt that never went through the 6.0 detection
+        # stage is adopted first, which is the one place the text is still
+        # read — and it reads it into the store rather than into this step.
+        from .core import detection_store, store as _store_module, track_store
 
         detection_store.adopt_legacy_detections(
             target_folder, camera_suffix, log_fn=log_fn)
+        self._require_store(target_folder, _store_module.DETECTIONS,
+                            camera_suffix, "Detect Animals")
 
-        if track_store.has_store(target_folder, camera_suffix):
-            stored = track_store.load_detections(target_folder, camera_suffix)
-            if stored:
-                detections = [{
-                    "detection_id": row["detection_id"],
-                    "frame": row["frame"],
-                    "x1": row["x1"], "y1": row["y1"],
-                    "x2": row["x2"], "y2": row["y2"],
-                    "confidence": row["confidence"],
-                    "class_id": int(row["source_class"] or 0),
-                } for row in stored]
-                if log_fn:
-                    log_fn(f"Using {len(detections)} detections from the store")
+        detections = [{
+            "detection_id": row["detection_id"],
+            "frame": row["frame"],
+            "x1": row["x1"], "y1": row["y1"],
+            "x2": row["x2"], "y2": row["y2"],
+            "confidence": row["confidence"],
+            "class_id": int(row["source_class"] or 0),
+        } for row in track_store.load_detections(target_folder, camera_suffix)]
+
+        if not detections:
+            raise RuntimeError(
+                "No detections to geo-reference. Run 'Detect Animals' first.")
 
         if log_fn:
             log_fn(f"Loaded {len(detections)} detections to geo-reference")
@@ -5026,6 +4920,7 @@ class BambiProcessor:
 
             # Output file for FoV polygons
             output_file = os.path.join(fov_folder, "fov_polygons.txt")
+            stored_polygons = {}
 
             with open(output_file, 'w', encoding='utf-8') as f:
                 f.write("# FoV polygon georeferenced data\n")
@@ -5073,6 +4968,7 @@ class BambiProcessor:
                     # Filter out None points
                     valid_points = [p for p in georef_points if p is not None]
 
+                    stored_polygons[frame_idx] = valid_points
                     if len(valid_points) > 0:
                         coords_str = " ".join(f"{p[0]:.6f} {p[1]:.6f} {p[2]:.6f}" for p in valid_points)
                         f.write(f"{frame_idx} {len(valid_points)} {coords_str}\n")
@@ -5095,6 +4991,13 @@ class BambiProcessor:
                 del texture_data
             if tri_mesh is not None:
                 del tri_mesh
+
+        # Into the store, which is what every consumer reads: the coverage map,
+        # the transect areas a population estimate divides by, and the layers.
+        from .core import fov_store
+
+        fov_store.record_fov(target_folder, camera_suffix, stored_polygons,
+                             log_fn=log_fn)
 
         _record_stage(config, "calculate_fov", camera_suffix, log_fn=log_fn)
 
@@ -5372,36 +5275,23 @@ class BambiProcessor:
         if log_fn:
             log_fn(f"Running built-in tracking with mode: {tracker_mode_str}")
 
-        # Load georeferenced detections (camera-specific folder)
-        georef_folder = os.path.join(target_folder, f"georeferenced_{camera_suffix}")
-        georef_file = os.path.join(georef_folder, "georeferenced.txt")
-
-        if not os.path.exists(georef_file):
-            raise FileNotFoundError("Georeferenced detections not found")
-
-        # Parse detections
         frames: Dict[int, List[Detection]] = defaultdict(list)
 
-        # Prefer the store: ``source_id`` then carries the real detection_id all
-        # the way through the tracker, so membership needs no reconstruction.
-        from .core import track_store
+        # From the store: ``source_id`` carries the real detection_id all the
+        # way through the tracker, so membership needs no reconstruction.
+        # georeferenced.txt has no such id, so a run built from it could not be
+        # recorded — it would look like it worked (tracks.csv appears) while
+        # MOT, GeoJSON, TRex and the analytics all saw nothing.
+        from .core import store as _store, track_store
 
+        self._require_store(target_folder, _store.GEOREFERENCED,
+                            camera_suffix, "Geo-Reference Detections")
         stored_geo = track_store.load_georeferenced(target_folder, camera_suffix)
-        from_store = bool(stored_geo)
-
-        # Falling back to georeferenced.txt when the project *has* a store is
-        # not a harmless compatibility path: the text file carries no
-        # detection_id, so the run cannot be recorded, and every export and
-        # analytic reads the store. It would look like it worked — tracks.csv
-        # appears — while MOT, GeoJSON, TRex and the analytics all see nothing.
-        if not from_store and track_store.has_store(target_folder,
-                                                    camera_suffix):
+        if not stored_geo:
             raise RuntimeError(
-                "Geo-referenced detections are missing from the store, so "
-                "tracking would have to fall back to georeferenced.txt — and "
-                "tracks built from it cannot be linked back to the "
-                "detections. Run 'Geo-reference detections' again, then "
-                "tracking.")
+                "No geo-referenced detections in the store. Run "
+                "'Geo-Reference Detections' again, then tracking.")
+
         for row in stored_geo:
             frames[row["frame"]].append(Detection(
                 source_id=row["detection_id"],
@@ -5411,31 +5301,6 @@ class BambiProcessor:
                 conf=row["confidence"] if row["confidence"] is not None else 1.0,
                 cls=row["species_id"],
             ))
-
-        with open(georef_file, 'r', encoding='utf-8') as f:
-            for line in f:
-                if from_store:
-                    break
-                line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
-                parts = line.split()
-                if len(parts) >= 10:
-                    idx = int(parts[0])
-                    frame = int(parts[1])
-                    det = Detection(
-                        source_id=idx,
-                        frame=frame,
-                        x1=float(parts[2]),
-                        y1=float(parts[3]),
-                        z1=float(parts[4]),
-                        x2=float(parts[5]),
-                        y2=float(parts[6]),
-                        z2=float(parts[7]),
-                        conf=float(parts[8]),
-                        cls=int(parts[9])
-                    )
-                    frames[frame].append(det)
 
         if log_fn:
             log_fn(f"Loaded {sum(len(v) for v in frames.values())} detections in {len(frames)} frames")
@@ -5557,18 +5422,17 @@ class BambiProcessor:
         # Record the run in the store. Membership comes straight from the
         # tracker's own output — the detection_id travelled through as
         # ``source_id`` — so nothing is matched back by coordinates.
-        if from_store:
-            track_store.record_tracks(
-                target_folder, camera_suffix,
-                [{"track_id": tid, "detection_id": d.source_id,
-                  "interpolated": int(getattr(d, "interpolated", 0))}
-                 for _frame, tid, d in results
-                 if getattr(d, "source_id", None) is not None],
-                kind="builtin", tracker=tracker_mode_str, log_fn=log_fn)
-            orphans = track_store.track_orphans(target_folder, camera_suffix)
-            if orphans and log_fn:
-                log_fn(f"Warning: {len(orphans)} track member(s) reference a "
-                       "detection that no longer exists")
+        track_store.record_tracks(
+            target_folder, camera_suffix,
+            [{"track_id": tid, "detection_id": d.source_id,
+              "interpolated": int(getattr(d, "interpolated", 0))}
+             for _frame, tid, d in results
+             if getattr(d, "source_id", None) is not None],
+            kind="builtin", tracker=tracker_mode_str, log_fn=log_fn)
+        orphans = track_store.track_orphans(target_folder, camera_suffix)
+        if orphans and log_fn:
+            log_fn(f"Warning: {len(orphans)} track member(s) reference a "
+                   "detection that no longer exists")
 
         # Count unique tracks
         unique_tracks = set(r[1] for r in results)
@@ -5679,21 +5543,20 @@ class BambiProcessor:
             if imagefile:
                 frame_to_path[frame_idx] = os.path.join(frames_folder, imagefile)
 
-        # Load pixel-space detections from detections file (camera-specific folder)
-        detections_file = os.path.join(target_folder, f"detections_{camera_suffix}", "detections.txt")
-        if not os.path.exists(detections_file):
-            raise FileNotFoundError("Detections file not found - run detection first")
-
         frames_pixel: Dict[int, List] = defaultdict(list)
 
-        # Prefer the store for the same reason the built-in tracker does: its
+        # From the store for the same reason the built-in tracker uses it: the
         # rows carry a detection_id, so the run can be recorded and the exports
         # and analytics can see the tracks. detections.txt has no such id.
-        from .core import track_store
+        from .core import store as _store, track_store
 
-        stored_dets = (track_store.load_detections(target_folder, camera_suffix)
-                       if track_store.has_store(target_folder, camera_suffix)
-                       else [])
+        self._require_store(target_folder, _store.DETECTIONS, camera_suffix,
+                            "Detect Animals")
+        stored_dets = track_store.load_detections(target_folder, camera_suffix)
+        if not stored_dets:
+            raise RuntimeError(
+                "No detections in the store. Run 'Detect Animals' first.")
+
         for row in stored_dets:
             frames_pixel[row["frame"]].append({
                 'detection_id': row["detection_id"],
@@ -5703,74 +5566,34 @@ class BambiProcessor:
                 'cls': int(row["source_class"] or 0),
             })
 
-        if not stored_dets:
-            with open(detections_file, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith('#'):
-                        continue
-                    parts = line.split()
-                    if len(parts) >= 6:
-                        try:
-                            frame = int(parts[0])
-                            frames_pixel[frame].append({
-                                'detection_id': None,
-                                'x1': float(parts[1]),
-                                'y1': float(parts[2]),
-                                'x2': float(parts[3]),
-                                'y2': float(parts[4]),
-                                'conf': float(parts[5]),
-                                'cls': int(parts[6]) if len(parts) > 6 else 0
-                            })
-                        except (ValueError, IndexError):
-                            continue
-
         if log_fn:
             log_fn(
                 f"Loaded {sum(len(v) for v in frames_pixel.values())} pixel detections in {len(frames_pixel)} frames")
-            if stored_dets:
-                log_fn("Using detections from the store")
 
         # Check if this is a geo-referenced tracker that needs geodets
         is_geo_tracker = backend in [TrackerBackend.GEOREF_NATIVE, TrackerBackend.GEOREF_HYBRID]
         frames_geo: Dict[int, List] = defaultdict(list)
 
         if is_geo_tracker:
-            # Load geo-referenced detections for GeoNative/GeoHybrid trackers (camera-specific folder)
-            georef_folder = os.path.join(target_folder, f"georeferenced_{camera_suffix}")
-            georef_file = os.path.join(georef_folder, "georeferenced.txt")
-
-            if os.path.exists(georef_file):
-                with open(georef_file, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line or line.startswith('#'):
-                            continue
-                        parts = line.split()
-                        if len(parts) >= 10:
-                            try:
-                                idx = int(parts[0])
-                                frame = int(parts[1])
-                                frames_geo[frame].append({
-                                    'source_id': idx,
-                                    'frame': frame,
-                                    'x1': float(parts[2]),
-                                    'y1': float(parts[3]),
-                                    'z1': float(parts[4]),
-                                    'x2': float(parts[5]),
-                                    'y2': float(parts[6]),
-                                    'z2': float(parts[7]),
-                                    'conf': float(parts[8]),
-                                    'cls': int(parts[9])
-                                })
-                            except (ValueError, IndexError):
-                                continue
-
+            # GeoNative/GeoHybrid also want the world coordinates. Same source
+            # as everything else, so the ids line up with frames_pixel.
+            for row in track_store.load_georeferenced(target_folder,
+                                                      camera_suffix):
+                frames_geo[row["frame"]].append({
+                    'source_id': row["detection_id"],
+                    'frame': row["frame"],
+                    'x1': row["gx1"], 'y1': row["gy1"], 'z1': row["gz1"],
+                    'x2': row["gx2"], 'y2': row["gy2"], 'z2': row["gz2"],
+                    'conf': row["confidence"] if row["confidence"] is not None else 1.0,
+                    'cls': row["species_id"],
+                })
+            if frames_geo:
                 if log_fn:
                     log_fn(f"Loaded {sum(len(v) for v in frames_geo.values())} geo detections for geo-tracker")
-            else:
-                if log_fn:
-                    log_fn("Warning: Geo-referenced detections not found - geo tracker may not work optimally")
+            elif log_fn:
+                log_fn("Warning: no geo-referenced detections in the store — "
+                       "this tracker uses them, so run 'Geo-Reference "
+                       "Detections' first for best results")
 
         if progress_fn:
             progress_fn(15)
@@ -5899,7 +5722,7 @@ class BambiProcessor:
             track_store.record_tracks(
                 target_folder, camera_suffix, members,
                 kind="boxmot", tracker=tracker_id, log_fn=log_fn)
-        elif stored_dets and log_fn:
+        elif log_fn:
             log_fn("Warning: this tracker did not report which detection each "
                    "track came from, so the run could not be recorded in the "
                    "store. tracks_pixel.csv is written, but the exports and "
@@ -6007,38 +5830,29 @@ class BambiProcessor:
         if log_fn:
             log_fn(f"Loading DEM and {camera_name} poses for track geo-referencing...")
 
-        # Load pixel tracks (camera-specific folder)
+        # Pixel tracks come from the store, where membership is a recorded
+        # (track_id, detection_id) pair rather than a row position in a CSV.
+        from .core import store as _store, track_store
+
         tracks_folder = os.path.join(target_folder, f"tracks_{camera_suffix}")
-        pixel_tracks_file = os.path.join(tracks_folder, "tracks_pixel.csv")
+        self._require_store(target_folder, _store.TRACKS, camera_suffix,
+                            "Track Animals")
 
-        if not os.path.exists(pixel_tracks_file):
-            raise FileNotFoundError("Pixel tracks not found - run tracking first")
-
-        pixel_tracks = []
-        with open(pixel_tracks_file, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
-                parts = line.split(',')
-                if len(parts) >= 8:
-                    try:
-                        pixel_tracks.append({
-                            'frame': int(parts[0]),
-                            'track_id': int(parts[1]),
-                            'x1': float(parts[2]),
-                            'y1': float(parts[3]),
-                            'x2': float(parts[4]),
-                            'y2': float(parts[5]),
-                            'conf': float(parts[6]),
-                            'cls': int(parts[7]),
-                            'interpolated': int(parts[8]) if len(parts) > 8 else 0
-                        })
-                    except (ValueError, IndexError):
-                        continue
+        pixel_tracks = [{
+            'frame': row["frame"],
+            'track_id': row["track_id"],
+            'x1': row["x1"], 'y1': row["y1"],
+            'x2': row["x2"], 'y2': row["y2"],
+            'conf': row["confidence"] if row["confidence"] is not None else 1.0,
+            'cls': row["species_id"],
+            'interpolated': row.get("interpolated", 0),
+        } for row in track_store.load_pixel_tracks(
+            target_folder, camera_suffix)]
 
         if not pixel_tracks:
-            raise RuntimeError("No pixel tracks found to geo-reference")
+            raise RuntimeError(
+                "No tracks in the store to geo-reference. Run 'Track Animals' "
+                "first.")
 
         if log_fn:
             log_fn(f"Loaded {len(pixel_tracks)} pixel track entries")

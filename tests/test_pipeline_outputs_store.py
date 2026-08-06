@@ -2,9 +2,9 @@
 """The QGIS layer readers preferring the store (EXCHANGE_FORMAT_PLAN.md §11).
 
 The plugin never hands a stage file to QGIS as a layer source — layers are
-built in memory from rows. These readers are where those rows come from, so
-they read the store when there is one and the legacy text otherwise, returning
-the same shape either way.
+built in memory from rows. These readers are where those rows come from, and
+they read the store and nothing else: a legacy file path is taken only to
+locate the project beside it (§11).
 """
 import os
 
@@ -80,26 +80,32 @@ def test_geo_tracks_come_from_the_store(populated):
     assert points[0]["x1"] == 100.0
 
 
-def test_geo_tracks_shape_matches_the_text_reader(populated, tmp_path):
-    """The layer builders must not care which source was used."""
-    stored = pipeline_outputs.load_geo_tracks_by_id(
+def test_geo_tracks_keep_the_shape_the_layer_builders_expect(populated):
+    """The builders were written against the text reader's dict, so the keys
+    are part of the contract even though the source changed."""
+    tracks = pipeline_outputs.load_geo_tracks_by_id(
         os.path.join(populated, "tracks_t", "tracks.csv"))
+    point = list(tracks.values())[0][0]
 
-    legacy_root = str(tmp_path / "legacy")
-    legacy = os.path.join(legacy_root, "tracks_t", "tracks.csv")
-    _write(legacy,
-           "1,7,100.0,200.0,5.0,110.0,210.0,5.0,0.9,0,0\n"
-           "2,7,300.0,400.0,5.0,310.0,410.0,5.0,0.8,0,0\n")
-    from_text = pipeline_outputs.load_geo_tracks_by_id(legacy)
-
-    assert set(list(stored.values())[0][0]) == set(list(from_text.values())[0][0])
+    assert set(point) >= {"frame", "x1", "y1", "z1", "x2", "y2", "z2",
+                          "confidence", "class_id", "interpolated"}
 
 
-def test_geo_tracks_fall_back_to_the_csv(tmp_path):
+def test_geo_tracks_do_not_fall_back_to_the_csv(tmp_path):
+    """A reconstruction from tracks.csv is a guess about which detection each
+    point came from; the store knows, so a project without one gets nothing
+    rather than something plausible."""
     path = os.path.join(str(tmp_path), "tracks_t", "tracks.csv")
-    _write(path, "1,7,100.0,200.0,5.0,110.0,210.0,5.0,0.9,0,0\n")
-    tracks = pipeline_outputs.load_geo_tracks_by_id(path)
-    assert list(tracks) == [7]
+    _write(path, "1,7,100.0,200.0,5.0,110.0,210.0,5.0,0.9,0,0")
+    assert pipeline_outputs.load_geo_tracks_by_id(path) == {}
+
+
+def test_the_missing_store_is_explained(tmp_path):
+    path = os.path.join(str(tmp_path), "tracks_t", "tracks.csv")
+    _write(path, "1,7,100.0,200.0,5.0,110.0,210.0,5.0,0.9,0,0")
+    messages = []
+    pipeline_outputs.load_geo_tracks_by_id(path, log_fn=messages.append)
+    assert any("Migrate" in m for m in messages)
 
 
 def test_geo_tracks_use_the_active_run(populated):
@@ -115,8 +121,9 @@ def test_geo_tracks_use_the_active_run(populated):
     assert len(tracks) == 2
 
 
-def test_geo_tracks_without_any_run_fall_back(populated):
-    """No active tracker run and no manual run means nothing to read."""
+def test_geo_tracks_without_any_run_are_empty(populated):
+    """No active tracker run and no manual run means nothing to show — not a
+    fall back to a file describing runs the store deliberately excluded."""
     conn = store.open_store(
         store.stage_path(populated, store.TRACKS, "t"), store.TRACKS, "t")
     conn.execute("UPDATE track_runs SET is_active = 0")
@@ -124,8 +131,8 @@ def test_geo_tracks_without_any_run_fall_back(populated):
     conn.close()
 
     path = os.path.join(populated, "tracks_t", "tracks.csv")
-    _write(path, "1,9,1.0,2.0,3.0,4.0,5.0,6.0,0.9,0,0\n")
-    assert list(pipeline_outputs.load_geo_tracks_by_id(path)) == [9]
+    _write(path, "1,9,1.0,2.0,3.0,4.0,5.0,6.0,0.9,0,0")
+    assert pipeline_outputs.load_geo_tracks_by_id(path) == {}
 
 
 # ---------------------------------------------------------------------------
@@ -140,11 +147,10 @@ def test_georef_detections_come_from_the_store(populated):
     assert by_frame[1][0]["detection_id"]
 
 
-def test_georef_detections_fall_back_to_the_text(tmp_path):
+def test_georef_detections_do_not_fall_back_to_the_text(tmp_path):
     path = os.path.join(str(tmp_path), "georeferenced_t", "georeferenced.txt")
-    _write(path, "0 1 100.0 200.0 5.0 110.0 210.0 5.0 0.9 0\n")
-    by_frame = pipeline_outputs.load_georef_detections_by_frame(path)
-    assert by_frame[1][0]["x1"] == 100.0
+    _write(path, "0 1 100.0 200.0 5.0 110.0 210.0 5.0 0.9 0")
+    assert pipeline_outputs.load_georef_detections_by_frame(path) == {}
 
 
 def test_failed_detections_are_simply_absent(populated):
@@ -182,19 +188,18 @@ def test_fov_polygons_come_from_the_store(tmp_path):
     assert polygons == {1: [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 1.0, 0.0)]}
 
 
-def test_fov_polygons_fall_back_to_the_text(tmp_path):
+def test_fov_polygons_do_not_fall_back_to_the_text(tmp_path):
     path = os.path.join(str(tmp_path), "fov_t", "fov_polygons.txt")
-    _write(path, "1 3 0.0 0.0 0.0 1.0 0.0 0.0 1.0 1.0 0.0\n")
-    polygons = pipeline_outputs.load_fov_polygons_3d(path)
-    assert list(polygons) == [1]
-    assert len(polygons[1]) == 3
+    _write(path, "1 3 0.0 0.0 0.0 1.0 0.0 0.0 1.0 1.0 0.0")
+    assert pipeline_outputs.load_fov_polygons_3d(path) == {}
 
 
-def test_empty_store_falls_back_rather_than_returning_nothing(tmp_path):
-    """An empty stage file must not mask a populated legacy file."""
+def test_an_empty_store_is_the_answer(tmp_path):
+    """A step that ran and produced nothing is not the same as a step that
+    never ran, and neither is a reason to read the text file."""
     root = str(tmp_path)
     store.open_store(
         store.stage_path(root, store.FOV, "t"), store.FOV, "t").close()
     path = os.path.join(root, "fov_t", "fov_polygons.txt")
-    _write(path, "1 3 0.0 0.0 0.0 1.0 0.0 0.0 1.0 1.0 0.0\n")
-    assert list(pipeline_outputs.load_fov_polygons_3d(path)) == [1]
+    _write(path, "1 3 0.0 0.0 0.0 1.0 0.0 0.0 1.0 1.0 0.0")
+    assert pipeline_outputs.load_fov_polygons_3d(path) == {}

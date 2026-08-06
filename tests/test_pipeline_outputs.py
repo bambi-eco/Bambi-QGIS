@@ -53,70 +53,43 @@ class TestReadDemOriginXy:
         assert read_dem_origin_xy("", short) == (0.0, 0.0)
 
 
-class TestLoadGeoTracksById:
-    def test_parses_and_groups_by_track(self, tmp_path):
-        f = tmp_path / "tracks.csv"
-        f.write_text(
-            "# header\n"
-            "0,7,100,200,5,101,201,6,0.9,1,0\n"
-            "1,7,102,202,5,103,203,6,0.8,1,1\n"
-            "0,8,110,210,5,111,211,6,0.7,2\n"
-            "garbage,row\n")
-        tracks = load_geo_tracks_by_id(str(f))
-        assert sorted(tracks.keys()) == [7, 8]
-        assert tracks[7][0]["z1"] == 5.0
-        assert tracks[7][1]["interpolated"] == 1
-        assert tracks[8][0]["interpolated"] == 0   # column absent -> 0
-        assert tracks[8][0]["class_id"] == 2
+class TestTheTextFilesAreNotRead:
+    """The readers take a legacy path only to locate the project's store.
 
-    def test_missing_file_logs_and_returns_empty(self, tmp_path):
+    Their store behaviour is covered in ``test_pipeline_outputs_store.py``;
+    what matters here is that a populated text file next to no store yields
+    nothing, rather than a reconstruction that looks like an answer.
+    """
+
+    def test_tracks_csv_is_not_parsed(self, tmp_path):
+        f = tmp_path / "tracks_t" / "tracks.csv"
+        f.parent.mkdir()
+        f.write_text("0,7,100,200,5,101,201,6,0.9,1,0")
+        assert load_geo_tracks_by_id(str(f)) == {}
+
+    def test_fov_polygons_txt_is_not_parsed(self, tmp_path):
+        f = tmp_path / "fov_t" / "fov_polygons.txt"
+        f.parent.mkdir()
+        f.write_text("0 3 10 20 400 30 20 401 30 40 402")
+        assert load_fov_polygons_3d(str(f)) == {}
+
+    def test_georeferenced_txt_is_not_parsed(self, tmp_path):
+        f = tmp_path / "georeferenced_t" / "georeferenced.txt"
+        f.parent.mkdir()
+        f.write_text("0 0 100 200 5 101 201 6 0.9 1")
+        assert load_georef_detections_by_frame(str(f)) == {}
+
+    def test_a_missing_file_is_not_an_error_either(self, tmp_path):
+        """Nothing to show is a normal state — a step that has not run."""
+        assert load_geo_tracks_by_id(str(tmp_path / "nope.csv")) == {}
+        assert load_fov_polygons_3d(str(tmp_path / "nope.txt")) == {}
+        assert load_georef_detections_by_frame(str(tmp_path / "no.txt")) == {}
+
+    def test_the_reason_is_logged_when_a_log_is_offered(self, tmp_path):
         logs = []
-        tracks = load_geo_tracks_by_id(
-            str(tmp_path / "nope.csv"), log_fn=logs.append)
-        assert tracks == {}
-        assert any("Error reading" in m for m in logs)
-
-
-class TestLoadFovPolygons3d:
-    def test_parses_xyz_triplets(self, tmp_path):
-        f = tmp_path / "fov_polygons.txt"
-        f.write_text(
-            "# header\n"
-            "0 3 10 20 400 30 20 401 30 40 402\n"
-            "1 0\n"                                   # zero points -> skipped
-            "2 2 1 2 3 4 5 6\n")
-        polygons = load_fov_polygons_3d(str(f))
-        assert polygons[0] == [(10.0, 20.0, 400.0), (30.0, 20.0, 401.0),
-                               (30.0, 40.0, 402.0)]
-        assert 1 not in polygons
-        assert polygons[2] == [(1.0, 2.0, 3.0), (4.0, 5.0, 6.0)]
-
-    def test_missing_file_logs(self, tmp_path):
-        logs = []
-        assert load_fov_polygons_3d(
-            str(tmp_path / "nope.txt"), log_fn=logs.append) == {}
-        assert any("Error reading FoV file" in m for m in logs)
-
-
-class TestLoadGeorefDetectionsByFrame:
-    def test_groups_by_frame_and_filters_invalid(self, tmp_path):
-        f = tmp_path / "georeferenced.txt"
-        f.write_text(
-            "# header\n"
-            "0 0 100 200 5 101 201 6 0.9 1\n"
-            "1 0 -1 210 5 111 211 6 0.8 1\n"      # negative x1 -> skipped
-            "2 3 120 220 5 121 221 6 0.7 2\n")
-        dets = load_georef_detections_by_frame(str(f))
-        assert sorted(dets.keys()) == [0, 3]
-        assert len(dets[0]) == 1
-        assert dets[0][0]["idx"] == 0
-        assert dets[3][0]["class_id"] == 2
-
-    def test_missing_file_logs(self, tmp_path):
-        logs = []
-        assert load_georef_detections_by_frame(
-            str(tmp_path / "nope.txt"), log_fn=logs.append) == {}
-        assert any("Error reading georeferenced file" in m for m in logs)
+        load_geo_tracks_by_id(str(tmp_path / "tracks_t" / "tracks.csv"),
+                              log_fn=logs.append)
+        assert any("Migrate" in m for m in logs)
 
 
 class TestCorrectionConventions:

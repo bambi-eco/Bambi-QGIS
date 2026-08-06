@@ -57,13 +57,14 @@ def _config(root):
 
 def test_tracking_refuses_the_stale_text_fallback(processor, detected):
     """georeferenced.txt carries no detection_id, so a run built from it
-    could never be linked back to the detections it describes."""
-    with pytest.raises(RuntimeError, match="Geo-reference detections"):
+    could never be linked back to the detections it describes. It is not read
+    at all, however recent it looks."""
+    with pytest.raises(FileNotFoundError, match="Geo-Reference Detections"):
         processor._run_builtin_tracking(_config(detected))
 
 
 def test_the_refusal_happens_before_anything_is_written(processor, detected):
-    with pytest.raises(RuntimeError):
+    with pytest.raises((RuntimeError, OSError)):
         processor._run_builtin_tracking(_config(detected))
 
     assert not os.path.exists(
@@ -98,17 +99,16 @@ def test_the_recorded_run_covers_the_detections(processor, detected):
     assert {row["detection_id"] for row in tracked} == set(ids)
 
 
-def test_a_project_without_a_store_still_uses_the_text_files(processor,
-                                                             tmp_path):
-    """5.x folders have no store at all, and must keep working."""
+def test_a_project_without_a_store_is_told_to_migrate(processor, tmp_path):
+    """A 5.x folder is not silently tracked from its text files — the result
+    would exist only as tracks.csv and be invisible to everything else."""
     root = str(tmp_path / "legacy")
     folder = os.path.join(root, "georeferenced_t")
     os.makedirs(folder, exist_ok=True)
     with open(os.path.join(folder, "georeferenced.txt"), "w",
               encoding="utf-8") as fh:
-        fh.write("# idx frame min_x min_y min_z max_x max_y max_z conf cls\n")
-        fh.write("0 0 500000.0 5300000.0 400.0 500010.0 5300010.0 400.0 "
-                 "0.9000 0\n")
+        fh.write("0 0 500000.0 5300000.0 400.0 500010.0 5300010.0 400.0 0.9 0")
 
-    processor._run_builtin_tracking(_config(root))
-    assert os.path.exists(os.path.join(root, "tracks_t", "tracks.csv"))
+    with pytest.raises(FileNotFoundError, match="Migrate"):
+        processor._run_builtin_tracking(_config(root))
+    assert not os.path.exists(os.path.join(root, "tracks_t", "tracks.csv"))

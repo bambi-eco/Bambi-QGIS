@@ -6,14 +6,11 @@ format-specific readers live in :mod:`core.inspection`,
 :mod:`core.video_export` and :mod:`core.labelling`; they return different
 shapes for their specific consumers and are deliberately not unified.
 
-File formats
-------------
-``tracks_{m}/tracks.csv``
-    ``frame,track_id,x1,y1,z1,x2,y2,z2,confidence,class_id[,interpolated]``
-``fov_{m}/fov_polygons.txt``
-    ``frame_idx num_points x1 y1 z1 x2 y2 z2 …``
-``georeferenced_{m}/georeferenced.txt``
-    ``idx frame x1 y1 z1 x2 y2 z2 confidence class_id``
+Everything here reads the 6.0 store. The functions still take a legacy file
+path, but only to locate the project — ``<target>/tracks_t/tracks.csv`` says
+where ``<target>/bambi_t/tracks.gpkg`` is. The text files themselves are no
+longer parsed by anything except :mod:`core.migration`, which exists to import
+them once.
 """
 
 import json
@@ -82,62 +79,27 @@ def _store_source(path: str, kind: str):
 
 
 def load_geo_tracks_by_id(csv_path: str, log_fn: LogFn = None) -> Dict[int, list]:
-    """Load geo-referenced tracks, keyed by track id.
+    """Geo-referenced tracks from the store, keyed by track id.
 
-    Prefers the 6.0 store — where membership is a join rather than a
-    coordinate match — and falls back to ``tracks.csv`` for projects that have
-    no store yet. The returned shape is identical either way, so the QGIS layer
-    builders are unaffected.
+    Takes the legacy *csv_path* only to locate the project: the store lives at
+    ``<target>/bambi_{m}/tracks.gpkg`` beside it, and the file itself is never
+    read. A project with no store returns nothing rather than being
+    reconstructed from text, because a reconstruction is a guess about which
+    detection a track point came from and the store knows (§1.2a).
     """
     source = _store_source(csv_path, "tracks")
-    if source is not None:
-        rows = _geo_tracks_from_store(*source)
-        if rows:
-            return rows
-
-    tracks = {}
-
-    try:
-        with open(csv_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
-
-                parts = line.split(',')
-                if len(parts) >= 10:
-                    try:
-                        frame = int(parts[0])
-                        track_id = int(parts[1])
-                        x1 = float(parts[2])
-                        y1 = float(parts[3])
-                        z1 = float(parts[4])
-                        x2 = float(parts[5])
-                        y2 = float(parts[6])
-                        z2 = float(parts[7])
-                        conf = float(parts[8])
-                        cls = int(parts[9])
-                        interpolated = int(parts[10]) if len(parts) > 10 else 0
-
-                        if track_id not in tracks:
-                            tracks[track_id] = []
-
-                        tracks[track_id].append({
-                            'frame': frame,
-                            'x1': x1, 'y1': y1, 'z1': z1,
-                            'x2': x2, 'y2': y2, 'z2': z2,
-                            'confidence': conf,
-                            'class_id': cls,
-                            'interpolated': interpolated
-                        })
-                    except (ValueError, IndexError):
-                        continue
-
-    except Exception as e:
+    if source is None:
         if log_fn:
-            log_fn(f"Error reading {csv_path}: {str(e)}")
+            log_fn(_no_store_message(csv_path, "tracks"))
+        return {}
+    return _geo_tracks_from_store(*source)
 
-    return tracks
+
+def _no_store_message(path: str, kind: str) -> str:
+    """Why nothing was loaded, and what to do about it."""
+    return (f"No {kind} store for {os.path.dirname(path)}. The 5.x text files "
+            "are no longer read — use 'Migrate 5.x…' on the Input tab, or "
+            "re-run the step.")
 
 
 def _geo_tracks_from_store(target_folder: str, modality: str) -> Dict[int, list]:
@@ -193,114 +155,32 @@ def _geo_tracks_from_store(target_folder: str, modality: str) -> Dict[int, list]
 
 
 def load_fov_polygons_3d(fov_file: str, log_fn: LogFn = None) -> Dict[int, list]:
-    """Load FoV polygons from file.
+    """Field-of-view polygons from the store, keyed by frame.
 
-    :param fov_file: Path to FoV polygons file
-    :return: Dictionary mapping frame index to list of (x, y, z) points
+    *fov_file* locates the project; the file itself is not read (see
+    :func:`load_geo_tracks_by_id`).
     """
     source = _store_source(fov_file, "fov")
-    if source is not None:
-        stored = _fov_from_store(*source)
-        if stored:
-            return stored
-
-    polygons = {}
-
-    try:
-        with open(fov_file, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
-
-                parts = line.split()
-                if len(parts) < 2:
-                    continue
-
-                frame_idx = int(parts[0])
-                num_points = int(parts[1])
-
-                if num_points == 0:
-                    continue
-
-                # Parse points (x y z triplets)
-                points = []
-                for i in range(num_points):
-                    idx = 2 + i * 3
-                    if idx + 2 < len(parts):
-                        x = float(parts[idx])
-                        y = float(parts[idx + 1])
-                        z = float(parts[idx + 2])
-                        points.append((x, y, z))
-
-                if points:
-                    polygons[frame_idx] = points
-
-    except Exception as e:
+    if source is None:
         if log_fn:
-            log_fn(f"Error reading FoV file: {str(e)}")
-
-    return polygons
+            log_fn(_no_store_message(fov_file, "field of view"))
+        return {}
+    return _fov_from_store(*source)
 
 
 def load_georef_detections_by_frame(georef_file: str,
                                     log_fn: LogFn = None) -> Dict[int, list]:
-    """Load geo-referenced detections grouped by frame.
+    """Geo-referenced detections from the store, grouped by frame.
 
-    :param georef_file: Path to georeferenced detections file
-    :return: Dictionary mapping frame index to list of detections
+    *georef_file* locates the project; the file itself is not read (see
+    :func:`load_geo_tracks_by_id`).
     """
-    from collections import defaultdict
-
     source = _store_source(georef_file, "georeferenced")
-    if source is not None:
-        rows = _georef_from_store(*source)
-        if rows:
-            return rows
-
-    frame_detections = defaultdict(list)
-
-    try:
-        with open(georef_file, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
-
-                parts = line.split()
-                if len(parts) >= 10:
-                    try:
-                        idx = int(parts[0])
-                        frame = int(parts[1])
-                        x1 = float(parts[2])
-                        y1 = float(parts[3])
-                        z1 = float(parts[4])
-                        x2 = float(parts[5])
-                        y2 = float(parts[6])
-                        z2 = float(parts[7])
-                        conf = float(parts[8])
-                        cls = int(parts[9])
-
-                        # Skip invalid detections
-                        if x1 < 0 or y1 < 0:
-                            continue
-
-                        frame_detections[frame].append({
-                            'idx': idx,
-                            'frame': frame,
-                            'x1': x1, 'y1': y1, 'z1': z1,
-                            'x2': x2, 'y2': y2, 'z2': z2,
-                            'confidence': conf,
-                            'class_id': cls
-                        })
-                    except (ValueError, IndexError):
-                        continue
-
-    except Exception as e:
+    if source is None:
         if log_fn:
-            log_fn(f"Error reading georeferenced file: {str(e)}")
-
-    return dict(frame_detections)
+            log_fn(_no_store_message(georef_file, "geo-referencing"))
+        return {}
+    return _georef_from_store(*source)
 
 
 def _georef_from_store(target_folder: str, modality: str) -> Dict[int, list]:
