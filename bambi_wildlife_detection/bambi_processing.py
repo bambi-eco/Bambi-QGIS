@@ -2075,13 +2075,20 @@ class BambiProcessor:
         return slug or "species"
 
     def analytics_strata(self, config: Dict[str, Any], source: str,
-                         log_fn=None) -> List[Tuple[str, Any]]:
+                         log_fn=None,
+                         camera_key: Optional[str] = None
+                         ) -> List[Tuple[str, Any]]:
         """The runs an analytic should perform, as ``(label, species_ids)``.
 
         One entry — ``("", <the filter>)`` — unless "separate result per
         species" is set, in which case one per species that actually has
         points. Species with nothing to count are left out rather than
         producing an empty result apiece, and reported instead.
+
+        *camera_key* names the config entry holding the modality, because the
+        analytics do not agree on one: population estimation has its own
+        ``pop_camera``, and asking the wrong one would count a different
+        camera's animals.
         """
         if not config.get("analytics_per_species"):
             return [("", config.get("analytics_species_ids"))]
@@ -2089,8 +2096,9 @@ class BambiProcessor:
         from .core import analytics_source, store as _store
 
         target_folder = config["target_folder"]
-        camera_key = ("tracking_camera" if source == "tracks"
-                      else "detection_camera")
+        if camera_key is None:
+            camera_key = ("tracking_camera" if source == "tracks"
+                          else "detection_camera")
         suffix = "t" if config.get(camera_key, "T") == "T" else "w"
         if not os.path.isfile(_store.stage_path(
                 target_folder, _store.DETECTIONS, suffix)):
@@ -2154,10 +2162,11 @@ class BambiProcessor:
                 target_folder, _store.DETECTIONS, suffix)):
             from .core import analytics_source
 
+            species_ids = config.get("analytics_species_ids")
             try:
                 points, provenance = analytics_source.load_points(
                     target_folder, suffix, source,
-                    species_ids=config.get("analytics_species_ids"),
+                    species_ids=species_ids,
                     include_manual=config.get("analytics_include_manual", True))
             except analytics_source.AnalyticsError:
                 points = []
@@ -2167,6 +2176,17 @@ class BambiProcessor:
                     summary = analytics_source.describe_filter(provenance)
                     log_fn(f"Counted: {summary}")
                 return points, suffix
+            if species_ids is not None:
+                # The legacy files know nothing about species, so falling back
+                # would answer with every animal under one species' name.
+                raise RuntimeError(
+                    "No geo-referenced points match the selected species. "
+                    "Choose 'All species' on the Survey Analytics tab, or "
+                    "tick a species that this flight actually recorded.")
+
+        # Whatever follows did not come from the store, so the provenance of a
+        # previous run must not be attached to it (§8.2).
+        self._last_analytics_provenance = None
 
         if source == "tracks":
             trk_camera = config.get("tracking_camera", "T")
@@ -2632,8 +2652,10 @@ class BambiProcessor:
                 int((covered >= 2).sum()) * px_area_m2 / 10000.0),
             "raster": output_file,
         }
-        if getattr(self, "_last_analytics_provenance", None):
-            stats["population_filter"] = self._last_analytics_provenance
+        # No population filter is recorded here on purpose: the coverage map
+        # counts frames rather than animals, so it has no species or tracking
+        # run behind it. It used to attach whatever the last density run left
+        # on the processor, which described a different product entirely.
         with open(os.path.join(analytics_folder, "coverage_map.json"),
                   'w', encoding='utf-8') as f:
             json.dump(stats, f, indent=2)
@@ -3116,7 +3138,8 @@ class BambiProcessor:
                                   progress_fn=None, log_fn=None,
                                   cancel_check=None):
         """Estimate a population — once, or once per species (§8.2)."""
-        strata = self.analytics_strata(config, "tracks", log_fn)
+        strata = self.analytics_strata(config, "tracks", log_fn,
+                                       camera_key="pop_camera")
 
         for index, (label, species_ids) in enumerate(strata):
             if cancel_check and cancel_check():
@@ -3317,9 +3340,18 @@ class BambiProcessor:
             "transects": combined_rows,
             "notes": notes,
         })
-        # An estimate without a record of what it counted is unauditable (§8.2).
-        if getattr(self, "_last_analytics_provenance", None):
-            result["population_filter"] = self._last_analytics_provenance
+        # An estimate without a record of what it counted is unauditable
+        # (§8.2). Built from this run's own filter rather than read off the
+        # processor, which would describe whichever analytic ran last.
+        result["population_filter"] = {
+            "modality": suffix,
+            "species_filter": (sorted(config["analytics_species_ids"])
+                               if config.get("analytics_species_ids")
+                               is not None else None),
+            "species": label or None,
+            "manual_run_included": config.get(
+                "analytics_include_manual", True),
+        }
 
         # Pooled projects assign species ids independently, so a taxonomy
         # difference between them has to be visible: a species missing from one
@@ -3482,7 +3514,22 @@ class BambiProcessor:
             )
         with open(perp_file, 'r', encoding='utf-8') as f:
             tracks = json.load(f).get("tracks", [])
+
+        # class_id is the resolved species for anything the store wrote, so
+        # the filter is applied here rather than where the file was written —
+        # otherwise every species in a per-species run gets the same tracks
+        # and the same numbers under a different name.
+        species_ids = config.get("analytics_species_ids")
+        if species_ids is not None:
+            wanted = set(species_ids)
+            tracks = [t for t in tracks if t.get("class_id") in wanted]
+
         if not tracks:
+            if species_ids is not None:
+                raise RuntimeError(
+                    "No tracks with perpendicular distances match the "
+                    f"selected species in {target_folder}. Re-run 'Calculate "
+                    "Track Perpendicular' if the tracks changed since.")
             raise RuntimeError(
                 f"No tracks with perpendicular distances found in {target_folder}.")
 

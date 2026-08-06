@@ -205,3 +205,88 @@ def test_the_pooled_raster_is_not_one_of_the_species(processor, survey):
 
     assert pooled["species"] is None
     assert pooled["n_points"] > roe["n_points"]
+
+
+# ---------------------------------------------------------------------------
+# The filter must not be quietly dropped
+# ---------------------------------------------------------------------------
+
+def test_a_filter_matching_nothing_is_refused_not_ignored(processor, survey):
+    """The legacy text files know nothing about species, so falling back to
+    them would answer with every animal under one species' name."""
+    config = _config(survey, analytics_species_ids=[999])
+    with pytest.raises(RuntimeError, match="match the selected species"):
+        processor._collect_analytics_points(config, "detections")
+
+
+def test_the_pooled_run_may_still_fall_back(processor, survey):
+    """Without a filter there is nothing to drop, so 5.x projects keep
+    working."""
+    points, _suffix = processor._collect_analytics_points(
+        _config(survey), "detections")
+    assert points
+
+
+def test_provenance_does_not_survive_into_a_legacy_run(processor, survey,
+                                                       tmp_path):
+    """It described the previous run, not this one."""
+    processor._collect_analytics_points(_config(survey), "detections")
+    assert processor._last_analytics_provenance is not None
+
+    legacy = str(tmp_path / "legacy")
+    os.makedirs(os.path.join(legacy, "tracks_t"), exist_ok=True)
+    with open(os.path.join(legacy, "tracks_t", "tracks.csv"), "w",
+              encoding="utf-8") as fh:
+        fh.write("00000000,1,1.0,2.0,3.0,4.0,5.0,6.0,0.9,0,0\n")
+
+    try:
+        processor._collect_analytics_points(_config(legacy), "tracks")
+    except Exception:  # noqa: BLE001 — the reset is what is under test
+        pass
+    assert processor._last_analytics_provenance is None
+
+
+def test_the_coverage_map_records_no_population_filter(processor, survey):
+    """It counts frames, so a species filter would describe nothing."""
+    import inspect
+
+    source = inspect.getsource(BambiProcessor.run_coverage_map)
+    assert "population_filter" not in source.split("No population filter")[-1]
+
+
+def test_population_estimation_filters_the_perpendicular_tracks(processor,
+                                                                survey):
+    """Without this every species in a per-species run gets the same tracks,
+    and so the same numbers under a different name."""
+    import inspect
+
+    source = inspect.getsource(BambiProcessor._population_project_table)
+    assert "analytics_species_ids" in source
+    assert "class_id" in source
+
+
+def test_the_population_estimate_records_its_own_filter(processor):
+    """Read off the config, not off whichever analytic ran last."""
+    import inspect
+
+    source = inspect.getsource(
+        BambiProcessor._run_population_estimation_once)
+    filter_block = source.split('result["population_filter"]')[-1]
+    assert "_last_analytics_provenance" not in filter_block
+    assert "analytics_species_ids" in filter_block
+
+
+def test_population_estimation_uses_its_own_camera(processor, survey):
+    """It has pop_camera; asking tracking_camera would count the other
+    camera's animals."""
+    config = _config(survey, analytics_per_species=True,
+                     pop_camera="T", tracking_camera="W")
+    strata = processor.analytics_strata(config, "tracks", None,
+                                        camera_key="pop_camera")
+    assert [name for name, _ in strata] == ["roe deer", "chamois"]
+
+
+def test_the_default_camera_key_still_follows_the_source(processor, survey):
+    config = _config(survey, analytics_per_species=True)
+    by_source = processor.analytics_strata(config, "detections")
+    assert [name for name, _ in by_source] == ["roe deer", "chamois"]
