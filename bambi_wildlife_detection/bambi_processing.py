@@ -1837,87 +1837,49 @@ class BambiProcessor:
             progress_fn(20)
 
         # Load all georeferenced track CSV files from tracks folder (camera-specific)
-        tracks_folder = os.path.join(target_folder, f"tracks_{trk_suffix}")
-        if not os.path.exists(tracks_folder):
-            raise FileNotFoundError(
-                f"tracks_{trk_suffix}/ folder not found. Please run 'Track Animals' first."
-            )
-
         # Collect all entries: {track_id: [rows...]}
         from collections import defaultdict
         all_tracks: Dict[int, list] = defaultdict(list)
-        csv_files_found = 0
 
-        # Prefer the store: its track ids are the ones every other consumer
-        # uses, and it applies the population filter — so false positives never
-        # reach the distance-sampling input (§8.2).
+        # From the store: its track ids are the ones every other consumer uses,
+        # and it applies the population filter — so false positives and
+        # unselected species never reach the distance sampling that reads these
+        # distances (§8.2). The CSVs know nothing of either.
         from .core import analytics_source, store as _store
 
-        tracks_from_store = os.path.isfile(_store.stage_path(
-            target_folder, _store.DETECTIONS, trk_suffix))
-        if tracks_from_store:
-            try:
-                rows, provenance = analytics_source.load_rows(
-                    target_folder, trk_suffix,
-                    species_ids=config.get("analytics_species_ids"))
-            except analytics_source.AnalyticsError:
-                rows, provenance = [], {}
-            for row in rows:
-                if row.get("track_id") is None:
-                    continue
-                all_tracks[row["track_id"]].append({
-                    "frame": row["frame"],
-                    "x1": row["gx1"], "y1": row["gy1"], "z1": row["gz1"],
-                    "x2": row["gx2"], "y2": row["gy2"], "z2": row["gz2"],
-                    "conf": row["confidence"] or 1.0,
-                    "cls": row["species_id"],
-                    "detection_id": row["detection_id"],
-                })
-            if all_tracks and log_fn:
-                summary = analytics_source.describe_filter(provenance)
-                log_fn(f"Loaded {len(all_tracks)} track(s) from the store — "
-                       f"{summary}")
-
-        if tracks_from_store and not all_tracks:
-            # As above: the CSVs know nothing of the species filter, so
-            # falling back to them would silently ignore it.
-            raise RuntimeError(
-                "No tracks match the current species filter. Choose 'All "
-                "species' on the Survey Analytics tab, or tick a species that "
-                "this flight actually recorded.")
-
-        for fname in [] if all_tracks else os.listdir(tracks_folder):
-            if not fname.endswith(".csv") or fname.endswith("_pixel.csv"):
+        self._require_store(target_folder, _store.TRACKS, trk_suffix,
+                            "Track Animals")
+        try:
+            rows, provenance = analytics_source.load_rows(
+                target_folder, trk_suffix,
+                species_ids=config.get("analytics_species_ids"))
+        except analytics_source.AnalyticsError:
+            rows, provenance = [], {}
+        for row in rows:
+            if row.get("track_id") is None:
                 continue
-            csv_path = os.path.join(tracks_folder, fname)
-            csv_files_found += 1
-            try:
-                with open(csv_path, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line or line.startswith('#'):
-                            continue
-                        parts = line.split(',')
-                        if len(parts) >= 10:
-                            try:
-                                all_tracks[int(parts[1])].append({
-                                    'frame': int(parts[0]),
-                                    'x1': float(parts[2]), 'y1': float(parts[3]), 'z1': float(parts[4]),
-                                    'x2': float(parts[5]), 'y2': float(parts[6]), 'z2': float(parts[7]),
-                                    'conf': float(parts[8]),
-                                    'cls': int(parts[9])
-                                })
-                            except (ValueError, IndexError):
-                                continue
-            except Exception as e:
-                if log_fn:
-                    log_fn(f"Warning: could not read {fname}: {e}")
+            all_tracks[row["track_id"]].append({
+                "frame": row["frame"],
+                "x1": row["gx1"], "y1": row["gy1"], "z1": row["gz1"],
+                "x2": row["gx2"], "y2": row["gy2"], "z2": row["gz2"],
+                "conf": row["confidence"] or 1.0,
+                "cls": row["species_id"],
+                "detection_id": row["detection_id"],
+            })
+        if all_tracks and log_fn:
+            summary = analytics_source.describe_filter(provenance)
+            log_fn(f"Loaded {len(all_tracks)} track(s) from the store — "
+                   f"{summary}")
 
         if not all_tracks:
-            raise RuntimeError("No georeferenced track data found. Please run 'Track Animals' first.")
-
-        if log_fn:
-            log_fn(f"Loaded {len(all_tracks)} tracks from {csv_files_found} CSV file(s)")
+            if config.get("analytics_species_ids") is not None:
+                raise RuntimeError(
+                    "No tracks match the current species filter. Choose 'All "
+                    "species' on the Survey Analytics tab, or tick a species "
+                    "that this flight recorded.")
+            raise RuntimeError(
+                "No geo-referenced tracks in the store. Run 'Track Animals' "
+                "first.")
 
         if progress_fn:
             progress_fn(40)
