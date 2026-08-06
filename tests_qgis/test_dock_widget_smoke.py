@@ -165,3 +165,18 @@ class TestResetToDefaults:
         dock.reset_config_to_defaults()
         assert dock.confidence_spin.value() == default_conf
         assert dock.target_folder_edit.text() != "/changed"
+
+
+def test_the_legacy_switch_says_it_is_going_away(dock):
+    """It is the one place a user learns the .txt/.csv files are temporary."""
+    label = dock.legacy_text_outputs_check.text()
+    assert ".txt" in label and ".csv" in label
+    assert "removed" in label.lower()
+
+
+def test_the_legacy_switch_no_longer_claims_tools_depend_on_it(dock):
+    """They did until the readers were moved to the store; a tooltip that
+    still said so would keep people from ever turning it off."""
+    tip = dock.legacy_text_outputs_check.toolTip()
+    assert "Video Creator" not in tip
+    assert "Nothing in the plugin reads them" in tip

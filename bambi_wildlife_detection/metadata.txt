@@ -28,7 +28,7 @@ about=A comprehensive QGIS plugin for detecting, tracking, and geo-referencing w
     All results are automatically added as styled layers to the QGIS project, grouped per flight.
 
 changelog=Version 6.0.0
-    This release replaces the text files used between processing steps with a relational store, so that results carry their own meaning instead of being reconstructed from row order. Existing projects are migrated on opening; the 5.x text files are still written alongside, and can be switched off under Output Configuration.
+    This release replaces the text files used between processing steps with a relational store, so that results carry their own meaning instead of being reconstructed from row order. Existing projects are migrated on opening. The 5.x text files are still written alongside for external scripts and can be switched off under Output Configuration, but nothing in the plugin reads them any more; they will be removed in a future release.
     Added:
     - Exchange format: detections, geo-referencing, tracks, field of view, labels and segmentations are stored in GeoPackages under bambi_t/ and bambi_w/, with a project.gpkg holding the project's species, enums, custom fields and step status. Every detection has an id that the later steps refer to, so nothing is matched back by coordinates.
     - "Migrate 5.x..." on the Input tab imports an existing project's outputs into the new format. The existing files are only read, never modified.

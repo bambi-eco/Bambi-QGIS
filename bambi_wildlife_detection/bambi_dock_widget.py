@@ -756,18 +756,21 @@ class BambiDockWidget(QDockWidget):
         output_layout.addRow("Target Folder:", target_row)
 
         # 6.0 writes the GeoPackage store; the text files are kept alongside it
-        # for one release. They are not decoration yet — several tools still
-        # read them — so the tooltip says what stops working.
+        # for external scripts only. Nothing in the plugin reads them any more,
+        # so turning this off no longer changes what the plugin can do.
         self.legacy_text_outputs_check = QCheckBox(
-            "Also write legacy text outputs (.txt / .csv)")
+            "Also write legacy text outputs "
+            "(.txt / .csv; will be removed in future)")
         self.legacy_text_outputs_check.setChecked(True)
         self.legacy_text_outputs_check.setToolTip(
-            "6.0 stores detections, geo-referencing and tracks in "
-            "bambi_{t,w}/*.gpkg. The 5.x text files are written alongside them "
-            "so external scripts keep working.\n\n"
-            "Turning this off also stops the Video Creator, the click tool and "
-            "the QGIS layers from finding their input, until those read the "
-            "store directly. Leave it on unless you know you do not need them."
+            "6.0 stores detections, geo-referencing, tracks, field of view and "
+            "labels in bambi_{t,w}/*.gpkg, and every step, layer, overlay and "
+            "analytic reads them from there.\n\n"
+            "The 5.x text files are written alongside so external scripts of "
+            "your own keep working. Nothing in the plugin reads them, so "
+            "turning this off costs you nothing but disk writes — and it is "
+            "how you check whether your own scripts still depend on them.\n\n"
+            "They will be removed in a future release."
         )
         output_layout.addRow("", self.legacy_text_outputs_check)
 

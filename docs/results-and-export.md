@@ -329,12 +329,26 @@ there.
 
 `detections.txt`, `georeferenced.txt`, `tracks.csv` and `tracks_pixel.csv` are
 still written beside the new files, controlled by **Also write legacy text
-outputs** under Output Configuration. They will be removed in 7.0.
+outputs (.txt / .csv; will be removed in future)** under Output Configuration.
 
-Leave it on unless you know you do not need them: the Video Creator, the
-click tool and the QGIS layers can still fall back to reading them, and older
-scripts of your own may depend on them.
+**Nothing in the plugin reads them.** Every step, layer, overlay and analytic
+reads the store, so turning the switch off costs nothing but disk writes — and
+it is how you find out whether scripts of your own still depend on them before
+the files disappear.
 
-`fov_polygons.txt`, the segmentation JSON and `labels.csv` are *not* covered by
-the switch, because no step writes them to the store yet — turning it off would
+Two consequences of that:
+
+- **A 5.x project must be migrated once** before anything works. **Migrate
+  5.x…** appears next to the target folder when there is something to import.
+  Before 6.0.0 the tools reconstructed what they needed from the text files;
+  those reconstructions guessed at which detection a track point came from, so
+  they are gone.
+- **A step that has run is decided by the store**, not by its text file being
+  on disk. Deleting `tracks.csv` no longer resets tracking — delete
+  `bambi_t/tracks.gpkg`, or use **Reset Step**.
+
+`fov_polygons.txt` is written both ways: to the store, which is what the
+coverage map, the transect areas and the FoV layers read, and as text for
+external scripts. The segmentation JSON and `labels.csv` are not covered by the
+switch, because no step writes them to the store yet — turning it off would
 otherwise delete your only copy.
