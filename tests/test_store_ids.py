@@ -169,7 +169,9 @@ def test_seeded_enums_exist_with_their_values(project):
 
     assert labels["sex"] == {"unknown": 0, "female": 1, "male": 2}
     assert labels["age"] == {"unknown": 0, "adult": 1, "juvenile": 2}
-    assert labels["occlusion"] == {"none": 0, "partially": 1, "fully": 2}
+    # Two-valued, and named after what the occlusion classifier reports, so
+    # predictions need no translation into a different vocabulary.
+    assert labels["occlusion"] == {"clear": 0, "occluded": 1}
 
 
 def test_seeded_fields_are_enum_typed_and_protected(project):
@@ -303,7 +305,7 @@ def test_seeding_twice_changes_nothing(project):
     store.seed_vocabulary(project)
     assert _species(project) == before
     assert project.execute(
-        "SELECT COUNT(*) AS n FROM enum_values").fetchone()["n"] == 9
+        "SELECT COUNT(*) AS n FROM enum_values").fetchone()["n"] == 8
 
 
 def test_seeding_does_not_revert_user_edits(tmp_path):
@@ -321,6 +323,38 @@ def test_seeding_does_not_revert_user_edits(tmp_path):
     assert names["Roe Deer"] == 1
     assert names["wolf"] == 10
     assert "roe deer" not in names
+    conn.close()
+
+
+def test_an_existing_three_value_occlusion_enum_is_left_alone(tmp_path):
+    """A project created before the two-value seed keeps its own vocabulary.
+
+    Enum value ids are append-only, so 0/1/2 in an old project mean
+    none/partially/fully and must go on meaning that — re-seeding must not
+    relabel them into clear/occluded and silently reinterpret every stored
+    occlusion value. The classifier's label mapping is what bridges the two.
+    """
+    path = str(tmp_path / "project.gpkg")
+    conn = store.open_store(path, store.PROJECT)
+    enum_id = conn.execute(
+        "SELECT enum_id FROM enums WHERE name = 'occlusion'").fetchone()[
+            "enum_id"]
+    # Rewrite the seeded values into what a pre-6.1 project holds.
+    conn.execute("DELETE FROM enum_values WHERE enum_id = ?", (enum_id,))
+    conn.executemany(
+        "INSERT INTO enum_values (enum_id, value_id, label, ordinal) "
+        "VALUES (?, ?, ?, ?)",
+        [(enum_id, 0, "none", 0), (enum_id, 1, "partially", 1),
+         (enum_id, 2, "fully", 2)])
+    conn.commit()
+    conn.close()
+
+    conn = store.open_store(path, store.PROJECT)   # re-seeds on open
+    store.seed_vocabulary(conn)                    # and again, explicitly
+    labels = {row["label"]: row["value_id"] for row in conn.execute(
+        "SELECT label, value_id FROM enum_values WHERE enum_id = ?",
+        (enum_id,))}
+    assert labels == {"none": 0, "partially": 1, "fully": 2}
     conn.close()
 
 

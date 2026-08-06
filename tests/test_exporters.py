@@ -110,7 +110,7 @@ def test_attributes_resolve_enum_values_to_labels(survey):
     rows = common.load_detections(survey, "t")
     attributes = common.resolve_attributes(
         rows[0]["attributes"], vocabulary["enum_labels"])
-    assert attributes["occlusion"] == "partially"
+    assert attributes["occlusion"] == "occluded"
     assert attributes["collar"] == "R-114"
 
 
@@ -147,7 +147,7 @@ def test_coco_carries_custom_fields(survey, tmp_path):
     with open(path, encoding="utf-8") as fh:
         annotations = json.load(fh)["annotations"]
     carried = [a for a in annotations if "attributes" in a]
-    assert carried and carried[0]["attributes"]["occlusion"] == "partially"
+    assert carried and carried[0]["attributes"]["occlusion"] == "occluded"
 
 
 def test_coco_categories_use_species_names(survey, tmp_path):
@@ -311,7 +311,7 @@ def test_mot_sidecar_carries_what_the_columns_cannot(survey, tmp_path):
     with open(os.path.join(folder, "attributes.csv"), encoding="utf-8") as fh:
         rows = list(csv.DictReader(fh))
     assert rows[0]["species"] == "roe deer"
-    assert rows[0]["occlusion"] == "partially"
+    assert rows[0]["occlusion"] == "occluded"
 
 
 def test_mot_classes_file_is_written(survey, tmp_path):
@@ -414,7 +414,7 @@ def test_camtrap_observations_carry_species_and_fields(survey, tmp_path):
     animals = [r for r in rows if r["observationType"] == "animal"]
     assert animals[0]["scientificName"] == "Capreolus capreolus"
     assert animals[0]["vernacularName"] == "roe deer"
-    assert animals[0]["occlusion"] == "partially"
+    assert animals[0]["occlusion"] == "occluded"
 
 
 def test_camtrap_records_false_positives_as_blank(survey, tmp_path):

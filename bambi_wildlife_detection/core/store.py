@@ -46,8 +46,15 @@ TRACKS = "tracks"
 FOV = "fov"
 LABELS = "labels"
 SEGMENTATION = "segmentation"
+CLASSIFICATION = "classification"
 
-STAGE_KINDS = (DETECTIONS, GEOREFERENCED, TRACKS, FOV, LABELS, SEGMENTATION)
+#: Cross-modal track matching. Not a stage kind: a match relates a thermal
+#: track to an RGB one, so it belongs to neither modality's folder and lives
+#: beside ``project.gpkg`` instead (see :func:`matches_path`).
+MATCHES = "matches"
+
+STAGE_KINDS = (DETECTIONS, GEOREFERENCED, TRACKS, FOV, LABELS, SEGMENTATION,
+               CLASSIFICATION)
 
 #: Modality suffixes, matching the ``_t`` / ``_w`` convention of 5.x.
 MODALITIES = ("t", "w")
@@ -101,10 +108,19 @@ SEEDED_TAXONOMY = {
 #: Enums seeded from the 5.x hardcoded taxonomies, with the fields that use
 #: them: ``(enum_name, values, field_name, field_scope)``. These are ordinary
 #: rows — they are the worked examples a user copies when defining their own.
+#: ``occlusion`` is deliberately two-valued and named after what the occlusion
+#: classifier reports, so the project vocabulary *is* the model's vocabulary
+#: rather than something every prediction has to be translated into. A project
+#: needing finer grades (``partially`` / ``fully``) adds them in the schema
+#: editor and points the classifier's label mapping at them.
+#:
+#: Seeding is ``INSERT OR IGNORE`` on ``(enum_id, value_id)``, so a project
+#: created before this change keeps its own three values untouched — the ids
+#: are append-only (§4.1) and could not be renumbered even deliberately.
 SEEDED_ENUMS = (
     ("sex", ("unknown", "female", "male"), "sex", "track"),
     ("age", ("unknown", "adult", "juvenile"), "age", "track"),
-    ("occlusion", ("none", "partially", "fully"), "occlusion", "detection"),
+    ("occlusion", ("clear", "occluded"), "occlusion", "detection"),
 )
 
 FIELD_TYPES = ("int", "float", "string", "bool", "datetime", "enum")
@@ -346,6 +362,111 @@ CREATE TABLE segments (
 CREATE INDEX ix_seg_frame ON segments(frame);
 """
 
+_CLASSIFICATION_DDL = """
+-- One embedding pass over a modality. Everything describing it lives here:
+-- the .npz files beside frames_{m}/ carry no metadata of their own, so this
+-- table is the only description and cannot disagree with a second copy.
+CREATE TABLE embedding_runs (
+    run_id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    backbone         TEXT,
+    dim              INTEGER,
+    crop_size        INTEGER,
+    padding          REAL,
+    projection       TEXT,          -- non_geo | geo_1k | geo_2k
+    thermal_anchored INTEGER NOT NULL DEFAULT 0,
+    folder           TEXT,          -- e.g. "embeddings_t/non_geo"
+    plugin_version   TEXT,
+    created_at       TEXT,
+    is_active        INTEGER NOT NULL DEFAULT 1
+);
+
+-- Which detections a run has embedded. Membership is the only fact here that
+-- is not derivable, and it is what makes a re-run incremental. The vector's
+-- location is pure convention, resolved at read time:
+--     folder = embedding_runs.folder
+--     file   = poses_{m}.json images[frame].imagefile, extension -> .npz
+--     array  = "det_<detection_id>"
+CREATE TABLE embeddings (
+    detection_id INTEGER NOT NULL,
+    run_id       INTEGER NOT NULL REFERENCES embedding_runs(run_id),
+    PRIMARY KEY (detection_id, run_id)
+);
+CREATE INDEX ix_emb_run ON embeddings(run_id);
+
+-- Per-frame head output. ``label`` is the head's own class name, kept verbatim
+-- so nothing is lost when it is mapped onto the project vocabulary.
+CREATE TABLE frame_predictions (
+    detection_id INTEGER NOT NULL,
+    task         TEXT NOT NULL,     -- occlusion | species | sex
+    label        TEXT NOT NULL,
+    class_index  INTEGER NOT NULL,  -- what the mapping is really keyed on
+    prob         REAL NOT NULL,
+    modality_in  TEXT NOT NULL,     -- rgb | thermal | matched
+    model        TEXT,
+    PRIMARY KEY (detection_id, task)
+);
+CREATE INDEX ix_fp_task ON frame_predictions(task);
+
+-- The per-track call. votes/n/fraction are kept because a demographic call is
+-- only as good as its margin: "male 106/115" is what an ecologist needs to
+-- judge a borderline individual, and it allows re-voting at a different quorum
+-- without re-running the backbone.
+CREATE TABLE track_predictions (
+    track_id    INTEGER NOT NULL,
+    task        TEXT NOT NULL,      -- + life_stage, which has no frame rows
+    label       TEXT NOT NULL,
+    votes       INTEGER NOT NULL,
+    n           INTEGER NOT NULL,
+    fraction    REAL NOT NULL,
+    modality_in TEXT NOT NULL,
+    model       TEXT,
+    evidence    TEXT,               -- JSON: frame source, area/z/gap, …
+    PRIMARY KEY (track_id, task)
+);
+CREATE INDEX ix_tp_task ON track_predictions(task);
+"""
+
+_MATCHES_DDL = """
+CREATE TABLE match_runs (
+    run_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    affine      TEXT,               -- JSON [[a, b], [c, d]], [tx, ty]; RGB -> TH
+    affine_rmse REAL,
+    n_pairs     INTEGER,
+    config_hash TEXT,
+    created_at  TEXT,
+    is_active   INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE track_matches (
+    match_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id      INTEGER NOT NULL REFERENCES match_runs(run_id),
+    track_id_t  INTEGER NOT NULL,
+    track_id_w  INTEGER NOT NULL,
+    shared      INTEGER NOT NULL,   -- frames the two tracks have in common
+    median_dist REAL NOT NULL,      -- the gated quantity
+    conf_t      REAL,
+    conf_w      REAL
+);
+-- One-to-one: a thermal track has at most one RGB partner in a run, and the
+-- reverse. Enforced here so a buggy assignment cannot quietly double-count an
+-- animal.
+CREATE UNIQUE INDEX ux_match_t ON track_matches(run_id, track_id_t);
+CREATE UNIQUE INDEX ux_match_w ON track_matches(run_id, track_id_w);
+
+-- The per-frame pairing inside a match, so building a matched feature vector
+-- is a join rather than a re-run of the matching.
+CREATE TABLE detection_matches (
+    match_id       INTEGER NOT NULL REFERENCES track_matches(match_id),
+    frame_t        INTEGER NOT NULL,
+    frame_w        INTEGER NOT NULL,
+    detection_id_t INTEGER NOT NULL,
+    detection_id_w INTEGER NOT NULL,
+    dist           REAL,
+    PRIMARY KEY (match_id, detection_id_t)
+);
+CREATE INDEX ix_dm_det_w ON detection_matches(detection_id_w);
+"""
+
 _DDL: Dict[str, str] = {
     PROJECT: _PROJECT_DDL,
     DETECTIONS: _DETECTIONS_DDL,
@@ -354,6 +475,8 @@ _DDL: Dict[str, str] = {
     FOV: _FOV_DDL,
     LABELS: _LABELS_DDL,
     SEGMENTATION: _SEGMENTATION_DDL,
+    CLASSIFICATION: _CLASSIFICATION_DDL,
+    MATCHES: _MATCHES_DDL,
 }
 
 
@@ -372,6 +495,16 @@ class StoreVersionError(RuntimeError):
 def project_path(target_folder: str) -> str:
     """Path of the project-level store."""
     return os.path.join(target_folder, "project.gpkg")
+
+
+def matches_path(target_folder: str) -> str:
+    """Path of the cross-modal match store.
+
+    Beside ``project.gpkg`` rather than under ``bambi_t/`` or ``bambi_w/``: a
+    match is a statement about both modalities at once, so filing it under one
+    of them would make the other's copy the authoritative one by accident.
+    """
+    return os.path.join(target_folder, "matches.gpkg")
 
 
 def stage_path(target_folder: str, kind: str, modality: str) -> str:

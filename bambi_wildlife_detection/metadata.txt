@@ -2,7 +2,7 @@
 name=Bambi - QGIS Integration
 qgisMinimumVersion=3.22
 description=Detect and track wildlife in drone videos/photos with geo-referencing
-version=6.0.0
+version=6.1.0
 author=Christoph Praschl, Anna Maschek, David C.Schedl
 email=christoph.praschl@fh-hagenberg.at
 
@@ -11,6 +11,7 @@ about=A comprehensive QGIS plugin for detecting, tracking, and geo-referencing w
     - Frame extraction and undistortion from drone videos (SRT timestamps) or photo collections (EXIF)
     - Animal detection using YOLO models (auto-downloaded from HuggingFace)
     - Multi-object tracking with built-in, BoxMOT, or geo-referenced backends; import of pre-computed TRex tracklets
+    - Demographic classification of tracked animals: cross-modal RGB/thermal track matching, DINOv3 features, occlusion/species/sex classifiers aggregated per animal by vote, and a size-based juvenile flag (requires a Hugging Face token for the gated DINOv3 model)
     - Geo-referencing of detections, tracks, and SAM3 segmentations onto a DEM (real-world UTM coordinates)
     - Flight route visualization and perpendicular distance sampling for transect-based surveys
     - Survey analytics: kernel-density heatmaps, line-transect distance-sampling density/abundance estimation (from detections or tracks), and transect-based population estimation (naive, bootstrap, zero-inflated negative binomial)
@@ -27,7 +28,28 @@ about=A comprehensive QGIS plugin for detecting, tracking, and geo-referencing w
     - Built-in dependency manager to install all required and optional packages from within QGIS
     All results are automatically added as styled layers to the QGIS project, grouped per flight.
 
-changelog=Version 6.0.0
+changelog=Version 6.1.0
+    A survey is more than a count: what tells you about a population is which animals are in it. This release adds the demographic step, following "When One Modality Is Not Enough: Multimodal Sex and Life-Stage Classification of Red Deer from Aerial RGB-Thermal Video". Tracked animals are classified by species and sex, juveniles are flagged by size, and the two cameras are used together rather than separately - because they fail in opposite conditions. In colour a deer under canopy blends into the ground; in thermal it is an unmistakable blob but the fur colour is gone and antlers show only while they are still growing and warm. Which sensor carries the sex cue therefore changes with the season, and reading both at once is what stays reliable across the year.
+    The classifiers read features from Meta's DINOv3, which is a gated model on Hugging Face: request access once and enter a read token in the new Classification tab. Nothing else in the plugin changes if you do not use it.
+    Added:
+    - Classification (Processing tab, step A3): occlusion, species and sex classifiers on tracked animals, plus a size-based life-stage flag. Species and sex are decided per animal by a vote across its frames, which is what makes a noisy per-frame call safe - an antler resolves only from some angles, so many frames of a true male look female and the majority still recovers him. The margin behind every call is kept, so a borderline animal can be reviewed, and the vote can be repeated at a different quorum without re-running anything.
+    - C1 Match RGB and Thermal Tracks: works out which thermal track and which RGB track are the same animal, by registering the two views onto each other and comparing where the boxes sit. An animal both cameras saw is a confirmed animal; a track only one camera saw is either an animal the other sensor cannot make out, or noise. The run log reports the confirmed count, and when nothing matches it names which gate rejected everything and how far the closest candidate was - so "there were no animals" is distinguishable from "the gate is wrong for this resolution". Matched pairs can be added to QGIS as a line layer.
+    - C2 Compute DINOv3 Embeddings: describes every animal's crop once, so all three classifiers reuse the same features. Vectors are written beside the frames, one file per frame, and are reusable outside the plugin. A re-run embeds only what is missing, so an interrupted run resumes rather than starting again, and changing the crop settings starts a new set without discarding the old one.
+    - C4 Estimate Life Stage by Size: a juvenile cannot be told from an adult female by appearance at survey resolution - which is why the sex classifier's second class is female/juvenile - so size settles it. An animal is called a juvenile only if it sits far below its cohort and has a clear gap to the next animal up; in any herd someone is smallest, and that alone is not evidence. Sizes are compared only within one flight, because how tightly boxes fit varies between recordings. Needs no models.
+    - Classification configuration tab: the Hugging Face token (kept in the QGIS settings, not the project file, because a project gets shared), a "Check access" button that answers before a long run starts, the classifier table, crop and voting settings, and the cross-modal matching gates.
+    - Class mapping per classifier: connects the classes a model returns to the values used in this project. The mapping follows the class order rather than the names, since a model returns positions - so renaming a label never re-points it, and a model that does not name its classes at all still works. Classes are read from the model where possible, probed for their count where the model carries no names, and defined by hand where the model is not available yet.
+    - Sex classifiers per species: the cue is species-specific - antlers, for red deer - so a model fitted on one species says nothing useful about another. A species with no classifier is simply not sexed, which is the honest answer rather than a guess. Red deer is the only species with a released model today.
+    - Occlusion is optional. It selects which frames carry usable evidence, but species and sex run either way: over the frames the occlusion classifier called clear, or over occlusion values you annotated by hand, or over every frame. The run log always says which of the three it used, so voting over occluded frames is never silent.
+    - Results are written onto the animals themselves - species, sex, life stage and per-frame occlusion - which is what makes them visible to the exports, the map layers, the survey analytics and the labelling tool. Optional, repeatable, and it never changes a track you annotated by hand or a species the detector itself identified.
+    - Both perspective and orthorectified crops are supported, with the classifier variant following the imagery so a model always sees the kind of image it was trained on.
+    - Dependency Manager: a Classification group installing transformers and huggingface-hub.
+    Changed:
+    - New projects seed the occlusion vocabulary as clear/occluded, matching what the occlusion classifier reports, so predictions and hand annotations share one vocabulary. Projects created earlier keep the values they have - enum ids are append-only and are never renumbered - and a classifier is pointed at them through its class mapping. Migrating a 5.x flight appends whatever levels it carries rather than dropping them.
+    - SAM3 segmentation is now step A4, after the classification block.
+    Fixed:
+    - Nothing outstanding from 6.0.0.
+
+    Version 6.0.0
     This release replaces the text files used between processing steps with a relational store, so that results carry their own meaning instead of being reconstructed from row order. Existing projects are migrated on opening. The 5.x text files are still written alongside for external scripts and can be switched off under Output Configuration, but nothing in the plugin reads them any more; they will be removed in a future release.
     Added:
     - Exchange format: detections, geo-referencing, tracks, field of view, labels and segmentations are stored in GeoPackages under bambi_t/ and bambi_w/, with a project.gpkg holding the project's species, enums, custom fields and step status. Every detection has an id that the later steps refer to, so nothing is matched back by coordinates.
@@ -61,10 +83,12 @@ changelog=Version 6.0.0
     - YOLO export: the images are exported alongside the labels. The data.yaml used to point at an "images_<modality>" folder that was never created, so the dataset could not be trained on. Labels and images are now written as the sibling folders YOLO expects, and frames without an image on disk are reported instead of silently ignored.
     - Tracking now refuses to fall back to georeferenced.txt when the project has a store, and the BoxMOT backends record their run in it. Both cases previously produced a tracks file while the store stayed empty, so MOT, GeoJSON, TRex and the survey analytics reported every detection as untracked even though tracking had reported success.
     - Track exports that come back empty now say why, instead of only reporting zero rows.
+
     Version 5.2.1
     Changed:
     - Dependency Manager: installs pin numpy/scipy to the versions QGIS ships so a dependency cannot shadow them and break QGIS. Some dependency chains cap these packages below the bundled version (ultralytics requires numpy<=2.1.1 while QGIS 3.34 ships 2.2.6), which made the pinned install abort with "ResolutionImpossible". Such installs now automatically retry without the pin and afterwards remove the user-site numpy/scipy copy that shadows the QGIS build.
     - Fixing Problems with flight along the Equator (our original detection logic to identify GPS coordinates during initialization phase)
+
     Version 5.2.0:
     Added:
     - Thermal tone-curve mapping: both the Thermal Image Viewer and the photo-extraction thermal visualisation now offer a "Curve (custom mapping)" mode as a fine-granular alternative to the lower/upper thresholds — a curve with draggable control points maps a fixed temperature range to display intensity (with a live temperature histogram). The range can be entered manually or determined via "Auto Detect", which scans the flight's thermal images for the actual minimum/maximum temperature. The curve is stored in the QGIS project.
@@ -85,12 +109,14 @@ changelog=Version 6.0.0
     - GeoTIFF to mesh conversion: DEMs with a compound CRS (e.g. Dutch AHN tiles tagged "Amersfoort / RD New + NAP height") were converted without reprojection and silently mislabeled with the target CRS, placing the mesh hundreds of kilometres from the flight and yielding empty geo-referencing results. The CRS is now identified via GDAL when rasterio cannot read it, and the conversion fails with a clear message if the source CRS cannot be determined.
     - GeoTIFF to mesh conversion now supports any UTM target zone (previously only zones 32-34) and EPSG:28992 (Dutch RD New) as a source CRS, including its Bessel datum shift.
     - Re-tagging a GeoTIFF with a source CRS override failed with newer rasterio versions (read-only LIBERTIFF driver).
+
     Version 5.1.0:
     Added:
     - Transect splitting tool: define named transects as start/end frame ranges of a flight, with a flight-route overview map highlighting the current frame's position, flight-path length measurement between start and end, and an "end after X metres" helper. Definitions are saved to transects_{t,w}/transects.json (+ .csv) in the output folder and loaded automatically.
     - Survey analytics: transect-based population estimation with three estimators (naive, bootstrap and zero-inflated negative binomial regression), ported from the R analysis of Praschl et al. 2026 and validated against it. Tracks are assigned to the transect nearest in perpendicular distance (with an optional truncation), and a transect's monitored area is the union of its frames' field-of-view footprints. Requires the transect definitions, "Calculate Field of View" and "Calculate Track Perpendicular"; results are written to analytics_{t,w}/population_estimate.json plus per-transect and per-track CSVs, and the transects can be loaded into QGIS as one layer group each (its merged field of view, its sub-flight route and the tracks assigned to it), nested under a "BAMBI Transect Areas" group. An optional study area (entered manually or derived from the flight's total field-of-view coverage) extrapolates every density to an abundance.
     Changed:
     - Labelling tool: considering masks during frame propagation; allows to move/rescale all bounding boxes of a track simultaneously
+
     Version 5.0.0:
     Added:
     - Labelling tool: key-frame based review and annotation of detections/tracks on extracted frames. Draw and edit track bounding boxes, assign species/sex/age/occlusion classes, interpolate between key frames, mark stop frames, and propagate boxes across frames via DEM geo-referencing. Includes a "Copy labels from RGB/Thermal" action that time-matches and reprojects labels between both modalities, plus user-defined custom label fields.

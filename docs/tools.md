@@ -5,6 +5,7 @@ Besides the main processing pipeline, the plugin ships several companion tools a
 - [Video Creator](#video-creator)
 - [Thermal Image Viewer](#thermal-image-viewer)
 - [Labelling Tool](#labelling-tool)
+- [Classifier configuration](#classifier-configuration)
 - [Interactive selection tools](#interactive-selection-tools)
 
 ## Video Creator
@@ -63,7 +64,7 @@ Labels do not need to be drawn on every frame. A track stores boxes only on **ke
 3. Drag/resize the interpolated box to fit — any edit automatically turns the frame into a key frame
 4. Repeat; the timeline bar below the slider shows the track's range and its key frames (click it to jump). The key-frame list in the side panel is clickable too — each frame number is an anchor that jumps to that frame (stop frames red, current frame bold; long lists show a window around the current frame)
 
-Each track carries a **species** (free-text combo with common defaults), **sex**, and **age** class (*Track classes* section — the identity of the animal, constant along the track). The **occlusion** level (*none* / *partially* / *fully*), in contrast, is stored **per key frame** (it sits in the *Key frames* section next to the stop-frame toggle): an animal can be fully visible on one key frame and occluded on the next. Interpolated frames inherit the occlusion of the previous key frame; changing occlusion on an interpolated frame promotes that frame to a key frame. The current value is also shown in the status line while scrubbing.
+Each track carries a **species** (free-text combo with common defaults), **sex**, and **age** class (*Track classes* section — the identity of the animal, constant along the track). The **occlusion** level (*clear* / *occluded* — the values the occlusion classifier reports, so hand annotations and predictions share one vocabulary; extend it in the [Project Schema](results-and-export.md#the-project-schema) if you need finer grades), in contrast, is stored **per key frame** (it sits in the *Key frames* section next to the stop-frame toggle): an animal can be fully visible on one key frame and occluded on the next. Interpolated frames inherit the occlusion of the previous key frame; changing occlusion on an interpolated frame promotes that frame to a key frame. The current value is also shown in the status line while scrubbing.
 
 Boxes can be moved/resized and classes changed at any time; **Set key frame (K)** freezes the current interpolated box (outside the track's range it copies the nearest key frame's box, extending the track), **Delete key frame** removes one (deleting the last key frame removes the track).
 
@@ -137,6 +138,42 @@ Label tracks are also written as **real tracks**, so labelled animals reach the 
 | `S`                     | Toggle stop frame (pause interpolation)    |
 | `Delete`                | Delete the key frame at the current frame  |
 | `Esc`                   | Cancel drawing mode                        |
+
+## Classifier configuration
+
+The **Configuration → Classification** tab holds everything the [A3 classification steps](pipeline.md#a3-classification) read. Two dialogs open from it.
+
+### Classifiers table
+
+One row per task — occlusion, species, sex — in the order they run.
+
+| Column | What it decides |
+|--------|-----------------|
+| **Input** | Which camera's features the classifier reads: *Thermal*, *RGB*, or *Matched* (both at once). Matched is the default, because it is where the two sensors complement each other most. |
+| **Model** | *Default* (our published model, downloaded on first use), *Custom* (your own file), or *Off*. |
+| **File / repository** | The model file, for a custom choice. |
+| **Labels** | Opens the class mapping, below. |
+| **Species…** | Sex only: which classifier to use per species. |
+
+Species shows **Default (not released)** and is disabled until a species classifier is published; supply a custom model, or leave the task off. The occlusion and sex classifiers are available now.
+
+### Class mapping
+
+Connects the classes a model returns to the values used in this project.
+
+The mapping follows the class **order**, not the names. A model returns positions — "class 2 scored highest" — and the names are only there to read; renaming one here never re-points the mapping. That is also why a model does not have to name its classes at all.
+
+**Read classes from the model** takes the list off the model. Where a model carries no names, it is asked how many classes it returns instead, and the rows appear as `class 0`, `class 1`… with the labels left for you to fill in. Where the model is not available locally yet, **Add class** defines them by hand.
+
+With the project's own occlusion vocabulary (`clear` / `occluded`) the mapping fills itself in by name and needs no clicks. It exists for everything else: an older project whose occlusion values are `none` / `partially` / `fully`, or a third-party model that calls them something else entirely.
+
+For occlusion the mapping additionally decides **which class means "this frame is usable"** — taken from whichever class you map onto the project's first occlusion value. Frame selection depends on it, so it is recorded rather than guessed from the word.
+
+### Sex classifiers per species
+
+Sex is not one problem across animals. The published classifier reads antlers on red deer; nothing about it transfers to a wild boar, and applying it anyway would produce confident nonsense rather than nothing.
+
+So the choice is made per species, and a species left **Off** is simply not sexed. Red deer is the only species with a released model, so it is the only row switched on by default.
 
 ## Interactive selection tools
 

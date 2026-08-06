@@ -469,8 +469,8 @@ def _label_store(root, modality="t"):
     store.open_store(store.project_path(root), store.PROJECT).close()
     ls = LabelStore(root, modality)
     track = LabelTrack(1, species="roe deer", sex="female", age="adult")
-    track.set_keyframe(1, (10.0, 20.0, 30.0, 40.0), occlusion="partially")
-    track.set_keyframe(3, (30.0, 40.0, 50.0, 60.0), occlusion="none")
+    track.set_keyframe(1, (10.0, 20.0, 30.0, 40.0), occlusion="occluded")
+    track.set_keyframe(3, (30.0, 40.0, 50.0, 60.0), occlusion="clear")
     ls.tracks[1] = track
     return ls
 
@@ -491,7 +491,7 @@ def test_species_and_enums_are_stored_as_ids(tmp_path):
     track = label_store.load_tracks(root, "t")[0]
     assert track["attributes"]["sex"] == 1       # female
     assert track["attributes"]["age"] == 1       # adult
-    assert track["keyframes"][0]["attributes"]["occlusion"] == 1   # partially
+    assert track["keyframes"][0]["attributes"]["occlusion"] == 1   # occluded
 
 
 def test_export_to_detections_materialises(tmp_path):

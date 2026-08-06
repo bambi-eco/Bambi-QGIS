@@ -104,7 +104,7 @@ The steps live on two tabs, split by what they depend on:
 | Tab | Steps | Depends on |
 |---|---|---|
 | **Pre-Processing** | P1 Extract Frames, P2 Generate Flight Route, P3 Calculate Field of View, P4 Generate ALFS, P5 Export Frames as GeoTIFF, P6 Generate Orthomosaic | the drone poses and the DEM — **no animals involved** |
-| **Processing** | A1 Detect Animals (with geo-referencing and perpendicular distances), A2 Track Animals Or Import, A3 SAM3 Segmentation (with its geo-referencing) | the detections |
+| **Processing** | A1 Detect Animals (with geo-referencing and perpendicular distances), A2 Track Animals Or Import, A3 Classification (C1 cross-modal matching, C2 embeddings, C3 occlusion/species/sex, C4 life stage), A4 SAM3 Segmentation (with its geo-referencing) | the detections |
 
 The numbering is prefixed so a bare number cannot mean two different steps.
 They are *not* one sequence: only P1 is a prerequisite for the Processing tab.
@@ -327,7 +327,79 @@ orthomosaic_t/    # or orthomosaic_w/ depending on camera selection
 └── orthomosaic.tif    # Merged georeferenced orthomosaic (LZW GeoTIFF with overviews)
 ```
 
-### A3. Run SAM3 Segmentation
+### A3. Classification
+
+Works out **what** each tracked animal is: whether a frame shows it clearly, what species it is, its sex, and whether it is a juvenile. Implements the pipeline of *When One Modality Is Not Enough: Multimodal Sex and Life-Stage Classification of Red Deer from Aerial RGB–Thermal Video*.
+
+> **Tracks you annotated in the labelling tool are never changed by these steps.** A hand annotation outranks a model: the classifiers fill in what is missing and leave your own work alone.
+
+The reason this is worth doing in two sensors rather than one is that they fail in opposite conditions. In colour a deer under canopy blends into the ground; in thermal it is an unmistakable bright blob but the fur colour is gone, and antlers only show while they are still growing and warm. Which sensor carries the sex cue therefore changes with the season — which is why the *matched* option, reading both at once, is the default.
+
+> **Requires a Hugging Face token.** The DINOv3 model these classifiers read is *gated*: request access at [huggingface.co/facebook/dinov3-vith16plus-pretrain-lvd1689m](https://huggingface.co/facebook/dinov3-vith16plus-pretrain-lvd1689m), then paste a read token into **Configuration → Classification** and press **Check access**. See [Installation](installation.md#classification).
+
+#### C1. Match RGB ↔ Thermal Tracks
+
+Decides which thermal track and which RGB track are the same animal, by registering the two views onto each other and comparing where the boxes sit. Needs both cameras tracked; there is no camera selector, because the step is inherently about the pair.
+
+Confirmation is what keeps a census honest. An animal both cameras saw is a real animal; a track only one camera saw is either an animal the other sensor cannot make out, or noise. In the paper's four test flights, of 34 tracks without a partner only *one* was a real animal — admitting them all would have added six individuals that did not exist.
+
+The run log reports how many pairs were confirmed out of how many raw tracks. If nothing matches, it names which gate rejected everything and how far the closest candidate was, so you can tell "there were no animals" from "the gate is wrong for this resolution".
+
+**→ Add Matched Pairs to QGIS** draws a line between each pair's positions, attributed with the shared frame count and median distance — the quickest way to see whether the gate is set sensibly.
+
+**Outputs:**
+```
+matches.gpkg    # beside project.gpkg: a match belongs to neither camera
+```
+
+#### C2. Compute DINOv3 Embeddings
+
+Describes every tracked animal's crop as a feature vector, once, so all three classifiers can reuse it. This is the expensive step — the model is large, and on CPU it takes minutes per hundred crops.
+
+Vectors are written beside the frames, one file per frame, so they are reusable outside the plugin. A re-run only embeds what is missing: an interrupted run resumes rather than starting again, and changing the crop settings starts a new set without discarding the old one.
+
+**Outputs:**
+```
+embeddings_t/            # or embeddings_w/
+└── non_geo/             # or geo_1k/ geo_2k/, per the chosen projection
+    └── frame_000123.npz # one array per detection, named det_<id>
+bambi_t/classification.gpkg   # which detections are embedded, and by which run
+```
+
+#### C3. Classify (occlusion → species → sex)
+
+Runs the enabled classifiers in that order, because each depends on the one before:
+
+1. **Occlusion**, per frame, labels a crop *clear* or *occluded*. It is a quality filter, not a verdict about the animal, so it produces no per-animal answer — and it is **optional**.
+2. **Species** votes across the frames that are worth trusting, and its majority fixes what the animal is.
+3. **Sex** reuses *exactly those frames*, and picks its model from the species just assigned.
+
+Voting is what makes a noisy per-frame call safe. An antler only resolves from some angles, so many frames of a true male look female; the majority still recovers him. The margin behind every call is kept — "male, 106 of 115 frames" is what lets you judge a borderline animal — and you can re-vote at a different quorum without re-running anything.
+
+An animal the classifier cannot call is **left unknown, never discarded**: it keeps its place in the census with the attribute blank.
+
+**Frames used** decides what may vote. *Visible frames only* uses the occlusion classifier when it ran, otherwise occlusion values you annotated by hand, and otherwise every frame — the run log always says which of the three it used.
+
+**→ Apply Results to Tracks and Detections** copies the answers onto the animals themselves, which is what makes them visible to the exports, the map layers, the survey analytics and the labelling tool. It runs automatically unless switched off, and is safe to repeat.
+
+#### C4. Estimate Life Stage by Size
+
+Flags juveniles by body size. Needs no models — only tracks, and geo-referencing if the metric areas are to be used.
+
+A juvenile cannot be told from an adult female by appearance at survey resolution, which is exactly why the sex classifier's second class is *female/juvenile*. Size settles it: a juvenile sits far below its cohort **and** has a clear gap to the next animal up. Both conditions are required, because in any herd someone is smallest and that alone is not evidence.
+
+Sizes are only ever compared **within one flight** — how tightly boxes fit varies between recordings, enough that the paper's own juvenile from one flight lands inside another flight's adult range. There is deliberately no absolute threshold.
+
+On a flight with only a handful of animals the test declines to call one, because the candidate sits in the lower half of the distribution and so widens the very spread it is measured against. The log says so rather than reporting a bare "no juvenile found": a cautious answer and an empty one look identical otherwise.
+
+**Outputs:**
+```
+bambi_t/classification.gpkg
+├── frame_predictions    # per crop: label, probability, model
+└── track_predictions    # per animal: the call, and the vote behind it
+```
+
+### A4. Run SAM3 Segmentation
 
 Segments individual detected objects from aerial images using Roboflow's SAM3 API. Recommended for RGB imagery.
 

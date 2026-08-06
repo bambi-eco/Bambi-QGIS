@@ -11,6 +11,11 @@
 # widgets, so they are intentionally omitted to keep this image lean.
 FROM qgis/qgis:release-3_34
 
+# Keep bytecode out of the bind-mounted source tree, so a run on the host
+# cannot leave .pyc files this container then reuses with host paths baked in
+# (see Dockerfile.unit for the failure that flushed this out).
+ENV PYTHONPYCACHEPREFIX=/tmp/pycache
+
 # numpy / scipy / pyproj / gdal ship with the QGIS image. Only pytest and
 # requests (imported at module load by tracker_manager) are added.
 # --break-system-packages is required on the newer (PEP 668) base; the

@@ -14,6 +14,7 @@ from bambi_wildlife_detection.core.labelling import (
     CustomField,
     LabelStore,
     LabelTrack,
+    OCCLUSION_LEVELS,
     SPECIES_CLASSES,
     TRACK_COLORS_RGB,
     _FrameMatcher,
@@ -55,7 +56,8 @@ class TestLabelTrack:
         box, is_kf, occ = track.box_at(5)
         assert box == (50.0, 25.0, 60.0, 35.0)
         assert is_kf is False
-        assert occ == "none"
+        # The default is the first level, i.e. "nothing obscures this frame".
+        assert occ == OCCLUSION_LEVELS[0] == "clear"
 
     def test_keyframe_returned_exactly(self):
         track = LabelTrack(1)

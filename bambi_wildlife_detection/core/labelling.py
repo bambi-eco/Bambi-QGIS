@@ -16,7 +16,8 @@ the labelling workflow. Contains:
   :func:`track_world_positions`, :func:`find_overlapping_tracks` and
   :func:`group_track_ids` for proposing merges from ground positions,
 * read-only loaders for pipeline outputs (detections, pixel tracks),
-* :class:`_FrameMatcher` — cross-modality frame matching by capture time,
+* :class:`_FrameMatcher` — re-exported from :mod:`core.frame_matching`, which
+  owns cross-modality frame matching by capture time since 6.1,
 * :class:`_GeoPropagator` — DEM-based box propagation between frames and
   modalities (lazy alfspy/trimesh/bambi imports).
 """
@@ -37,7 +38,12 @@ SPECIES_CLASSES = [
 ]
 SEX_CLASSES = ["unknown", "female", "male"]
 AGE_CLASSES = ["unknown", "adult", "juvenile"]
-OCCLUSION_LEVELS = ["none", "partially", "fully"]
+#: Fallback occlusion vocabulary, used only when a project has no 6.0 store to
+#: read one from — the tool refills the combo from ``project.gpkg`` whenever
+#: one exists. Matches ``store.SEEDED_ENUMS`` so a hand annotation and a
+#: classifier prediction speak the same language; the first entry is the
+#: "nothing is wrong with this frame" default.
+OCCLUSION_LEVELS = ["clear", "occluded"]
 
 # Distinct colours cycled per label track id (RGB tuples; the GUI layer
 # converts them to QColor).
@@ -334,7 +340,8 @@ class LabelTrack:
         prev = self.keyframes.get(frame)
         source = prev if prev is not None else self._effective_entry(frame)
         if occlusion is None:
-            occlusion = source.get("occlusion", "none") if source else "none"
+            default = OCCLUSION_LEVELS[0]
+            occlusion = source.get("occlusion", default) if source else default
         if attributes is None:
             # inherit the key-frame attributes in force at this frame
             attributes = dict(source.get("attributes", {})) if source else {}
@@ -1124,69 +1131,14 @@ def _load_pixel_tracks(target_folder: str,
 # Cross-modality frame correspondence (by capture timestamp)
 # ---------------------------------------------------------------------------
 
-def _pose_epochs(images: List[dict]) -> List[Optional[float]]:
-    """Return the capture time (epoch seconds) of every pose image.
-
-    Poses store an ISO-8601 ``timestamp`` (with timezone) taken from the SRT
-    capture time, so thermal and RGB frames share the same real-world clock
-    and can be matched across modalities.  Entries without a parseable
-    timestamp yield ``None``.
-    """
-    from datetime import datetime
-
-    epochs: List[Optional[float]] = []
-    for img in images:
-        ts = img.get("timestamp", "")
-        if not ts:
-            epochs.append(None)
-            continue
-        try:
-            epochs.append(datetime.fromisoformat(ts).timestamp())
-        except Exception:
-            epochs.append(None)
-    return epochs
-
-
-class _FrameMatcher:
-    """Maps a source-modality frame index to the nearest target-modality one.
-
-    Correspondence is by capture time: for a source frame's timestamp the
-    target frame with the closest timestamp is returned, together with the
-    absolute time difference so callers can reject poor matches.
-    """
-
-    def __init__(self, src_images: List[dict], dst_images: List[dict]):
-        import bisect
-
-        self._src_epochs = _pose_epochs(src_images)
-        dst_epochs = _pose_epochs(dst_images)
-        # Sorted (epoch, dst_index) of target frames that have a timestamp.
-        self._pairs = sorted(
-            (e, i) for i, e in enumerate(dst_epochs) if e is not None)
-        self._keys = [e for e, _ in self._pairs]
-        self._bisect = bisect.bisect_left
-
-    @property
-    def usable(self) -> bool:
-        """True when both sides carry enough timestamps to match by time."""
-        return bool(self._pairs) and any(e is not None for e in self._src_epochs)
-
-    def match(self, src_frame: int) -> Optional[Tuple[int, float]]:
-        """Return ``(dst_frame, dt_seconds)`` nearest in time, or ``None``."""
-        if not (0 <= src_frame < len(self._src_epochs)):
-            return None
-        target = self._src_epochs[src_frame]
-        if target is None or not self._keys:
-            return None
-        pos = self._bisect(self._keys, target)
-        best = None
-        for j in (pos - 1, pos):
-            if 0 <= j < len(self._pairs):
-                epoch, idx = self._pairs[j]
-                dt = abs(epoch - target)
-                if best is None or dt < best[1]:
-                    best = (idx, dt)
-        return best
+# Promoted to core.frame_matching in 6.1: cross-modal track matching needs the
+# same correspondence, and two copies of "which RGB frame is this thermal one"
+# would be two things to keep in step. Re-exported under the historic private
+# names so the labelling tool and its tests keep working unchanged.
+from .frame_matching import (  # noqa: E402,F401 — re-exported API
+    FrameMatcher as _FrameMatcher,
+    pose_epochs as _pose_epochs,
+)
 
 
 # ---------------------------------------------------------------------------

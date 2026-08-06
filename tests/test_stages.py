@@ -46,6 +46,47 @@ def test_detection_dependents_reach_the_analytics():
     assert "track_perpendicular" in found
 
 
+def test_retracking_invalidates_every_classification_result():
+    """Predictions are keyed on track ids, so new tracks void all of them."""
+    found = stages.dependents("tracking")
+    for stage in ("track_matching", "embeddings", "classification",
+                  "life_stage"):
+        assert stage in found
+
+
+def test_classification_depends_on_the_embeddings():
+    assert stages.dependencies("classification") == ("embeddings",)
+    assert "classification" in stages.dependents("embeddings")
+
+
+def test_life_stage_needs_no_embeddings():
+    """Box area is geometry, so the size cue works without a backbone."""
+    assert "embeddings" not in stages.dependencies("life_stage")
+    assert set(stages.dependencies("life_stage")) == {"tracking",
+                                                      "georeference"}
+
+
+def test_matching_does_not_depend_on_the_embeddings():
+    """Matching is what *enables* a matched feature, so it must precede it."""
+    assert "embeddings" not in stages.dependencies("track_matching")
+    assert "track_matching" not in stages.dependents("embeddings")
+
+
+def test_the_match_store_is_not_filed_under_a_modality():
+    outputs = stages.stage_outputs("/flight", "track_matching", "t")
+    assert any(path.endswith("matches.gpkg") for path in outputs)
+    assert not any("bambi_t" in path for path in outputs)
+
+
+def test_resetting_the_embeddings_removes_the_vectors_too():
+    """The .npz files are the expensive part; leaving them would make a reset
+    look like it had done nothing."""
+    outputs = stages.stage_outputs("/flight", "embeddings", "w")
+    assert any(path.endswith(os.path.join("/flight", "embeddings_w"))
+               or path.endswith("embeddings_w") for path in outputs)
+    assert any(path.endswith("classification.gpkg") for path in outputs)
+
+
 def test_scene_products_do_not_depend_on_detections():
     """Pre-Processing is independent of any animal (§10.1)."""
     found = stages.dependents("detection")

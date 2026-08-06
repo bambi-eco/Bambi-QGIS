@@ -424,15 +424,33 @@ def test_sex_and_age_become_enum_value_ids(legacy):
 
 
 def test_occlusion_becomes_a_keyframe_enum_value(legacy):
+    """A 5.x occlusion level survives into a store seeded clear/occluded.
+
+    6.1 seeds the two values the occlusion classifier reports, so a 5.x
+    ``partially`` is not in the vocabulary — it is *appended* rather than
+    dropped, which is what keeps the migration lossless. Resolved by label
+    rather than by id, because the id it gets depends on what else the flight
+    happened to contain.
+    """
     migration.migrate_project(legacy)
+    project = store.open_store(store.project_path(legacy), store.PROJECT)
+    occlusion = {r["value_id"]: r["label"] for r in _rows(
+        project, "SELECT v.value_id, v.label FROM enum_values v "
+                 "JOIN enums e USING (enum_id) WHERE e.name = 'occlusion'")}
+    project.close()
+
     conn = store.open_store(
         store.stage_path(legacy, store.LABELS, "t"), store.LABELS, "t")
     attributes = json.loads(_rows(
         conn, "SELECT attributes FROM label_keyframes "
               "WHERE label_track_id = 1 AND frame = 3")[0]["attributes"])
-    assert attributes["occlusion"] == 1   # partially
+    assert occlusion[attributes["occlusion"]] == "partially"
     assert attributes["posture"] == "standing"
     conn.close()
+
+    # The seeded pair keeps its ids; the 5.x levels are appended above them.
+    assert occlusion[0] == "clear" and occlusion[1] == "occluded"
+    assert set(occlusion.values()) >= {"clear", "occluded", "partially", "none"}
 
 
 def test_custom_fields_are_imported_with_mapped_scopes(legacy):
@@ -459,7 +477,11 @@ def test_unseen_enum_value_is_appended_not_dropped(tmp_path):
         conn, "SELECT v.label FROM enum_values v JOIN enums e USING (enum_id) "
               "WHERE e.name = 'sex' ORDER BY v.value_id")]
     assert labels == ["unknown", "female", "male", "hermaphrodite"]
-    assert report.counts.get("enum_values_appended") == 1
+    # Two appended: 'hermaphrodite' onto sex, and the 5.x 'none' onto the
+    # clear/occluded occlusion enum.
+    assert report.counts.get("enum_values_appended") == 2
+    assert any("hermaphrodite" in w for w in report.warnings)
+    assert any("occlusion" in w and "none" in w for w in report.warnings)
     conn.close()
 
 

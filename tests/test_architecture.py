@@ -24,8 +24,9 @@ FORBIDDEN_ANYWHERE_PREFIXES = (
 
 # Allowed only as lazy (function-local) imports, never at module level.
 HEAVY_TOP_LEVEL_PACKAGES = {
-    "alfspy", "bambi", "boxmot", "cv2", "geopandas", "fiona", "pycolmap",
-    "rasterio", "shapely", "simplekml", "torch", "trimesh", "pyrr",
+    "alfspy", "bambi", "boxmot", "cv2", "geopandas", "fiona", "huggingface_hub",
+    "pycolmap", "rasterio", "shapely", "simplekml", "torch", "transformers",
+    "trimesh", "pyrr",
 }
 
 CORE_MODULES = sorted(p.stem for p in CORE_DIR.glob("*.py") if p.stem != "__init__")

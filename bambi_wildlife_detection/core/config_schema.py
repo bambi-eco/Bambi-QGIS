@@ -54,9 +54,16 @@ KINDS = frozenset({"str", "bool01", "int_str", "double", "int_double", "bool"})
 #   combo_text         QComboBox currentText(); load = findText, set if found
 #   combo_text_editable  like combo_text but falls back to setCurrentText()
 #   combo_index        QComboBox currentIndex(); load = bounds-checked setter
+#   json               a plain dock attribute holding a dict/list, serialised
+#                      to a ``str`` entry. For structured settings bound to a
+#                      table or dialog rather than to one value widget — the
+#                      classifier mapping is the first of these. Earlier cases
+#                      (``Correction/AdditionalCorrections``,
+#                      ``Input/ThermalVisCurve``) predate the role and are
+#                      still saved by hand; this exists so the next one is not.
 ROLES = frozenset({
     "line", "crs", "text", "check", "spin",
-    "combo_text", "combo_text_editable", "combo_index",
+    "combo_text", "combo_text_editable", "combo_index", "json",
 })
 
 # Entries in the order the pre-refactor loader applied them (widget setters
@@ -179,6 +186,36 @@ CONFIG_ENTRIES: List[ConfigEntry] = [
     ConfigEntry("SAM3/StartFrame", "int_double", 0),
     ConfigEntry("SAM3/EndFrame", "int_double", 999999),
     ConfigEntry("SAM3/FrameStep", "int_double", 1),
+    # ===== Classification Settings =====
+    # The Hugging Face token is intentionally NOT here: it is a user
+    # credential, and this table is written into a project file that gets
+    # shared. It lives in QSettings instead (see core/hf_access.py).
+    ConfigEntry("Classification/Backbone", "str"),
+    ConfigEntry("Classification/Device", "int_double", 0),
+    ConfigEntry("Classification/BatchSize", "int_double", 16),
+    ConfigEntry("Classification/Fp16", "bool", True),
+    ConfigEntry("Classification/Projection", "int_double", 0),
+    ConfigEntry("Classification/CropPadding", "double", 0.10),
+    ConfigEntry("Classification/CropSize", "int_double", 224),
+    ConfigEntry("Classification/Letterbox", "bool", True),
+    ConfigEntry("Classification/FrameSelection", "int_double", 0),
+    ConfigEntry("Classification/Quorum", "double", 0.5),
+    ConfigEntry("Classification/MinFrames", "int_double", 1),
+    ConfigEntry("Classification/Unmatched", "int_double", 0),
+    ConfigEntry("Classification/WriteResults", "bool", True),
+    ConfigEntry("Classification/OverwriteSpecies", "bool", False),
+    # ===== Life stage from box area =====
+    ConfigEntry("LifeStage/Z", "double", -2.0),
+    ConfigEntry("LifeStage/IqrFactor", "double", 2.0),
+    ConfigEntry("LifeStage/MinIndividuals", "int_double", 4),
+    # The classifier mapping table (task -> modality, model, label mapping).
+    ConfigEntry("Classification/Models", "str"),
+    # ===== Cross-modal matching (feeds the 'matched' classifiers) =====
+    ConfigEntry("Match/MinSharedFrames", "int_double", 8),
+    ConfigEntry("Match/GatePx", "double", 28.0),
+    ConfigEntry("Match/MinConfidence", "double", 0.20),
+    ConfigEntry("Match/MaxTimeOffset", "double", 0.10),
+    ConfigEntry("Match/ThermalAnchored", "bool", True),
     # ===== Flight Route Settings =====
     ConfigEntry("FlightRoute/FrameMarkersEnabled", "bool", True),
     ConfigEntry("FlightRoute/FrameMarkerInterval", "int_double", 100),
@@ -302,6 +339,29 @@ WIDGET_BINDINGS: Dict[str, Tuple[str, str]] = {
     "SAM3/StartFrame": ("sam3_start_frame_spin", "spin"),
     "SAM3/EndFrame": ("sam3_end_frame_spin", "spin"),
     "SAM3/FrameStep": ("sam3_step_spin", "spin"),
+    "Classification/Backbone": ("classification_backbone_edit", "line"),
+    "Classification/Device": ("classification_device_combo", "combo_index"),
+    "Classification/BatchSize": ("classification_batch_spin", "spin"),
+    "Classification/Fp16": ("classification_fp16_check", "check"),
+    "Classification/Projection": ("classification_projection_combo", "combo_index"),
+    "Classification/CropPadding": ("classification_padding_spin", "spin"),
+    "Classification/CropSize": ("classification_crop_size_spin", "spin"),
+    "Classification/Letterbox": ("classification_letterbox_check", "check"),
+    "Classification/FrameSelection": ("classification_frames_combo", "combo_index"),
+    "Classification/Quorum": ("classification_quorum_spin", "spin"),
+    "Classification/MinFrames": ("classification_min_frames_spin", "spin"),
+    "Classification/Unmatched": ("classification_unmatched_combo", "combo_index"),
+    "Classification/WriteResults": ("classification_write_check", "check"),
+    "Classification/OverwriteSpecies": ("classification_overwrite_check", "check"),
+    "LifeStage/Z": ("life_stage_z_spin", "spin"),
+    "LifeStage/IqrFactor": ("life_stage_iqr_spin", "spin"),
+    "LifeStage/MinIndividuals": ("life_stage_min_spin", "spin"),
+    "Classification/Models": ("_classification_models", "json"),
+    "Match/MinSharedFrames": ("match_min_shared_spin", "spin"),
+    "Match/GatePx": ("match_gate_spin", "spin"),
+    "Match/MinConfidence": ("match_min_confidence_spin", "spin"),
+    "Match/MaxTimeOffset": ("match_max_time_offset_spin", "spin"),
+    "Match/ThermalAnchored": ("match_thermal_anchored_check", "check"),
     "FlightRoute/FrameMarkersEnabled": ("frame_markers_enabled_check", "check"),
     "FlightRoute/FrameMarkerInterval": ("frame_marker_interval_spin", "spin"),
     "FlightRoute/IncludeFrameZero": ("frame_marker_include_zero_check", "check"),
@@ -413,9 +473,15 @@ def check_schema() -> Optional[str]:
         missing = entry_keys - binding_keys
         extra = binding_keys - entry_keys
         return f"WIDGET_BINDINGS mismatch (missing {missing}, extra {extra})"
+    kinds = {entry.key: entry.kind for entry in CONFIG_ENTRIES}
     for key, (attr, role) in WIDGET_BINDINGS.items():
         if role not in ROLES:
             return f"unknown role {role!r} for {key}"
         if not attr:
             return f"empty widget attr for {key}"
+        # A ``json`` binding serialises a structure into a plain string entry;
+        # any other kind would coerce it to a number or a bool on save.
+        if role == "json" and kinds[key] != "str":
+            return (f"json role needs a 'str' entry, but {key} is "
+                    f"{kinds[key]!r}")
     return None

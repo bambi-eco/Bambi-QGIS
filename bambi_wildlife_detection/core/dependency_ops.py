@@ -50,6 +50,11 @@ _VERSION_RANGES = {
     'dji-thermal-sdk': ('1.7', '1.8'),
     'fiona': ('1.10.1', '1.10.1'),
     'simplekml': ('1.3.6', '1.3.6'),
+    # DINOv3 support landed in transformers 4.56.0; anything older cannot load
+    # the backbone the classification heads were trained against.
+    'transformers': ('4.56.0', None),
+    # huggingface-hub is deliberately absent: it has no tested bound, and an
+    # entry of (None, None) is exactly what a missing key already means.
 }
 
 

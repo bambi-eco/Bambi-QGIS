@@ -45,6 +45,15 @@ STAGE_DEPENDENCIES: Dict[str, Tuple[str, ...]] = {
     "orthomosaic": ("export_geotiffs",),
     "sam3_segmentation": (FRAMES,),
     "sam3_georeference": ("sam3_segmentation",),
+    # Classification. Everything here is keyed on track ids, so re-running
+    # tracking invalidates all of it — which is exactly what the cascade does.
+    "track_matching": ("tracking",),
+    "embeddings": ("tracking",),
+    "classification": ("embeddings",),
+    # Life stage is read from box area, not from features, so it needs no
+    # embeddings — only tracks and the geo-referencing that makes the area
+    # metric.
+    "life_stage": ("tracking", "georeference"),
     "perpendicular": ("georeference", "flight_route"),
     "track_perpendicular": ("tracking", "flight_route"),
     "population": ("tracking",),
@@ -59,7 +68,23 @@ STAGE_STORE_KIND: Dict[str, str] = {
     "tracking": store.TRACKS,
     "calculate_fov": store.FOV,
     "sam3_segmentation": store.SEGMENTATION,
+    # ``classification`` and ``life_stage`` write into the same file, so only
+    # the stage that creates it claims it here: letting either reset delete the
+    # file would take the other's results with it. Their own outputs are
+    # cleared row-wise by core.classification_store.
+    "embeddings": store.CLASSIFICATION,
 }
+
+#: Stages whose output is a modality-independent store, and which one. These
+#: are recorded against :data:`CROSS_MODAL` rather than a single modality.
+STAGE_SHARED_STORE_KIND: Dict[str, str] = {
+    "track_matching": store.MATCHES,
+}
+
+#: The modality a cross-modal stage is recorded under. A match belongs to both
+#: sides at once, and recording it twice would let one be reset while the other
+#: still claimed to be complete.
+CROSS_MODAL = "tw"
 
 #: Legacy output folders per stage, still written during 6.x. A reset has to
 #: remove these too or the stage would still look complete (§7).
@@ -74,6 +99,14 @@ STAGE_LEGACY_FOLDERS: Dict[str, Tuple[str, ...]] = {
     "orthomosaic": ("orthomosaic",),
     "sam3_segmentation": ("segmentation",),
     "trex_import": ("tracks_pixel",),
+}
+
+#: Current (non-legacy) output folders per stage. The embedding vectors are
+#: files beside the frames rather than rows in the GeoPackage, so a reset has
+#: to remove them too — they are the expensive part, and leaving them behind
+#: would make a "reset" look like it had done nothing.
+STAGE_OUTPUT_FOLDERS: Dict[str, Tuple[str, ...]] = {
+    "embeddings": ("embeddings",),
 }
 
 PENDING = "pending"
@@ -217,12 +250,17 @@ def states(target_folder: str, modality: str = "") -> Dict[str, dict]:
 
 def stage_outputs(target_folder: str, stage: str,
                   modality: str) -> List[str]:
-    """Paths this stage owns: its store file plus any legacy folders."""
+    """Paths this stage owns: its store file plus any output folders."""
     paths = []
     kind = STAGE_STORE_KIND.get(stage)
     if kind:
         paths.append(store.stage_path(target_folder, kind, modality))
+    shared = STAGE_SHARED_STORE_KIND.get(stage)
+    if shared == store.MATCHES:
+        paths.append(store.matches_path(target_folder))
     for base in STAGE_LEGACY_FOLDERS.get(stage, ()):
+        paths.append(os.path.join(target_folder, f"{base}_{modality}"))
+    for base in STAGE_OUTPUT_FOLDERS.get(stage, ()):
         paths.append(os.path.join(target_folder, f"{base}_{modality}"))
     return paths
 

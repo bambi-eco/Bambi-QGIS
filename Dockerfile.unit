@@ -2,6 +2,14 @@ FROM python:3.11-slim
 
 WORKDIR /workspace
 
+# Keep bytecode out of the bind-mounted source tree. Without this the
+# container happily reuses __pycache__ written by a run on the host: the .pyc
+# passes its mtime/size check, but the source path baked into it is the host's,
+# so anything needing real source fails. torch.jit.script is exactly that — it
+# reads a module's source to compile it — which turned into "could not get
+# source code" from deep inside torch.
+ENV PYTHONPYCACHEPREFIX=/tmp/pycache
+
 # Minimal system libraries for the rasterio and opencv-python-headless
 # wheels (slim base image lacks them).
 RUN apt-get update -qq && \
@@ -29,6 +37,17 @@ RUN pip install --no-cache-dir \
     geopandas \
     fiona \
     simplekml
+
+# CPU-only PyTorch, for the classification head tests. The heads are
+# TorchScript archives, so the tests build a real one and load it through
+# torch.jit — which is the only way to verify the contract they are exported
+# with (the (embedding, probs) tuple, and the `classes` attribute that a plain
+# assignment silently fails to persist). Without torch those 60-odd tests skip,
+# which hides the core of the classification feature from this tier.
+# The CPU index keeps this to ~200 MB instead of pulling the CUDA stack.
+RUN pip install --no-cache-dir \
+    --index-url https://download.pytorch.org/whl/cpu \
+    torch
 
 # Code is mounted at runtime via docker-compose volume — no COPY needed.
 CMD ["bash", "run_tests.sh"]

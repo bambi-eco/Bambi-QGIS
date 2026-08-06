@@ -180,15 +180,53 @@ docker compose run --rm qt6-check
 
 ## Citation
 
-If you use this plugin in your research, please cite:
+If you use this plugin in your research, please cite one of the associated papers.
+
+For tracking:
 
 ```bibtex
-@Article{praschlGeoReferencedTracking,
-    author  = {Praschl, Christoph and Coucke, Vincent and Maschek, Anna and Schedl, David},
-    title   = {Stay Local or Go Global: Geo-Referenced Bounding Boxes for
-               Tracking Wildlife in Thermal Drone Videos},
+@article{Praschl2026,
+  title = {Stay Local or Go Global: Geo‐Referenced Bounding Boxes for Tracking Wildlife in Thermal Drone Videos},
+  volume = {20},
+  ISSN = {1751-9640},
+  DOI = {10.1049/cvi2.70077},
+  number = {1},
+  journal = {IET Computer Vision},
+  publisher = {Institution of Engineering and Technology (IET)},
+  author = {Praschl,  Christoph and Coucke,  Vincent and Maschek,  Anna and Schedl,  David C.},
+  year = {2026},
+  month = Jan 
 }
 ```
+
+For the multi-modal classification pipeline (occlusion, species, sex, age) (paper accepted but not published yet; so preliminary reference version):
+```bibtex
+@inproceedings{markoff_praschl2026_eccv1,
+  author    = {Markoff, Hugo and Praschl, Christoph and Ludo{\v{s}}ki, Ivan and Beery, Sara and {\O}rsted, Michael and Schedl, David C.},
+  title     = {When One Modality Is Not Enough: Multimodal Sex and Life-Stage Classification of Red Deer from Aerial {RGB}-Thermal Video},
+  booktitle = {Computer Vision -- {ECCV} 2026 Workshops},
+  year      = {2026},
+  month     = sep,
+  series    = {Lecture Notes in Computer Science},
+  publisher = {Springer},
+  note      = {Accepted archival paper at the 3rd Workshop on Computer Vision for Ecology ({CV4Ecology})}
+}
+```
+
+And for specifically red deer sex classification (paper accepted but not published yet; so preliminary reference version):
+```bibtex
+@inproceedings{markoff_praschl2026_eccv2,
+  author    = {Markoff, Hugo and Praschl, Christoph and J{\o}rgensen, Anton Hjalte and Mogensen, Christian Emil and Skadhauge, Mathias Bech and Beery, Sara and {\O}rsted, Michael and Schedl, David C.},
+  title     = {Oh Deer, How Should I Handle This? Seasonal Priors for Selective Wildlife Annotation and Classification},
+  booktitle = {Computer Vision -- {ECCV} 2026 Workshops},
+  year      = {2026},
+  month     = sep,
+  series    = {Lecture Notes in Computer Science},
+  publisher = {Springer},
+  note      = {Accepted archival paper at the 3rd Workshop on Computer Vision for Ecology ({CV4Ecology})}
+}
+```
+
 
 ## License & Credits
 

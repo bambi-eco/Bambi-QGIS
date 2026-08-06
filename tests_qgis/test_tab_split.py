@@ -61,7 +61,9 @@ PRE_BUTTONS = [
 PROC_BUTTONS = [
     ("detect_btn", "A1"),
     ("track_btn", "A2"),
-    ("sam3_segment_btn", "A3"),
+    # A3 is the classification block; its steps are numbered C1, C2, … inside
+    # it, so the block header carries the A3 rather than a button.
+    ("sam3_segment_btn", "A4"),
 ]
 
 

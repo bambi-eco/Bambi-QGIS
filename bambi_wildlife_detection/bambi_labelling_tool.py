@@ -2096,7 +2096,7 @@ class LabellingToolDialog(QDialog):
         track.set_keyframe(
             self._current_frame,
             (rect.left(), rect.top(), rect.right(), rect.bottom()),
-            occlusion="none")
+            occlusion=OCCLUSION_LEVELS[0])
         self._store.tracks[track.track_id] = track
         self._selected_track = track.track_id
         self._mark_dirty()
@@ -2372,7 +2372,7 @@ class LabellingToolDialog(QDialog):
             f = d["frame"]
             if f == first or f == last or (f - first) % step == 0:
                 track.set_keyframe(
-                    f, (d["x1"], d["y1"], d["x2"], d["y2"]), occlusion="none")
+                    f, (d["x1"], d["y1"], d["x2"], d["y2"]), occlusion=OCCLUSION_LEVELS[0])
                 # Provenance: which detection this key frame was copied from.
                 if d.get("detection_id") is not None:
                     track.keyframes[f]["origin_detection_id"] = d["detection_id"]
@@ -2567,7 +2567,7 @@ class LabellingToolDialog(QDialog):
                         continue
                     new_track.set_keyframe(
                         dst_frame, new_box,
-                        occlusion=kf.get("occlusion", "none"),
+                        occlusion=kf.get("occlusion", OCCLUSION_LEVELS[0]),
                         stop=bool(kf.get("stop", False)),
                         attributes=dict(kf.get("attributes", {})))
                     added_keyframes += 1
@@ -2652,7 +2652,7 @@ class LabellingToolDialog(QDialog):
             track.set_keyframe(
                 self._current_frame,
                 (kf["x1"], kf["y1"], kf["x2"], kf["y2"]),
-                occlusion=kf.get("occlusion", "none"))
+                occlusion=kf.get("occlusion", OCCLUSION_LEVELS[0]))
         elif res[1]:
             return  # already a key frame
         else:

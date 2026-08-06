@@ -26,6 +26,7 @@ from qgis.PyQt.QtCore import Qt, QTimer
 from qgis.PyQt.QtGui import QFont
 
 
+from .core.hf_access import DEFAULT_BACKBONE as _DEFAULT_BACKBONE
 from .core.dependency_ops import (  # noqa: F401 — re-exported API
     _DJI_SDK_URL,
     _VERSION_RANGES,
@@ -135,6 +136,23 @@ class DependencyManagerDialog(QDialog):
                 desc='Geo-referenced tracker extensions – BoxMOT must be installed first.',
                 callback=self._install_geo_ref_tracking,
                 dist_name='georef-tracker',
+            ),
+        ]))
+
+        # ---- Classification (optional) ----
+        vbox.addWidget(self._build_group('Classification  (optional)', [
+            dict(
+                key='classification',
+                label='Transformers + Hugging Face Hub',
+                desc=(
+                    'DINOv3 feature extraction for the occlusion, species and '
+                    'sex classifiers. The backbone itself is a gated Hugging '
+                    'Face model — request access and enter a token in the '
+                    'Classification configuration tab.'
+                ),
+                callback=self._install_classification,
+                dist_names=[('transformers', 'transformers'),
+                            ('hub', 'huggingface-hub')],
             ),
         ]))
 
@@ -503,6 +521,21 @@ class DependencyManagerDialog(QDialog):
         def _do(log_fn):
             _run_pip(['install', '--force-reinstall', 'simplekml==1.3.6'], log_fn)
         self._start_worker('simplekml', _do)
+
+    def _install_classification(self):
+        self._log_line('─── Classification (transformers + huggingface-hub) ───')
+
+        def _do(log_fn):
+            # transformers pulls huggingface-hub itself, but naming it keeps the
+            # status row honest when only one of the two is present.
+            _run_pip(['install', '--upgrade',
+                      'transformers>=4.56.0', 'huggingface-hub'], log_fn)
+            log_fn('')
+            log_fn('The DINOv3 backbone is a gated model: request access at')
+            log_fn(f'  https://huggingface.co/{_DEFAULT_BACKBONE}')
+            log_fn('then enter a read token in the Classification tab and press')
+            log_fn('"Check access". The backbone (~3.3 GB) downloads on first use.')
+        self._start_worker('classification', _do)
 
     def _install_gpu(self):
         self._log_line('─── GPU Support (CUDA 12.1) ───')

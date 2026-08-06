@@ -20,7 +20,8 @@ from qgis.PyQt.QtWidgets import (
     QCheckBox, QTabWidget, QMessageBox, QScrollArea,
     QFrame, QListWidget, QListWidgetItem, QDialog,
     QDialogButtonBox, QGridLayout, QToolButton,
-    QRadioButton, QButtonGroup, QInputDialog, QAbstractItemView
+    QRadioButton, QButtonGroup, QInputDialog, QAbstractItemView,
+    QTableWidget, QTableWidgetItem, QHeaderView
 )
 from qgis.PyQt.QtGui import QFont, QColor
 from qgis.core import (
@@ -37,12 +38,33 @@ from .bambi_click_tool import BambiClickTool
 # Built-in calibration presets live in bambi_calibrations.py (Qt-free module
 # so they are importable without QGIS, e.g. by the integration tests).
 from .bambi_calibrations import THERMAL_CALIBRATIONS, RGB_CALIBRATIONS  # noqa: F401
+from .core.hf_access import DEFAULT_BACKBONE as HF_DEFAULT_BACKBONE
 # Stage kinds, for asking whether a step has results rather than whether its
 # legacy text file happens to be on disk.
 from .core import store as _store_kinds
 
 # Plugin scope for project settings storage
 PLUGIN_SCOPE = "BambiWildlifeDetection"
+
+# The Hugging Face token lives in the QGIS settings rather than in the project
+# configuration: it is a user credential, and a project file gets shared.
+_HF_TOKEN_SETTING = f"{PLUGIN_SCOPE}/classification/hfToken"
+
+# Combo index -> the value the processing steps use. Kept beside the combo
+# rather than derived from its label so renaming a label cannot silently
+# re-target a setting.
+_CLASSIFICATION_PROJECTIONS = ("non_geo", "geo_1k", "geo_2k")
+_CLASSIFICATION_DEVICES = ("auto", "cpu", "cuda")
+_CLASSIFICATION_UNMATCHED = ("skip", "rgb", "thermal")
+
+# The classification tasks, in the order they run: occlusion decides which
+# frames the other two may vote over, and sex reuses exactly the species
+# frames.
+_CLASSIFICATION_TASKS = ("occlusion", "species", "sex")
+_CLASSIFICATION_INPUTS = (("Thermal", "thermal"), ("RGB", "rgb"),
+                          ("Matched", "matched"))
+_CLASSIFICATION_SOURCES = (("Off", "off"), ("Default", "default"),
+                           ("Custom…", "custom"))
 
 
 class CorrectionRangeDialog(QDialog):
@@ -1851,6 +1873,453 @@ class BambiDockWidget(QDockWidget):
 
         tracking_tab_layout.addStretch()
 
+        # ----- Sub-Tab: Classification -----
+        classification_tab = QWidget()
+        classification_tab_layout = QVBoxLayout(classification_tab)
+        config_sub_tabs.addTab(classification_tab, "Classification")
+
+        classification_info = QLabel(
+            "Classifies tracked animals by occlusion, species and sex using "
+            "DINOv3 features. The heads are small; the DINOv3 backbone they "
+            "read is a <b>gated</b> Hugging Face model, so access has to be "
+            "requested once and a token entered below."
+        )
+        classification_info.setWordWrap(True)
+        classification_info.setTextFormat(Qt.TextFormat.RichText)
+        classification_info.setStyleSheet("color: gray; font-size: 10px;")
+        classification_tab_layout.addWidget(classification_info)
+
+        # Per-task model choice, modality and label mapping. Bound to the
+        # config schema's ``json`` role rather than to a value widget, because
+        # it is a table; the table editing it arrives with the classifier
+        # steps.
+        self._classification_models = {}
+
+        # --- Hugging Face access ---
+        hf_group = QGroupBox("Hugging Face Access")
+        hf_layout = QFormLayout(hf_group)
+
+        self.hf_token_edit = QLineEdit()
+        self.hf_token_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.hf_token_edit.setPlaceholderText(
+            "hf_… (read token; stored in the QGIS settings, not the project)")
+        self.hf_token_edit.setToolTip(
+            "A Hugging Face access token with read permission.\n\n"
+            "Stored in your QGIS settings rather than in the project file, "
+            "because a project gets shared and a token must not travel with "
+            "it.\n\n"
+            "Leave empty to use the HF_TOKEN environment variable or the "
+            "token from 'hf auth login'."
+        )
+        self.hf_token_edit.editingFinished.connect(self._save_hf_token)
+        hf_layout.addRow("Access Token:", self.hf_token_edit)
+
+        self.hf_show_token_check = QCheckBox("Show token")
+        self.hf_show_token_check.stateChanged.connect(self._toggle_hf_token_echo)
+        hf_layout.addRow("", self.hf_show_token_check)
+
+        self.classification_backbone_edit = QLineEdit()
+        self.classification_backbone_edit.setPlaceholderText(HF_DEFAULT_BACKBONE)
+        self.classification_backbone_edit.setToolTip(
+            "The DINOv3 model producing the features the classifier heads "
+            "consume. Leave empty for the model every published head was "
+            "trained against.\n\n"
+            "Append '@' and a commit hash to pin a revision "
+            "(repo@abc123…). Without one, Hugging Face resolves the model to "
+            "whatever its main branch holds at the time, so a repository that "
+            "changes would change your features."
+        )
+        hf_layout.addRow("Backbone:", self.classification_backbone_edit)
+
+        check_row = QHBoxLayout()
+        self.hf_check_access_btn = QPushButton("Check access")
+        self.hf_check_access_btn.setToolTip(
+            "Ask Hugging Face whether this token may download the backbone, "
+            "before a long run finds out the hard way."
+        )
+        self.hf_check_access_btn.clicked.connect(self.check_hf_access)
+        check_row.addWidget(self.hf_check_access_btn)
+        self.hf_access_status = QLabel("⚪ Not checked")
+        self.hf_access_status.setWordWrap(True)
+        check_row.addWidget(self.hf_access_status, 1)
+        hf_layout.addRow("", check_row)
+
+        classification_tab_layout.addWidget(hf_group)
+
+        # --- Source imagery ---
+        source_group = QGroupBox("Source Imagery")
+        source_layout = QFormLayout(source_group)
+
+        self.classification_projection_combo = QComboBox()
+        self.classification_projection_combo.addItems([
+            "Perspective (camera frames)",
+            "Orthorectified 1k (GeoTIFF)",
+            "Orthorectified 2k (GeoTIFF)",
+        ])
+        self.classification_projection_combo.setToolTip(
+            "Which imagery the crops come from — and, with it, which variant "
+            "of each classifier is used, so a head always sees the kind of "
+            "image it was trained on.\n\n"
+            "Perspective crops the extracted frames. The orthorectified "
+            "options crop the per-frame GeoTIFFs, so 'Export Frames as "
+            "GeoTIFF' and geo-referencing both have to have run first — the "
+            "boxes reach the rasters through their world coordinates.\n\n"
+            "1k and 2k refer to the source width the two variants were fitted "
+            "at; pick the one nearer your export. Perspective is the better "
+            "view for RGB — orthorectification smears animals that are "
+            "already small and low in contrast."
+        )
+        source_layout.addRow("Projection:", self.classification_projection_combo)
+
+        classification_tab_layout.addWidget(source_group)
+
+        # --- Classifier mapping ---
+        models_group = QGroupBox("Classifiers")
+        models_layout = QVBoxLayout(models_group)
+
+        models_info = QLabel(
+            "One row per task. <b>Input</b> chooses which camera's features "
+            "the classifier reads — <i>matched</i> uses both, which is where "
+            "the two sensors complement each other most. <b>Labels</b> "
+            "connects what the model returns to this project's vocabulary."
+        )
+        models_info.setWordWrap(True)
+        models_info.setTextFormat(Qt.TextFormat.RichText)
+        models_info.setStyleSheet("color: gray; font-size: 10px;")
+        models_layout.addWidget(models_info)
+
+        self.classification_models_table = QTableWidget(
+            len(_CLASSIFICATION_TASKS), 5)
+        self.classification_models_table.setHorizontalHeaderLabels(
+            ["Task", "Input", "Model", "File / repository", ""])
+        header = self.classification_models_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.classification_models_table.verticalHeader().setVisible(False)
+        self.classification_models_table.setMinimumHeight(120)
+        models_layout.addWidget(self.classification_models_table)
+
+        self._build_classification_models_table()
+        classification_tab_layout.addWidget(models_group)
+
+        # --- Crops ---
+        crop_group = QGroupBox("Crops")
+        crop_layout = QFormLayout(crop_group)
+
+        self.classification_padding_spin = QDoubleSpinBox()
+        self.classification_padding_spin.setRange(0.0, 2.0)
+        self.classification_padding_spin.setDecimals(2)
+        self.classification_padding_spin.setSingleStep(0.05)
+        self.classification_padding_spin.setValue(0.10)
+        self.classification_padding_spin.setToolTip(
+            "Fraction of the box added on every side before cropping.\n\n"
+            "Some context helps the classifier; too much and the animal is a "
+            "speck in a field of grass."
+        )
+        crop_layout.addRow("Padding:", self.classification_padding_spin)
+
+        self.classification_crop_size_spin = QSpinBox()
+        self.classification_crop_size_spin.setRange(64, 1024)
+        self.classification_crop_size_spin.setSingleStep(16)
+        self.classification_crop_size_spin.setValue(224)
+        self.classification_crop_size_spin.setSuffix(" px")
+        self.classification_crop_size_spin.setToolTip(
+            "Side length of the crop handed to the backbone. 224 is what "
+            "DINOv3 expects; other sizes must be a multiple of 16."
+        )
+        crop_layout.addRow("Crop size:", self.classification_crop_size_spin)
+
+        self.classification_letterbox_check = QCheckBox(
+            "Keep the aspect ratio (pad to square)")
+        self.classification_letterbox_check.setChecked(True)
+        self.classification_letterbox_check.setToolTip(
+            "A deer seen from above is elongated, and stretching it to a "
+            "square changes its proportions — which is part of what the sex "
+            "classifier reads. Turn this off only to reproduce a model "
+            "trained on stretched crops."
+        )
+        crop_layout.addRow("", self.classification_letterbox_check)
+
+        classification_tab_layout.addWidget(crop_group)
+
+        # --- Voting ---
+        vote_group = QGroupBox("Frame Selection and Voting")
+        vote_layout = QFormLayout(vote_group)
+
+        vote_info = QLabel(
+            "Species and sex are decided per animal by a vote across its "
+            "frames. Voting is what makes a noisy per-frame call safe: an "
+            "antler only resolves from some angles, so many frames of a true "
+            "male look female, and the majority still recovers him."
+        )
+        vote_info.setWordWrap(True)
+        vote_info.setStyleSheet("color: gray; font-size: 10px;")
+        vote_layout.addRow(vote_info)
+
+        self.classification_frames_combo = QComboBox()
+        self.classification_frames_combo.addItems(
+            ["Visible frames only", "All frames"])
+        self.classification_frames_combo.setToolTip(
+            "Which frames species and sex may vote over.\n\n"
+            "'Visible frames only' uses the occlusion classifier when it has "
+            "run, otherwise occlusion values already annotated by hand, and "
+            "otherwise every frame — the run log always says which.\n\n"
+            "Occlusion classification is optional: species and sex work "
+            "either way."
+        )
+        vote_layout.addRow("Frames used:", self.classification_frames_combo)
+
+        self.classification_quorum_spin = QDoubleSpinBox()
+        self.classification_quorum_spin.setRange(0.0, 1.0)
+        self.classification_quorum_spin.setDecimals(2)
+        self.classification_quorum_spin.setSingleStep(0.05)
+        self.classification_quorum_spin.setValue(0.5)
+        self.classification_quorum_spin.setToolTip(
+            "Share of voting frames a class must exceed to be called.\n\n"
+            "0.50 is a simple majority. Raising it makes the classifier "
+            "abstain more often — an abstention leaves the animal in the "
+            "census with the attribute unknown, it never discards it."
+        )
+        vote_layout.addRow("Quorum:", self.classification_quorum_spin)
+
+        self.classification_min_frames_spin = QSpinBox()
+        self.classification_min_frames_spin.setRange(1, 1000)
+        self.classification_min_frames_spin.setValue(1)
+        self.classification_min_frames_spin.setToolTip(
+            "Fewest voting frames an animal needs before it is called at all. "
+            "A vote over one or two frames is barely a vote."
+        )
+        vote_layout.addRow("Min voting frames:",
+                           self.classification_min_frames_spin)
+
+        self.classification_unmatched_combo = QComboBox()
+        self.classification_unmatched_combo.addItems([
+            "Skip the animal", "Fall back to RGB", "Fall back to thermal"])
+        self.classification_unmatched_combo.setToolTip(
+            "What to do with an animal that only one camera saw, when a "
+            "classifier is set to 'matched'.\n\n"
+            "The matched classifiers were trained on real pairs and cannot "
+            "take a blank for the missing camera, so this has to be an "
+            "explicit choice."
+        )
+        vote_layout.addRow("Unmatched animals:",
+                           self.classification_unmatched_combo)
+
+        self.classification_write_check = QCheckBox(
+            "Write results into the tracks and detections")
+        self.classification_write_check.setChecked(True)
+        self.classification_write_check.setToolTip(
+            "Copy each result onto the animal itself — species, sex, life "
+            "stage and per-frame occlusion.\n\n"
+            "This is what makes the classifications visible everywhere else: "
+            "the exports, the map layers, the survey analytics and the "
+            "labelling tool. Switched off, the results are still recorded in "
+            "full, but only inside the classification store.\n\n"
+            "Safe to repeat — the results themselves remain the record, and "
+            "writing them again simply brings the animals back into step."
+        )
+        vote_layout.addRow("", self.classification_write_check)
+
+        self.classification_overwrite_check = QCheckBox(
+            "Replace a species the detector already assigned")
+        self.classification_overwrite_check.setChecked(False)
+        self.classification_overwrite_check.setToolTip(
+            "By default an animal the detector itself identified keeps that "
+            "identification, and only unidentified ones are filled in — so a "
+            "class mapping you configured is not quietly undone.\n\n"
+            "Turn this on to let the classifier's answer win everywhere."
+        )
+        vote_layout.addRow("", self.classification_overwrite_check)
+
+        classification_tab_layout.addWidget(vote_group)
+
+        # --- Life stage ---
+        life_group = QGroupBox("Life Stage from Body Size")
+        life_layout = QFormLayout(life_group)
+
+        life_info = QLabel(
+            "A juvenile cannot be told from an adult female by appearance at "
+            "survey resolution — which is why the sex classifier's second "
+            "class is <i>female/juvenile</i>. Size settles it: a juvenile "
+            "sits far below its cohort with a clear gap to the next animal.\n\n"
+            "Sizes are only ever compared <b>within one flight</b>, because "
+            "how tightly boxes fit varies between recordings. There is "
+            "deliberately no absolute threshold."
+        )
+        life_info.setWordWrap(True)
+        life_info.setTextFormat(Qt.TextFormat.RichText)
+        life_info.setStyleSheet("color: gray; font-size: 10px;")
+        life_layout.addRow(life_info)
+
+        self.life_stage_z_spin = QDoubleSpinBox()
+        self.life_stage_z_spin.setRange(-10.0, 0.0)
+        self.life_stage_z_spin.setDecimals(1)
+        self.life_stage_z_spin.setSingleStep(0.5)
+        self.life_stage_z_spin.setValue(-2.0)
+        self.life_stage_z_spin.setToolTip(
+            "How far below the flight median an animal must sit, as a robust "
+            "z-score. More negative is stricter."
+        )
+        life_layout.addRow("Size z-score below:", self.life_stage_z_spin)
+
+        self.life_stage_iqr_spin = QDoubleSpinBox()
+        self.life_stage_iqr_spin.setRange(0.0, 20.0)
+        self.life_stage_iqr_spin.setDecimals(1)
+        self.life_stage_iqr_spin.setSingleStep(0.5)
+        self.life_stage_iqr_spin.setValue(2.0)
+        self.life_stage_iqr_spin.setToolTip(
+            "How wide the gap to the next-smallest animal must be, as a "
+            "multiple of the flight's interquartile range.\n\n"
+            "This is what stops the rule firing on the merely smallest adult "
+            "of a herd — someone is always smallest, and that is not evidence "
+            "of anything."
+        )
+        life_layout.addRow("Size gap over (× IQR):", self.life_stage_iqr_spin)
+
+        self.life_stage_min_spin = QSpinBox()
+        self.life_stage_min_spin.setRange(1, 100)
+        self.life_stage_min_spin.setValue(4)
+        self.life_stage_min_spin.setToolTip(
+            "Fewest animals in a flight for the comparison to run at all. A "
+            "robust score over three animals is not robust."
+        )
+        life_layout.addRow("Min individuals:", self.life_stage_min_spin)
+
+        classification_tab_layout.addWidget(life_group)
+
+        # --- Cross-modal matching ---
+        match_group = QGroupBox("Cross-Modal Track Matching")
+        match_layout = QFormLayout(match_group)
+
+        match_info = QLabel(
+            "Decides which thermal track and which RGB track are the same "
+            "animal. Needed for the <i>matched</i> classifiers, and useful on "
+            "its own: an animal both cameras saw is a confirmed animal, which "
+            "is what keeps a census free of tracks that fired on shadow."
+        )
+        match_info.setWordWrap(True)
+        match_info.setTextFormat(Qt.TextFormat.RichText)
+        match_info.setStyleSheet("color: gray; font-size: 10px;")
+        match_layout.addRow(match_info)
+
+        self.match_min_shared_spin = QSpinBox()
+        self.match_min_shared_spin.setRange(1, 1000)
+        self.match_min_shared_spin.setValue(8)
+        self.match_min_shared_spin.setToolTip(
+            "Frames two tracks must have in common before they can be "
+            "matched. Below this the median distance is not a median of much."
+        )
+        match_layout.addRow("Min shared frames:", self.match_min_shared_spin)
+
+        self.match_gate_spin = QDoubleSpinBox()
+        self.match_gate_spin.setRange(0.1, 10000.0)
+        self.match_gate_spin.setDecimals(1)
+        self.match_gate_spin.setSingleStep(1.0)
+        self.match_gate_spin.setValue(28.0)
+        self.match_gate_spin.setSuffix(" px")
+        self.match_gate_spin.setToolTip(
+            "Largest median inter-centre distance still counted as the same "
+            "animal, in thermal pixels.\n\n"
+            "The default of 28 px is the value published for 1024×1024 "
+            "inference — raise it if your frames are larger, and check the "
+            "run log, which reports how far the closest rejected candidate "
+            "was."
+        )
+        match_layout.addRow("Distance gate:", self.match_gate_spin)
+
+        self.match_min_confidence_spin = QDoubleSpinBox()
+        self.match_min_confidence_spin.setRange(0.0, 1.0)
+        self.match_min_confidence_spin.setDecimals(2)
+        self.match_min_confidence_spin.setSingleStep(0.05)
+        self.match_min_confidence_spin.setValue(0.20)
+        self.match_min_confidence_spin.setToolTip(
+            "Mean detection confidence both tracks must reach. Stops a match "
+            "being built on a track that fired on shadow."
+        )
+        match_layout.addRow("Min mean confidence:",
+                            self.match_min_confidence_spin)
+
+        self.match_max_time_offset_spin = QDoubleSpinBox()
+        self.match_max_time_offset_spin.setRange(0.001, 10.0)
+        self.match_max_time_offset_spin.setDecimals(3)
+        self.match_max_time_offset_spin.setSingleStep(0.01)
+        self.match_max_time_offset_spin.setValue(0.10)
+        self.match_max_time_offset_spin.setSuffix(" s")
+        self.match_max_time_offset_spin.setToolTip(
+            "How far apart two frames may be on the shared capture clock and "
+            "still count as the same moment. The two cameras record at "
+            "different rates, so frame numbers never line up; at the ends of "
+            "a flight the nearest frame in time can be seconds away, and "
+            "pairing across such a gap would invent correspondences."
+        )
+        match_layout.addRow("Max frame time offset:",
+                            self.match_max_time_offset_spin)
+
+        self.match_thermal_anchored_check = QCheckBox(
+            "Size RGB crops from the thermal box")
+        self.match_thermal_anchored_check.setChecked(True)
+        self.match_thermal_anchored_check.setToolTip(
+            "For a matched pair, take the crop size from the thermal box — "
+            "the looser of the two, so it more reliably encloses the whole "
+            "animal, antlers included.\n\n"
+            "Affects only the crop the classifier sees. The stored detections "
+            "are never rewritten, so geo-referencing and tracking stay valid."
+        )
+        match_layout.addRow("", self.match_thermal_anchored_check)
+
+        classification_tab_layout.addWidget(match_group)
+
+        # --- Compute ---
+        compute_group = QGroupBox("Compute")
+        compute_layout = QFormLayout(compute_group)
+
+        self.classification_device_combo = QComboBox()
+        self.classification_device_combo.addItems(
+            ["Auto", "CPU", "CUDA (GPU)"])
+        self.classification_device_combo.setToolTip(
+            "Auto uses the GPU when a CUDA build of PyTorch is installed.\n"
+            "The backbone is large — on CPU expect minutes per hundred crops."
+        )
+        compute_layout.addRow("Device:", self.classification_device_combo)
+
+        self.classification_batch_spin = QSpinBox()
+        self.classification_batch_spin.setRange(1, 256)
+        self.classification_batch_spin.setValue(16)
+        self.classification_batch_spin.setToolTip(
+            "Crops embedded per forward pass. Lower this if the GPU runs out "
+            "of memory."
+        )
+        compute_layout.addRow("Batch Size:", self.classification_batch_spin)
+
+        self.classification_fp16_check = QCheckBox(
+            "Use half precision on the GPU")
+        self.classification_fp16_check.setChecked(True)
+        self.classification_fp16_check.setToolTip(
+            "Halves the memory the backbone needs, with no measurable effect "
+            "on the features. Ignored on CPU."
+        )
+        compute_layout.addRow("", self.classification_fp16_check)
+
+        model_dir_label = QLabel(
+            "Models and the backbone cache are stored in the shared "
+            "<code>bambi_deps/models/</code> folder, alongside the detection "
+            "weights — downloaded once, not once per flight."
+        )
+        model_dir_label.setWordWrap(True)
+        model_dir_label.setTextFormat(Qt.TextFormat.RichText)
+        model_dir_label.setStyleSheet("color: gray; font-size: 10px;")
+        compute_layout.addRow("", model_dir_label)
+
+        classification_tab_layout.addWidget(compute_group)
+        classification_tab_layout.addStretch()
+
+        # The token is per user, not per project, so it is restored here rather
+        # than by load_config_from_project.
+        self._load_hf_token()
+
         # ----- Sub-Tab 4: Field of View -----
         fov_tab = QWidget()
         fov_tab_layout = QVBoxLayout(fov_tab)
@@ -2518,9 +2987,138 @@ class BambiDockWidget(QDockWidget):
         add_ortho_row.addWidget(self.add_orthomosaic_status)
         steps_btn_layout.addLayout(add_ortho_row)
 
-        # ----- A3: Run SAM3 Segmentation -----
+        # ----- A3: Classification -----
+        classify_header = QLabel("A3. Classification")
+        classify_header.setStyleSheet("font-weight: bold; margin-top: 6px;")
+        proc_steps_layout.addWidget(classify_header)
+
+        classify_note = QLabel(
+            "ℹ Tracks you annotated in the labelling tool are never changed "
+            "by these steps. A hand annotation outranks a model, so the "
+            "classifiers fill in what is missing and leave your own work "
+            "alone."
+        )
+        classify_note.setWordWrap(True)
+        classify_note.setStyleSheet(
+            "color: #31708f; background: #d9edf7; border: 1px solid #bce8f1; "
+            "border-radius: 4px; padding: 5px; font-size: 10px;")
+        proc_steps_layout.addWidget(classify_note)
+
+        # ----- C1: Match RGB <-> Thermal tracks -----
+        match_row = QHBoxLayout()
+        self.track_matching_btn = QPushButton("   C1. Match RGB ↔ Thermal Tracks")
+        self.track_matching_btn.clicked.connect(self.run_track_matching)
+        self.track_matching_btn.setToolTip(
+            "Work out which thermal track and which RGB track are the same "
+            "animal.\n\n"
+            "Needs both cameras tracked. An animal confirmed by both is a real "
+            "animal; a track only one camera saw is either an animal the other "
+            "sensor cannot see, or noise."
+        )
+        self.track_matching_status = QLabel("⚪ Not started")
+        match_row.addWidget(self.track_matching_btn)
+        match_row.addWidget(self.track_matching_status)
+        proc_steps_layout.addLayout(match_row)
+
+        # -> Add matched pairs to QGIS
+        add_matches_row = QHBoxLayout()
+        self.add_matches_btn = QPushButton("      → Add Matched Pairs to QGIS")
+        self.add_matches_btn.clicked.connect(self.add_matches_to_qgis)
+        self.add_matches_btn.setToolTip(
+            "Draw a line between each matched pair's geo-referenced positions, "
+            "attributed with the shared frame count and median distance — the "
+            "quickest way to see whether the gate is set sensibly."
+        )
+        self.add_matches_status = QLabel("⚪")
+        add_matches_row.addWidget(self.add_matches_btn)
+        add_matches_row.addWidget(self.add_matches_status)
+        proc_steps_layout.addLayout(add_matches_row)
+
+        # ----- C2: Compute DINOv3 embeddings -----
+        embeddings_row = QHBoxLayout()
+        self.embeddings_btn = QPushButton("   C2. Compute DINOv3 Embeddings")
+        self.embeddings_btn.clicked.connect(self.run_embeddings)
+        self.embeddings_btn.setToolTip(
+            "Embed every tracked animal's crop with DINOv3, once, so the "
+            "classifiers can reuse the vectors.\n\n"
+            "This is the expensive step. The vectors are written beside the "
+            "frames, and a re-run only embeds what is missing — an "
+            "interrupted run resumes rather than starting again."
+        )
+        self.embeddings_camera_combo = QComboBox()
+        self.embeddings_camera_combo.addItems(["T - Thermal", "W - RGB"])
+        self.embeddings_camera_combo.setFixedWidth(100)
+        self.embeddings_camera_combo.setToolTip(
+            "Which camera's crops to embed. The 'matched' classifiers need "
+            "both."
+        )
+        self.embeddings_status = QLabel("⚪ Not started")
+        embeddings_row.addWidget(self.embeddings_btn)
+        embeddings_row.addWidget(self.embeddings_camera_combo)
+        embeddings_row.addWidget(self.embeddings_status)
+        proc_steps_layout.addLayout(embeddings_row)
+
+        # ----- C3: Classify -----
+        classify_row = QHBoxLayout()
+        self.classify_btn = QPushButton(
+            "   C3. Classify (occlusion → species → sex)")
+        self.classify_btn.clicked.connect(self.run_classification)
+        self.classify_btn.setToolTip(
+            "Run the enabled classifiers in order.\n\n"
+            "Occlusion decides which frames carry usable evidence, species "
+            "fixes what the animal is, and sex reuses exactly those frames "
+            "and picks its model from the species. Species and sex are "
+            "decided per animal by a vote; occlusion stays per frame."
+        )
+        self.classification_camera_combo = QComboBox()
+        self.classification_camera_combo.addItems(["T - Thermal", "W - RGB"])
+        self.classification_camera_combo.setFixedWidth(100)
+        self.classification_camera_combo.setToolTip(
+            "Which camera's tracks the answers are recorded against. A "
+            "'matched' classifier still reads both cameras."
+        )
+        self.classify_status = QLabel("⚪ Not started")
+        classify_row.addWidget(self.classify_btn)
+        classify_row.addWidget(self.classification_camera_combo)
+        classify_row.addWidget(self.classify_status)
+        proc_steps_layout.addLayout(classify_row)
+
+        # ----- C4: Life stage -----
+        life_stage_row = QHBoxLayout()
+        self.life_stage_btn = QPushButton("   C4. Estimate Life Stage by Size")
+        self.life_stage_btn.clicked.connect(self.run_life_stage)
+        self.life_stage_btn.setToolTip(
+            "Flag juveniles by body size, within this flight.\n\n"
+            "Needs no models — only tracks, and geo-referencing if the metric "
+            "areas are to be used. A juvenile cannot be told from an adult "
+            "female by appearance at survey resolution, so size is what "
+            "separates them."
+        )
+        self.life_stage_status = QLabel("⚪ Not started")
+        life_stage_row.addWidget(self.life_stage_btn)
+        life_stage_row.addWidget(self.life_stage_status)
+        proc_steps_layout.addLayout(life_stage_row)
+
+        # -> Apply results to the tracks and detections
+        apply_row = QHBoxLayout()
+        self.apply_results_btn = QPushButton(
+            "      → Apply Results to Tracks and Detections")
+        self.apply_results_btn.clicked.connect(self.apply_classification_results)
+        self.apply_results_btn.setToolTip(
+            "Copy the stored classifications onto the animals themselves, so "
+            "the exports, layers, analytics and labelling tool all see them.\n\n"
+            "Runs automatically after classifying unless that is switched off. "
+            "Repeat it any time — for instance after re-applying a detector "
+            "class mapping, which resets the species on the detections."
+        )
+        self.apply_results_status = QLabel("⚪")
+        apply_row.addWidget(self.apply_results_btn)
+        apply_row.addWidget(self.apply_results_status)
+        proc_steps_layout.addLayout(apply_row)
+
+        # ----- A4: Run SAM3 Segmentation -----
         step9_row = QHBoxLayout()
-        self.sam3_segment_btn = QPushButton("A3. Run SAM3 Segmentation")
+        self.sam3_segment_btn = QPushButton("A4. Run SAM3 Segmentation")
         self.sam3_segment_btn.clicked.connect(self.run_sam3_segmentation)
         self.sam3_segment_btn.setToolTip("Run SAM3 segmentation on extracted frames using Roboflow API")
         self.sam3_camera_combo = QComboBox()
@@ -2533,7 +3131,7 @@ class BambiDockWidget(QDockWidget):
         step9_row.addWidget(self.sam3_segment_status)
         proc_steps_layout.addLayout(step9_row)
 
-        # ----- -> Geo-Reference Segmentation (sub-step of A3) -----
+        # ----- -> Geo-Reference Segmentation (sub-step of A4) -----
         step10_row = QHBoxLayout()
         self.sam3_georef_btn = QPushButton("   → Geo-Reference Segmentation")
         self.sam3_georef_btn.clicked.connect(self.run_sam3_georeference)
@@ -3440,6 +4038,88 @@ class BambiDockWidget(QDockWidget):
                 self.sam3_step_spin.value()
                 if hasattr(self, 'sam3_step_spin') else 1),
 
+            # Classification. The token is resolved here rather than stored in
+            # the config, so it never reaches the project file; an empty field
+            # falls back to the environment or the 'hf auth login' token.
+            "hf_token": (
+                self._resolve_hf_token()
+                if hasattr(self, 'hf_token_edit') else ""),
+            "classification_backbone": self._classification_backbone(),
+            "classification_projection": (
+                _CLASSIFICATION_PROJECTIONS[
+                    self.classification_projection_combo.currentIndex()]
+                if hasattr(self, 'classification_projection_combo')
+                else _CLASSIFICATION_PROJECTIONS[0]),
+            "classification_device": (
+                _CLASSIFICATION_DEVICES[
+                    self.classification_device_combo.currentIndex()]
+                if hasattr(self, 'classification_device_combo')
+                else _CLASSIFICATION_DEVICES[0]),
+            "classification_batch_size": (
+                self.classification_batch_spin.value()
+                if hasattr(self, 'classification_batch_spin') else 16),
+            "classification_fp16": (
+                self.classification_fp16_check.isChecked()
+                if hasattr(self, 'classification_fp16_check') else True),
+            "classification_models": dict(
+                getattr(self, '_classification_models', None) or {}),
+            "classification_crop_padding": (
+                self.classification_padding_spin.value()
+                if hasattr(self, 'classification_padding_spin') else 0.10),
+            "classification_crop_size": (
+                self.classification_crop_size_spin.value()
+                if hasattr(self, 'classification_crop_size_spin') else 224),
+            "classification_letterbox": (
+                self.classification_letterbox_check.isChecked()
+                if hasattr(self, 'classification_letterbox_check') else True),
+            "embeddings_camera": (
+                "T" if self.embeddings_camera_combo.currentIndex() == 0
+                else "W") if hasattr(self, 'embeddings_camera_combo') else "T",
+            "classification_camera": self._combo_camera(
+                'classification_camera_combo'),
+            "classification_frame_selection": self._combo_choice(
+                'classification_frames_combo', ("visible", "all")),
+            "classification_quorum": (
+                self.classification_quorum_spin.value()
+                if hasattr(self, 'classification_quorum_spin') else 0.5),
+            "classification_min_frames": (
+                self.classification_min_frames_spin.value()
+                if hasattr(self, 'classification_min_frames_spin') else 1),
+            "classification_unmatched": self._combo_choice(
+                'classification_unmatched_combo', _CLASSIFICATION_UNMATCHED),
+            "life_stage_z": (
+                self.life_stage_z_spin.value()
+                if hasattr(self, 'life_stage_z_spin') else -2.0),
+            "life_stage_iqr_factor": (
+                self.life_stage_iqr_spin.value()
+                if hasattr(self, 'life_stage_iqr_spin') else 2.0),
+            "life_stage_min_individuals": (
+                self.life_stage_min_spin.value()
+                if hasattr(self, 'life_stage_min_spin') else 4),
+            "classification_write_results": (
+                self.classification_write_check.isChecked()
+                if hasattr(self, 'classification_write_check') else True),
+            "classification_overwrite_species": (
+                self.classification_overwrite_check.isChecked()
+                if hasattr(self, 'classification_overwrite_check') else False),
+
+            # Cross-modal matching
+            "match_min_shared": (
+                self.match_min_shared_spin.value()
+                if hasattr(self, 'match_min_shared_spin') else 8),
+            "match_gate_px": (
+                self.match_gate_spin.value()
+                if hasattr(self, 'match_gate_spin') else 28.0),
+            "match_min_confidence": (
+                self.match_min_confidence_spin.value()
+                if hasattr(self, 'match_min_confidence_spin') else 0.20),
+            "match_max_time_offset": (
+                self.match_max_time_offset_spin.value()
+                if hasattr(self, 'match_max_time_offset_spin') else 0.10),
+            "match_thermal_anchored": (
+                self.match_thermal_anchored_check.isChecked()
+                if hasattr(self, 'match_thermal_anchored_check') else True),
+
             # Flight Route options
             "filter_gps_origin": (
                 self.filter_gps_origin_check.isChecked()
@@ -4245,7 +4925,14 @@ class BambiDockWidget(QDockWidget):
             "Links detections across frames into continuous tracks using the selected "
             "tracking backend. With a TRex tracklet folder configured this imports "
             "those instead, and runs no tracker.<br><br>"
-            "<b>A3 — Run SAM3 Segmentation</b><br>"
+            "<b>A3 — Classification</b><br>"
+            "<b>C1 — Match RGB ↔ Thermal Tracks</b><br>"
+            "Works out which thermal track and which RGB track are the same "
+            "animal, by comparing where their boxes sit once the two views are "
+            "registered onto each other. Needs both cameras tracked. An animal "
+            "both cameras saw is a confirmed animal; a track only one saw is "
+            "either an animal the other sensor cannot make out, or noise.<br><br>"
+            "<b>A4 — Run SAM3 Segmentation</b><br>"
             "Segments detected objects using Roboflow SAM3.<br><br>"
             "<b>→ Geo-Reference Segmentation</b><br>"
             "Projects the masks onto the DEM to world coordinates.<br><br>"
@@ -5418,6 +6105,10 @@ class BambiDockWidget(QDockWidget):
         "alfs": "Generate ALFS",
         "export_geotiffs": "Export Frames as GeoTIFF",
         "orthomosaic": "Generate Orthomosaic",
+        "track_matching": "Match RGB ↔ Thermal Tracks",
+        "embeddings": "DINOv3 Embeddings",
+        "classification": "Classification",
+        "life_stage": "Life Stage",
         "sam3_segmentation": "SAM3 Segmentation",
         "sam3_georeference": "Geo-Reference Segmentation",
         "perpendicular": "Perpendicular Distances",
@@ -6619,6 +7310,270 @@ class BambiDockWidget(QDockWidget):
 
         self.start_worker("extract_rgb_frames")
 
+    # ------------------------------------------------------------------
+    # Classification — Hugging Face access
+    # ------------------------------------------------------------------
+
+    def _load_hf_token(self):
+        """Populate the token field from the QGIS settings.
+
+        The token is a user credential, so it is kept per user rather than per
+        project: a project file gets shared, and a token must not travel with
+        it. Nothing is shown when the token comes from the environment or from
+        ``hf auth login`` — the field stays empty and those are picked up at
+        run time, which is why it is a placeholder rather than a default.
+        """
+        stored = QgsSettings().value(_HF_TOKEN_SETTING, "", type=str)
+        self.hf_token_edit.setText(stored)
+
+    # ------------------------------------------------------------------
+    # Classifier mapping table
+    # ------------------------------------------------------------------
+
+    def _build_classification_models_table(self):
+        """One row per task, bound to ``_classification_models``."""
+        from .core import hf_access
+
+        table = self.classification_models_table
+        for row, task in enumerate(_CLASSIFICATION_TASKS):
+            name = QTableWidgetItem(task.capitalize())
+            name.setFlags(name.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            table.setItem(row, 0, name)
+
+            modality = QComboBox()
+            for label, value in _CLASSIFICATION_INPUTS:
+                modality.addItem(label, value)
+            modality.setCurrentIndex(2)      # matched, where fusion helps most
+            modality.currentIndexChanged.connect(
+                lambda _i, t=task: self._on_classification_model_changed(t))
+            table.setCellWidget(row, 1, modality)
+
+            source = QComboBox()
+            for label, value in _CLASSIFICATION_SOURCES:
+                source.addItem(label, value)
+            if not hf_access.has_default_head(task):
+                # Nothing published for this task yet, so "Default" would only
+                # fail later. Say so here instead.
+                index = source.findData("default")
+                source.model().item(index).setEnabled(False)
+                source.setItemText(index, "Default (not released)")
+            source.setCurrentIndex(
+                1 if hf_access.has_default_head(task) else 0)
+            source.currentIndexChanged.connect(
+                lambda _i, t=task: self._on_classification_model_changed(t))
+            table.setCellWidget(row, 2, source)
+
+            path = QTableWidgetItem("")
+            table.setItem(row, 3, path)
+
+            actions = QWidget()
+            actions_layout = QHBoxLayout(actions)
+            actions_layout.setContentsMargins(0, 0, 0, 0)
+            actions_layout.setSpacing(2)
+
+            browse = QPushButton("…")
+            browse.setFixedWidth(28)
+            browse.setToolTip("Choose a model file")
+            browse.clicked.connect(
+                lambda _c=False, t=task: self._browse_classification_model(t))
+            actions_layout.addWidget(browse)
+
+            labels = QPushButton("Labels")
+            labels.setToolTip(
+                "Connect the model's classes to this project's vocabulary")
+            labels.clicked.connect(
+                lambda _c=False, t=task: self._edit_classification_labels(t))
+            actions_layout.addWidget(labels)
+
+            if task == "sex":
+                species = QPushButton("Species…")
+                species.setToolTip(
+                    "Choose a sex classifier per species — the cue is "
+                    "species-specific, so one model does not transfer")
+                species.clicked.connect(self._edit_sex_species_models)
+                actions_layout.addWidget(species)
+
+            table.setCellWidget(row, 4, actions)
+
+        self._apply_classification_models_to_table()
+
+    def _task_row(self, task: str) -> int:
+        return _CLASSIFICATION_TASKS.index(task)
+
+    def _classification_spec(self, task: str) -> dict:
+        models = getattr(self, '_classification_models', None) or {}
+        return dict(models.get(task) or {})
+
+    def _set_classification_spec(self, task: str, spec: dict):
+        models = dict(getattr(self, '_classification_models', None) or {})
+        models[task] = spec
+        self._classification_models = models
+
+    def _on_classification_model_changed(self, task: str):
+        """Mirror a table edit into the saved mapping."""
+        row = self._task_row(task)
+        table = self.classification_models_table
+        spec = self._classification_spec(task)
+        spec["modality"] = table.cellWidget(row, 1).currentData()
+        spec["model"] = table.cellWidget(row, 2).currentData()
+        item = table.item(row, 3)
+        spec["path"] = item.text().strip() if item else ""
+        self._set_classification_spec(task, spec)
+
+    def _apply_classification_models_to_table(self):
+        """Push the saved mapping back into the table after a config load."""
+        from .core import hf_access
+
+        table = getattr(self, 'classification_models_table', None)
+        if table is None:
+            return
+        for task in _CLASSIFICATION_TASKS:
+            row = self._task_row(task)
+            spec = self._classification_spec(task)
+
+            modality = table.cellWidget(row, 1)
+            found = modality.findData(spec.get("modality", "matched"))
+            modality.blockSignals(True)
+            modality.setCurrentIndex(found if found >= 0 else 2)
+            modality.blockSignals(False)
+
+            default = "default" if hf_access.has_default_head(task) else "off"
+            source = table.cellWidget(row, 2)
+            found = source.findData(spec.get("model", default))
+            source.blockSignals(True)
+            source.setCurrentIndex(found if found >= 0 else 0)
+            source.blockSignals(False)
+
+            table.item(row, 3).setText(spec.get("path", ""))
+            self._on_classification_model_changed(task)
+
+    def _browse_classification_model(self, task: str):
+        path, _filter = QFileDialog.getOpenFileName(
+            self, f"Choose a {task} classifier", "",
+            "TorchScript model (*.pt *.pth);;All files (*)")
+        if not path:
+            return
+        row = self._task_row(task)
+        table = self.classification_models_table
+        table.item(row, 3).setText(path)
+        # Choosing a file means using it — otherwise the path sits there
+        # looking configured while the default is what actually runs.
+        source = table.cellWidget(row, 2)
+        source.setCurrentIndex(max(0, source.findData("custom")))
+        self._on_classification_model_changed(task)
+
+    def _edit_classification_labels(self, task: str):
+        from .bambi_label_mapping_dialog import BambiLabelMappingDialog
+
+        config = self.get_config()
+        self._on_classification_model_changed(task)
+        dialog = BambiLabelMappingDialog(
+            task, self._classification_spec(task),
+            target_folder=config.get("target_folder", ""),
+            models_dir=BambiProcessor._get_default_model_dir(),
+            projection=config.get("classification_projection", "non_geo"),
+            parent=self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._set_classification_spec(task, dialog.result_spec())
+            self.log(f"Updated the {task} class mapping")
+
+    def _edit_sex_species_models(self):
+        from .bambi_sex_model_dialog import BambiSexModelDialog
+
+        config = self.get_config()
+        self._on_classification_model_changed("sex")
+        dialog = BambiSexModelDialog(
+            self._classification_spec("sex"),
+            target_folder=config.get("target_folder", ""), parent=self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._set_classification_spec("sex", dialog.result_spec())
+            chosen = len(dialog.result_spec().get("species") or {})
+            self.log(f"Sex classifiers configured for {chosen} species")
+
+    def _combo_choice(self, attr: str, values) -> str:
+        """The value a combo's current index stands for.
+
+        Kept beside the combo rather than derived from its label, so renaming
+        a label in the UI cannot silently re-target a setting.
+        """
+        combo = getattr(self, attr, None)
+        if combo is None:
+            return values[0]
+        index = combo.currentIndex()
+        return values[index] if 0 <= index < len(values) else values[0]
+
+    def _combo_camera(self, attr: str) -> str:
+        """``T`` or ``W`` from a camera combo."""
+        return self._combo_choice(attr, ("T", "W"))
+
+    def _classification_backbone(self) -> str:
+        """The configured backbone, falling back to the shipped default.
+
+        An empty field means "whatever this plugin version considers standard",
+        so the default can move without every saved project pinning the old one.
+        """
+        edit = getattr(self, 'classification_backbone_edit', None)
+        text = edit.text().strip() if edit is not None else ""
+        return text or HF_DEFAULT_BACKBONE
+
+    def _resolve_hf_token(self) -> str:
+        """The token the processing steps should use, or ``""`` if there is none."""
+        from .core import hf_access
+
+        return hf_access.resolve_token(self.hf_token_edit.text())[0]
+
+    def _save_hf_token(self):
+        """Persist the token to the QGIS settings (never to the project)."""
+        QgsSettings().setValue(
+            _HF_TOKEN_SETTING, self.hf_token_edit.text().strip())
+
+    def _toggle_hf_token_echo(self, state):
+        """Show or hide the token characters."""
+        mode = (QLineEdit.EchoMode.Normal if state
+                else QLineEdit.EchoMode.Password)
+        self.hf_token_edit.setEchoMode(mode)
+
+    def check_hf_access(self):
+        """Report whether the configured token can read the backbone.
+
+        A gated repository is the most likely thing to go wrong in the whole
+        classification feature, and finding out three steps into a long run is
+        the worst time to learn it — so it is answerable up front.
+        """
+        from .core import hf_access
+
+        self._save_hf_token()
+        token, source = hf_access.resolve_token(self.hf_token_edit.text())
+        repo = self._classification_backbone()
+
+        self.hf_access_status.setText("🟡 Checking…")
+        self.hf_check_access_btn.setEnabled(False)
+        try:
+            # Blocking, but it is a single metadata request and the user asked
+            # for it — a worker thread here would cost more than it saves.
+            result = hf_access.check_repo_access(repo, token)
+        finally:
+            self.hf_check_access_btn.setEnabled(True)
+
+        icons = {
+            hf_access.ACCESS_GRANTED: "🟢",
+            hf_access.ACCESS_GATED: "🔴",
+            hf_access.ACCESS_NO_TOKEN: "🔴",
+            hf_access.ACCESS_MISSING: "🔴",
+            hf_access.ACCESS_UNAVAILABLE: "🟠",
+            hf_access.ACCESS_ERROR: "🟠",
+        }
+        icon = icons.get(result["status"], "⚪")
+
+        if result["status"] == hf_access.ACCESS_GRANTED:
+            using = hf_access.describe_token_source(source)
+            self.hf_access_status.setText(f"{icon} Access granted (using {using})")
+        else:
+            self.hf_access_status.setText(f"{icon} {result['message']}")
+
+        self.log(f"Hugging Face access check for {repo}: "
+                 f"{result['status']} — {result['message']}")
+
     def _confirm_ultralytics_license(self) -> bool:
         """Show the Ultralytics license notice before running detection.
 
@@ -6876,6 +7831,341 @@ class BambiDockWidget(QDockWidget):
             self.update_status("add_orthomosaic", "🔴 Error")
             QMessageBox.critical(self, "Error", f"Failed to add orthomosaic: {str(e)}")
 
+    def run_track_matching(self):
+        """Match thermal and RGB tracks (step C1)."""
+        from .core import store, track_store
+
+        config = self.get_config()
+        target_folder = config["target_folder"]
+
+        # Both modalities are required — this is the one step that is
+        # inherently about the pair, so there is no camera combo to choose.
+        missing = [name for name, modality in (("Thermal", "t"), ("RGB", "w"))
+                   if not os.path.isfile(
+                       store.stage_path(target_folder, store.TRACKS, modality))]
+        if missing:
+            QMessageBox.warning(
+                self, "Missing Prerequisites",
+                f"{' and '.join(missing)} tracking has not been completed.\n\n"
+                "Cross-modal matching compares the two cameras, so both have "
+                "to be detected, geo-referenced and tracked first."
+            )
+            return
+
+        empty = [name for name, modality in (("Thermal", "t"), ("RGB", "w"))
+                 if not track_store.load_pixel_tracks(target_folder, modality)]
+        if empty:
+            QMessageBox.warning(
+                self, "No Tracks",
+                f"{' and '.join(empty)} tracking produced no tracks, so there "
+                "is nothing to match."
+            )
+            return
+
+        self.start_worker("track_matching")
+
+    def run_embeddings(self):
+        """Compute DINOv3 embeddings for the selected camera (step C2)."""
+        from .core import hf_access, store, track_store
+
+        config = self.get_config()
+        camera = config.get("embeddings_camera", "T")
+        suffix = "t" if camera == "T" else "w"
+        camera_name = "Thermal" if camera == "T" else "RGB"
+        target_folder = config["target_folder"]
+
+        if not os.path.isfile(
+                store.stage_path(target_folder, store.TRACKS, suffix)):
+            QMessageBox.warning(
+                self, "Missing Prerequisites",
+                f"{camera_name} tracking has not been completed.\n"
+                "Embeddings are computed for tracked animals, so run "
+                f"tracking for {camera_name} first."
+            )
+            return
+
+        if not track_store.load_pixel_tracks(target_folder, suffix):
+            QMessageBox.warning(
+                self, "No Tracks",
+                f"{camera_name} tracking produced no tracks, so there is "
+                "nothing to embed."
+            )
+            return
+
+        # An orthorectified projection crops the exported GeoTIFFs, so say so
+        # here rather than letting the worker raise several seconds in.
+        from .core import geo_crops
+
+        projection = config.get("classification_projection", "non_geo")
+        if geo_crops.is_geo(projection) and not geo_crops.available_frames(
+                target_folder, suffix):
+            QMessageBox.warning(
+                self, "Missing GeoTIFFs",
+                f"The classification projection is set to an orthorectified "
+                f"variant, but no {camera_name} GeoTIFFs have been exported.\n\n"
+                "Run 'Export Frames as GeoTIFF' for this camera, or set the "
+                "projection to Perspective in the Classification tab."
+            )
+            return
+
+        # A gated repository is the usual failure, and finding out after the
+        # first frames have been cropped wastes the user's time.
+        token, _source = hf_access.resolve_token(
+            self.hf_token_edit.text() if hasattr(self, 'hf_token_edit') else "")
+        if not token:
+            answer = QMessageBox.question(
+                self, "No Hugging Face Token",
+                "No Hugging Face token is configured, and the DINOv3 backbone "
+                "is a gated model.\n\n"
+                "This will only work if the model is already in the local "
+                "cache. Continue anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+
+        self.start_worker("embeddings")
+
+    def run_classification(self):
+        """Run the enabled classifiers on the selected camera (step C3)."""
+        from .core import classification_store, hf_access
+
+        config = self.get_config()
+        camera = config.get("classification_camera", "T")
+        suffix = "t" if camera == "T" else "w"
+        camera_name = "Thermal" if camera == "T" else "RGB"
+        target_folder = config["target_folder"]
+
+        models = config.get("classification_models") or {}
+        enabled = [task for task in hf_access.TASKS
+                   if (models.get(task) or {}).get("model", "off") != "off"]
+        if not enabled:
+            QMessageBox.warning(
+                self, "No Classifier Enabled",
+                "No classifier is switched on.\n\n"
+                "Choose a model for occlusion, species or sex in the "
+                "Classification configuration tab."
+            )
+            return
+
+        if classification_store.active_embedding_run(
+                target_folder, suffix) is None:
+            QMessageBox.warning(
+                self, "Missing Embeddings",
+                f"No {camera_name} embeddings have been computed.\n\n"
+                "Run 'Compute DINOv3 Embeddings' for this camera first — the "
+                "classifiers read those vectors rather than the images."
+            )
+            return
+
+        # A 'matched' head needs the other camera embedded and the tracks
+        # paired; say so now rather than falling back silently.
+        primary = "thermal" if suffix == "t" else "rgb"
+
+        def _needs_other(task):
+            return (models.get(task) or {}).get("modality", "matched") != primary
+
+        cross = [task for task in enabled if _needs_other(task)]
+        if cross:
+            other = "w" if suffix == "t" else "t"
+            other_name = "RGB" if other == "w" else "Thermal"
+            if classification_store.active_embedding_run(
+                    target_folder, other) is None:
+                standard = QMessageBox.StandardButton
+                buttons = standard.Yes | standard.No
+                answer = QMessageBox.question(
+                    self, "Missing Cross-Modal Features",
+                    f"{', '.join(cross)} need the {other_name} camera, but it "
+                    "has no embeddings.\n\n"
+                    "Those classifiers will fall back or skip, as set by "
+                    "'Unmatched animals'. Continue anyway?",
+                    buttons, QMessageBox.StandardButton.No)
+                if answer != QMessageBox.StandardButton.Yes:
+                    return
+
+        self.start_worker("classification")
+
+    def run_life_stage(self):
+        """Flag juveniles by body size (step C4)."""
+        from .core import store, track_store
+
+        config = self.get_config()
+        camera = config.get("classification_camera", "T")
+        suffix = "t" if camera == "T" else "w"
+        camera_name = "Thermal" if camera == "T" else "RGB"
+        target_folder = config["target_folder"]
+
+        if not os.path.isfile(
+                store.stage_path(target_folder, store.TRACKS, suffix)):
+            QMessageBox.warning(
+                self, "Missing Prerequisites",
+                f"{camera_name} tracking has not been completed.\n\n"
+                "Life stage is read from each animal's box size, so the "
+                "animals have to be tracked first."
+            )
+            return
+
+        tracks = {row["track_id"] for row
+                  in track_store.load_pixel_tracks(target_folder, suffix)}
+        minimum = config.get("life_stage_min_individuals", 4)
+        if len(tracks) < minimum:
+            QMessageBox.warning(
+                self, "Too Few Individuals",
+                f"This flight has {len(tracks)} tracked individual(s), and "
+                f"the size comparison needs at least {minimum}.\n\n"
+                "Sizes are compared within a flight, so a small flight gives "
+                "the test nothing to compare against. Lower the minimum in "
+                "the Classification tab if you want it to run anyway."
+            )
+            return
+
+        self.start_worker("life_stage")
+
+    def apply_classification_results(self):
+        """Copy stored classifications onto the tracks and detections."""
+        from .core import apply_results, classification_store
+
+        config = self.get_config()
+        camera = config.get("classification_camera", "T")
+        suffix = "t" if camera == "T" else "w"
+        camera_name = "Thermal" if camera == "T" else "RGB"
+        target_folder = config["target_folder"]
+
+        present = classification_store.tasks_present(target_folder, suffix)
+        has_occlusion = bool(classification_store.frame_predictions(
+            target_folder, suffix, "occlusion"))
+        if not present and not has_occlusion:
+            QMessageBox.warning(
+                self, "No Results",
+                f"No {camera_name} classification results have been stored "
+                "yet.\n\nRun the classifiers first."
+            )
+            return
+
+        try:
+            self.update_status("apply_results", "🟡 Applying...")
+            counts = apply_results.apply_all(
+                target_folder, suffix,
+                config.get("classification_models") or {},
+                overwrite_detections=bool(
+                    config.get("classification_overwrite_species", False)),
+                log_fn=self.log)
+        except Exception as exc:
+            self.log(f"Error applying results: {exc}")
+            self.update_status("apply_results", "🔴 Error")
+            QMessageBox.critical(
+                self, "Error", f"Failed to apply the results: {exc}")
+            return
+
+        self.update_status("apply_results", "🟢 Applied")
+        if not any(counts.values()):
+            self.log("The tracks and detections already match the stored "
+                     "results — nothing needed changing.")
+        else:
+            summary = ", ".join(f"{value} {key.replace('_', ' ')}"
+                                for key, value in counts.items() if value)
+            self.log(f"Applied classification results: {summary}")
+
+    def add_matches_to_qgis(self):
+        """Draw each matched pair as a line between the two animals' positions."""
+        from .core import match_store
+
+        config = self.get_config()
+        target_folder = config["target_folder"]
+
+        matches = match_store.track_matches(target_folder)
+        if not matches:
+            QMessageBox.warning(
+                self, "No Matches",
+                "No matched track pairs were found. Run 'Match RGB ↔ Thermal "
+                "Tracks' first."
+            )
+            return
+
+        try:
+            self.log("Adding matched track pairs to QGIS...")
+            self.update_status("add_matches", "🟡 Loading...")
+
+            centroids_t = self._track_centroids(target_folder, "t")
+            centroids_w = self._track_centroids(target_folder, "w")
+
+            epsg = config.get("target_epsg", 32633)
+            layer = QgsVectorLayer(
+                f"LineString?crs=EPSG:{epsg}", "BAMBI Matched Pairs", "memory")
+            provider = layer.dataProvider()
+            provider.addAttributes([
+                QgsField("track_t", QVariant.Int),
+                QgsField("track_w", QVariant.Int),
+                QgsField("shared", QVariant.Int),
+                QgsField("median_dist", QVariant.Double),
+                QgsField("conf_t", QVariant.Double),
+                QgsField("conf_w", QVariant.Double),
+            ])
+            layer.updateFields()
+
+            features, skipped = [], 0
+            for match in matches:
+                start = centroids_t.get(match["track_id_t"])
+                end = centroids_w.get(match["track_id_w"])
+                if start is None or end is None:
+                    # One side was never geo-referenced, so there is no world
+                    # position to draw from. The match itself is still valid.
+                    skipped += 1
+                    continue
+                feature = QgsFeature()
+                feature.setGeometry(QgsGeometry.fromPolylineXY(
+                    [QgsPointXY(*start), QgsPointXY(*end)]))
+                feature.setAttributes([
+                    match["track_id_t"], match["track_id_w"],
+                    match["shared"], match["median_dist"],
+                    match["conf_t"], match["conf_w"],
+                ])
+                features.append(feature)
+
+            provider.addFeatures(features)
+            layer.updateExtents()
+
+            symbol = QgsLineSymbol.createSimple(
+                {"color": "255,140,0,255", "width": "0.8"})
+            layer.renderer().setSymbol(symbol)
+
+            self._add_layer_to_flight(layer)
+            self.update_status("add_matches", "🟢 Added")
+            self.iface.mapCanvas().refresh()
+
+            note = f", {skipped} without a world position" if skipped else ""
+            self.log(f"Added {len(features)} matched pair(s) to QGIS{note}")
+
+        except Exception as exc:
+            self.log(f"Error adding matched pairs: {exc}")
+            self.update_status("add_matches", "🔴 Error")
+            QMessageBox.critical(
+                self, "Error", f"Failed to add matched pairs: {exc}")
+
+    @staticmethod
+    def _track_centroids(target_folder: str, modality: str) -> Dict[int, tuple]:
+        """Mean world position of each track, for drawing it on the map."""
+        from .core import track_store
+
+        # Geo rows are per detection, so they are joined onto their tracks
+        # through the pixel-track membership.
+        sums: Dict[int, list] = {}
+        geo = {row["detection_id"]: row for row
+               in track_store.load_georeferenced(target_folder, modality)}
+        for row in track_store.load_pixel_tracks(target_folder, modality):
+            placed = geo.get(row["detection_id"])
+            if placed is None:
+                continue
+            cx = (placed["gx1"] + placed["gx2"]) / 2.0
+            cy = (placed["gy1"] + placed["gy2"]) / 2.0
+            entry = sums.setdefault(row["track_id"], [0.0, 0.0, 0])
+            entry[0] += cx
+            entry[1] += cy
+            entry[2] += 1
+
+        return {track_id: (x / n, y / n)
+                for track_id, (x, y, n) in sums.items() if n}
+
     def run_sam3_segmentation(self):
         """Run SAM3 segmentation step."""
         config = self.get_config()
@@ -6958,7 +8248,7 @@ class BambiDockWidget(QDockWidget):
                 self,
                 "Missing Prerequisites",
                 f"{camera_label} SAM3 geo-referencing has not been completed.\n"
-                f"Please run Geo-Reference Segmentation (under step A3) first."
+                f"Please run Geo-Reference Segmentation (under step A4) first."
             )
             return
 
@@ -8410,6 +9700,12 @@ class BambiDockWidget(QDockWidget):
             "add_perpendicular": self.add_perpendicular_status,
             "track_perpendicular": self.track_perpendicular_status,
             "add_track_perpendicular": self.add_track_perpendicular_status,
+            "track_matching": self.track_matching_status,
+            "add_matches": self.add_matches_status,
+            "embeddings": self.embeddings_status,
+            "classification": self.classify_status,
+            "life_stage": self.life_stage_status,
+            "apply_results": self.apply_results_status,
             "sam3_segmentation": self.sam3_segment_status,
             "sam3_georeference": self.sam3_georef_status,
             "add_sam3": self.add_sam3_status,
@@ -10775,10 +12071,21 @@ class BambiDockWidget(QDockWidget):
         self._thermal_vis_curve = None
         self._update_thermal_vis_curve_label()
 
+        # Bound through the schema's ``json`` role, so it is an attribute
+        # rather than a widget and the widget sweep above does not reach it.
+        # The Hugging Face token is deliberately *not* reset: it is a user
+        # credential in QSettings, not part of this project's configuration.
+        self._classification_models = {}
+
         self.log("Configuration reset to defaults")
 
     def _config_widget_value(self, attr: str, role: str):
         """Read a config value from the bound widget (core.config_schema role)."""
+        if role == "json":
+            # Not a widget: a plain attribute holding a dict/list, serialised
+            # into a string entry. Structured settings live behind a table or
+            # dialog rather than one value widget.
+            return json.dumps(getattr(self, attr, None) or {}, sort_keys=True)
         widget = getattr(self, attr)
         if role in ("line", "crs"):
             return widget.text()
@@ -10796,6 +12103,15 @@ class BambiDockWidget(QDockWidget):
 
     def _apply_config_value(self, attr: str, role: str, value) -> None:
         """Apply a loaded config value to the bound widget (config_schema role)."""
+        if role == "json":
+            try:
+                setattr(self, attr, json.loads(value) if value else {})
+            except (ValueError, TypeError):
+                # A corrupted entry must not stop the rest of the
+                # configuration loading; the setting reverts to its default.
+                setattr(self, attr, {})
+                self.log(f"Warning: ignoring unreadable setting for {attr}")
+            return
         widget = getattr(self, attr)
         if role == "line":
             widget.setText(value)
@@ -10972,6 +12288,11 @@ class BambiDockWidget(QDockWidget):
         else:
             self._thermal_vis_curve = None
         self._update_thermal_vis_curve_label()
+
+        # The classifier mapping is bound through the schema's ``json`` role,
+        # so the attribute is already loaded — the table it is edited in has to
+        # be brought back into step with it.
+        self._apply_classification_models_to_table()
 
         self.log("Configuration loaded from project")
 

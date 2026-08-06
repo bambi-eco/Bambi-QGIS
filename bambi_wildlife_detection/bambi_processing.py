@@ -9,7 +9,8 @@ This module contains the processing logic for all pipeline steps.
 import csv
 import os
 import json
-from typing import Dict, Any, Optional, List, Tuple
+import shutil
+from typing import Dict, Any, Optional, List, Sequence, Tuple
 
 from qgis.PyQt.QtCore import QObject, pyqtSignal
 
@@ -180,6 +181,26 @@ class ProcessingWorker(QObject):
                 self.processor.run_track_perpendicular(
                     self.config, self.progress.emit, self.log.emit, self.is_cancelled
                 )
+            elif self.step == "life_stage":
+                self.processor.run_life_stage(
+                    self.config, self.progress.emit, self.log.emit,
+                    self.is_cancelled
+                )
+            elif self.step == "classification":
+                self.processor.run_classification(
+                    self.config, self.progress.emit, self.log.emit,
+                    self.is_cancelled
+                )
+            elif self.step == "embeddings":
+                self.processor.run_embeddings(
+                    self.config, self.progress.emit, self.log.emit,
+                    self.is_cancelled
+                )
+            elif self.step == "track_matching":
+                self.processor.run_track_matching(
+                    self.config, self.progress.emit, self.log.emit,
+                    self.is_cancelled
+                )
             elif self.step == "trex_import":
                 self.processor.run_trex_import(self.config, self.progress.emit, self.log.emit, self.is_cancelled)
             elif self.step == "density_heatmap":
@@ -260,6 +281,43 @@ def _record_stage(config: Dict[str, Any], stage: str, modality: str,
     if stale and log_fn:
         names = ", ".join(stale)
         log_fn(f"Now out of date after re-running '{stage}': {names}")
+
+
+def _modality_name(modality: str) -> str:
+    """The head-facing name of a modality suffix (``t`` -> ``thermal``)."""
+    return "thermal" if modality == "t" else "rgb"
+
+
+def _describe_frame_source(source: str) -> str:
+    """A human phrase for where the votable frames came from."""
+    from .core import classification
+
+    return {
+        classification.FRAMES_FROM_HEAD: "clear frames per the occlusion "
+                                         "classifier",
+        classification.FRAMES_FROM_ANNOTATIONS: "clear frames per the stored "
+                                                "annotations",
+        classification.FRAMES_FROM_ALL: "all frames, as configured",
+        classification.FRAMES_FROM_NOTHING: "all frames — no occlusion labels "
+                                            "were available to filter by",
+    }.get(source, source)
+
+
+def _plugin_version() -> str:
+    """The plugin version, read from ``metadata.txt``.
+
+    Recorded alongside expensive outputs so a folder says which build produced
+    it. Never raises: not knowing the version is not a reason to fail a run.
+    """
+    path = os.path.join(os.path.dirname(__file__), "metadata.txt")
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("version="):
+                    return line.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return ""
 
 
 class CancelledException(Exception):
@@ -1741,6 +1799,972 @@ class BambiProcessor:
 
         if progress_fn:
             progress_fn(100)
+
+    def run_track_matching(self, config: Dict[str, Any], progress_fn=None,
+                           log_fn=None, cancel_check=None):
+        """Match thermal tracks to RGB tracks — paper §3.2, step C1.
+
+        Confirmation *is* the track definition for the census: a pair seen in
+        both modalities is a real animal, a long confident single-modality
+        track is an animal one sensor cannot see, and the rest is sensor noise.
+        The paper's own numbers make the case — of 34 unmatched tracks only one
+        was real, while admitting them wholesale would have added six phantom
+        individuals.
+
+        Both modalities must have been tracked. Writes ``matches.gpkg``, which
+        belongs to neither modality and so sits beside ``project.gpkg``.
+        """
+        import math
+
+        from .core import frame_matching, match_store, stages, track_matching
+        from .core import track_store
+
+        target_folder = config["target_folder"]
+
+        if log_fn:
+            log_fn("Matching thermal and RGB tracks...")
+        if progress_fn:
+            progress_fn(5)
+
+        rows_t = track_store.load_pixel_tracks(target_folder, "t")
+        rows_w = track_store.load_pixel_tracks(target_folder, "w")
+        if not rows_t or not rows_w:
+            missing = "thermal" if not rows_t else "RGB"
+            raise ValueError(
+                f"No {missing} tracks found. Cross-modal matching needs both "
+                "modalities tracked — run detection, geo-referencing and "
+                "tracking for each camera first.")
+
+        if log_fn:
+            log_fn(f"Loaded {len(set(r['track_id'] for r in rows_t))} thermal "
+                   f"and {len(set(r['track_id'] for r in rows_w))} RGB track(s)")
+        if progress_fn:
+            progress_fn(20)
+
+        # Frame correspondence by capture time: the two cameras run at
+        # different rates, so frame indices do not line up.
+        images_t = self._load_pose_images(target_folder, "t")
+        images_w = self._load_pose_images(target_folder, "w")
+        matcher = frame_matching.FrameMatcher(images_t, images_w)
+        if not matcher.usable:
+            raise ValueError(
+                "The poses carry no timestamps, so thermal and RGB frames "
+                "cannot be lined up in time. Re-extract the frames with SRT "
+                "files present.")
+
+        max_dt = float(config.get("match_max_time_offset", 0.10))
+        frame_map = {}
+        for frame in range(len(images_t)):
+            partner = matcher.matches_within(frame, max_dt)
+            if partner is not None:
+                frame_map[frame] = partner
+
+        if not frame_map:
+            raise ValueError(
+                f"No thermal frame has an RGB frame within {max_dt:.2f} s. "
+                "Check that both recordings cover the same flight, or raise "
+                "the maximum frame time offset.")
+        if log_fn:
+            log_fn(f"Frame correspondence: {len(frame_map)} of "
+                   f"{len(images_t)} thermal frame(s) have an RGB partner "
+                   f"within {max_dt:.2f} s")
+        if progress_fn:
+            progress_fn(40)
+
+        if cancel_check and cancel_check():
+            raise CancelledException("Track matching cancelled")
+
+        settings = track_matching.MatchConfig(
+            min_shared=int(config.get("match_min_shared", 8)),
+            gate_px=float(config.get("match_gate_px", 28.0)),
+            min_confidence=float(config.get("match_min_confidence", 0.20)),
+            max_time_offset=max_dt,
+        )
+        result = track_matching.match_tracks(
+            rows_t, rows_w, frame_map, config=settings,
+            frame_size_t=self._frame_size(images_t),
+            frame_size_w=self._frame_size(images_w),
+            log_fn=log_fn)
+
+        if progress_fn:
+            progress_fn(80)
+
+        match_store.record_matches(
+            target_folder, result["matches"],
+            affine=result["affine"].as_json(),
+            affine_rmse=(result["affine_rmse"]
+                         if math.isfinite(result["affine_rmse"]) else None),
+            config_hash=stages.fingerprint(
+                config,
+                ("match_min_shared", "match_gate_px", "match_min_confidence",
+                 "match_max_time_offset"),
+                upstream=("tracking",)),
+            log_fn=log_fn)
+
+        if log_fn:
+            counts = match_store.summary(
+                target_folder,
+                tracks_t=len(set(r["track_id"] for r in rows_t)),
+                tracks_w=len(set(r["track_id"] for r in rows_w)))
+            log_fn(f"Confirmed {counts['confirmed']} animal(s) from "
+                   f"{counts['raw']} raw track(s); {counts['unmatched']} "
+                   "track(s) were seen by one camera only")
+
+        _record_stage(config, "track_matching", stages.CROSS_MODAL,
+                      row_count=len(result["matches"]), log_fn=log_fn)
+
+        if progress_fn:
+            progress_fn(100)
+
+    def run_embeddings(self, config: Dict[str, Any], progress_fn=None,
+                       log_fn=None, cancel_check=None):
+        """Embed every tracked detection with DINOv3 — step C2.
+
+        The vectors are the expensive part of classification and every head
+        reads the same ones, so they are computed once, written beside the
+        frames as ``embeddings_{m}/{projection}/<frame>.npz``, and reused. A
+        re-run embeds only what is missing, which is what makes an interrupted
+        run resumable rather than repeatable.
+        """
+        from .core import (classification, classification_store,
+                           embedding_files, geo_crops, track_store)
+
+        camera = config.get("embeddings_camera", "T")
+        suffix = "t" if camera == "T" else "w"
+        camera_name = "Thermal" if camera == "T" else "RGB"
+        target_folder = config["target_folder"]
+        projection = config.get("classification_projection", "non_geo")
+
+        rows = track_store.load_pixel_tracks(target_folder, suffix)
+        if not rows:
+            raise ValueError(
+                f"No {camera_name} tracks found. Run tracking for this camera "
+                "before computing embeddings.")
+
+        images = self._load_pose_images(target_folder, suffix)
+        image_of_frame = {i: (img.get("imagefile") or "")
+                          for i, img in enumerate(images)}
+        frames_folder = os.path.join(target_folder, f"frames_{suffix}")
+
+        # Orthorectified crops come from the exported GeoTIFFs, and the boxes
+        # reach them through the world coordinates geo-referencing already
+        # produced — so one geo-referencing result serves both projections.
+        geo_boxes: Dict[int, tuple] = {}
+        if geo_crops.is_geo(projection):
+            if not geo_crops.available_frames(target_folder, suffix):
+                raise ValueError(
+                    f"No {camera_name} GeoTIFFs found. Orthorectified crops "
+                    "come from the per-frame GeoTIFF export, so run 'Export "
+                    "Frames as GeoTIFF' for this camera first — or set the "
+                    "projection to Perspective.")
+            geo_boxes = {
+                row["detection_id"]: (row["gx1"], row["gy1"],
+                                      row["gx2"], row["gy2"])
+                for row in track_store.load_georeferenced(target_folder, suffix)
+            }
+            if not geo_boxes:
+                raise ValueError(
+                    f"No {camera_name} detections have world coordinates. "
+                    "Run Geo-Reference Detections before using an "
+                    "orthorectified projection.")
+            rows = [row for row in rows if row["detection_id"] in geo_boxes]
+            if not rows:
+                raise ValueError(
+                    "None of the tracked detections could be geo-referenced, "
+                    "so there is nothing to crop from the GeoTIFFs.")
+
+        crop_config = classification.CropConfig(
+            padding=float(config.get("classification_crop_padding", 0.10)),
+            size=int(config.get("classification_crop_size", 224)),
+            letterbox=bool(config.get("classification_letterbox", True)))
+
+        backbone = classification.Backbone(
+            model_id=config.get("classification_backbone", ""),
+            models_dir=self._get_default_model_dir(),
+            token=config.get("hf_token", ""),
+            device=config.get("classification_device", "auto"),
+            fp16=bool(config.get("classification_fp16", True)),
+            log_fn=log_fn)
+
+        if log_fn:
+            log_fn(f"Embedding {camera_name} crops with "
+                   f"{backbone.model_id} ({projection})")
+        if progress_fn:
+            progress_fn(2)
+
+        # Loading the backbone before deciding what to do means a bad token or
+        # a missing package fails in seconds rather than after a long scan.
+        backbone.load()
+
+        # Thermal anchoring only means something in camera space. An orthophoto
+        # is already in metric ground units, so both modalities' boxes describe
+        # the same footprint and there is nothing to borrow.
+        anchor_sizes = ({} if geo_boxes else self._thermal_anchor_sizes(
+            config, target_folder, suffix, log_fn))
+
+        settings = dict(
+            backbone=backbone.model_id, dim=backbone.dim,
+            crop_size=crop_config.size, padding=crop_config.padding,
+            projection=projection,
+            thermal_anchored=bool(anchor_sizes))
+        existing = classification_store.reuse_embedding_run(
+            target_folder, suffix, **settings)
+        if existing is None:
+            run_id = classification_store.start_embedding_run(
+                target_folder, suffix,
+                folder=embedding_files.relative_run_folder(suffix, projection),
+                plugin_version=_plugin_version(), log_fn=log_fn, **settings)
+        else:
+            run_id = int(existing["run_id"])
+            classification_store.activate_embedding_run(
+                target_folder, suffix, run_id)
+            if log_fn:
+                log_fn(f"Resuming embedding run {run_id}")
+
+        # The store records membership; the files are the truth. A vector
+        # deleted by hand has to be noticed rather than believed.
+        wanted = [{"detection_id": row["detection_id"], "frame": row["frame"],
+                   "imagefile": image_of_frame.get(row["frame"], "")}
+                  for row in rows]
+        recorded = classification_store.embedded_ids(
+            target_folder, suffix, run_id)
+        if recorded:
+            on_disk = set(embedding_files.present_ids(
+                target_folder, suffix, projection,
+                [w for w in wanted if w["detection_id"] in recorded]))
+            vanished = sorted(recorded - on_disk)
+            if vanished:
+                classification_store.forget_embedded(
+                    target_folder, suffix, run_id, vanished)
+                if log_fn:
+                    log_fn(f"{len(vanished)} recorded vector(s) are missing "
+                           "from disk and will be recomputed")
+
+        boxes = {row["detection_id"]: row for row in rows}
+        pending = classification_store.pending_ids(
+            target_folder, suffix, run_id,
+            [row["detection_id"] for row in rows])
+        if not pending:
+            if log_fn:
+                log_fn(f"All {len(rows)} detection(s) are already embedded")
+            if progress_fn:
+                progress_fn(100)
+            _record_stage(config, "embeddings", suffix,
+                          row_count=len(rows), log_fn=log_fn)
+            return
+
+        by_frame = classification.group_by_frame(
+            [boxes[detection_id] for detection_id in pending])
+        if log_fn:
+            log_fn(f"{len(pending)} of {len(rows)} detection(s) still need "
+                   f"embedding, across {len(by_frame)} frame(s)")
+
+        batch_size = int(config.get("classification_batch_size", 16))
+        done = 0
+        skipped_frames = 0
+        warned_resolution = False
+        for index, frame in enumerate(sorted(by_frame)):
+            if cancel_check and cancel_check():
+                raise CancelledException("Embedding cancelled")
+
+            imagefile = image_of_frame.get(frame, "")
+            transform = None
+            if geo_boxes:
+                image, transform = geo_crops.read_geotiff(
+                    geo_crops.geotiff_path(target_folder, suffix, frame))
+                if image is not None and not warned_resolution:
+                    warning = geo_crops.resolution_warning(
+                        projection, image.shape[1])
+                    if warning and log_fn:
+                        log_fn(warning)
+                    warned_resolution = True
+            else:
+                image = self._read_frame_image(frames_folder, imagefile, frame)
+
+            if image is None:
+                if log_fn:
+                    log_fn(f"Warning: frame {frame} could not be read, "
+                           "skipping its detections")
+                skipped_frames += 1
+                continue
+
+            image = classification.to_rgb(image)
+            entries = by_frame[frame]
+            crops, ids = [], []
+            for row in entries:
+                if transform is not None:
+                    # The world box mapped into this raster's own pixel space.
+                    # Thermal anchoring does not apply: an orthophoto is
+                    # already in metric ground units, so both modalities'
+                    # boxes describe the same footprint.
+                    box = geo_crops.geo_box_to_pixel(
+                        transform, geo_boxes[row["detection_id"]])
+                    override = None
+                else:
+                    box = (row["x1"], row["y1"], row["x2"], row["y2"])
+                    override = anchor_sizes.get(row["detection_id"])
+                window = classification.crop_window(
+                    box, crop_config, size_override=override)
+                crops.append(classification.extract_crop(
+                    image, window, crop_config.size))
+                ids.append(int(row["detection_id"]))
+
+            vectors = {}
+            for start in range(0, len(crops), batch_size):
+                chunk = crops[start:start + batch_size]
+                embedded = backbone.embed(chunk)
+                for offset, vector in enumerate(embedded):
+                    vectors[ids[start + offset]] = vector
+
+            embedding_files.write_frame(
+                embedding_files.frame_path(
+                    target_folder, suffix, projection, frame, imagefile),
+                vectors)
+            # Recorded per frame, so an interrupted run resumes from exactly
+            # what it finished rather than starting again.
+            classification_store.record_embedded(
+                target_folder, suffix, run_id, vectors)
+            done += len(vectors)
+
+            if progress_fn and by_frame:
+                progress_fn(5 + int(90 * (index + 1) / len(by_frame)))
+
+        if log_fn:
+            note = (f", {skipped_frames} frame(s) skipped for want of an image"
+                    if skipped_frames else "")
+            log_fn(f"Embedded {done} crop(s) into "
+                   f"{embedding_files.relative_run_folder(suffix, projection)}"
+                   f"{note}")
+
+        _record_stage(config, "embeddings", suffix,
+                      row_count=len(rows), log_fn=log_fn)
+        if progress_fn:
+            progress_fn(100)
+
+    def run_classification(self, config: Dict[str, Any], progress_fn=None,
+                           log_fn=None, cancel_check=None):
+        """Occlusion, then species, then sex — step C3.
+
+        The order is load-bearing (paper §3.3): occlusion decides which frames
+        carry usable evidence, species fixes what the animal is, and sex reuses
+        *exactly* the species frames. Occlusion itself stays per frame; the
+        other two are aggregated per track by a quorum vote, which is what
+        makes a noisy per-frame call safe — an antler resolves only from some
+        angles, so many frames of a true male look female.
+
+        Everything is anchored on one modality: its tracks are what the answers
+        are recorded against, while a ``matched`` head reads both sides through
+        the cross-modal pairing.
+        """
+        from .core import (classification, classification_store,
+                           embedding_files, hf_access, match_store,
+                           track_store)
+
+        camera = config.get("classification_camera", "T")
+        suffix = "t" if camera == "T" else "w"
+        other = "w" if suffix == "t" else "t"
+        camera_name = "Thermal" if camera == "T" else "RGB"
+        target_folder = config["target_folder"]
+        models = config.get("classification_models") or {}
+
+        tasks = [task for task in hf_access.TASKS
+                 if (models.get(task) or {}).get("model", "off") != "off"]
+        if not tasks:
+            raise ValueError(
+                "No classifier is enabled. Choose a model for at least one of "
+                "occlusion, species or sex in the Classification tab.")
+
+        run = classification_store.active_embedding_run(target_folder, suffix)
+        if run is None:
+            raise ValueError(
+                f"No {camera_name} embeddings found. Run 'Compute DINOv3 "
+                "Embeddings' for this camera first.")
+
+        projection = run["projection"]
+        rows = track_store.load_pixel_tracks(target_folder, suffix)
+        if not rows:
+            raise ValueError(f"No {camera_name} tracks found.")
+
+        if log_fn:
+            enabled = ", ".join(tasks)
+            log_fn(f"Classifying {camera_name} tracks ({projection}): "
+                   f"{enabled}")
+        if progress_fn:
+            progress_fn(5)
+
+        # -- features -------------------------------------------------------
+        images = self._load_pose_images(target_folder, suffix)
+        image_of_frame = {i: (img.get("imagefile") or "")
+                          for i, img in enumerate(images)}
+        wanted = [{"detection_id": row["detection_id"], "frame": row["frame"],
+                   "imagefile": image_of_frame.get(row["frame"], "")}
+                  for row in rows]
+        vectors_primary = embedding_files.read_vectors(
+            target_folder, suffix, projection, wanted)
+        if not vectors_primary:
+            raise ValueError(
+                "The embedding vectors are missing from disk. Re-run 'Compute "
+                "DINOv3 Embeddings'.")
+
+        # Anything but this modality's own single-modality view needs the other
+        # side: 'matched' by definition, and the opposite single modality
+        # because its vectors live in the other store.
+        primary_name = _modality_name(suffix)
+        needs_partner = any(
+            (models.get(task) or {}).get("modality", "matched") != primary_name
+            for task in tasks)
+        vectors_other: Dict[int, Any] = {}
+        partner_of_primary: Dict[int, int] = {}
+        if needs_partner:
+            partner_of_primary = match_store.partner_detections(
+                target_folder, suffix)
+            other_run = classification_store.active_embedding_run(
+                target_folder, other)
+            if partner_of_primary and other_run is not None:
+                other_rows = track_store.load_pixel_tracks(target_folder, other)
+                other_images = self._load_pose_images(target_folder, other)
+                other_names = {i: (img.get("imagefile") or "")
+                               for i, img in enumerate(other_images)}
+                vectors_other = embedding_files.read_vectors(
+                    target_folder, other, other_run["projection"],
+                    [{"detection_id": r["detection_id"], "frame": r["frame"],
+                      "imagefile": other_names.get(r["frame"], "")}
+                     for r in other_rows])
+            if not vectors_other and log_fn:
+                log_fn("No cross-modal features are available: either the "
+                       "tracks have not been matched or the other camera has "
+                       "not been embedded. Heads configured 'matched' will "
+                       "fall back or skip, as configured.")
+
+        resolver = classification.FeatureResolver(
+            primary=suffix,
+            vectors_t=vectors_primary if suffix == "t" else vectors_other,
+            vectors_w=vectors_primary if suffix == "w" else vectors_other,
+            partner_of_primary=partner_of_primary)
+
+        by_track: Dict[int, List[dict]] = {}
+        for row in rows:
+            by_track.setdefault(int(row["track_id"]), []).append(row)
+
+        unmatched = config.get("classification_unmatched", "skip")
+        quorum = float(config.get("classification_quorum", 0.5))
+        min_frames = int(config.get("classification_min_frames", 1))
+        use_all_frames = config.get(
+            "classification_frame_selection", "visible") == "all"
+
+        # -- occlusion ------------------------------------------------------
+        occlusion_labels: Dict[int, str] = {}
+        if "occlusion" in tasks:
+            if cancel_check and cancel_check():
+                raise CancelledException("Classification cancelled")
+            occlusion_labels = self._run_head(
+                config, target_folder, suffix, "occlusion", models["occlusion"],
+                [row["detection_id"] for row in rows], resolver, unmatched,
+                projection, log_fn)
+        if progress_fn:
+            progress_fn(35)
+
+        # -- which frames may vote -----------------------------------------
+        annotated = self._stored_occlusion(target_folder, suffix)
+        clear_head = tuple(
+            (models.get("occlusion") or {}).get("clear_labels") or ("clear",))
+        clear_annotations = tuple(
+            (models.get("occlusion") or {}).get("clear_values") or (0,))
+
+        voting_frames: Dict[int, List[int]] = {}
+        frame_source = classification.FRAMES_FROM_ALL
+        for track_id, members in by_track.items():
+            chosen, frame_source = classification.visible_detections(
+                [row["detection_id"] for row in members],
+                head_labels=occlusion_labels, annotated=annotated,
+                clear_head_labels=clear_head,
+                clear_annotations=clear_annotations,
+                use_all=use_all_frames)
+            voting_frames[track_id] = chosen
+
+        if log_fn:
+            total = sum(len(v) for v in voting_frames.values())
+            log_fn(f"{total} of {len(rows)} frame(s) will vote "
+                   f"({_describe_frame_source(frame_source)})")
+
+        # -- species, then sex over exactly the same frames -----------------
+        species_of_track: Dict[int, str] = {}
+        for task in ("species", "sex"):
+            if task not in tasks:
+                continue
+            if cancel_check and cancel_check():
+                raise CancelledException("Classification cancelled")
+            species_of_track = self._run_voted_task(
+                config, target_folder, suffix, task, models[task],
+                by_track, voting_frames, resolver, unmatched, projection,
+                quorum, min_frames, frame_source, species_of_track, log_fn)
+            if progress_fn:
+                progress_fn(60 if task == "species" else 90)
+
+        self._apply_classification_results(
+            config, suffix, tasks, log_fn=log_fn)
+
+        _record_stage(config, "classification", suffix,
+                      row_count=len(by_track), log_fn=log_fn)
+        if progress_fn:
+            progress_fn(100)
+
+    def _apply_classification_results(self, config: Dict[str, Any],
+                                      modality: str, tasks: Sequence[str],
+                                      log_fn=None) -> None:
+        """Project stored results onto the fields everything else reads.
+
+        Optional, because the results are complete in ``classification.gpkg``
+        either way — this is what makes them visible to the exporters, the
+        layers, the analytics and the labelling tool.
+        """
+        from .core import apply_results
+
+        if not config.get("classification_write_results", True):
+            if log_fn:
+                log_fn("Results kept in the classification store only — "
+                       "'Write results into tracks and detections' is off.")
+            return
+
+        counts = apply_results.apply_all(
+            config["target_folder"], modality,
+            config.get("classification_models") or {},
+            tasks=list(tasks),
+            overwrite_detections=bool(
+                config.get("classification_overwrite_species", False)),
+            log_fn=log_fn)
+        if log_fn and not any(counts.values()):
+            log_fn("Nothing to apply: the stored results already match the "
+                   "tracks and detections.")
+
+    def run_life_stage(self, config: Dict[str, Any], progress_fn=None,
+                       log_fn=None, cancel_check=None):
+        """Flag juveniles by body size — step C4.
+
+        Appearance cannot separate a juvenile from an adult female at survey
+        resolution, which is why the sex classifier's second class is
+        ``female_juvenile``. Size can, within one flight: a juvenile sits far
+        below its cohort with a clear gap to the next animal.
+
+        Needs no models and no embeddings — only tracks, and geo-referencing
+        if the metric areas are to be used.
+        """
+        from .core import classification_store, life_stage, track_store
+
+        camera = config.get("classification_camera", "T")
+        suffix = "t" if camera == "T" else "w"
+        camera_name = "Thermal" if camera == "T" else "RGB"
+        target_folder = config["target_folder"]
+
+        rows = track_store.load_pixel_tracks(target_folder, suffix)
+        if not rows:
+            raise ValueError(
+                f"No {camera_name} tracks found. Run tracking for this camera "
+                "first.")
+
+        if progress_fn:
+            progress_fn(10)
+
+        # Orthorectified areas are metric and so the better cue; perspective
+        # pixels still work, because the comparison is only ever within one
+        # flight.
+        geo_rows = track_store.load_georeferenced(target_folder, suffix)
+        source = life_stage.AREA_PIXEL
+        areas = {}
+        if geo_rows:
+            geo_by_detection = {row["detection_id"]: row for row in geo_rows}
+            joined = [dict(row, **{k: geo_by_detection[row["detection_id"]][k]
+                                   for k in ("gx1", "gy1", "gx2", "gy2")})
+                      for row in rows
+                      if row["detection_id"] in geo_by_detection]
+            if joined:
+                areas = life_stage.track_areas(joined, geo=True)
+                source = life_stage.AREA_GEO
+        if not areas:
+            areas = life_stage.track_areas(rows, geo=False)
+
+        if log_fn:
+            log_fn(f"Measuring {len(areas)} individual(s) on the {source} "
+                   "boxes")
+        if progress_fn:
+            progress_fn(40)
+
+        if cancel_check and cancel_check():
+            raise CancelledException("Life stage cancelled")
+
+        settings = life_stage.Config(
+            z_threshold=float(config.get("life_stage_z", -2.0)),
+            iqr_factor=float(config.get("life_stage_iqr_factor", 2.0)),
+            min_individuals=int(config.get("life_stage_min_individuals", 4)))
+
+        # A male was marked by his antlers, not his size, so he is an adult
+        # whatever his box area says.
+        males = [row["track_id"] for row in
+                 classification_store.track_predictions(
+                     target_folder, suffix, "sex")
+                 if row["label"].lower() == "male"]
+
+        found = life_stage.assess(areas, settings, adults=males)
+        if log_fn:
+            log_fn(life_stage.explain(found, settings, source))
+
+        if not found:
+            if progress_fn:
+                progress_fn(100)
+            return
+
+        ratios = life_stage.cohort_ratio(found)
+        classification_store.record_track_predictions(
+            target_folder, suffix, classification_store.LIFE_STAGE,
+            [{
+                "track_id": item.track_id, "label": item.label,
+                # Size is one measurement per animal, not a vote — recorded as
+                # a unanimous call of one so the table stays uniform.
+                "votes": 1, "n": 1, "fraction": 1.0,
+                "modality_in": source, "model": "box-area",
+                "evidence": {
+                    "area": item.area, "z": item.z, "gap": item.gap,
+                    "cohort_ratio": ratios.get(item.track_id),
+                    "frames": item.frames, "source": source,
+                    "low_outlier": item.low_outlier,
+                },
+            } for item in found], log_fn=log_fn)
+
+        self._apply_classification_results(
+            config, suffix, [classification_store.LIFE_STAGE], log_fn=log_fn)
+
+        _record_stage(config, "life_stage", suffix,
+                      row_count=len(found), log_fn=log_fn)
+        if progress_fn:
+            progress_fn(100)
+
+    def _run_head(self, config, target_folder, suffix, task, spec,
+                  detection_ids, resolver, unmatched, projection, log_fn):
+        """Run one per-frame head and record its output. Returns its labels."""
+        from .core import classification_store
+
+        modality_in = spec.get("modality", "matched")
+        head, _dim = self._open_head(config, task, spec, modality_in,
+                                     projection, log_fn)
+
+        usable, features = [], []
+        for detection_id in detection_ids:
+            vector = resolver.resolve(detection_id, modality_in, unmatched)
+            if vector is None:
+                continue
+            usable.append(detection_id)
+            features.append(vector)
+
+        if not usable:
+            if log_fn:
+                log_fn(f"No features available for '{task}' — nothing to do")
+            return {}
+
+        calls = head.predict(features)
+        classes = head.classes
+        predictions, labels = [], {}
+        for detection_id, (index, probability) in zip(usable, calls):
+            label = classes[index] if index < len(classes) else str(index)
+            labels[detection_id] = label
+            predictions.append({
+                "detection_id": detection_id, "label": label,
+                "class_index": index, "prob": probability,
+                "modality_in": modality_in,
+                "model": os.path.basename(head.path),
+            })
+
+        classification_store.record_frame_predictions(
+            target_folder, suffix, task, predictions, log_fn=log_fn)
+
+        if log_fn:
+            counts: Dict[str, int] = {}
+            for label in labels.values():
+                counts[label] = counts.get(label, 0) + 1
+            summary = ", ".join(f"{n} {name}" for name, n in
+                                sorted(counts.items(), key=lambda x: -x[1]))
+            skipped = len(detection_ids) - len(usable)
+            note = f"; {skipped} skipped for want of features" if skipped else ""
+            log_fn(f"{task}: {summary}{note}")
+        return labels
+
+    def _run_voted_task(self, config, target_folder, suffix, task, spec,
+                        by_track, voting_frames, resolver, unmatched,
+                        projection, quorum, min_frames, frame_source,
+                        species_of_track, log_fn):
+        """Run a per-frame head and aggregate it per track by quorum vote."""
+        from .core import classification, classification_store
+
+        modality_in = spec.get("modality", "matched")
+        frame_rows, track_rows = [], []
+        resolved_species = dict(species_of_track)
+
+        # Sex is chosen per species, so its heads are opened lazily and cached
+        # — a flight with three species uses three different classifiers.
+        heads: Dict[str, Any] = {}
+
+        for track_id, members in sorted(by_track.items()):
+            chosen = voting_frames.get(track_id, [])
+            if not chosen:
+                continue
+
+            key = ""
+            if task == "sex":
+                key = resolved_species.get(track_id, "")
+                per_species = (spec.get("species") or {}).get(key)
+                if per_species is None or per_species.get("model",
+                                                          "off") == "off":
+                    continue    # no sex classifier configured for this species
+                spec_for_track = dict(spec, **per_species)
+            else:
+                spec_for_track = spec
+
+            if key not in heads:
+                heads[key] = self._open_head(
+                    config, task, spec_for_track, modality_in, projection,
+                    log_fn)
+            head, _dim = heads[key]
+
+            usable, features = [], []
+            for detection_id in chosen:
+                vector = resolver.resolve(detection_id, modality_in, unmatched)
+                if vector is None:
+                    continue
+                usable.append(detection_id)
+                features.append(vector)
+            if not usable:
+                continue
+
+            calls = head.predict(features)
+            classes = head.classes
+            per_frame = []
+            for detection_id, (index, probability) in zip(usable, calls):
+                label = classes[index] if index < len(classes) else str(index)
+                per_frame.append((index, label))
+                frame_rows.append({
+                    "detection_id": detection_id, "label": label,
+                    "class_index": index, "prob": probability,
+                    "modality_in": modality_in,
+                    "model": os.path.basename(head.path),
+                })
+
+            vote = classification.quorum_vote(per_frame, quorum, min_frames)
+            if vote is None:
+                # Abstain on the *call*, never on the animal: the track keeps
+                # its place in the census with the attribute left unknown.
+                continue
+            if task == "species":
+                resolved_species[track_id] = vote.label
+            track_rows.append({
+                "track_id": track_id, "label": vote.label,
+                "votes": vote.votes, "n": vote.n, "fraction": vote.fraction,
+                "modality_in": modality_in,
+                "model": os.path.basename(head.path),
+                "evidence": {"frames": frame_source,
+                             "class_index": vote.class_index},
+            })
+
+        classification_store.record_frame_predictions(
+            target_folder, suffix, task, frame_rows)
+        classification_store.record_track_predictions(
+            target_folder, suffix, task, track_rows, log_fn=log_fn)
+
+        if log_fn:
+            counts: Dict[str, int] = {}
+            for row in track_rows:
+                counts[row["label"]] = counts.get(row["label"], 0) + 1
+            summary = ", ".join(f"{n} {name}" for name, n in
+                                sorted(counts.items(), key=lambda x: -x[1]))
+            undecided = len(by_track) - len(track_rows)
+            note = (f"; {undecided} track(s) left undecided"
+                    if undecided else "")
+            log_fn(f"{task}: {summary or 'nothing called'}{note}")
+        return resolved_species
+
+    def _open_head(self, config, task, spec, modality_in, projection,
+                   log_fn=None):
+        """Load the head configured for *task*, downloading a default if needed."""
+        from .core import classification, hf_access
+
+        models_dir = self._get_default_model_dir()
+        source = spec.get("model", "default")
+
+        if source == "custom":
+            path = (spec.get("path") or "").strip()
+            if not path:
+                raise ValueError(
+                    f"The {task} classifier is set to a custom model but no "
+                    "file was chosen.")
+            if not os.path.isfile(path):
+                raise FileNotFoundError(f"{task} classifier not found: {path}")
+        else:
+            repo = hf_access.default_head_repo(task)
+            if not repo:
+                raise ValueError(
+                    f"There is no default {task} classifier yet. Choose a "
+                    "custom model in the Classification tab, or switch this "
+                    "task off.")
+            path = hf_access.head_local_path(
+                models_dir, task, projection, modality_in)
+            if not os.path.isfile(path):
+                path = self._download_head(
+                    repo, task, projection, modality_in, path,
+                    config.get("hf_token", ""), log_fn)
+
+        dim = hf_access.feature_dim(
+            modality_in, int(config.get("classification_backbone_dim",
+                                        hf_access.BACKBONE_DIM)))
+        return classification.Head(path, feature_dim=dim, log_fn=log_fn), dim
+
+    @staticmethod
+    def _download_head(repo, task, projection, modality_in, destination,
+                       token, log_fn=None):
+        """Fetch a published head into the shared models folder."""
+        from .core import hf_access
+
+        try:
+            from huggingface_hub import hf_hub_download
+        except ImportError as exc:
+            raise RuntimeError(
+                "huggingface_hub is not installed. Install the Classification "
+                "dependencies from the Dependency Manager.") from exc
+
+        remote = hf_access.head_repo_path(task, projection, modality_in)
+        if log_fn:
+            log_fn(f"Downloading {repo}/{remote} …")
+        os.makedirs(os.path.dirname(destination), exist_ok=True)
+        try:
+            # nosec B615 — deliberately unpinned, for the same reason as the
+            # backbone: the repository is user-overridable, so a hardcoded
+            # revision would be wrong for a custom head. Reproducibility comes
+            # from the model file itself, which is recorded with every
+            # prediction.
+            fetched = hf_hub_download(  # nosec B615
+                repo_id=repo, filename=remote, token=token or None,
+                local_dir=os.path.dirname(os.path.dirname(destination)))
+        except Exception as exc:
+            raise RuntimeError(
+                f"Could not download the {task} classifier "
+                f"({repo}/{remote}): {exc}") from exc
+        if os.path.abspath(fetched) != os.path.abspath(destination):
+            os.makedirs(os.path.dirname(destination), exist_ok=True)
+            shutil.copyfile(fetched, destination)
+        return destination
+
+    @staticmethod
+    def _stored_occlusion(target_folder: str, modality: str) -> Dict[int, Any]:
+        """Occlusion values already on the detections.
+
+        This is what the labelling tool writes, and it is the second source of
+        frame selection: a hand annotation outranks a 78 %-accurate head.
+        """
+        from .core import store
+
+        path = store.stage_path(target_folder, store.DETECTIONS, modality)
+        if not os.path.isfile(path):
+            return {}
+        conn = store.open_store(path, store.DETECTIONS, modality)
+        try:
+            found = {}
+            for row in conn.execute(
+                    "SELECT detection_id, attributes FROM detections "
+                    "WHERE attributes IS NOT NULL AND attributes <> ''"):
+                try:
+                    attributes = json.loads(row["attributes"])
+                except (ValueError, TypeError):
+                    continue
+                if isinstance(attributes, dict) and "occlusion" in attributes:
+                    found[int(row["detection_id"])] = attributes["occlusion"]
+            return found
+        finally:
+            conn.close()
+
+    def _thermal_anchor_sizes(self, config: Dict[str, Any],
+                              target_folder: str, camera_suffix: str,
+                              log_fn=None) -> Dict[int, tuple]:
+        """RGB crop sizes taken from each detection's thermal partner.
+
+        The thermal box is the looser of the two and so more reliably encloses
+        the whole animal, antlers included. Only the *crop* is affected —
+        nothing rewrites the stored detections, so geo-referencing and tracking
+        stay valid.
+
+        Empty unless this is the RGB modality, the option is on, and a matching
+        run exists.
+        """
+        from .core import (classification, match_store, track_matching,
+                           track_store)
+
+        if camera_suffix != "w":
+            return {}
+        if not config.get("match_thermal_anchored", True):
+            return {}
+
+        run = match_store.active_run(target_folder)
+        if run is None:
+            return {}
+
+        affine = track_matching.Affine.from_json(run.get("affine"))
+        inverse = affine.inverse_scale()
+        partners = match_store.partner_detections(target_folder, "w")
+        if not partners:
+            return {}
+
+        thermal = {row["detection_id"]: row for row
+                   in track_store.load_pixel_tracks(target_folder, "t")}
+
+        sizes = {}
+        for detection_w, detection_t in partners.items():
+            box = thermal.get(detection_t)
+            if box is None:
+                continue
+            sizes[detection_w] = classification.anchored_size(
+                (box["x1"], box["y1"], box["x2"], box["y2"]), inverse)
+
+        if log_fn and sizes:
+            log_fn(f"{len(sizes)} RGB crop(s) sized from their thermal partner")
+        return sizes
+
+    @staticmethod
+    def _read_frame_image(frames_folder: str, imagefile: str, frame: int):
+        """Read a frame image, or ``None`` when it is not on disk."""
+        import cv2
+
+        name = imagefile or f"frame_{frame:06d}.jpg"
+        path = os.path.join(frames_folder, name)
+        if not os.path.isfile(path):
+            return None
+        image = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+        if image is None:
+            return None
+        # cv2 reads BGR; the backbone's processor expects RGB. cvtColor rather
+        # than a ``[:, :, ::-1]`` slice, which leaves a negative stride that
+        # cv2.resize then refuses.
+        if image.ndim == 3 and image.shape[2] == 3:
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        elif image.ndim == 3 and image.shape[2] == 4:
+            image = cv2.cvtColor(image, cv2.COLOR_BGRA2RGB)
+        return image
+
+    @staticmethod
+    def _load_pose_images(target_folder: str, camera_suffix: str) -> list:
+        """The ``images`` array of a modality's poses file."""
+        poses_file = os.path.join(target_folder, f"poses_{camera_suffix}.json")
+        if not os.path.exists(poses_file):
+            raise FileNotFoundError(
+                f"poses_{camera_suffix}.json not found — run frame extraction "
+                f"for this camera first.")
+        with open(poses_file, "r", encoding="utf-8") as handle:
+            return json.load(handle).get("images", [])
+
+    @staticmethod
+    def _frame_size(images: list):
+        """``(width, height)`` of the first pose image that reports one."""
+        for image in images:
+            width = image.get("width") or image.get("imagewidth")
+            height = image.get("height") or image.get("imageheight")
+            if width and height:
+                return (float(width), float(height))
+        return None
 
     def run_track_perpendicular(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Calculate perpendicular distances from the last bounding box of each track to the flight route.

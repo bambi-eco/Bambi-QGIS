@@ -111,6 +111,41 @@ pip install fiona==1.10.1
 pip install simplekml==1.3.6
 ```
 
+### Optional: Classification
+
+The [classification steps](pipeline.md#a3-classification) — occlusion, species and sex — need:
+
+```bash
+pip install "transformers>=4.56.0" huggingface-hub
+```
+
+DINOv3 support arrived in transformers 4.56.0; anything older cannot load the model these classifiers read.
+
+#### Access to the DINOv3 model
+
+The classifiers do not look at images directly. They read features produced by Meta's **DINOv3 ViT-H+**, which is a *gated* model on Hugging Face — access is granted per person, and it is not ours to pass on. Once:
+
+1. Open [facebook/dinov3-vith16plus-pretrain-lvd1689m](https://huggingface.co/facebook/dinov3-vith16plus-pretrain-lvd1689m) and accept the conditions.
+2. Create a token with **read** permission under [Settings → Access Tokens](https://huggingface.co/settings/tokens).
+3. Paste it into **Configuration → Classification** and press **Check access**.
+
+The token is stored in your QGIS settings rather than in the project file — a project gets shared, and a credential should not travel with it. If you already ran `hf auth login`, or have `HF_TOKEN` set in your environment, leave the field empty and that is used instead.
+
+**Check access** answers before a long run starts, which is the point: a gated model that refuses to download three steps into a flight is the most likely thing to go wrong here.
+
+#### What gets downloaded, and where
+
+Everything lands in the same shared folder as the detection weights — `bambi_deps/models/` inside your QGIS profile — so it is paid for once, not once per flight:
+
+| | Size | Notes |
+|---|---|---|
+| DINOv3 backbone | ~3.3 GB | downloaded on the first embedding run |
+| Classifier heads | ~3–6 MB each | downloaded as each is first used |
+
+The backbone is large enough to be worth a GPU: on CPU expect minutes per hundred crops. See *Optional: AI GPU support* below.
+
+To pin a specific revision of the backbone rather than whatever its main branch holds, append `@` and a commit hash to the model name in the Classification tab.
+
 ### Optional: AI GPU support
 
 By default, AI model inference is CPU-bound. To run e.g. detection on your GPU, re-install PyTorch with bindings suitable for your GPU. For Nvidia CUDA 12.1+ (use `nvidia-smi` to check compatible CUDA versions):

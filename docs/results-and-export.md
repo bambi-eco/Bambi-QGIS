@@ -26,10 +26,18 @@ Each flight's target folder contains:
         fov.gpkg
         labels.gpkg
         segmentation.gpkg
+        classification.gpkg   embedding runs, per-frame and per-animal calls
     bambi_w/                  RGB, same set
+    matches.gpkg              which thermal and RGB track are the same animal
     frames_t/  frames_w/      extracted frames (unchanged)
+    embeddings_t/ …           feature vectors, one file per frame
     poses_t.json …            camera poses (unchanged)
 ```
+
+`matches.gpkg` sits beside `project.gpkg` rather than under one camera, because
+a match is a statement about both at once — filing it under one would make that
+copy authoritative by accident, and resetting that camera would take the other's
+matches with it.
 
 These are ordinary GeoPackages: open one from the QGIS **Browser** panel to
 look at a table, or delete a file to make that step run again from scratch.
@@ -175,11 +183,54 @@ keeps the raw class it was reported with, so correcting a mapping never means
 running the detector again. The boxes do not move, so geo-referencing and
 tracking stay valid; only the species-dependent analytics need re-running.
 
+### Classification results, and how they reach everything else
+
+The [classifiers](pipeline.md#a3-classification) record their answers in
+`classification.gpkg` with the evidence behind each one — the model used, the
+per-frame probability, and the vote margin per animal. Nothing else in the
+plugin reads that file, so a further step copies the answers onto the animals
+themselves:
+
+| Result | Written to |
+|--------|------------|
+| occlusion, per frame | the detection's `occlusion` attribute |
+| species, per animal | the track's species **and** its detections' |
+| sex, per animal | the track's `sex` attribute |
+| life stage, per animal | the track's `age` attribute |
+
+which is what makes them visible to the exports, the map layers, the survey
+analytics and the labelling tool without any of those needing to know
+classification exists. Species is written at both levels because the exports
+and the analytics filter on the *detection's* species; the track carries the
+individual's answer, and the detections carry it so the existing queries find
+it.
+
+Three things this never does:
+
+- **It never changes a track you annotated by hand.** A labelling-tool track
+  keeps everything you gave it.
+- **It never overwrites a species the detector itself identified** — only
+  animals still recorded as `animal` are filled in, so a class mapping you
+  configured is not quietly undone. There is an option to let the classifier
+  win everywhere if you want that.
+- **It never becomes the only copy.** `classification.gpkg` remains the record,
+  so applying the results again is always safe. That matters after re-applying
+  a detector class mapping, which resets the species on the detections: one
+  click of **→ Apply Results** puts the classifications back, rather than
+  re-running anything.
+
 ### Enums and custom fields
 
 An **enum** is a reusable list of values — `sex`, `age` and `occlusion` are
 ordinary enums you can extend. Values keep their identity when renamed, so
 fixing a label never orphans the data using it.
+
+> **Changed in 6.1.** New projects seed `occlusion` as `clear` / `occluded`,
+> matching what the occlusion classifier reports so that predictions need no
+> translation. Projects created earlier keep the values they have — enum ids
+> are append-only and are never renumbered — and a classifier is pointed at
+> them through its label mapping. Migrating a 5.x flight appends any level it
+> carries (`none`, `partially`, `fully`) rather than dropping it.
 
 A **custom field** adds an attribute to detections, tracks, frames or the
 project. Enum-typed fields are picked from a list, which is how typos are kept

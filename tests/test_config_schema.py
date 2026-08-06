@@ -69,6 +69,53 @@ class TestCheckSchema:
         assert "mismatch" in cs.check_schema()
 
 
+class TestJsonRole:
+    """The ``json`` role carries structured settings (a table or a dialog)
+    through a plain string entry, so the schema stays the single description of
+    what a project saves instead of such settings drifting into hand-written
+    save/load code."""
+
+    def test_json_bindings_use_a_string_entry(self):
+        kinds = {entry.key: entry.kind for entry in cs.CONFIG_ENTRIES}
+        for key, (_attr, role) in cs.WIDGET_BINDINGS.items():
+            if role == "json":
+                assert kinds[key] == "str", key
+
+    def test_rejects_a_json_binding_on_a_typed_entry(self, monkeypatch):
+        # A json binding on anything but ``str`` would coerce the payload to a
+        # number or a bool on save, silently destroying it.
+        entries = [e for e in cs.CONFIG_ENTRIES if e.key != "Detection/Confidence"]
+        entries.append(cs.ConfigEntry("Detection/Confidence", "double", 0.5))
+        bindings = dict(cs.WIDGET_BINDINGS)
+        bindings["Detection/Confidence"] = ("confidence_spin", "json")
+        monkeypatch.setattr(cs, "CONFIG_ENTRIES", entries)
+        monkeypatch.setattr(cs, "WIDGET_BINDINGS", bindings)
+
+        problem = cs.check_schema()
+        assert problem and "json role needs a 'str' entry" in problem
+
+    def test_the_classifier_mapping_is_bound_as_json(self):
+        attr, role = cs.WIDGET_BINDINGS["Classification/Models"]
+        assert role == "json"
+        assert attr == "_classification_models"
+
+
+class TestClassificationEntries:
+    def test_token_is_never_part_of_the_saved_configuration(self):
+        # The token is a user credential and the project file gets shared, so
+        # it must not appear in the schema under any name.
+        for key in cs.CONFIG_KEYS:
+            assert "token" not in key.lower(), key
+
+    def test_backbone_defaults_to_empty_so_the_code_default_wins(self):
+        entry = next(e for e in cs.CONFIG_ENTRIES
+                     if e.key == "Classification/Backbone")
+        assert entry.kind == "str"
+        # An empty value means "use core.hf_access.DEFAULT_BACKBONE", so the
+        # default can move without rewriting every saved project.
+        assert entry.default is None
+
+
 def _sample_values():
     """A representative value for every schema key, exercising each kind."""
     values = {}
