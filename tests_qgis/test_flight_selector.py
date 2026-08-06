@@ -699,3 +699,23 @@ def test_the_confirmation_lists_what_was_found(dock, two_flights):
     found = flights.describe_existing(a)
     assert found["is_flight"] is True
     assert "tracks (thermal)" in found["results"]
+
+
+def test_the_flight_box_explains_the_folder_rule(dock):
+    """The one-folder-one-flight rule is enforced but not obvious, so it is
+    stated where a flight is added rather than only in the refusal."""
+    from qgis.PyQt.QtWidgets import QGroupBox, QLabel
+
+    box = next(g for g in dock.findChildren(QGroupBox) if g.title() == "Flight")
+    texts = [label.text() for label in box.findChildren(QLabel)]
+    assert any("target folder" in text for text in texts)
+
+
+def test_the_flight_info_wraps(dock):
+    """A label that does not wrap widens every tab."""
+    from qgis.PyQt.QtWidgets import QGroupBox, QLabel
+
+    box = next(g for g in dock.findChildren(QGroupBox) if g.title() == "Flight")
+    for label in box.findChildren(QLabel):
+        if "target folder" in label.text():
+            assert label.wordWrap() is True

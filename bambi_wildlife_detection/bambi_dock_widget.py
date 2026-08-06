@@ -418,6 +418,16 @@ class BambiDockWidget(QDockWidget):
         self.flight_remove_btn.clicked.connect(self.remove_flight)
         flight_row.addWidget(self.flight_remove_btn)
         flight_box.addLayout(flight_row)
+
+        flight_info = QLabel(
+            "Adding a new flight requires defining the output target folder, "
+            "to avoid multiple use. A folder that has already been processed "
+            "is added back with its stored configuration."
+        )
+        flight_info.setWordWrap(True)
+        flight_info.setStyleSheet("color: gray; font-size: 10px;")
+        flight_box.addWidget(flight_info)
+
         input_layout.addWidget(flight_group)
 
         # --- Input mode toggle ---
