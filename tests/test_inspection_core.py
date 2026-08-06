@@ -7,54 +7,66 @@ import sys
 
 import pytest
 
-from bambi_wildlife_detection.core import inspection
+from bambi_wildlife_detection.core import (
+    detection_store, inspection, track_store)
 from tests.fakes import install_fake_render_stack, make_module
+
+
+def _detected(root, tracked=False):
+    """Two detections in the store, optionally grouped into one track."""
+    detection_store.record_detections(root, "t", [
+        {"frame": 0, "x1": 1.0, "y1": 2.0, "x2": 3.0, "y2": 4.0,
+         "confidence": 0.9, "source_class": "0"},
+        {"frame": 1, "x1": 5.0, "y1": 6.0, "x2": 7.0, "y2": 8.0,
+         "confidence": 0.8, "source_class": "0"},
+    ])
+    ids = [d["detection_id"] for d in track_store.load_detections(root, "t")]
+    if tracked:
+        track_store.record_tracks(root, "t", [
+            {"track_id": 7, "detection_id": ids[0]},
+            {"track_id": 7, "detection_id": ids[1]},
+        ])
+    return ids
+
 
 IMG_W, IMG_H = 640, 512
 ORIGIN = (1000.0, 2000.0, 300.0)
 
 
-class TestLoadGeorefTrackDets:
-    def _write(self, tmp_path, fname, lines):
-        folder = tmp_path / "tracks_t"
-        folder.mkdir(exist_ok=True)
-        (folder / fname).write_text("\n".join(lines) + "\n")
-
-    def test_filters_by_track_id_and_sorts(self, tmp_path):
-        self._write(tmp_path, "tracks.csv", [
-            "# header",
-            "5,2,0,0,0,1,1,1,0.9,1,0",
-            "3,2,0,0,0,1,1,1,0.8,1,1",
-            "4,9,0,0,0,1,1,1,0.7,2,0",
-        ])
-        result = inspection.load_georef_track_dets(str(tmp_path), 2, "t")
-        assert [d["frame"] for d in result] == [3, 5]
-        assert result[0]["interpolated"] == 1
-        assert result[1]["confidence"] == 0.9
-
-    def test_skips_pixel_csvs(self, tmp_path):
-        self._write(tmp_path, "tracks_pixel.csv", ["0,2,0,0,0,1,1,1,0.9,1"])
-        assert inspection.load_georef_track_dets(str(tmp_path), 2, "t") == []
-
-    def test_missing_folder(self, tmp_path):
-        assert inspection.load_georef_track_dets(str(tmp_path), 1, "w") == []
-
-
 class TestSimpleLoaders:
     def test_load_pixel_detections(self, tmp_path):
-        f = tmp_path / "detections.txt"
-        f.write_text("# h\n0 1 2 3 4 0.9 2\n1 5 6 7 8 0.8\n")
-        result = inspection.load_pixel_detections(str(f))
-        assert result[0]["class_id"] == 2
-        assert result[1]["class_id"] == 0    # missing class defaults to 0
-        assert inspection.load_pixel_detections(str(tmp_path / "x")) == []
+        root = str(tmp_path)
+        _detected(root)
+        result = inspection.load_pixel_detections(root, "t")
+        assert [d["frame"] for d in result] == [0, 1]
+        assert result[0]["x1"] == 1.0
+        # The detection_id is what the layer was built from, so the clicked
+        # box needs no matching back by confidence (§1.2a).
+        assert result[0]["detection_id"]
+
+    def test_pixel_detections_ignore_the_text_file(self, tmp_path):
+        det = tmp_path / "detections_t"
+        det.mkdir()
+        (det / "detections.txt").write_text("0 1 2 3 4 0.9 2")
+        assert inspection.load_pixel_detections(str(tmp_path), "t") == []
+
+    def test_pixel_detections_for_an_unknown_modality(self, tmp_path):
+        assert inspection.load_pixel_detections(str(tmp_path), "x") == []
 
     def test_load_pixel_tracks(self, tmp_path):
-        f = tmp_path / "tracks_pixel.csv"
-        f.write_text("# h\n0,7,1,2,3,4,0.9,1\n1,7,5,6,7,8,0.8,1\n")
-        result = inspection.load_pixel_tracks(str(f))
-        assert len(result[7]) == 2
-        assert result[7][0]["conf"] == 0.9
+        root = str(tmp_path)
+        _detected(root, tracked=True)
+        result = inspection.load_pixel_tracks(root, "t")
+        assert len(result) == 1
+        boxes = list(result.values())[0]
+        assert [b["frame"] for b in boxes] == [0, 1]
+        assert boxes[0]["conf"] == 0.9
+
+    def test_pixel_tracks_ignore_the_csv(self, tmp_path):
+        trk = tmp_path / "tracks_t"
+        trk.mkdir()
+        (trk / "tracks_pixel.csv").write_text("0,7,1,2,3,4,0.9,1")
+        assert inspection.load_pixel_tracks(str(tmp_path), "t") == {}
 
     def test_resolve_image_paths(self, tmp_path):
         (tmp_path / "frames_t").mkdir()
@@ -122,25 +134,6 @@ class TestBuildFrames:
         assert frames[0]["boxes_green"] == [(1, 2, 3, 4, 0.9, 1, 1)]
         assert frames[0]["boxes_blue"] == [(9, 9, 10, 10, 0.5, 2)]
         assert frames[0]["boxes_modality"] == "t"
-
-    def test_from_georef_matches_by_confidence_and_class(self, tmp_path):
-        georef_dets = [
-            {"frame": 0, "confidence": 0.9, "class_id": 1, "interpolated": 0},
-            {"frame": 1, "confidence": 0.9, "class_id": 1, "interpolated": 1},
-        ]
-        pixel_dets = [
-            {"frame": 0, "x1": 1, "y1": 1, "x2": 2, "y2": 2,
-             "confidence": 0.9001, "class_id": 1},
-            {"frame": 0, "x1": 5, "y1": 5, "x2": 6, "y2": 6,
-             "confidence": 0.5, "class_id": 1},
-        ]
-        frames = inspection.build_frames_from_georef(
-            georef_dets, pixel_dets, str(tmp_path), "w")
-        # frame 0: matched within confidence tolerance, other box is blue
-        assert frames[0]["boxes_green"][0][:4] == (1, 1, 2, 2)
-        assert frames[0]["boxes_blue"][0][:4] == (5, 5, 6, 6)
-        # frame 1: no pixel match -> interpolated (copied) box, dashed flag
-        assert frames[1]["boxes_green"][0][6] == 1
 
 
 @pytest.fixture

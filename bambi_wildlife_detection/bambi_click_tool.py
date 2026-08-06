@@ -199,8 +199,7 @@ class BambiClickTool(QgsMapToolIdentify):
         det_conf = float(feature["confidence"])
         det_class = int(feature["class_id"])
 
-        det_file = os.path.join(target_folder, f"detections_{boxes_modality}", "detections.txt")
-        all_dets = self._load_pixel_detections(det_file)
+        all_dets = self._load_pixel_detections(target_folder, boxes_modality)
 
         same_frame = [d for d in all_dets if d["frame"] == frame_idx]
 
@@ -277,8 +276,8 @@ class BambiClickTool(QgsMapToolIdentify):
                     target_folder, dem_path, correction_path
                 )
 
-            det_file = os.path.join(target_folder, f"detections_{boxes_modality}", "detections.txt")
-            all_dets = self._load_pixel_detections(det_file)
+            all_dets = self._load_pixel_detections(
+                target_folder, boxes_modality)
             same_frame = [d for d in all_dets if d["frame"] == frame_idx]
 
             # All detections on this frame are shown in green — there is no
@@ -372,40 +371,27 @@ class BambiClickTool(QgsMapToolIdentify):
             except (TypeError, ValueError):
                 pass
 
-        # Load all pixel-space detections once — needed by both paths below.
-        det_file = os.path.join(target_folder, f"detections_{boxes_modality}", "detections.txt")
-        all_pixel_dets = self._load_pixel_detections(det_file)
+        # The store holds each track's boxes together with the detection they
+        # came from, so there is one path rather than a primary and a fallback
+        # that matched geo rows back to pixel rows by confidence and class.
+        all_tracks = self._load_pixel_tracks(target_folder, boxes_modality)
+        track_dets_pixel = sorted(
+            all_tracks.get(track_id, []), key=lambda d: d["frame"])
 
-        # --- Primary path: tracks_pixel.csv (built-in / BoxMOT trackers) ---
-        tracks_file = os.path.join(target_folder, f"tracks_{boxes_modality}", "tracks_pixel.csv")
-        track_dets_pixel = []
-        if os.path.isfile(tracks_file):
-            all_tracks = self._load_pixel_tracks(tracks_file)
-            track_dets_pixel = sorted(
-                all_tracks.get(track_id, []), key=lambda d: d["frame"]
+        if not track_dets_pixel:
+            QMessageBox.warning(
+                None,
+                "BAMBI Inspector",
+                f"No frame data found for track {track_id}.\n\n"
+                "The store holds no boxes for it. Re-run tracking, or use "
+                "'Migrate 5.x…' on the Input tab for an older project.",
             )
+            return
 
-        if track_dets_pixel:
-            frames = self._build_frames_from_pixel_tracks(
-                track_dets_pixel, all_tracks, track_id, target_folder, boxes_modality
-            )
-        else:
-            # --- Fallback: geo-referenced CSVs + detections.txt ---
-            # Used when pixel tracks don't exist (geo-referenced native tracker)
-            # or when the track_id is absent from tracks_pixel.csv.
-            georef_dets = self._load_georef_track_dets(target_folder, track_id, boxes_modality)
-            if not georef_dets:
-                QMessageBox.warning(
-                    None,
-                    "BAMBI Inspector",
-                    f"No frame data found for track {track_id}.\n\n"
-                    "Neither tracks_pixel.csv nor any geo-referenced CSV "
-                    "contains entries for this track.",
-                )
-                return
-            frames = self._build_frames_from_georef(
-                georef_dets, all_pixel_dets, target_folder, boxes_modality
-            )
+        frames = self._build_frames_from_pixel_tracks(
+            track_dets_pixel, all_tracks, track_id, target_folder,
+            boxes_modality
+        )
 
         if not frames:
             return
@@ -437,13 +423,6 @@ class BambiClickTool(QgsMapToolIdentify):
         """Build viewer frame list from pixel-space track data (core.inspection)."""
         return inspection.build_frames_from_pixel_tracks(
             track_dets, all_tracks, track_id, target_folder, boxes_modality)
-
-    def _build_frames_from_georef(
-        self, georef_dets, all_pixel_dets, target_folder, boxes_modality: str
-    ) -> List[dict]:
-        """Build viewer frame list from geo-referenced tracks (core.inspection)."""
-        return inspection.build_frames_from_georef(
-            georef_dets, all_pixel_dets, target_folder, boxes_modality)
 
     def _fill_interpolated_boxes(self, frames: List[dict]) -> None:
         inspection.fill_interpolated_boxes(frames)
@@ -528,16 +507,13 @@ class BambiClickTool(QgsMapToolIdentify):
     # Data loaders
     # ------------------------------------------------------------------
 
-    def _load_georef_track_dets(self, target_folder: str, track_id: int,
-                                camera_suffix: str = "t") -> List[dict]:
-        return inspection.load_georef_track_dets(
-            target_folder, track_id, camera_suffix)
+    def _load_pixel_detections(self, target_folder: str,
+                               modality: str) -> List[dict]:
+        return inspection.load_pixel_detections(target_folder, modality)
 
-    def _load_pixel_detections(self, det_file: str) -> List[dict]:
-        return inspection.load_pixel_detections(det_file)
-
-    def _load_pixel_tracks(self, tracks_file: str) -> Dict[int, List[dict]]:
-        return inspection.load_pixel_tracks(tracks_file)
+    def _load_pixel_tracks(self, target_folder: str,
+                           modality: str) -> Dict[int, List[dict]]:
+        return inspection.load_pixel_tracks(target_folder, modality)
 
     def _resolve_image_paths(self, target_folder: str, frame_idx: int) -> tuple:
         return inspection.resolve_image_paths(target_folder, frame_idx)

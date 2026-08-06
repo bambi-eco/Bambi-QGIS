@@ -41,22 +41,37 @@ def id_to_color(identifier, saturation=0.65, lightness=0.5):
 # Availability checks
 # ---------------------------------------------------------------------------
 
+def _has_stage(target, kind, suffix):
+    """True when a stage's store exists for this modality."""
+    from . import store
+
+    if suffix not in store.MODALITIES:
+        return False
+    return os.path.isfile(store.stage_path(target, kind, suffix))
+
+
 def pixel_tracks_available(target, suffix):
-    """True if any source :func:`load_pixel_tracks` could use is present:
-    a direct pixel-track CSV, or the detections + tracks.csv needed for the
-    geo-join / line-index fallbacks."""
-    for folder in (f"tracks_{suffix}", f"tracks_pixel_{suffix}"):
-        for fname in ("tracks_pixel_undistorted.csv", "tracks_pixel.csv"):
-            if os.path.exists(os.path.join(target, folder, fname)):
-                return True
-    return (os.path.exists(os.path.join(target, f"detections_{suffix}", "detections.txt"))
-            and os.path.exists(os.path.join(target, f"tracks_{suffix}", "tracks.csv")))  # noqa: W503, W504
+    """True when there are tracks to draw.
+
+    The overlay needs each box tied to a track id, which is what the store
+    records; the 5.x files could only be paired back together by guesswork
+    (§8.2), so they are not consulted.
+    """
+    from . import store
+
+    return _has_stage(target, store.TRACKS, suffix)
 
 
 def availability_warnings(params):
-    """Return a human-readable warning for every selected option whose
-    backing data is missing on disk. Loaders degrade gracefully (draw
-    nothing) when data is absent, so these are warnings, not errors."""
+    """A human-readable warning for every selected option with no data behind
+    it. The loaders draw nothing when data is absent, so these are warnings.
+
+    Overlay data comes from the store, so the warnings name the step to run
+    rather than a file to look for — a 5.x project has the files and still
+    cannot be drawn from them.
+    """
+    from . import store
+
     target = params["target"]
     labels = {"t": "Thermal", "w": "RGB"}
     warns = []
@@ -65,32 +80,33 @@ def availability_warnings(params):
         return os.path.exists(os.path.join(target, *parts))
 
     # ---- Video panels + their per-frame image source ------------------
-    for s in params["video_suffixes"]:
-        lbl = labels.get(s, s)
+    for s_ in params["video_suffixes"]:
+        lbl = labels.get(s_, s_)
         if params["source"] == "extracted":
-            if not exists(f"poses_{s}.json") or not exists(f"frames_{s}"):
+            if not exists(f"poses_{s_}.json") or not exists(f"frames_{s_}"):
                 warns.append(f"{lbl} video: extracted frames missing "
-                             f"(poses_{s}.json / frames_{s}/).")
+                             f"(poses_{s_}.json / frames_{s_}/).")
         elif params["ortho_kind"] == "alfs":
-            if not exists(f"alfs_{s}", "alfs.tif"):
+            if not exists(f"alfs_{s_}", "alfs.tif"):
                 warns.append(f"{lbl} video: ALFS orthophoto missing "
-                             f"(alfs_{s}/alfs.tif).")
+                             f"(alfs_{s_}/alfs.tif).")
         else:
-            if not exists(f"geotiffs_{s}"):
+            if not exists(f"geotiffs_{s_}"):
                 warns.append(f"{lbl} video: per-frame geotiffs missing "
-                             f"(geotiffs_{s}/).")
+                             f"(geotiffs_{s_}/).")
 
     # ---- Overlays (drawn only on extracted frames) --------------------
     if params["source"] == "extracted":
-        for s in params["video_suffixes"]:
-            lbl = labels.get(s, s)
+        for s_ in params["video_suffixes"]:
+            lbl = labels.get(s_, s_)
             if (params["overlay"] == "detections"
-                    and not exists(f"detections_{s}", "detections.txt")):  # noqa: W503, W504
-                warns.append(f"{lbl} detections overlay: "
-                             f"detections_{s}/detections.txt missing.")
+                    and not _has_stage(target, store.DETECTIONS, s_)):  # noqa: W503, W504
+                warns.append(f"{lbl} detections overlay: no detections "
+                             "stored — run 'Detect Animals'.")
             elif (params["overlay"] == "tracks"
-                  and not pixel_tracks_available(target, s)):  # noqa: W503, W504
-                warns.append(f"{lbl} tracks overlay: no track data found.")
+                  and not pixel_tracks_available(target, s_)):  # noqa: W503, W504
+                warns.append(f"{lbl} tracks overlay: no tracks stored — run "
+                             "'Track Animals'.")
 
     # ---- Map panel ----------------------------------------------------
     if params["map"]:
@@ -98,13 +114,14 @@ def availability_warnings(params):
         if params["map_flight"] and not exists(f"flight_route_{cam}", "camera_positions.geojson"):
             warns.append("Map flight path: "
                          f"flight_route_{cam}/camera_positions.geojson missing.")
-        if params["map_fov"] and not exists(f"fov_{cam}", "fov_polygons.txt"):
-            warns.append(f"Map field of view: fov_{cam}/fov_polygons.txt missing.")
-        if params["map_det"] and not exists(f"georeferenced_{cam}", "georeferenced.txt"):
-            warns.append("Map detections: "
-                         f"georeferenced_{cam}/georeferenced.txt missing.")
-        if params["map_trk"] and not exists(f"tracks_{cam}", "tracks.csv"):
-            warns.append(f"Map tracks: tracks_{cam}/tracks.csv missing.")
+        if params["map_fov"] and not _has_stage(target, store.FOV, cam):
+            warns.append("Map field of view: none stored — run 'Calculate "
+                         "Field of View'.")
+        if params["map_det"] and not _has_stage(target, store.GEOREFERENCED, cam):
+            warns.append("Map detections: none geo-referenced — run "
+                         "'Geo-Reference Detections'.")
+        if params["map_trk"] and not _has_stage(target, store.TRACKS, cam):
+            warns.append("Map tracks: no tracks stored — run 'Track Animals'.")
         if params["map_perp"] and not (
                 exists(f"flight_route_{cam}", f"perpendicular_{cam}.json")
                 or exists(f"flight_route_{cam}", "perpendicular.json")):  # noqa: W503, W504
@@ -115,14 +132,15 @@ def availability_warnings(params):
     if params["info"]:
         cam = params["info_camera"]
         lbl = labels.get(cam, cam)
-        if params["info_dets"] and not exists(f"detections_{cam}", "detections.txt"):
-            warns.append(f"Info panel detections ({lbl}): "
-                         f"detections_{cam}/detections.txt missing.")
+        if params["info_dets"] and not _has_stage(target, store.DETECTIONS, cam):
+            warns.append(f"Info panel detections ({lbl}): none stored — run "
+                         "'Detect Animals'.")
         if params["info_tracks"] and not pixel_tracks_available(target, cam):
-            warns.append(f"Info panel tracks ({lbl}): no track data found.")
-        if params["info_area"] and not exists(f"fov_{cam}", "fov_polygons.txt"):
-            warns.append(f"Info panel monitored area ({lbl}): "
-                         f"fov_{cam}/fov_polygons.txt missing.")
+            warns.append(f"Info panel tracks ({lbl}): no tracks stored — run "
+                         "'Track Animals'.")
+        if params["info_area"] and not _has_stage(target, store.FOV, cam):
+            warns.append(f"Info panel monitored area ({lbl}): none stored — "
+                         "run 'Calculate Field of View'.")
 
     return warns
 
@@ -147,128 +165,17 @@ def load_poses(target, suffix, log_fn: Optional[Callable[[str], None]] = None):
 
 
 def load_pixel_detections(target, suffix):
-    """frame -> list of (x1, y1, x2, y2, class_id)."""
-    path = os.path.join(target, f"detections_{suffix}", "detections.txt")
+    """frame -> list of (x1, y1, x2, y2, class_id) in extracted-frame pixels."""
+    from . import store, track_store
+
+    if not _has_stage(target, store.DETECTIONS, suffix):
+        return {}
     out = {}
-    if not os.path.exists(path):
-        return out
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            p = line.split()
-            if len(p) < 5:
-                continue
-            frame = int(float(p[0]))
-            out.setdefault(frame, []).append(
-                (float(p[1]), float(p[2]), float(p[3]), float(p[4]),
-                 p[6] if len(p) > 6 else "0"))
+    for row in track_store.load_detections(target, suffix):
+        out.setdefault(row["frame"], []).append(
+            (row["x1"], row["y1"], row["x2"], row["y2"],
+             str(row["species_id"])))
     return out
-
-
-def load_detection_rows(target, suffix):
-    """Ordered list of (frame, x1, y1, x2, y2) pixel detections, in file order."""
-    path = os.path.join(target, f"detections_{suffix}", "detections.txt")
-    rows = []
-    if not os.path.exists(path):
-        return rows
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            p = line.split()
-            if len(p) < 5:
-                continue
-            try:
-                rows.append((int(float(p[0])), float(p[1]), float(p[2]),
-                             float(p[3]), float(p[4])))
-            except ValueError:
-                continue
-    return rows
-
-
-def load_track_id_rows(target, suffix):
-    """Ordered list of (frame, track_id) from the track output, in file order,
-    excluding interpolated rows so it stays aligned with the detection file.
-
-    Prefers the pixel track CSV when present, else the geo-referenced
-    ``tracks.csv`` (our tracks are typically only geo-referenced)."""
-    for fname, interp_col in (("tracks_pixel.csv", 8), ("tracks.csv", 10)):
-        path = os.path.join(target, f"tracks_{suffix}", fname)
-        if not os.path.exists(path):
-            continue
-        rows = []
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                p = line.split(",")
-                if len(p) < 2:
-                    continue
-                try:
-                    frame = int(float(p[0]))
-                    tid = int(float(p[1]))
-                    interp = int(float(p[interp_col])) if len(p) > interp_col else 0
-                except (ValueError, IndexError):
-                    continue
-                if interp:
-                    continue
-                rows.append((frame, tid))
-        return rows
-    return []
-
-
-def load_georef_rows(target, suffix):
-    """Ordered list of (frame, x1, y1, x2, y2) geo detections, in file order.
-
-    Row format: idx frame x1 y1 z1 x2 y2 z2 conf cls."""
-    path = os.path.join(target, f"georeferenced_{suffix}", "georeferenced.txt")
-    rows = []
-    if not os.path.exists(path):
-        return rows
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            p = line.split()
-            if len(p) < 8:
-                continue
-            try:
-                rows.append((int(p[1]), float(p[2]), float(p[3]),
-                             float(p[5]), float(p[6])))
-            except (ValueError, IndexError):
-                continue
-    return rows
-
-
-def parse_pixel_tracks_csv(path, interp_col):
-    """frame -> list of (track_id, x1, y1, x2, y2) from a pixel MOT CSV."""
-    out = {}
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            p = line.split(",")
-            if len(p) < 6:
-                continue
-            try:
-                if len(p) > interp_col and int(float(p[interp_col])):
-                    continue
-                out.setdefault(int(float(p[0])), []).append(
-                    (int(float(p[1])), float(p[2]), float(p[3]),
-                     float(p[4]), float(p[5])))
-            except (ValueError, IndexError):
-                continue
-    return out
-
-
-def coord_key(coords):
-    return tuple(round(v, 3) for v in coords)
 
 
 def pixel_tracks_from_store(target, suffix):
@@ -292,154 +199,29 @@ def pixel_tracks_from_store(target, suffix):
 
 
 def load_pixel_tracks(target, suffix, log_fn: Optional[Callable[[str], None]] = None):
-    """frame -> list of (track_id, x1, y1, x2, y2) in extracted-frame pixel space.
+    """frame -> list of (track_id, x1, y1, x2, y2) in extracted-frame pixels.
 
-    Strategy, in order of reliability:
-    0. The 6.0 store, where membership is recorded as (track_id, detection_id)
-       and the answer is a join — no matching of any kind.
-    1. A pixel-space track CSV if one exists (exact boxes + ids).
-    2. Otherwise pair the geo-referenced tracks to the pixel detections by
-       matching geo coordinates through georeferenced.txt. This is order-
-       independent, so it is correct even when tracks.csv is re-sorted by
-       (frame, track_id) or contains interpolated rows.
-    3. As a last resort, pair strictly by line index (valid only when the
-       detection and track files share the same ordering, e.g. TRex import).
-
-    Steps 1–3 all reconstruct something the pipeline knew and threw away; they
-    remain only for projects with no store (EXCHANGE_FORMAT_PLAN.md §8.2).
+    A join: membership is recorded as (track_id, detection_id), so no pairing
+    of any kind is needed. This used to try three reconstructions below the
+    store — a pixel CSV, a geo-coordinate match through georeferenced.txt, and
+    finally a row-index match — each of which could silently mis-assign a box
+    to the wrong animal when the files were re-sorted or a detection was
+    dropped (§8.2).
     """
-    # 0. The store. Exact, and unaffected by dropped detections or re-sorting.
     stored = pixel_tracks_from_store(target, suffix)
-    if stored:
-        return stored
-
-    # 1. Direct pixel tracks. Prefer the undistorted file, which matches the
-    # extracted (undistorted) frames the overlay is drawn on; the plain
-    # tracks_pixel.csv is in raw video space for the TRex pipelines.
-    for folder in (f"tracks_{suffix}", f"tracks_pixel_{suffix}"):
-        for fname in ("tracks_pixel_undistorted.csv", "tracks_pixel.csv"):
-            path = os.path.join(target, folder, fname)
-            if os.path.exists(path):
-                return parse_pixel_tracks_csv(path, 8)
-
-    # 2. Geo-coordinate join.
-    out = pair_tracks_via_geo(target, suffix)
-    if out:
-        return out
-
-    # 3. Line-index fallback.
-    return pair_tracks_by_line_index(target, suffix, log_fn=log_fn)
-
-
-def pair_tracks_via_geo(target, suffix):
-    """Assign track ids to pixel detections by matching geo coordinates.
-
-    detections.txt and georeferenced.txt share the same per-frame ordering
-    (georeferenced is built from the detections in order), so the k-th pixel
-    box in a frame corresponds to the k-th geo box; that geo box's coordinates
-    then look up the track id in tracks.csv regardless of its row order."""
-    from collections import defaultdict
-
-    det_rows = load_detection_rows(target, suffix)
-    geo_rows = load_georef_rows(target, suffix)
-    if not det_rows or not geo_rows:
-        return {}
-
-    # Track id keyed by (frame, rounded geo box) from the geo tracks csv.
-    trk_lookup = {}
-    tpath = os.path.join(target, f"tracks_{suffix}", "tracks.csv")
-    if not os.path.exists(tpath):
-        return {}
-    with open(tpath, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            p = line.split(",")
-            if len(p) < 7:
-                continue
-            try:
-                if len(p) > 10 and int(float(p[10])):
-                    continue  # interpolated row, no detection
-                frame = int(float(p[0]))
-                tid = int(float(p[1]))
-                key = (frame, coord_key(
-                    (float(p[2]), float(p[3]), float(p[5]), float(p[6]))))
-            except (ValueError, IndexError):
-                continue
-            trk_lookup.setdefault(key, tid)
-    if not trk_lookup:
-        return {}
-
-    det_by_frame = defaultdict(list)
-    for (frame, x1, y1, x2, y2) in det_rows:
-        det_by_frame[frame].append((x1, y1, x2, y2))
-    geo_by_frame = defaultdict(list)
-    for (frame, x1, y1, x2, y2) in geo_rows:
-        geo_by_frame[frame].append((x1, y1, x2, y2))
-
-    out = {}
-    matched = 0
-    for frame, boxes in det_by_frame.items():
-        geos = geo_by_frame.get(frame, [])
-        if len(geos) != len(boxes):
-            continue  # cannot align this frame safely (dropped detections)
-        for box, geo in zip(boxes, geos):
-            tid = trk_lookup.get((frame, coord_key(geo)))
-            if tid is not None:
-                out.setdefault(frame, []).append((tid,) + box)
-                matched += 1
-    return out if matched else {}
-
-
-def pair_tracks_by_line_index(target, suffix,
-                              log_fn: Optional[Callable[[str], None]] = None):
-    """Pair pixel detections with track ids by shared line index (last resort)."""
-    det_rows = load_detection_rows(target, suffix)
-    id_rows = load_track_id_rows(target, suffix)
-    out = {}
-    if not det_rows or not id_rows:
-        return out
-    n = min(len(det_rows), len(id_rows))
-    skipped = 0
-    for i in range(n):
-        dframe, x1, y1, x2, y2 = det_rows[i]
-        tframe, tid = id_rows[i]
-        if tframe != dframe:
-            skipped += 1
-            continue
-        out.setdefault(dframe, []).append((tid, x1, y1, x2, y2))
-    if skipped and log_fn:
-        log_fn(
-            f"Tracks overlay ({suffix}): {skipped}/{n} rows skipped "
-            "(detection/track lines out of sync).")
-    return out
+    if not stored and log_fn:
+        log_fn("No tracks in the store for this camera. Run tracking, or use "
+               "'Migrate 5.x…' on the Input tab for an older project.")
+    return stored
 
 
 def load_fov_polygons(target, suffix):
     """frame -> list of (x, y). Geo coordinates in the data CRS."""
-    path = os.path.join(target, f"fov_{suffix}", "fov_polygons.txt")
-    out = {}
-    if not os.path.exists(path):
-        return out
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            p = line.split()
-            if len(p) < 2:
-                continue
-            frame = int(p[0])
-            n = int(p[1])
-            pts = []
-            for i in range(n):
-                idx = 2 + i * 3
-                if idx + 2 < len(p):
-                    pts.append((float(p[idx]), float(p[idx + 1])))
-            if len(pts) >= 3:
-                out[frame] = pts
-    return out
+    from . import fov_store
+
+    return {frame: [(x, y) for x, y, _z in points]
+            for frame, points in fov_store.load_fov(target, suffix).items()
+            if len(points) >= 3}
 
 
 def load_perpendicular(target, suffix):
@@ -490,62 +272,41 @@ def load_camera_positions(target, suffix):
 
 
 def load_geo_tracks(target, suffix):
-    """frame -> list of {tid, x1, y1, x2, y2} from tracks_{suffix}/tracks.csv."""
-    path = os.path.join(target, f"tracks_{suffix}", "tracks.csv")
+    """frame -> list of {tid, x1, y1, x2, y2} in world coordinates."""
+    from . import pipeline_outputs
+
     out = {}
-    if not os.path.exists(path):
-        return out
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            p = line.split(",")
-            if len(p) < 7:
-                continue
-            # frame, tid, x1, y1, z1, x2, y2, z2, ...
-            frame = int(float(p[0]))
-            out.setdefault(frame, []).append({
-                "tid": int(float(p[1])),
-                "x1": float(p[2]), "y1": float(p[3]),
-                "x2": float(p[5]), "y2": float(p[6]),
+    tracks = pipeline_outputs.load_geo_tracks_by_id(
+        os.path.join(target, f"tracks_{suffix}", "tracks.csv"))
+    for track_id, points in tracks.items():
+        for point in points:
+            out.setdefault(point["frame"], []).append({
+                "tid": track_id,
+                "x1": point["x1"], "y1": point["y1"],
+                "x2": point["x2"], "y2": point["y2"],
             })
     return out
 
 
 def load_geo_detections(target, suffix):
-    """frame -> list of {tid, x1, y1, x2, y2} from georeferenced_{suffix}.
+    """frame -> list of {tid, x1, y1, x2, y2} in world coordinates.
 
-    Row format (space-separated): idx frame x1 y1 z1 x2 y2 z2 conf cls.
-    A per-frame running index is used as a pseudo track id for colouring."""
-    path = os.path.join(target, f"georeferenced_{suffix}", "georeferenced.txt")
+    A per-frame running index stands in for a track id, purely to colour the
+    boxes apart; these are detections and have no tracks.
+    """
+    from . import pipeline_outputs
+
+    by_frame = pipeline_outputs.load_georef_detections_by_frame(
+        os.path.join(target, f"georeferenced_{suffix}", "georeferenced.txt"))
     out = {}
-    if not os.path.exists(path):
-        return out
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            p = line.split()
-            if len(p) < 8:
-                continue
-            try:
-                frame = int(p[1])
-                x1, y1 = float(p[2]), float(p[3])
-                x2, y2 = float(p[5]), float(p[6])
-            except (ValueError, IndexError):
-                continue
-            if x1 < 0 or y1 < 0:
-                continue
-            lst = out.setdefault(frame, [])
-            lst.append({"tid": len(lst), "x1": x1, "y1": y1, "x2": x2, "y2": y2})
+    for frame, rows in by_frame.items():
+        lst = out.setdefault(frame, [])
+        for row in rows:
+            lst.append({"tid": len(lst),
+                        "x1": row["x1"], "y1": row["y1"],
+                        "x2": row["x2"], "y2": row["y2"]})
     return out
 
-
-# ---------------------------------------------------------------------------
-# Map canvas geometry / formatting
-# ---------------------------------------------------------------------------
 
 def pad_extent_to_aspect(extent, width, height, margin):
     min_x, max_x, min_y, max_y = extent

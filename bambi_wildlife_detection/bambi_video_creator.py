@@ -641,32 +641,8 @@ class VideoCreatorDialog(QDialog):
     def _load_pixel_detections(self, target, suffix):
         return video_export.load_pixel_detections(target, suffix)
 
-    def _load_detection_rows(self, target, suffix):
-        return video_export.load_detection_rows(target, suffix)
-
-    def _load_track_id_rows(self, target, suffix):
-        return video_export.load_track_id_rows(target, suffix)
-
-    def _load_georef_rows(self, target, suffix):
-        return video_export.load_georef_rows(target, suffix)
-
-    @staticmethod
-    def _parse_pixel_tracks_csv(path, interp_col):
-        return video_export.parse_pixel_tracks_csv(path, interp_col)
-
-    @staticmethod
-    def _coord_key(coords):
-        return video_export.coord_key(coords)
-
     def _load_pixel_tracks(self, target, suffix):
         return video_export.load_pixel_tracks(target, suffix, log_fn=self._log_msg)
-
-    def _pair_tracks_via_geo(self, target, suffix):
-        return video_export.pair_tracks_via_geo(target, suffix)
-
-    def _pair_tracks_by_line_index(self, target, suffix):
-        return video_export.pair_tracks_by_line_index(
-            target, suffix, log_fn=self._log_msg)
 
     def _load_fov_polygons(self, target, suffix):
         return video_export.load_fov_polygons(target, suffix)

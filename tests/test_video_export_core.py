@@ -1,11 +1,43 @@
 # -*- coding: utf-8 -*-
-"""Unit tests for core.video_export (video creator data loaders, track
-pairing strategies, availability checks and canvas maths)."""
+"""Unit tests for core.video_export (video creator data loaders, availability
+checks and canvas maths).
+
+Everything the overlays draw comes from the store. The pairing strategies that
+used to sit below it — a pixel CSV, a geo-coordinate match, a row-index match —
+are gone: each could hand a box to the wrong animal when a file was re-sorted
+or a detection was dropped (§8.2).
+"""
 import json
+import os
 
 import pytest
 
+from bambi_wildlife_detection.core import detection_store, fov_store
+from bambi_wildlife_detection.core import track_store
 from bambi_wildlife_detection.core import video_export as ve
+
+
+def _tracked(root, modality="t"):
+    """Two detections in one track, geo-referenced."""
+    detection_store.record_detections(root, modality, [
+        {"frame": 0, "x1": 10.0, "y1": 20.0, "x2": 30.0, "y2": 40.0,
+         "confidence": 0.9, "source_class": "0"},
+        {"frame": 1, "x1": 12.0, "y1": 22.0, "x2": 32.0, "y2": 42.0,
+         "confidence": 0.8, "source_class": "0"},
+    ])
+    ids = [d["detection_id"]
+           for d in track_store.load_detections(root, modality)]
+    track_store.record_georeference(root, modality, [
+        {"detection_id": ids[0], "gx1": 100.0, "gy1": 200.0, "gz1": 5.0,
+         "gx2": 110.0, "gy2": 210.0, "gz2": 5.0},
+        {"detection_id": ids[1], "gx1": 300.0, "gy1": 400.0, "gz1": 5.0,
+         "gx2": 310.0, "gy2": 410.0, "gz2": 5.0},
+    ])
+    track_store.record_tracks(root, modality, [
+        {"track_id": 5, "detection_id": ids[0]},
+        {"track_id": 5, "detection_id": ids[1]},
+    ])
+    return ids
 
 
 class TestColors:
@@ -21,17 +53,22 @@ class TestColors:
 
 
 class TestPixelTracksAvailable:
-    def test_direct_pixel_csv(self, tmp_path):
+    def test_a_pixel_csv_is_not_enough(self, tmp_path):
+        """It has ids but no way to tie them to detections, which is what
+        made the old pairing guesswork."""
         (tmp_path / "tracks_t").mkdir()
         (tmp_path / "tracks_t" / "tracks_pixel.csv").write_text("")
-        assert ve.pixel_tracks_available(str(tmp_path), "t") is True
+        assert ve.pixel_tracks_available(str(tmp_path), "t") is False
 
-    def test_fallback_needs_detections_and_tracks(self, tmp_path):
+    def test_the_legacy_pair_is_not_enough_either(self, tmp_path):
         (tmp_path / "detections_t").mkdir()
         (tmp_path / "detections_t" / "detections.txt").write_text("")
-        assert ve.pixel_tracks_available(str(tmp_path), "t") is False
         (tmp_path / "tracks_t").mkdir()
         (tmp_path / "tracks_t" / "tracks.csv").write_text("")
+        assert ve.pixel_tracks_available(str(tmp_path), "t") is False
+
+    def test_a_track_store_is(self, tmp_path):
+        _tracked(str(tmp_path))
         assert ve.pixel_tracks_available(str(tmp_path), "t") is True
 
     def test_nothing_present(self, tmp_path):
@@ -84,6 +121,27 @@ class TestAvailabilityWarnings:
             str(tmp_path), video_suffixes=["t"], overlay="detections"))
         assert any("detections overlay" in w for w in warns)
 
+    def test_the_warning_names_the_step_not_the_file(self, tmp_path):
+        """A 5.x project has detections.txt and still cannot be drawn from
+        it, so pointing at the file would send someone the wrong way."""
+        (tmp_path / "poses_t.json").write_text("{}")
+        (tmp_path / "frames_t").mkdir()
+        (tmp_path / "detections_t").mkdir()
+        (tmp_path / "detections_t" / "detections.txt").write_text("0 1 2 3 4 5")
+
+        warns = ve.availability_warnings(_params(
+            str(tmp_path), video_suffixes=["t"], overlay="detections"))
+        assert any("Detect Animals" in w for w in warns)
+
+    def test_a_stored_overlay_raises_no_warning(self, tmp_path):
+        (tmp_path / "poses_t.json").write_text("{}")
+        (tmp_path / "frames_t").mkdir()
+        _tracked(str(tmp_path))
+
+        warns = ve.availability_warnings(_params(
+            str(tmp_path), video_suffixes=["t"], overlay="tracks"))
+        assert warns == []
+
     def test_map_layers_missing(self, tmp_path):
         warns = ve.availability_warnings(_params(
             str(tmp_path), map=True,
@@ -112,64 +170,35 @@ class TestLoaders:
         assert any("could not read" in m for m in logs)
 
     def test_load_pixel_detections(self, tmp_path):
-        det = tmp_path / "detections_t"
-        det.mkdir()
-        (det / "detections.txt").write_text(
-            "# h\n0 1 2 3 4 0.9 2\n0 5 6 7 8 0.9\n1 1 1 2 2 0.8 1\n")
-        out = ve.load_pixel_detections(str(tmp_path), "t")
-        assert out[0][0] == (1.0, 2.0, 3.0, 4.0, "2")
-        assert out[0][1][4] == "0"          # missing class defaults to "0"
+        root = str(tmp_path)
+        _tracked(root)
+        out = ve.load_pixel_detections(root, "t")
+        assert out[0][0][:4] == (10.0, 20.0, 30.0, 40.0)
         assert len(out[1]) == 1
 
-    def test_load_detection_rows_in_file_order(self, tmp_path):
+    def test_pixel_detections_ignore_the_text_file(self, tmp_path):
         det = tmp_path / "detections_t"
         det.mkdir()
-        (det / "detections.txt").write_text(
-            "5 1 1 2 2 0.9 1\n0 3 3 4 4 0.9 1\nnot a row\n")
-        rows = ve.load_detection_rows(str(tmp_path), "t")
-        assert [r[0] for r in rows] == [5, 0]
-
-    def test_load_track_id_rows_prefers_pixel_and_skips_interpolated(self, tmp_path):
-        trk = tmp_path / "tracks_t"
-        trk.mkdir()
-        (trk / "tracks.csv").write_text("0,99,0,0,0,1,1,1,0.9,1,0\n")
-        (trk / "tracks_pixel.csv").write_text(
-            "0,7,1,1,2,2,0.9,1,0\n"
-            "1,7,1,1,2,2,0.9,1,1\n"     # interpolated -> skipped
-            "2,8,1,1,2,2,0.9,1\n")
-        rows = ve.load_track_id_rows(str(tmp_path), "t")
-        assert rows == [(0, 7), (2, 8)]
-
-    def test_load_georef_rows(self, tmp_path):
-        geo = tmp_path / "georeferenced_t"
-        geo.mkdir()
-        (geo / "georeferenced.txt").write_text(
-            "# h\n0 3 100.0 200.0 5.0 101.0 201.0 5.0 0.9 1\n")
-        rows = ve.load_georef_rows(str(tmp_path), "t")
-        assert rows == [(3, 100.0, 200.0, 101.0, 201.0)]
-
-    def test_parse_pixel_tracks_csv(self, tmp_path):
-        f = tmp_path / "tracks_pixel.csv"
-        f.write_text(
-            "0,7,1,2,3,4,0.9,1,0\n"
-            "0,8,5,6,7,8,0.9,1,1\n")     # interpolated -> skipped
-        out = ve.parse_pixel_tracks_csv(str(f), 8)
-        assert out == {0: [(7, 1.0, 2.0, 3.0, 4.0)]}
-
-    def test_coord_key_rounds(self):
-        assert ve.coord_key((1.00049, 2.0)) == (1.0, 2.0)
-        assert ve.coord_key((1.0006, 2.0)) == (1.001, 2.0)
+        (det / "detections.txt").write_text("0 1 2 3 4 0.9 2")
+        assert ve.load_pixel_detections(str(tmp_path), "t") == {}
 
     def test_load_fov_polygons(self, tmp_path):
+        root = str(tmp_path)
+        fov_store.record_fov(root, "t", {
+            0: [(10.0, 20.0, 0.0), (30.0, 20.0, 0.0),
+                (30.0, 40.0, 0.0), (10.0, 40.0, 0.0)],
+            1: [(1.0, 2.0, 0.0), (3.0, 4.0, 0.0)],   # 2 points -> dropped
+        })
+        out = ve.load_fov_polygons(root, "t")
+        assert out[0] == [(10.0, 20.0), (30.0, 20.0), (30.0, 40.0), (10.0, 40.0)]
+        assert 1 not in out
+
+    def test_fov_polygons_ignore_the_text_file(self, tmp_path):
         fov = tmp_path / "fov_t"
         fov.mkdir()
         (fov / "fov_polygons.txt").write_text(
-            "# h\n"
-            "0 4 10 20 0 30 20 0 30 40 0 10 40 0\n"
-            "1 2 1 2 0 3 4 0\n")        # only 2 points -> dropped
-        out = ve.load_fov_polygons(str(tmp_path), "t")
-        assert out[0] == [(10.0, 20.0), (30.0, 20.0), (30.0, 40.0), (10.0, 40.0)]
-        assert 1 not in out
+            "0 4 10 20 0 30 20 0 30 40 0 10 40 0")
+        assert ve.load_fov_polygons(str(tmp_path), "t") == {}
 
     def test_load_perpendicular_with_legacy_fallback(self, tmp_path):
         route = tmp_path / "flight_route_t"
@@ -198,77 +227,75 @@ class TestLoaders:
         assert out[1] == (11.0, 21.0)    # index fallback
 
     def test_load_geo_tracks(self, tmp_path):
+        root = str(tmp_path)
+        _tracked(root)
+        out = ve.load_geo_tracks(root, "t")
+        assert sorted(out) == [0, 1]
+        assert out[0][0]["x1"] == 100.0
+        # Both frames belong to the one track, whatever id the store gave it.
+        assert out[0][0]["tid"] == out[1][0]["tid"]
+
+    def test_geo_tracks_ignore_the_text_file(self, tmp_path):
         trk = tmp_path / "tracks_t"
         trk.mkdir()
-        (trk / "tracks.csv").write_text("0,7,100,200,5,101,201,5,0.9,1\n")
-        out = ve.load_geo_tracks(str(tmp_path), "t")
-        assert out[0][0] == {"tid": 7, "x1": 100.0, "y1": 200.0,
-                             "x2": 101.0, "y2": 201.0}
+        (trk / "tracks.csv").write_text("0,99,1,2,3,4,5,6,0.9,0,0")
+        assert ve.load_geo_tracks(str(tmp_path), "t") == {}
 
-    def test_load_geo_detections_filters_negative(self, tmp_path):
-        geo = tmp_path / "georeferenced_t"
-        geo.mkdir()
-        (geo / "georeferenced.txt").write_text(
-            "0 0 100 200 5 101 201 5 0.9 1\n"
-            "1 0 -1 200 5 101 201 5 0.9 1\n"     # negative -> dropped
-            "2 0 110 210 5 111 211 5 0.9 1\n")
-        out = ve.load_geo_detections(str(tmp_path), "t")
-        assert [d["tid"] for d in out[0]] == [0, 1]   # running pseudo ids
-        assert out[0][1]["x1"] == 110.0
+    def test_load_geo_detections(self, tmp_path):
+        root = str(tmp_path)
+        _tracked(root)
+        out = ve.load_geo_detections(root, "t")
+        assert sorted(out) == [0, 1]
+        assert out[0][0]["x1"] == 100.0
+        # A running index stands in for a track id, to colour them apart.
+        assert out[0][0]["tid"] == 0
+
+    def test_geo_detections_omit_what_could_not_be_placed(self, tmp_path):
+        """A failure has no geo row at all, rather than a sentinel box."""
+        root = str(tmp_path)
+        detection_store.record_detections(root, "t", [
+            {"frame": 0, "x1": 1.0, "y1": 2.0, "x2": 3.0, "y2": 4.0,
+             "confidence": 0.9, "source_class": "0"},
+            {"frame": 1, "x1": 5.0, "y1": 6.0, "x2": 7.0, "y2": 8.0,
+             "confidence": 0.9, "source_class": "0"},
+        ])
+        ids = [d["detection_id"] for d in track_store.load_detections(root, "t")]
+        track_store.record_georeference(
+            root, "t",
+            [{"detection_id": ids[0], "gx1": 1.0, "gy1": 2.0, "gz1": 0.0,
+              "gx2": 3.0, "gy2": 4.0, "gz2": 0.0}],
+            [{"detection_id": ids[1], "reason": "beyond_mesh"}])
+
+        assert sorted(ve.load_geo_detections(root, "t")) == [0]
 
 
-class TestLoadPixelTracksStrategies:
-    def _write(self, tmp_path, rel, content):
-        path = tmp_path / rel
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content)
+class TestLoadPixelTracks:
+    def test_the_store_is_the_only_source(self, tmp_path):
+        root = str(tmp_path)
+        _tracked(root)
+        folder = os.path.join(root, "tracks_t")
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, "tracks_pixel.csv"), "w") as fh:
+            fh.write("0,99,1.0,1.0,2.0,2.0,0.9,0,0")
 
-    def test_direct_pixel_csv_wins(self, tmp_path):
-        self._write(tmp_path, "tracks_t/tracks_pixel.csv",
-                    "0,7,1,2,3,4,0.9,1,0\n")
-        out = ve.load_pixel_tracks(str(tmp_path), "t")
-        assert out == {0: [(7, 1.0, 2.0, 3.0, 4.0)]}
+        overlay = ve.load_pixel_tracks(root, "t")
+        ids = {row[0] for rows in overlay.values() for row in rows}
+        assert len(ids) == 1 and 99 not in ids
 
-    def test_geo_join_assigns_track_ids(self, tmp_path):
-        self._write(tmp_path, "detections_t/detections.txt",
-                    "0 10 10 20 20 0.9000 1\n"
-                    "0 30 30 40 40 0.8000 1\n"
-                    "1 11 11 21 21 0.9000 1\n")
-        self._write(tmp_path, "georeferenced_t/georeferenced.txt",
-                    "0 0 100.0 200.0 5 101.0 201.0 5 0.9 1\n"
-                    "1 0 110.0 210.0 5 111.0 211.0 5 0.8 1\n"
-                    "2 1 102.0 202.0 5 103.0 203.0 5 0.9 1\n")
-        self._write(tmp_path, "tracks_t/tracks.csv",
-                    "1,9,102.0,202.0,5,103.0,203.0,5,0.9,1,0\n"
-                    "0,7,100.0,200.0,5,101.0,201.0,5,0.9,1,0\n"
-                    "0,8,110.0,210.0,5,111.0,211.0,5,0.8,1,0\n")
-        out = ve.load_pixel_tracks(str(tmp_path), "t")
-        assert out[0] == [(7, 10.0, 10.0, 20.0, 20.0),
-                          (8, 30.0, 30.0, 40.0, 40.0)]
-        assert out[1] == [(9, 11.0, 11.0, 21.0, 21.0)]
+    def test_without_a_store_there_is_nothing_to_draw(self, tmp_path):
+        """A CSV of ids that cannot be tied to detections is not an overlay."""
+        root = str(tmp_path)
+        folder = os.path.join(root, "tracks_t")
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, "tracks_pixel.csv"), "w") as fh:
+            fh.write("0,99,1.0,1.0,2.0,2.0,0.9,0,0")
 
-    def test_geo_join_skips_misaligned_frames(self, tmp_path):
-        # Frame 0 has 2 detections but only 1 geo row -> cannot align safely
-        self._write(tmp_path, "detections_t/detections.txt",
-                    "0 10 10 20 20 0.9 1\n0 30 30 40 40 0.8 1\n")
-        self._write(tmp_path, "georeferenced_t/georeferenced.txt",
-                    "0 0 100.0 200.0 5 101.0 201.0 5 0.9 1\n")
-        self._write(tmp_path, "tracks_t/tracks.csv",
-                    "0,7,100.0,200.0,5,101.0,201.0,5,0.9,1,0\n")
-        assert ve.pair_tracks_via_geo(str(tmp_path), "t") == {}
+        assert ve.load_pixel_tracks(root, "t") == {}
 
-    def test_line_index_fallback_logs_skew(self, tmp_path):
-        self._write(tmp_path, "detections_t/detections.txt",
-                    "0 10 10 20 20 0.9 1\n1 30 30 40 40 0.8 1\n")
-        # No georeferenced.txt -> geo join impossible; tracks.csv rows align
-        # by line index except the second (frame mismatch).
-        self._write(tmp_path, "tracks_t/tracks.csv",
-                    "0,7,0,0,0,1,1,1,0.9,1,0\n"
-                    "5,8,0,0,0,1,1,1,0.8,1,0\n")
+    def test_and_it_says_so(self, tmp_path):
         logs = []
-        out = ve.load_pixel_tracks(str(tmp_path), "t", log_fn=logs.append)
-        assert out == {0: [(7, 10.0, 10.0, 20.0, 20.0)]}
-        assert any("out of sync" in m for m in logs)
+        ve.load_pixel_tracks(str(tmp_path), "t", log_fn=logs.append)
+        assert any("Migrate" in m for m in logs)
 
 
 class TestCanvasMath:
@@ -353,19 +380,14 @@ class TestPixelTracksFromStore:
         overlay = video_export.load_pixel_tracks(root, "t")
         assert {row[0] for rows in overlay.values() for row in rows} != {99}
 
-    def test_falls_back_without_a_store(self, tmp_path):
-        import os
-
-        from bambi_wildlife_detection.core import video_export
-
+    def test_without_a_store_there_is_nothing(self, tmp_path):
         root = str(tmp_path)
         folder = os.path.join(root, "tracks_t")
         os.makedirs(folder, exist_ok=True)
         with open(os.path.join(folder, "tracks_pixel.csv"), "w") as fh:
-            fh.write("0,99,1.0,1.0,2.0,2.0,0.9,0,0\n")
+            fh.write("0,99,1.0,1.0,2.0,2.0,0.9,0,0")
 
-        overlay = video_export.load_pixel_tracks(root, "t")
-        assert overlay[0][0][0] == 99
+        assert ve.load_pixel_tracks(root, "t") == {}
 
     def test_unknown_modality_is_ignored(self, tmp_path):
         from bambi_wildlife_detection.core import video_export

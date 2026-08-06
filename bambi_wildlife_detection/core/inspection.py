@@ -28,106 +28,46 @@ def _noop_log(message: str, level: str = "info") -> None:
 # Data loaders
 # ---------------------------------------------------------------------------
 
-def load_georef_track_dets(target_folder: str, track_id: int,
-                           camera_suffix: str = "t") -> List[dict]:
-    """Return frame/confidence/class_id entries for *track_id* from the
-    geo-referenced track CSVs (``tracks_t/*.csv`` or ``tracks_w/*.csv``,
-    excluding ``_pixel.csv``).
+def load_pixel_detections(target_folder: str, modality: str) -> List[dict]:
+    """Pixel-space detections for one modality, from the store.
 
-    Format: ``frame,track_id,x1,y1,z1,x2,y2,z2,confidence,class_id[,interpolated]``
+    The inspector used to parse ``detections.txt`` and then identify the
+    clicked box by matching its confidence and class to four decimal places.
+    The store carries the detection_id the layer was built from, so nothing
+    has to be matched back (§1.2a).
     """
-    tracks_folder = os.path.join(target_folder, f"tracks_{camera_suffix}")
-    if not os.path.isdir(tracks_folder):
+    from . import store, track_store
+
+    if modality not in store.MODALITIES:
         return []
-
-    result: List[dict] = []
-    try:
-        for fname in os.listdir(tracks_folder):
-            if not fname.endswith(".csv") or fname.endswith("_pixel.csv"):
-                continue
-            csv_path = os.path.join(tracks_folder, fname)
-            with open(csv_path, "r", encoding="utf-8") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if not line or line.startswith("#"):
-                        continue
-                    parts = line.split(",")
-                    if len(parts) >= 10 and int(parts[1]) == track_id:
-                        result.append({
-                            "frame": int(parts[0]),
-                            "confidence": float(parts[8]),
-                            "class_id": int(parts[9]),
-                            "interpolated": int(parts[10]) if len(parts) > 10 else 0,
-                        })
-            if result:
-                break  # found in this file, no need to search further
-    except Exception:  # nosec B110
-        pass
-
-    return sorted(result, key=lambda d: d["frame"])
+    return [{
+        "detection_id": row["detection_id"],
+        "frame": row["frame"],
+        "x1": row["x1"], "y1": row["y1"],
+        "x2": row["x2"], "y2": row["y2"],
+        "confidence": row["confidence"] if row["confidence"] is not None else 1.0,
+        "class_id": row["species_id"],
+    } for row in track_store.load_detections(target_folder, modality)]
 
 
-def load_pixel_detections(det_file: str) -> List[dict]:
-    """Parse a ``detections_{t,w}/detections.txt`` file.
+def load_pixel_tracks(target_folder: str,
+                      modality: str) -> Dict[int, List[dict]]:
+    """``track_id -> [box, …]`` in pixel space, from the store."""
+    from . import store, track_store
 
-    Format (space-separated, comment header with #):
-    ``frame x1 y1 x2 y2 confidence class_id``
-    """
-    result: List[dict] = []
-    if not os.path.isfile(det_file):
-        return result
-    try:
-        with open(det_file, "r", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                parts = line.split()
-                if len(parts) >= 6:
-                    result.append({
-                        "frame": int(parts[0]),
-                        "x1": float(parts[1]),
-                        "y1": float(parts[2]),
-                        "x2": float(parts[3]),
-                        "y2": float(parts[4]),
-                        "confidence": float(parts[5]),
-                        "class_id": int(parts[6]) if len(parts) > 6 else 0,
-                    })
-    except Exception:  # nosec B110
-        pass
-    return result
-
-
-def load_pixel_tracks(tracks_file: str) -> Dict[int, List[dict]]:
-    """Parse ``tracks/tracks_pixel.csv``.
-
-    Format (comma-separated, comment header with #):
-    ``frame,track_id,x1,y1,x2,y2,conf,cls[,interpolated]``
-    """
+    if modality not in store.MODALITIES:
+        return {}
     result: Dict[int, List[dict]] = {}
-    if not os.path.isfile(tracks_file):
-        return result
-    try:
-        with open(tracks_file, "r", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                parts = line.split(",")
-                if len(parts) >= 8:
-                    tid = int(parts[1])
-                    entry = {
-                        "frame": int(parts[0]),
-                        "x1": float(parts[2]),
-                        "y1": float(parts[3]),
-                        "x2": float(parts[4]),
-                        "y2": float(parts[5]),
-                        "conf": float(parts[6]),
-                        "cls": int(parts[7]),
-                    }
-                    result.setdefault(tid, []).append(entry)
-    except Exception:  # nosec B110
-        pass
+    for row in track_store.load_pixel_tracks(target_folder, modality):
+        result.setdefault(row["track_id"], []).append({
+            "detection_id": row["detection_id"],
+            "frame": row["frame"],
+            "x1": row["x1"], "y1": row["y1"],
+            "x2": row["x2"], "y2": row["y2"],
+            "conf": row["confidence"] if row["confidence"] is not None else 1.0,
+            "cls": row["species_id"],
+            "interpolated": row.get("interpolated", 0),
+        })
     return result
 
 
@@ -210,57 +150,6 @@ def build_frames_from_pixel_tracks(
             ],
             "boxes_blue": other_on_frame,
         })
-    return frames
-
-
-def build_frames_from_georef(
-    georef_dets, all_pixel_dets, target_folder, boxes_modality: str
-) -> List[dict]:
-    """Build viewer frame list by matching geo-referenced track detections
-    back to pixel detections via (frame, confidence, class_id).
-
-    Frames where no pixel match is found (interpolated frames whose bbox
-    was never written to detections.txt) get their bounding box
-    interpolated linearly from neighbouring actual detections and are
-    flagged with is_interpolated=1 so the viewer draws a dashed border.
-    """
-    frames = []
-    for gd in georef_dets:
-        fi = gd["frame"]
-        conf = gd["confidence"]
-        cls = gd["class_id"]
-        is_interp = gd.get("interpolated", 0)
-
-        same_frame = [d for d in all_pixel_dets if d["frame"] == fi]
-
-        # Match by confidence ± tolerance and class
-        matched = [
-            d for d in same_frame
-            if d["class_id"] == cls and abs(d["confidence"] - conf) < 0.0015
-        ]
-        others = [d for d in same_frame if d not in matched]
-
-        path_t, path_w = resolve_image_paths(target_folder, fi)
-        frames.append({
-            "frame_idx": fi,
-            "image_path_t": path_t,
-            "image_path_w": path_w,
-            "boxes_modality": boxes_modality,
-            "boxes_green": [
-                (d["x1"], d["y1"], d["x2"], d["y2"],
-                 d["confidence"], d["class_id"], is_interp)
-                for d in matched
-            ],
-            "boxes_blue": [
-                (d["x1"], d["y1"], d["x2"], d["y2"],
-                 d["confidence"], d["class_id"])
-                for d in others
-            ],
-        })
-
-    # For frames where the pixel match failed (interpolated frames that
-    # were never written to detections.txt), interpolate from neighbours.
-    fill_interpolated_boxes(frames)
     return frames
 
 
@@ -510,28 +399,27 @@ def project_map_point(
 
         in_bounds = 0 <= px <= img_width and 0 <= py <= img_height
 
-        # ---- Debug: find nearest georef entry for comparison ---------
+        # ---- Debug: nearest geo-referenced detection, for comparison ----
         georef_info = ""
         try:
-            georef_path = os.path.join(target_folder, f"georeferenced_{modality}", "georeferenced.txt")
-            if os.path.isfile(georef_path):
-                with open(georef_path, "r", encoding="utf-8") as gf:
-                    best_dist = float("inf")
-                    best_line = ""
-                    for line in gf:
-                        line = line.strip()
-                        if not line or line.startswith("#"):
-                            continue
-                        parts = line.split()
-                        if len(parts) >= 10 and int(parts[1]) == frame_idx:
-                            gx = (float(parts[2]) + float(parts[5])) / 2
-                            gy = (float(parts[3]) + float(parts[6])) / 2
-                            d = (gx - xy[0])**2 + (gy - xy[1])**2
-                            if d < best_dist:
-                                best_dist = d
-                                best_line = line
-                    if best_line:
-                        georef_info = f"\n  Nearest georef : {best_line}"
+            from . import track_store
+
+            best_dist = float("inf")
+            best = None
+            for row in track_store.load_georeferenced(target_folder, modality):
+                if row["frame"] != frame_idx:
+                    continue
+                gx = (row["gx1"] + row["gx2"]) / 2
+                gy = (row["gy1"] + row["gy2"]) / 2
+                d = (gx - xy[0]) ** 2 + (gy - xy[1]) ** 2
+                if d < best_dist:
+                    best_dist, best = d, row
+            if best is not None:
+                georef_info = (
+                    "\n  Nearest georef : detection "
+                    f"{best['detection_id']} "
+                    f"at x={(best['gx1'] + best['gx2']) / 2:.3f} "
+                    f"y={(best['gy1'] + best['gy2']) / 2:.3f}")
         except Exception:  # nosec B110
             pass
 
