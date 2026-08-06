@@ -274,6 +274,31 @@ Two rules apply to all of them:
   track*, which replaces the tracker track it came from rather than adding to
   it.
 
+### Counting one species
+
+The **Species** box at the top of the tab decides which species the analytics
+count. It applies to the whole tab, because a density map of roe deer and an
+abundance estimate of everything are not comparable — the filter belongs to the
+question rather than to one product.
+
+- **All species** (the default) counts everything, as every earlier version
+  did. It means *no filter*, not "every species in today's list", so a species
+  added later stays included without revisiting the tab.
+- Untick it to choose species individually. `not-an-animal` is never offered:
+  it is excluded from every analytic either way.
+- The **coverage map is unaffected** — it counts frames rather than animals.
+- The choice is recorded in the provenance, so a result says which species it
+  counted.
+
+The filter is applied where the distances are computed, so **changing it means
+re-running *Calculate Perpendicular*** before distance sampling reflects it. If
+the filter matches nothing the step stops and says so, rather than falling back
+to the legacy text files, which know nothing about species.
+
+The selection is not saved with the project. Species belong to a flight's own
+`project.gpkg`, so an id carried into another flight would mean something else
+there.
+
 ---
 
 ## Legacy text outputs

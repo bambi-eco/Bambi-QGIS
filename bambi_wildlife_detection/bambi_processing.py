@@ -1601,30 +1601,69 @@ class BambiProcessor:
             )
 
         detections = []
-        with open(georef_file, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
-                parts = line.split()
-                if len(parts) >= 10:
-                    try:
-                        detections.append({
-                            'idx': int(parts[0]),
-                            'frame': int(parts[1]),
-                            'x1': float(parts[2]), 'y1': float(parts[3]), 'z1': float(parts[4]),
-                            'x2': float(parts[5]), 'y2': float(parts[6]), 'z2': float(parts[7]),
-                            'confidence': float(parts[8]),
-                            'class_id': int(parts[9])
-                        })
-                    except (ValueError, IndexError):
-                        continue
+
+        # Prefer the store, for two reasons: it applies the population filter
+        # (false positives and unselected species never reach the distance
+        # sampling that reads these distances), and its class is the resolved
+        # species rather than the raw detector class georeferenced.txt carries.
+        from .core import analytics_source, store as _store
+
+        from_store = os.path.isfile(_store.stage_path(
+            target_folder, _store.DETECTIONS, det_suffix))
+        if from_store:
+            try:
+                rows, provenance = analytics_source.load_rows(
+                    target_folder, det_suffix,
+                    species_ids=config.get("analytics_species_ids"))
+            except analytics_source.AnalyticsError:
+                rows, provenance = [], {}
+            for row in rows:
+                detections.append({
+                    'idx': row["detection_id"],
+                    'frame': row["frame"],
+                    'x1': row["gx1"], 'y1': row["gy1"], 'z1': row["gz1"],
+                    'x2': row["gx2"], 'y2': row["gy2"], 'z2': row["gz2"],
+                    'confidence': row["confidence"] or 1.0,
+                    'class_id': row["species_id"],
+                })
+            if detections and log_fn:
+                summary = analytics_source.describe_filter(provenance)
+                log_fn(f"Loaded {len(detections)} detection(s) from the "
+                       f"store — {summary}")
+
+        if from_store and not detections:
+            # Falling back to the text file here would quietly ignore the
+            # species filter that just excluded everything.
+            raise RuntimeError(
+                "No geo-referenced detections match the current species "
+                "filter. Choose 'All species' on the Survey Analytics tab, or "
+                "tick a species that this flight actually recorded.")
 
         if not detections:
-            raise RuntimeError("No valid georeferenced detections found.")
+            with open(georef_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    parts = line.split()
+                    if len(parts) >= 10:
+                        try:
+                            detections.append({
+                                'idx': int(parts[0]),
+                                'frame': int(parts[1]),
+                                'x1': float(parts[2]), 'y1': float(parts[3]), 'z1': float(parts[4]),
+                                'x2': float(parts[5]), 'y2': float(parts[6]), 'z2': float(parts[7]),
+                                'confidence': float(parts[8]),
+                                'class_id': int(parts[9])
+                            })
+                        except (ValueError, IndexError):
+                            continue
 
-        if log_fn:
-            log_fn(f"Loaded {len(detections)} georeferenced detections")
+            if not detections:
+                raise RuntimeError("No valid georeferenced detections found.")
+
+            if log_fn:
+                log_fn(f"Loaded {len(detections)} georeferenced detections")
 
         if progress_fn:
             progress_fn(40)
@@ -1845,11 +1884,13 @@ class BambiProcessor:
         # reach the distance-sampling input (§8.2).
         from .core import analytics_source, store as _store
 
-        if os.path.isfile(_store.stage_path(
-                target_folder, _store.DETECTIONS, trk_suffix)):
+        tracks_from_store = os.path.isfile(_store.stage_path(
+            target_folder, _store.DETECTIONS, trk_suffix))
+        if tracks_from_store:
             try:
                 rows, provenance = analytics_source.load_rows(
-                    target_folder, trk_suffix)
+                    target_folder, trk_suffix,
+                    species_ids=config.get("analytics_species_ids"))
             except analytics_source.AnalyticsError:
                 rows, provenance = [], {}
             for row in rows:
@@ -1867,6 +1908,14 @@ class BambiProcessor:
                 summary = analytics_source.describe_filter(provenance)
                 log_fn(f"Loaded {len(all_tracks)} track(s) from the store — "
                        f"{summary}")
+
+        if tracks_from_store and not all_tracks:
+            # As above: the CSVs know nothing of the species filter, so
+            # falling back to them would silently ignore it.
+            raise RuntimeError(
+                "No tracks match the current species filter. Choose 'All "
+                "species' on the Survey Analytics tab, or tick a species that "
+                "this flight actually recorded.")
 
         for fname in [] if all_tracks else os.listdir(tracks_folder):
             if not fname.endswith(".csv") or fname.endswith("_pixel.csv"):

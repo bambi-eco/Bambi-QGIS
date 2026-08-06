@@ -301,3 +301,49 @@ def test_vocabulary_comparison_of_a_project_without_a_store(tmp_path):
     comparison = analytics_source.compare_vocabularies(
         [a, str(tmp_path / "never-run")])
     assert "roe deer" in comparison["shared"]
+
+
+def test_no_filter_and_every_species_are_not_the_same_thing(survey):
+    """``None`` keeps a species added later included; an explicit list of
+    today's ids would silently start excluding it."""
+    everything, provenance = analytics_source.load_rows(survey, "t")
+    assert provenance["species_filter"] is None
+
+    listed = [entry["species_id"]
+              for entry in analytics_source.species_options(survey)]
+    explicit, provenance = analytics_source.load_rows(
+        survey, "t", species_ids=listed)
+    assert len(explicit) == len(everything)
+    assert provenance["species_filter"] == sorted(listed)
+
+
+def test_an_empty_species_list_selects_nothing(survey):
+    """Not "everything" — an empty tick list has to mean what it says."""
+    rows, provenance = analytics_source.load_rows(survey, "t", species_ids=[])
+    assert rows == []
+    assert provenance["species_filter"] == []
+
+
+def test_the_filter_is_recorded_for_every_source(survey):
+    for source in ("detections", "tracks"):
+        _points, provenance = analytics_source.load_points(
+            survey, "t", source, species_ids=[1])
+        assert provenance["species_filter"] == [1], source
+
+
+def test_filtering_never_admits_a_false_positive(survey):
+    """not-an-animal is excluded whatever is ticked, including its own id."""
+    rows, _ = analytics_source.load_rows(
+        survey, "t", species_ids=[store.NOT_AN_ANIMAL_SPECIES_ID])
+    assert rows == []
+
+
+def test_species_options_are_offered_in_schema_order(survey):
+    from bambi_wildlife_detection.core import label_store
+
+    offered = [entry["species_id"]
+               for entry in analytics_source.species_options(survey)]
+    vocabulary = [entry["species_id"]
+                  for entry in label_store.vocabulary(survey)["species"]
+                  if entry["species_id"] != store.NOT_AN_ANIMAL_SPECIES_ID]
+    assert offered == vocabulary

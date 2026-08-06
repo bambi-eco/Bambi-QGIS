@@ -20,7 +20,7 @@ from qgis.PyQt.QtWidgets import (
     QCheckBox, QTabWidget, QMessageBox, QScrollArea,
     QFrame, QListWidget, QListWidgetItem, QDialog,
     QDialogButtonBox, QGridLayout, QToolButton,
-    QRadioButton, QButtonGroup, QInputDialog
+    QRadioButton, QButtonGroup, QInputDialog, QAbstractItemView
 )
 from qgis.PyQt.QtGui import QFont, QColor
 from qgis.core import (
@@ -2700,6 +2700,44 @@ class BambiDockWidget(QDockWidget):
         analytics_info.setStyleSheet("color: gray; font-size: 10px;")
         analytics_tab_layout.addWidget(analytics_info)
 
+        # ----- Species filter -----
+        # One control for the whole tab: a density map of roe deer and an
+        # abundance estimate of everything are not comparable, so the filter
+        # belongs to the question rather than to one analytic.
+        species_group = QGroupBox("Species")
+        species_layout = QVBoxLayout(species_group)
+
+        self.analytics_all_species_check = QCheckBox("All species")
+        self.analytics_all_species_check.setChecked(True)
+        self.analytics_all_species_check.setToolTip(
+            "Count every species the project defines, as before. "
+            "'not-an-animal' is never counted either way.")
+        self.analytics_all_species_check.toggled.connect(
+            self._on_analytics_species_mode_changed)
+        species_layout.addWidget(self.analytics_all_species_check)
+
+        self.analytics_species_list = QListWidget()
+        self.analytics_species_list.setSelectionMode(
+            QAbstractItemView.SelectionMode.NoSelection)
+        self.analytics_species_list.setMaximumHeight(96)
+        self.analytics_species_list.setEnabled(False)
+        self.analytics_species_list.setToolTip(
+            "Species to count. The density heatmap, distance sampling and "
+            "population estimation use this list and record it alongside the "
+            "result. The coverage map counts frames rather than animals, so "
+            "it is unaffected.")
+        self.analytics_species_list.itemChanged.connect(
+            lambda _item: self._update_analytics_species_status())
+        species_layout.addWidget(self.analytics_species_list)
+
+        self.analytics_species_status = QLabel("")
+        self.analytics_species_status.setWordWrap(True)
+        self.analytics_species_status.setStyleSheet(
+            "color: gray; font-size: 10px;")
+        species_layout.addWidget(self.analytics_species_status)
+
+        analytics_tab_layout.addWidget(species_group)
+
         # ----- Density Heatmap -----
         density_group = QGroupBox("Density Heatmap")
         density_layout = QVBoxLayout(density_group)
@@ -3406,6 +3444,13 @@ class BambiDockWidget(QDockWidget):
             "ortho_end_frame": (
                 self.ortho_end_frame_spin.value()
                 if not self.ortho_all_frames_check.isChecked() else None),
+
+            # Survey analytics: which species count (None = all of them).
+            # One key for every analytic on the tab, since the filter belongs
+            # to the question rather than to one product (§8.2).
+            "analytics_species_ids": (
+                self.analytics_species_ids()
+                if hasattr(self, 'analytics_all_species_check') else None),
 
             # Survey analytics: density heatmap
             "density_source": (
@@ -5270,6 +5315,7 @@ class BambiDockWidget(QDockWidget):
         if not getattr(self, "_switching_flight", False):
             self._adopt_target_folder(folder)
         self._refresh_migrate_button()
+        self.refresh_analytics_species()
 
     def _refresh_migrate_button(self):
         """Show 'Migrate 5.x…' only where there is something to migrate."""
@@ -5482,6 +5528,7 @@ class BambiDockWidget(QDockWidget):
         if flight:
             self.log(f"Switched to flight '{flight['name']}'")
             self._check_existing_outputs(flight.get("target_folder", ""))
+        self.refresh_analytics_species()
 
     def add_flight(self):
         """Add another flight to this project and switch to it."""
@@ -5745,6 +5792,102 @@ class BambiDockWidget(QDockWidget):
         box.setDefaultButton(cancel_btn)
         box.exec()
         return box.clickedButton() is remove_btn
+
+    # ------------------------------------------------------------------
+    # Which species the analytics count (§8.2)
+    # ------------------------------------------------------------------
+
+    def _on_analytics_species_mode_changed(self, all_species: bool):
+        self.analytics_species_list.setEnabled(not all_species)
+        if not all_species and self.analytics_species_list.count() == 0:
+            self.refresh_analytics_species()
+        self._update_analytics_species_status()
+
+    def refresh_analytics_species(self):
+        """Fill the list from the active flight's own vocabulary.
+
+        Species live in each flight's ``project.gpkg``, so the list is rebuilt
+        per flight rather than carried across — a species id from one flight
+        means nothing in another.
+        """
+        from .core import analytics_source
+
+        folder = self.target_folder_edit.text().strip()
+        previous = {name for name, _id in self._analytics_species_selection()}
+
+        self.analytics_species_list.clear()
+        options = []
+        if folder and os.path.isdir(folder):
+            try:
+                options = analytics_source.species_options(folder)
+            except Exception:  # noqa: BLE001 — an empty list is the answer
+                options = []
+
+        for entry in options:
+            item = QListWidgetItem(entry["name"])
+            item.setData(Qt.ItemDataRole.UserRole, entry["species_id"])
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            # Keep a species ticked across a refresh, by name: the ids are
+            # stable within a flight, and the name is what was chosen.
+            item.setCheckState(Qt.CheckState.Checked
+                               if entry["name"] in previous
+                               else Qt.CheckState.Unchecked)
+            self.analytics_species_list.addItem(item)
+
+        self._update_analytics_species_status()
+        return len(options)
+
+    def _analytics_species_selection(self):
+        """Ticked species as ``(name, species_id)`` pairs."""
+        selection = []
+        for index in range(self.analytics_species_list.count()):
+            item = self.analytics_species_list.item(index)
+            if item.checkState() == Qt.CheckState.Checked:
+                selection.append(
+                    (item.text(), item.data(Qt.ItemDataRole.UserRole)))
+        return selection
+
+    def analytics_species_ids(self):
+        """Species ids for the analytics, or ``None`` to count everything.
+
+        ``None`` rather than "every id" on purpose: it is what the analytics
+        already mean by no filter, and it keeps a species added later included
+        without the selection having to be revisited.
+        """
+        if self.analytics_all_species_check.isChecked():
+            return None
+        return [species_id for _name, species_id
+                in self._analytics_species_selection()]
+
+    def _update_analytics_species_status(self):
+        if self.analytics_all_species_check.isChecked():
+            self.analytics_species_status.setText(
+                "Counting every species. 'not-an-animal' is excluded from "
+                "every analytic either way.")
+            return
+        if self.analytics_species_list.count() == 0:
+            self.analytics_species_status.setText(
+                "No species found — set a target folder whose project has "
+                "been through the pipeline.")
+            return
+        chosen = self._analytics_species_selection()
+        if not chosen:
+            self.analytics_species_status.setText(
+                "Tick at least one species, or choose 'All species'.")
+        else:
+            names = ", ".join(name for name, _id in chosen)
+            self.analytics_species_status.setText(f"Counting: {names}")
+
+    def _check_analytics_species(self) -> bool:
+        """False when the filter would exclude everything, with a reason."""
+        ids = self.analytics_species_ids()
+        if ids is not None and not ids:
+            QMessageBox.warning(
+                self, "Survey Analytics",
+                "No species are selected, so there would be nothing to "
+                "count. Tick at least one species, or choose 'All species'.")
+            return False
+        return True
 
     def _on_export_format_changed(self):
         """Reflect the chosen format's own defaults in the options."""
@@ -6958,6 +7101,9 @@ class BambiDockWidget(QDockWidget):
 
     def run_density_heatmap(self):
         """Run the density-heatmap generation step."""
+        if not self._check_analytics_species():
+            return
+
         config = self.get_config()
         target_folder = config.get("target_folder", "")
         if not target_folder or not os.path.isdir(target_folder):
@@ -7114,6 +7260,9 @@ class BambiDockWidget(QDockWidget):
 
     def run_distance_sampling(self):
         """Run the distance-sampling estimation step (one or more projects)."""
+        if not self._check_analytics_species():
+            return
+
         config = self.get_config()
         folders = config.get("ds_project_folders", [])
         if not folders:
@@ -7249,6 +7398,9 @@ class BambiDockWidget(QDockWidget):
 
     def run_population_estimation(self):
         """Run the transect-based population estimation (one or more projects)."""
+        if not self._check_analytics_species():
+            return
+
         config = self.get_config()
         entries = config.get("pop_project_folders", [])
         if not entries:
