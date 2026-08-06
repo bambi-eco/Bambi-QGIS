@@ -290,6 +290,29 @@ question rather than to one product.
 - The choice is recorded in the provenance, so a result says which species it
   counted.
 
+### One result, or one per species
+
+Ticking several species pools them into a single result by default: one density
+raster, one abundance figure. **Separate result per species** runs the analytic
+once per species instead, writing one result each:
+
+| Analytic | Pooled | Per species |
+|---|---|---|
+| Density heatmap | `density_detections.tif` | `density_detections_roe-deer.tif`, … |
+| Distance sampling | `distance_sampling_detections.json` | `distance_sampling_detections_roe-deer.json`, … |
+| Population estimation | `population_estimate.json` | `population_estimate_roe-deer.json`, … |
+
+Each result records the species it counted, and the summary dialogs and layer
+names carry it through. Two details:
+
+- **A species with nothing to count is skipped**, not given an empty result,
+  and the skipped ones are named in the log.
+- **A species too thin to fit a detection function is reported and skipped**,
+  rather than failing the whole run. With several species it is normal for the
+  rare ones to have too few distances — that is a result about those species,
+  not an error about the others. If none can be fitted, the run fails and says
+  so for each.
+
 The filter is applied where the distances are computed, so **changing it means
 re-running *Calculate Perpendicular*** before distance sampling reflects it. If
 the filter matches nothing the step stops and says so, rather than falling back

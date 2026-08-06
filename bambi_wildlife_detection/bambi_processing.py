@@ -2065,6 +2065,69 @@ class BambiProcessor:
     # Survey analytics: density heatmap + distance sampling
     # ------------------------------------------------------------------ #
 
+    @staticmethod
+    def species_slug(name: str) -> str:
+        """A species name as a filename fragment: 'roe deer' → 'roe-deer'."""
+        keep = [c.lower() if c.isalnum() else "-" for c in (name or "")]
+        slug = "".join(keep).strip("-")
+        while "--" in slug:
+            slug = slug.replace("--", "-")
+        return slug or "species"
+
+    def analytics_strata(self, config: Dict[str, Any], source: str,
+                         log_fn=None) -> List[Tuple[str, Any]]:
+        """The runs an analytic should perform, as ``(label, species_ids)``.
+
+        One entry — ``("", <the filter>)`` — unless "separate result per
+        species" is set, in which case one per species that actually has
+        points. Species with nothing to count are left out rather than
+        producing an empty result apiece, and reported instead.
+        """
+        if not config.get("analytics_per_species"):
+            return [("", config.get("analytics_species_ids"))]
+
+        from .core import analytics_source, store as _store
+
+        target_folder = config["target_folder"]
+        camera_key = ("tracking_camera" if source == "tracks"
+                      else "detection_camera")
+        suffix = "t" if config.get(camera_key, "T") == "T" else "w"
+        if not os.path.isfile(_store.stage_path(
+                target_folder, _store.DETECTIONS, suffix)):
+            raise RuntimeError(
+                "A separate result per species needs the 6.0 store, which "
+                "this project does not have. Migrate it first, or untick "
+                "'Separate result per species'.")
+
+        selected = config.get("analytics_species_ids")
+        strata, empty = [], []
+        for entry in analytics_source.species_options(target_folder):
+            species_id = entry["species_id"]
+            if selected is not None and species_id not in selected:
+                continue
+            try:
+                points, _provenance = analytics_source.load_points(
+                    target_folder, suffix, source, [species_id],
+                    config.get("analytics_include_manual", True))
+            except analytics_source.AnalyticsError:
+                points = []
+            if points:
+                strata.append((entry["name"], [species_id]))
+            else:
+                empty.append(entry["name"])
+
+        if log_fn and empty:
+            log_fn(f"No {source} for: {', '.join(empty)} — skipped.")
+        if not strata:
+            raise RuntimeError(
+                "No species has any geo-referenced "
+                f"{source} to analyse, so there is nothing to produce a "
+                "result for.")
+        if log_fn:
+            log_fn(f"Running per species: "
+                   f"{', '.join(name for name, _ in strata)}")
+        return strata
+
     def _collect_analytics_points(self, config, source, log_fn=None):
         """Collect world-coordinate (UTM) point locations for analytics.
 
@@ -2163,7 +2226,36 @@ class BambiProcessor:
             log_fn(f"Collected {len(points)} {source} point(s) from {suffix} outputs")
         return points, suffix
 
-    def run_density_heatmap(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
+    def run_density_heatmap(self, config: Dict[str, Any], progress_fn=None,
+                            log_fn=None, cancel_check=None):
+        """Generate a density raster — one, or one per species (§8.2)."""
+        source = config.get("density_source", "detections")
+        strata = self.analytics_strata(config, source, log_fn)
+
+        for index, (label, species_ids) in enumerate(strata):
+            if cancel_check and cancel_check():
+                raise CancelledException("Density heatmap cancelled")
+            per_run = dict(config)
+            per_run["analytics_species_ids"] = species_ids
+            if log_fn and label:
+                log_fn(f"— {label} —")
+
+            def scaled(value, index=index):
+                """Progress across all strata, not within one."""
+                if progress_fn:
+                    span = 100.0 / len(strata)
+                    progress_fn(int(index * span + value * span / 100.0))
+
+            self._run_density_heatmap_once(
+                per_run, label, scaled if progress_fn else None, log_fn,
+                cancel_check)
+
+        if progress_fn:
+            progress_fn(100)
+
+    def _run_density_heatmap_once(self, config: Dict[str, Any],
+                                  label: str = "", progress_fn=None,
+                                  log_fn=None, cancel_check=None):
         """Generate a kernel-density estimate raster of animal locations.
 
         Points come from either geo-referenced detections or tracks (one point
@@ -2265,7 +2357,10 @@ class BambiProcessor:
 
         analytics_folder = os.path.join(target_folder, f"analytics_{suffix}")
         os.makedirs(analytics_folder, exist_ok=True)
-        out_file = os.path.join(analytics_folder, f"density_{source}.tif")
+        stem = f"density_{source}"
+        if label:
+            stem += f"_{self.species_slug(label)}"
+        out_file = os.path.join(analytics_folder, f"{stem}.tif")
 
         bounds = (min_x, min_y, max_x, max_y)
         self._save_single_band_raster(out, out_file, bounds, target_epsg, nodata, log_fn)
@@ -2282,11 +2377,12 @@ class BambiProcessor:
             "max_density": float(valid.max()) if valid.size else 0.0,
             "mean_density": float(valid.mean()) if valid.size else 0.0,
             "raster": out_file,
+            "species": label or None,
         }
         # What went into the number, so it can be traced back (§8.2).
         if getattr(self, "_last_analytics_provenance", None):
             stats["population_filter"] = self._last_analytics_provenance
-        with open(os.path.join(analytics_folder, f"density_{source}.json"),
+        with open(os.path.join(analytics_folder, f"{stem}.json"),
                   'w', encoding='utf-8') as f:
             json.dump(stats, f, indent=2)
 
@@ -2296,6 +2392,7 @@ class BambiProcessor:
                    f"from {len(points)} {source}")
         if progress_fn:
             progress_fn(100)
+        return out_file
 
     @staticmethod
     def _gaussian_blur_numpy(grid, sigma):
@@ -2550,7 +2647,52 @@ class BambiProcessor:
         if progress_fn:
             progress_fn(100)
 
-    def run_distance_sampling(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
+    def run_distance_sampling(self, config: Dict[str, Any], progress_fn=None,
+                              log_fn=None, cancel_check=None):
+        """Fit a detection function — once, or once per species (§8.2).
+
+        A stratum too thin to fit is reported and skipped rather than failing
+        the whole run: with several species it is normal for the rare ones to
+        have too few distances, and that is a result about those species, not
+        an error about the others.
+        """
+        source = config.get("ds_source", "detections")
+        strata = self.analytics_strata(config, source, log_fn)
+
+        failures = []
+        for index, (label, species_ids) in enumerate(strata):
+            if cancel_check and cancel_check():
+                raise CancelledException("Distance sampling cancelled")
+            per_run = dict(config)
+            per_run["analytics_species_ids"] = species_ids
+            if log_fn and label:
+                log_fn(f"— {label} —")
+
+            def scaled(value, index=index):
+                if progress_fn:
+                    span = 100.0 / len(strata)
+                    progress_fn(int(index * span + value * span / 100.0))
+
+            try:
+                self._run_distance_sampling_once(
+                    per_run, label, scaled if progress_fn else None, log_fn,
+                    cancel_check)
+            except (RuntimeError, ValueError, FloatingPointError) as exc:
+                if not label:
+                    raise
+                failures.append((label, str(exc)))
+                if log_fn:
+                    log_fn(f"{label}: no estimate — {exc}")
+
+        if failures and len(failures) == len(strata):
+            detail = "; ".join(f"{name} ({why})" for name, why in failures)
+            raise RuntimeError(f"No species could be fitted: {detail}")
+        if progress_fn:
+            progress_fn(100)
+
+    def _run_distance_sampling_once(self, config: Dict[str, Any],
+                                    label: str = "", progress_fn=None,
+                                    log_fn=None, cancel_check=None):
         """Estimate density/abundance via conventional line-transect distance sampling.
 
         Uses the perpendicular distances already computed by 'Calculate
@@ -2717,7 +2859,11 @@ class BambiProcessor:
             else ("t" if config.get("detection_camera", "T") == "T" else "w")
         analytics_folder = os.path.join(target_folder, f"analytics_{det_suffix_out}")
         os.makedirs(analytics_folder, exist_ok=True)
-        out_file = os.path.join(analytics_folder, f"distance_sampling_{source}.json")
+        stem = f"distance_sampling_{source}"
+        if label:
+            stem += f"_{self.species_slug(label)}"
+            result["species"] = label
+        out_file = os.path.join(analytics_folder, f"{stem}.json")
         with open(out_file, 'w', encoding='utf-8') as f:
             json.dump(result, f, indent=2)
 
@@ -2769,9 +2915,15 @@ class BambiProcessor:
                 f"Please run '{prereq}' first.")
         with open(perp_file, 'r', encoding='utf-8') as f:
             perp_data = json.load(f)
+        entries = [e for e in perp_data.get(list_key, []) if dist_key in e]
+        species_ids = config.get("analytics_species_ids")
+        if species_ids is not None:
+            # class_id is the resolved species for anything the store wrote;
+            # an entry without one predates that and cannot be attributed.
+            wanted = set(species_ids)
+            entries = [e for e in entries if e.get("class_id") in wanted]
         distances = np.asarray(
-            [float(e[dist_key]) for e in perp_data.get(list_key, []) if dist_key in e],
-            dtype=np.float64)
+            [float(e[dist_key]) for e in entries], dtype=np.float64)
         distances = distances[np.isfinite(distances) & (distances >= 0)]
 
         route_file = os.path.join(
@@ -2960,8 +3112,35 @@ class BambiProcessor:
     # Survey analytics: transect-based population estimation
     # ------------------------------------------------------------------ #
 
-    def run_population_estimation(self, config: Dict[str, Any], progress_fn=None,
-                                  log_fn=None, cancel_check=None):
+    def run_population_estimation(self, config: Dict[str, Any],
+                                  progress_fn=None, log_fn=None,
+                                  cancel_check=None):
+        """Estimate a population — once, or once per species (§8.2)."""
+        strata = self.analytics_strata(config, "tracks", log_fn)
+
+        for index, (label, species_ids) in enumerate(strata):
+            if cancel_check and cancel_check():
+                raise CancelledException("Population estimation cancelled")
+            per_run = dict(config)
+            per_run["analytics_species_ids"] = species_ids
+            if log_fn and label:
+                log_fn(f"— {label} —")
+
+            def scaled(value, index=index):
+                if progress_fn:
+                    span = 100.0 / len(strata)
+                    progress_fn(int(index * span + value * span / 100.0))
+
+            self._run_population_estimation_once(
+                per_run, label, scaled if progress_fn else None, log_fn,
+                cancel_check)
+
+        if progress_fn:
+            progress_fn(100)
+
+    def _run_population_estimation_once(self, config: Dict[str, Any],
+                                        label: str = "", progress_fn=None,
+                                        log_fn=None, cancel_check=None):
         """Estimate population density from the transects of a split flight.
 
         Builds the per-transect count/area table the R analysis of Praschl et
@@ -3160,7 +3339,11 @@ class BambiProcessor:
         analytics_folder = os.path.join(target_folder, f"analytics_{suffix}")
         os.makedirs(analytics_folder, exist_ok=True)
 
-        out_file = os.path.join(analytics_folder, "population_estimate.json")
+        stem = "population_estimate"
+        if label:
+            stem += f"_{self.species_slug(label)}"
+            result["species"] = label
+        out_file = os.path.join(analytics_folder, f"{stem}.json")
         with open(out_file, 'w', encoding='utf-8') as f:
             json.dump(result, f, indent=2)
 

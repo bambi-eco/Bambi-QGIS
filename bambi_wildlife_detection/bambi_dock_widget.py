@@ -2730,6 +2730,19 @@ class BambiDockWidget(QDockWidget):
             lambda _item: self._update_analytics_species_status())
         species_layout.addWidget(self.analytics_species_list)
 
+        self.analytics_per_species_check = QCheckBox(
+            "Separate result per species")
+        self.analytics_per_species_check.setToolTip(
+            "Off: the selected species are pooled into one result.\n"
+            "On: the density heatmap, distance sampling and population "
+            "estimation run once per species and write one result each, named "
+            "after the species. A species with nothing to count is skipped, "
+            "and one too thin to fit is reported rather than failing the run."
+        )
+        self.analytics_per_species_check.toggled.connect(
+            lambda _on: self._update_analytics_species_status())
+        species_layout.addWidget(self.analytics_per_species_check)
+
         self.analytics_species_status = QLabel("")
         self.analytics_species_status.setWordWrap(True)
         self.analytics_species_status.setStyleSheet(
@@ -3451,6 +3464,9 @@ class BambiDockWidget(QDockWidget):
             "analytics_species_ids": (
                 self.analytics_species_ids()
                 if hasattr(self, 'analytics_all_species_check') else None),
+            "analytics_per_species": (
+                self.analytics_per_species_check.isChecked()
+                if hasattr(self, 'analytics_per_species_check') else False),
 
             # Survey analytics: density heatmap
             "density_source": (
@@ -5860,10 +5876,13 @@ class BambiDockWidget(QDockWidget):
                 in self._analytics_species_selection()]
 
     def _update_analytics_species_status(self):
+        separate = self.analytics_per_species_check.isChecked()
         if self.analytics_all_species_check.isChecked():
             self.analytics_species_status.setText(
-                "Counting every species. 'not-an-animal' is excluded from "
-                "every analytic either way.")
+                ("One result per species, for every species with something to "
+                 "count." if separate else
+                 "Counting every species together. 'not-an-animal' is "
+                 "excluded from every analytic either way."))
             return
         if self.analytics_species_list.count() == 0:
             self.analytics_species_status.setText(
@@ -5874,9 +5893,14 @@ class BambiDockWidget(QDockWidget):
         if not chosen:
             self.analytics_species_status.setText(
                 "Tick at least one species, or choose 'All species'.")
+        elif separate:
+            names = ", ".join(name for name, _id in chosen)
+            self.analytics_species_status.setText(
+                f"One result each for: {names}")
         else:
             names = ", ".join(name for name, _id in chosen)
-            self.analytics_species_status.setText(f"Counting: {names}")
+            self.analytics_species_status.setText(
+                f"Counting together: {names}")
 
     def _check_analytics_species(self) -> bool:
         """False when the filter would exclude everything, with a reason."""
@@ -5888,6 +5912,45 @@ class BambiDockWidget(QDockWidget):
                 "count. Tick at least one species, or choose 'All species'.")
             return False
         return True
+
+    def analytics_outputs(self, analytics_folder: str, stem: str, ext: str):
+        """``(species, path)`` for the results the current mode produced.
+
+        Keyed off the checkbox rather than off whatever is in the folder, so a
+        leftover file from an earlier per-species run is not mistaken for part
+        of this one.
+        """
+        if not self.analytics_per_species_check.isChecked():
+            path = os.path.join(analytics_folder, f"{stem}.{ext}")
+            return [("", path)] if os.path.isfile(path) else []
+
+        if not os.path.isdir(analytics_folder):
+            return []
+        found = []
+        for name in sorted(os.listdir(analytics_folder)):
+            if not (name.startswith(f"{stem}_") and name.endswith(f".{ext}")):
+                continue
+            path = os.path.join(analytics_folder, name)
+            found.append((self._analytics_species_of(path, stem, ext, name),
+                          path))
+        return found
+
+    @staticmethod
+    def _analytics_species_of(path: str, stem: str, ext: str, name: str) -> str:
+        """The species a result belongs to — from the file, not the filename.
+
+        The name is a slug ("roe-deer"), so the readable name is read back out
+        of the result itself; the slug is only the fallback.
+        """
+        document = path if ext == "json" else f"{path[:-len(ext)]}json"
+        try:
+            with open(document, "r", encoding="utf-8") as fh:
+                species = json.load(fh).get("species")
+            if species:
+                return str(species)
+        except (OSError, ValueError):
+            pass
+        return name[len(stem) + 1:-(len(ext) + 1)]
 
     def _on_export_format_changed(self):
         """Reflect the chosen format's own defaults in the options."""
@@ -7140,9 +7203,10 @@ class BambiDockWidget(QDockWidget):
             suffix = "t" if config.get("detection_camera", "T") == "T" else "w"
         camera_label = "Thermal" if suffix == "t" else "RGB"
 
-        raster_file = os.path.join(config["target_folder"], f"analytics_{suffix}",
-                                   f"density_{source}.tif")
-        if not os.path.exists(raster_file):
+        rasters = self.analytics_outputs(
+            os.path.join(config["target_folder"], f"analytics_{suffix}"),
+            f"density_{source}", "tif")
+        if not rasters:
             QMessageBox.warning(
                 self, "Missing Data",
                 "Density heatmap has not been generated.\n"
@@ -7152,15 +7216,20 @@ class BambiDockWidget(QDockWidget):
 
         try:
             self.update_status("add_density", "🟡 Loading...")
-            layer_name = f"BAMBI Density {source.capitalize()} ({camera_label})"
-            layer = QgsRasterLayer(raster_file, layer_name)
-            if not layer.isValid():
-                raise RuntimeError(f"Failed to load raster: {raster_file}")
-            self._apply_density_style(layer)
-            QgsProject.instance().addMapLayer(layer)
+            for species, raster_file in rasters:
+                layer_name = (
+                    f"BAMBI Density {source.capitalize()} ({camera_label})")
+                if species:
+                    layer_name = (f"BAMBI Density {species} "
+                                  f"{source.capitalize()} ({camera_label})")
+                layer = QgsRasterLayer(raster_file, layer_name)
+                if not layer.isValid():
+                    raise RuntimeError(f"Failed to load raster: {raster_file}")
+                self._apply_density_style(layer)
+                QgsProject.instance().addMapLayer(layer)
+                self.log(f"Added density heatmap layer: {layer_name}")
             self.update_status("add_density", "🟢 Added")
             self.iface.mapCanvas().refresh()
-            self.log(f"Added density heatmap layer: {layer_name}")
         except Exception as e:
             self.update_status("add_density", "🔴 Error")
             self.log(f"Error adding density heatmap: {e}")
@@ -7305,24 +7374,55 @@ class BambiDockWidget(QDockWidget):
         self.start_worker("distance_sampling")
 
     def _show_distance_sampling_results(self):
-        """Read the distance-sampling JSON and show a summary dialog."""
+        """Read the distance-sampling JSON(s) and show a summary dialog."""
         config = self.get_config()
         source = config.get("ds_source", "detections")
         if source == "tracks":
             suffix = "t" if config.get("tracking_camera", "T") == "T" else "w"
         else:
             suffix = "t" if config.get("detection_camera", "T") == "T" else "w"
-        result_file = os.path.join(config["target_folder"], f"analytics_{suffix}",
-                                   f"distance_sampling_{source}.json")
-        if not os.path.exists(result_file):
-            return
-        try:
-            with open(result_file, 'r', encoding='utf-8') as f:
-                r = json.load(f)
-        except Exception as e:
-            self.log(f"Could not read distance-sampling results: {e}")
+
+        results = self.analytics_outputs(
+            os.path.join(config["target_folder"], f"analytics_{suffix}"),
+            f"distance_sampling_{source}", "json")
+        if not results:
             return
 
+        sections = []
+        for species, result_file in results:
+            try:
+                with open(result_file, 'r', encoding='utf-8') as f:
+                    r = json.load(f)
+            except Exception as e:
+                self.log(f"Could not read distance-sampling results: {e}")
+                continue
+            if species:
+                sections.append(f"<h2>{species}</h2>")
+            sections.append(
+                self._distance_sampling_html(r, result_file))
+        if not sections:
+            return
+
+        self._show_analytics_dialog(
+            "Distance-Sampling Results", "".join(sections))
+
+    def _show_analytics_dialog(self, title: str, html: str):
+        """One read-only dialog for an analytic's summary."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle(title)
+        dlg.setMinimumWidth(480)
+        layout = QVBoxLayout(dlg)
+        text = QTextEdit()
+        text.setReadOnly(True)
+        text.setHtml(html)
+        layout.addWidget(text)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+        buttons.accepted.connect(dlg.accept)
+        layout.addWidget(buttons)
+        dlg.exec()
+
+    def _distance_sampling_html(self, r, result_file):
+        """The summary table for one distance-sampling result."""
         d_ci = r.get("density_ci95", [0, 0])
         n_ci = r.get("abundance_ci95", [0, 0])
         rows = "".join(
@@ -7382,19 +7482,7 @@ class BambiDockWidget(QDockWidget):
         <p style='color:gray;font-size:11px'>{r.get('notes', '')}</p>
         <p style='color:gray;font-size:11px'>Saved to: {result_file}</p>
         """
-
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Distance-Sampling Results")
-        dlg.setMinimumWidth(480)
-        layout = QVBoxLayout(dlg)
-        text = QTextEdit()
-        text.setReadOnly(True)
-        text.setHtml(html)
-        layout.addWidget(text)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
-        buttons.accepted.connect(dlg.accept)
-        layout.addWidget(buttons)
-        dlg.exec()
+        return html
 
     def run_population_estimation(self):
         """Run the transect-based population estimation (one or more projects)."""
@@ -7472,20 +7560,35 @@ class BambiDockWidget(QDockWidget):
         self.start_worker("population_estimation")
 
     def _show_population_results(self):
-        """Read the population-estimate JSON and show a summary dialog."""
+        """Read the population-estimate JSON(s) and show a summary dialog."""
         config = self.get_config()
         suffix = "t" if config.get("pop_camera", "T") == "T" else "w"
-        result_file = os.path.join(config["target_folder"], f"analytics_{suffix}",
-                                   "population_estimate.json")
-        if not os.path.exists(result_file):
-            return
-        try:
-            with open(result_file, 'r', encoding='utf-8') as f:
-                r = json.load(f)
-        except Exception as e:
-            self.log(f"Could not read population-estimation results: {e}")
+
+        results = self.analytics_outputs(
+            os.path.join(config["target_folder"], f"analytics_{suffix}"),
+            "population_estimate", "json")
+        if not results:
             return
 
+        sections = []
+        for species, result_file in results:
+            try:
+                with open(result_file, 'r', encoding='utf-8') as f:
+                    r = json.load(f)
+            except Exception as e:
+                self.log(f"Could not read population-estimation results: {e}")
+                continue
+            if species:
+                sections.append(f"<h2>{species}</h2>")
+            sections.append(self._population_html(r, result_file))
+        if not sections:
+            return
+
+        self._show_analytics_dialog(
+            "Population Estimation Results", "".join(sections))
+
+    def _population_html(self, r, result_file):
+        """The summary table for one population estimate."""
         study_ha = r.get("study_area_ha", 0) or 0
         method_labels = {"naive": "Naive", "bootstrap": "Bootstrap", "zinb": "ZINB"}
         est_rows = ""
@@ -7604,20 +7707,7 @@ class BambiDockWidget(QDockWidget):
         <p style='color:gray;font-size:11px'>{r.get('notes', '')}</p>
         <p style='color:gray;font-size:11px'>Saved to: {result_file}</p>
         """
-
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Population-Estimation Results")
-        dlg.setMinimumWidth(560)
-        dlg.setMinimumHeight(520)
-        layout = QVBoxLayout(dlg)
-        text = QTextEdit()
-        text.setReadOnly(True)
-        text.setHtml(html)
-        layout.addWidget(text)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
-        buttons.accepted.connect(dlg.accept)
-        layout.addWidget(buttons)
-        dlg.exec()
+        return html
 
     def add_transect_areas_to_qgis(self):
         """Add one layer group per transect, holding its route and its FoV area.

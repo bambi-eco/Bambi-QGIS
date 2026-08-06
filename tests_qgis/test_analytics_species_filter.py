@@ -177,3 +177,81 @@ def test_the_coverage_map_is_not_blocked_by_the_filter(dock, quiet,
     dock.run_coverage_map()
     warnings = " ".join(str(a) for a in quiet["warn"])
     assert "species" not in warnings.lower()
+
+
+# ---------------------------------------------------------------------------
+# Separate result per species
+# ---------------------------------------------------------------------------
+
+def test_pooling_is_the_default(dock):
+    assert dock.analytics_per_species_check.isChecked() is False
+    assert dock.get_config()["analytics_per_species"] is False
+
+
+def test_the_choice_reaches_the_config_too(dock):
+    dock.analytics_per_species_check.setChecked(True)
+    assert dock.get_config()["analytics_per_species"] is True
+
+
+def test_the_status_distinguishes_pooled_from_separate(dock, project_folder):
+    dock.target_folder_edit.setText(project_folder)
+    dock.refresh_analytics_species()
+
+    dock.analytics_per_species_check.setChecked(False)
+    pooled = dock.analytics_species_status.text()
+    dock.analytics_per_species_check.setChecked(True)
+    separate = dock.analytics_species_status.text()
+
+    assert pooled != separate
+    assert "each" in separate or "per species" in separate
+
+
+def test_the_loader_finds_one_output_when_pooled(dock, project_folder):
+    folder = os.path.join(project_folder, "analytics_t")
+    os.makedirs(folder, exist_ok=True)
+    for name in ("density_detections.tif", "density_detections_roe-deer.tif"):
+        open(os.path.join(folder, name), "wb").close()
+
+    dock.analytics_per_species_check.setChecked(False)
+    found = dock.analytics_outputs(folder, "density_detections", "tif")
+    assert [species for species, _path in found] == [""]
+
+
+def test_the_loader_finds_every_species_when_separate(dock, project_folder):
+    folder = os.path.join(project_folder, "analytics_t")
+    os.makedirs(folder, exist_ok=True)
+    for name in ("density_detections.tif", "density_detections_roe-deer.tif",
+                 "density_detections_chamois.tif"):
+        open(os.path.join(folder, name), "wb").close()
+
+    dock.analytics_per_species_check.setChecked(True)
+    found = dock.analytics_outputs(folder, "density_detections", "tif")
+    assert len(found) == 2
+    assert "" not in [species for species, _path in found]
+
+
+def test_the_species_name_is_read_from_the_result(dock, project_folder):
+    """The filename is a slug, so 'roe deer' would come back as 'roe-deer'."""
+    import json
+
+    folder = os.path.join(project_folder, "analytics_t")
+    os.makedirs(folder, exist_ok=True)
+    open(os.path.join(folder, "density_detections_roe-deer.tif"), "wb").close()
+    with open(os.path.join(folder, "density_detections_roe-deer.json"),
+              "w", encoding="utf-8") as fh:
+        json.dump({"species": "roe deer"}, fh)
+
+    dock.analytics_per_species_check.setChecked(True)
+    found = dock.analytics_outputs(folder, "density_detections", "tif")
+    assert found[0][0] == "roe deer"
+
+
+def test_the_slug_is_the_fallback_when_there_is_no_result_file(dock,
+                                                               project_folder):
+    folder = os.path.join(project_folder, "analytics_t")
+    os.makedirs(folder, exist_ok=True)
+    open(os.path.join(folder, "density_detections_chamois.tif"), "wb").close()
+
+    dock.analytics_per_species_check.setChecked(True)
+    found = dock.analytics_outputs(folder, "density_detections", "tif")
+    assert found[0][0] == "chamois"
