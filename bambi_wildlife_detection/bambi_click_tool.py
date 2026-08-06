@@ -15,16 +15,16 @@ Layer custom properties used
 ``bambi_dem_path``         : absolute path to the DEM GLTF/GLB file
 ``bambi_correction_path``  : absolute path to correction.json (may be empty)
 
-Data files read (relative to *target_folder*, ``{m}`` = ``t`` thermal / ``w`` RGB,
+Data read (relative to *target_folder*, ``{m}`` = ``t`` thermal / ``w`` RGB,
 selected from the layer's ``bambi_detection_camera`` property)
 ---------------------------------------------
-``detections_{m}/detections.txt``  — pixel-space detections
-    format: ``frame x1 y1 x2 y2 confidence class_id`` (space-separated)
-    header line starts with ``#``
+``bambi_{m}/detections.gpkg``  — pixel-space detections and their species
+``bambi_{m}/tracks.gpkg``      — which detections belong to which track
 
-``tracks_{m}/tracks_pixel.csv``    — pixel-space track detections
-    format: ``frame,track_id,x1,y1,x2,y2,conf,cls[,interpolated]``
-    header line starts with ``#``
+Both through :mod:`core.inspection`. The clicked box is found by the
+``detection_id`` the layer was built from; the 5.x text files carry no such id,
+so they were matched back on confidence and class to four decimal places and
+are no longer read at all.
 
 ``poses_t.json`` / ``poses_w.json`` — frame → image file mapping
     structure: ``{"images": [{"imagefile": "...", ...}, ...]}``

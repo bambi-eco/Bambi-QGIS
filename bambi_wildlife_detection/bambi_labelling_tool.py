@@ -8,8 +8,8 @@ extracted frames of a processed flight.
 
 Features
 --------
-* Visualises existing pipeline detections (``detections_{m}/detections.txt``)
-  and tracks (``tracks_{m}/tracks_pixel.csv``) as read-only overlays.
+* Visualises the pipeline's detections and tracks (from ``bambi_{m}/*.gpkg``)
+  as read-only overlays, so what is drawn is what every other tool counts.
 * Modality selector: label either on thermal or RGB frames — never mixed.
   Label tracks are stored per modality in ``labels_{m}/labels.json``.
 * Key-frame based annotation: bounding boxes are only stored on key frames
@@ -1731,8 +1731,7 @@ class LabellingToolDialog(QDialog):
                 f"Could not read frames from {poses_path}.")
             return
 
-        self._detections = _load_detections_by_frame(
-            os.path.join(self._target_folder, f"detections_{m}", "detections.txt"))
+        self._detections = _load_detections_by_frame(self._target_folder, m)
         self._pixel_tracks = self._load_pipeline_tracks(m)
 
         self._store = LabelStore(self._target_folder, m)
@@ -2347,9 +2346,6 @@ class LabellingToolDialog(QDialog):
         from .core import track_store
 
         stored = track_store.load_pixel_tracks(self._target_folder, modality)
-        if not stored:
-            return _load_pixel_tracks(os.path.join(
-                self._target_folder, f"tracks_{modality}", "tracks_pixel.csv"))
 
         tracks: Dict[int, List[dict]] = {}
         for row in stored:
@@ -2964,7 +2960,8 @@ class LabellingToolDialog(QDialog):
             return
 
         # Refresh the read-only overlay so the exported boxes show up.
-        self._detections = _load_detections_by_frame(det_file)
+        self._detections = _load_detections_by_frame(
+            self._target_folder, self._modality)
         self._render_frame()
 
         QMessageBox.information(
@@ -3011,9 +3008,8 @@ class LabellingToolDialog(QDialog):
 
         # Refresh the read-only overlays: the detections now show the label
         # boxes and the deleted pipeline tracks disappear.
-        self._detections = _load_detections_by_frame(det_file)
-        self._pixel_tracks = _load_pixel_tracks(
-            os.path.join(self._target_folder, f"tracks_{m}", "tracks_pixel.csv"))
+        self._detections = _load_detections_by_frame(self._target_folder, m)
+        self._pixel_tracks = _load_pixel_tracks(self._target_folder, m)
         self._render_frame()
 
         removed_note = ""

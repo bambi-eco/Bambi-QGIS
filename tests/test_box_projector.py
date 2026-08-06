@@ -69,27 +69,48 @@ class TestCorrectionForFrame:
 
 
 class TestLoadGeoref:
-    def test_parses_valid_lines_and_skips_junk(self, tmp_path):
-        folder = tmp_path / "georeferenced_t"
-        folder.mkdir()
-        (folder / "georeferenced.txt").write_text(
-            "# idx frame x1 y1 z1 x2 y2 z2 conf cls\n"
-            "\n"
-            "0 12 100.0 200.0 300.0 101.0 201.0 301.0 0.87 3\n"
-            "1 13 too short\n"
-            "2 14 110.0 210.0 310.0 111.0 211.0 311.0 0.55 1\n"
-        )
-        result = _load_georef(str(tmp_path), "t")
+    def test_reads_the_store(self, tmp_path):
+        from bambi_wildlife_detection.core import detection_store, track_store
+
+        root = str(tmp_path)
+        detection_store.record_detections(root, "t", [
+            {"frame": 12, "x1": 1.0, "y1": 2.0, "x2": 3.0, "y2": 4.0,
+             "confidence": 0.87, "source_class": "3"},
+            {"frame": 14, "x1": 5.0, "y1": 6.0, "x2": 7.0, "y2": 8.0,
+             "confidence": 0.55, "source_class": "1"},
+        ])
+        ids = [d["detection_id"]
+               for d in track_store.load_detections(root, "t")]
+        track_store.record_georeference(root, "t", [
+            {"detection_id": ids[0], "gx1": 100.0, "gy1": 200.0, "gz1": 300.0,
+             "gx2": 101.0, "gy2": 201.0, "gz2": 301.0},
+            {"detection_id": ids[1], "gx1": 110.0, "gy1": 210.0, "gz1": 310.0,
+             "gx2": 111.0, "gy2": 211.0, "gz2": 311.0},
+        ])
+
+        result = _load_georef(root, "t")
         assert len(result) == 2
         first = result[0]
         assert first["frame"] == 12
         assert first["x1"] == 100.0
         assert first["z2"] == 301.0
         assert first["confidence"] == 0.87
-        assert first["class_id"] == 3
+        # The row carries the id the viewer box came from, so nothing has to
+        # be matched back by coordinates.
+        assert first["detection_id"] == ids[0]
 
-    def test_missing_file_returns_empty_list(self, tmp_path):
+    def test_the_text_file_is_not_read(self, tmp_path):
+        folder = tmp_path / "georeferenced_t"
+        folder.mkdir()
+        (folder / "georeferenced.txt").write_text(
+            "0 12 100.0 200.0 300.0 101.0 201.0 301.0 0.87 3")
+        assert _load_georef(str(tmp_path), "t") == []
+
+    def test_missing_store_returns_empty_list(self, tmp_path):
         assert _load_georef(str(tmp_path), "w") == []
+
+    def test_unknown_modality_returns_empty_list(self, tmp_path):
+        assert _load_georef(str(tmp_path), "x") == []
 
 
 class TestMatchBoxesToGeoref:

@@ -780,15 +780,15 @@ class LabelStore:
 
     # -- 6.0 store --------------------------------------------------------
 
-    def _vocabulary(self) -> dict:
+    def _vocabulary(self, create: bool = False) -> dict:
         """Species and enum lookups from the project store, keyed by name.
 
-        Empty when no project store exists yet, which is what makes the store
-        write a no-op on an un-migrated 5.x folder.
+        Empty when no project store exists yet, so the tool can show its
+        built-in lists. *create* seeds one, for the paths about to write.
         """
         from . import label_store
 
-        return label_store.vocabulary(self.target_folder)
+        return label_store.vocabulary(self.target_folder, create=create)
 
     def to_store_tracks(self, vocabulary: Optional[dict] = None) -> List[dict]:
         """Convert the in-memory label tracks into store rows.
@@ -971,13 +971,10 @@ class LabelStore:
         # In the store this is one delete plus the normal upsert: the detector's
         # rows go, the labelling tool's are re-materialised in place, and the
         # tracking outputs are invalidated by the cascade rather than by hand.
-        from . import store
+        from . import label_store
 
-        if os.path.isfile(store.project_path(self.target_folder)):
-            from . import label_store
-
-            label_store.clear_detector_detections(
-                self.target_folder, self.modality)
+        label_store.clear_detector_detections(
+            self.target_folder, self.modality)
         self._materialise()
 
         removed: List[str] = []
@@ -994,15 +991,19 @@ class LabelStore:
 
         Unchanged ``(track, frame)`` pairs keep their ``detection_id``, so
         editing one key frame does not invalidate the whole flight.
-        """
-        from . import store
 
-        if not os.path.isfile(store.project_path(self.target_folder)):
-            return {}
+        The store is created if the folder has none: labels that exist only as
+        text are invisible to the analytics, the exports and the layers, which
+        all read the store.
+        """
         from . import label_store
 
+        # Seed the vocabulary first: resolving a species against an absent one
+        # would put every label under the fallback species instead.
+        vocabulary = self._vocabulary(create=True)
         return label_store.materialise(
-            self.target_folder, self.modality, self.to_store_tracks())
+            self.target_folder, self.modality,
+            self.to_store_tracks(vocabulary))
 
     def _detections_file(self) -> str:
         """Path of this modality's ``detections.txt`` (folder is created)."""
@@ -1076,60 +1077,44 @@ class LabelStore:
 # Overlay data loaders (pipeline outputs, read-only)
 # ---------------------------------------------------------------------------
 
-def _load_detections_by_frame(det_file: str) -> Dict[int, List[tuple]]:
-    """Parse ``detections_{m}/detections.txt`` into ``frame -> [boxes]``.
+def _load_detections_by_frame(target_folder: str,
+                              modality: str) -> Dict[int, List[tuple]]:
+    """``frame -> [(x1, y1, x2, y2, conf, class_id), …]`` from the store.
 
-    Format (space-separated, ``#`` comments): ``frame x1 y1 x2 y2 conf cls``
+    The read-only overlay the labelling tool draws under its own boxes. It
+    used to parse ``detections.txt``, which meant the overlay could disagree
+    with the store the tool writes into.
     """
+    from . import store, track_store
+
+    if modality not in store.MODALITIES:
+        return {}
     result: Dict[int, List[tuple]] = {}
-    if not os.path.isfile(det_file):
-        return result
-    try:
-        with open(det_file, "r", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                parts = line.split()
-                if len(parts) >= 6:
-                    frame = int(parts[0])
-                    result.setdefault(frame, []).append((
-                        float(parts[1]), float(parts[2]),
-                        float(parts[3]), float(parts[4]),
-                        float(parts[5]),
-                        int(parts[6]) if len(parts) > 6 else 0,
-                    ))
-    except Exception:  # nosec B110
-        pass
+    for row in track_store.load_detections(target_folder, modality):
+        result.setdefault(row["frame"], []).append((
+            row["x1"], row["y1"], row["x2"], row["y2"],
+            row["confidence"] if row["confidence"] is not None else 1.0,
+            row["species_id"],
+        ))
     return result
 
 
-def _load_pixel_tracks(tracks_file: str) -> Dict[int, List[dict]]:
-    """Parse ``tracks_{m}/tracks_pixel.csv`` into ``track_id -> [entries]``.
+def _load_pixel_tracks(target_folder: str,
+                       modality: str) -> Dict[int, List[dict]]:
+    """``track_id -> [entry, …]`` in frame order, from the store."""
+    from . import store, track_store
 
-    Format (comma-separated, ``#`` comments):
-    ``frame,track_id,x1,y1,x2,y2,conf,cls[,interpolated]``
-    """
+    if modality not in store.MODALITIES:
+        return {}
     result: Dict[int, List[dict]] = {}
-    if not os.path.isfile(tracks_file):
-        return result
-    try:
-        with open(tracks_file, "r", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                parts = line.split(",")
-                if len(parts) >= 8:
-                    tid = int(parts[1])
-                    result.setdefault(tid, []).append({
-                        "frame": int(parts[0]),
-                        "x1": float(parts[2]), "y1": float(parts[3]),
-                        "x2": float(parts[4]), "y2": float(parts[5]),
-                        "conf": float(parts[6]), "cls": int(parts[7]),
-                    })
-    except Exception:  # nosec B110
-        pass
+    for row in track_store.load_pixel_tracks(target_folder, modality):
+        result.setdefault(row["track_id"], []).append({
+            "frame": row["frame"],
+            "x1": row["x1"], "y1": row["y1"],
+            "x2": row["x2"], "y2": row["y2"],
+            "conf": row["confidence"] if row["confidence"] is not None else 1.0,
+            "cls": row["species_id"],
+        })
     for entries in result.values():
         entries.sort(key=lambda d: d["frame"])
     return result

@@ -43,41 +43,23 @@ from .core.corrections import (  # noqa: F401 — re-exported API
 
 
 def _load_georef(target_folder: str, src_modality: str) -> List[dict]:
-    """Parse ``georeferenced_{src_modality}/georeferenced.txt``.
+    """Geo-referenced detections for the modality the boxes were detected in.
 
-    The geo-referenced detections live in the camera-specific folder matching
-    the modality the boxes were detected in (``_t`` thermal, ``_w`` RGB).
-
-    Format: ``idx frame x1 y1 z1 x2 y2 z2 confidence class_id``
-    Coordinates have the DEM origin offset already added.
+    From the store: coordinates already have the DEM origin offset added, and
+    each row carries the detection_id the viewer box came from.
     """
-    path = os.path.join(
-        target_folder, f"georeferenced_{src_modality}", "georeferenced.txt")
-    result: List[dict] = []
-    if not os.path.isfile(path):
-        return result
-    try:
-        with open(path, "r", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                parts = line.split()
-                if len(parts) >= 10:
-                    result.append({
-                        "frame": int(parts[1]),
-                        "x1": float(parts[2]),
-                        "y1": float(parts[3]),
-                        "z1": float(parts[4]),
-                        "x2": float(parts[5]),
-                        "y2": float(parts[6]),
-                        "z2": float(parts[7]),
-                        "confidence": float(parts[8]),
-                        "class_id": int(parts[9]),
-                    })
-    except Exception:  # nosec B110
-        pass
-    return result
+    from .core import store, track_store
+
+    if src_modality not in store.MODALITIES:
+        return []
+    return [{
+        "detection_id": row["detection_id"],
+        "frame": row["frame"],
+        "x1": row["gx1"], "y1": row["gy1"], "z1": row["gz1"],
+        "x2": row["gx2"], "y2": row["gy2"], "z2": row["gz2"],
+        "confidence": row["confidence"] if row["confidence"] is not None else 1.0,
+        "class_id": row["species_id"],
+    } for row in track_store.load_georeferenced(target_folder, src_modality)]
 
 
 def _match_boxes_to_georef(
@@ -273,8 +255,8 @@ class BoxProjectionWorker(QThread):
         if not georef_all:
             src_label = "RGB" if self._src_modality == "w" else "thermal"
             raise RuntimeError(
-                f"No geo-referenced detections found for the {src_label} modality "
-                f"(expected georeferenced_{self._src_modality}/georeferenced.txt).\n"
+                f"No geo-referenced detections stored for the {src_label} "
+                "modality.\n"
                 "Please run the 'Geo-Reference Detections' step first."
             )
 

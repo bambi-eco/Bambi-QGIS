@@ -5,8 +5,9 @@ results now live in GeoPackages that record what they mean — which detection a
 track point came from, why a detection could not be placed on the DEM, what a
 density figure counted. This page covers what that changes for you.
 
-The 5.x text files are still written alongside, so external scripts keep
-working. See [Legacy text outputs](#legacy-text-outputs).
+The 5.x text files are still **written** alongside, so external scripts keep
+working — but nothing in the plugin **reads** them any more. See
+[Legacy text outputs](#legacy-text-outputs).
 
 ---
 

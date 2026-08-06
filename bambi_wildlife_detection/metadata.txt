@@ -42,6 +42,7 @@ changelog=Version 6.0.0
     - Survey analytics: a Species box selects which species the density heatmap, distance sampling and population estimation count, or all of them as before. "All species" means no filter, so a species added later stays included. The coverage map counts frames and is unaffected. "Separate result per species" runs those analytics once per species and writes one result each, named after the species; a species with nothing to count is skipped, and one too thin to fit is reported rather than failing the run.
     - "Reset Step..." deletes one step's outputs and marks everything that depended on it as out of date.
     - Geo-referencing records why a detection could not be placed on the DEM, rather than dropping it silently.
+    - Nothing in the plugin reads the 5.x text files any more; they are written for external scripts only. Every step, layer, overlay and analytic reads the store, so turning "Write legacy text outputs" off no longer changes what the plugin can do. Open a 5.x project once with "Migrate 5.x..." to bring it across.
     Changed:
     - The Processing tab is split into Pre-Processing (P1-P6: frames, flight route, field of view, ALFS, GeoTIFF, orthomosaic) and Processing (A1-A3: detection, tracking, segmentation). The two only look sequential; everything in Pre-Processing is independent of any animal. Steps are renumbered so a bare number no longer means two things.
     - Configuration is stored with the flight's outputs instead of in the QGIS project, so a target folder describes the settings that produced it. Older projects are converted when first opened.
@@ -52,6 +53,9 @@ changelog=Version 6.0.0
     Fixed:
     - Adding a species no longer renumbers the others, which previously changed the meaning of detections already exported.
     - A detection that cannot be geo-referenced no longer costs the other detections in its frame their tracks.
+    - Several steps refused to run when "Write legacy text outputs" was off: they checked for the text file before reading the store, so the pipeline could not proceed on its own output.
+    - The Field of View step now records its footprints in the store. They existed only as text, so the coverage map, the transect areas a population estimate divides by, and the FoV layers had nothing to read unless the project had been migrated from 5.x.
+    - The video creator, the map inspectors and the cross-modality box projector no longer reconstruct track membership by matching coordinates, row positions or confidence values. Those reconstructions could attach a box to the wrong animal whenever a file was re-sorted or a detection was dropped.
     - Re-running a step now marks the perpendicular distances, population estimates and exported media that depended on it as out of date; previously only the tracking folders were cleaned up.
     - YOLO export: the images are exported alongside the labels. The data.yaml used to point at an "images_<modality>" folder that was never created, so the dataset could not be trained on. Labels and images are now written as the sibling folders YOLO expects, and frames without an image on disk are reported instead of silently ignored.
     - Tracking now refuses to fall back to georeferenced.txt when the project has a store, and the BoxMOT backends record their run in it. Both cases previously produced a tracks file while the store stayed empty, so MOT, GeoJSON, TRex and the survey analytics reported every detection as untracked even though tracking had reported success.

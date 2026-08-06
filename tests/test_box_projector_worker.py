@@ -14,6 +14,7 @@ import sys
 import pytest
 
 from bambi_wildlife_detection.bambi_box_projector import BoxProjectionWorker
+from bambi_wildlife_detection.core import detection_store, track_store
 from tests.fakes import SignalRecorder, install_fake_render_stack
 
 IMG_W, IMG_H = 640, 512  # worker fallback resolution (no frame files on disk)
@@ -32,14 +33,18 @@ def _write_pipeline_folder(tmp_path, with_georef=True, with_poses=True):
     (tmp_path / "dem.json").write_text(json.dumps({"origin": list(ORIGIN)}))
 
     if with_georef:
-        georef_dir = tmp_path / "georeferenced_t"
-        georef_dir.mkdir()
-        # Local box corners (relative to DEM origin): (-0.5, -0.25) .. (0.5, 0.25)
-        line = (
-            f"0 0 {ORIGIN[0] - 0.5} {ORIGIN[1] - 0.25} {ORIGIN[2]} "
-            f"{ORIGIN[0] + 0.5} {ORIGIN[1] + 0.25} {ORIGIN[2]} 0.9 1"
-        )
-        (georef_dir / "georeferenced.txt").write_text("# header\n" + line + "\n")
+        # Box corners (relative to the DEM origin): (-0.5, -0.25)..(0.5, 0.25)
+        root = str(tmp_path)
+        detection_store.record_detections(root, "t", [
+            {"frame": 0, "x1": 10.0, "y1": 10.0, "x2": 20.0, "y2": 20.0,
+             "confidence": 0.9, "source_class": "1"}])
+        ids = [d["detection_id"]
+               for d in track_store.load_detections(root, "t")]
+        track_store.record_georeference(root, "t", [{
+            "detection_id": ids[0],
+            "gx1": ORIGIN[0] - 0.5, "gy1": ORIGIN[1] - 0.25, "gz1": ORIGIN[2],
+            "gx2": ORIGIN[0] + 0.5, "gy2": ORIGIN[1] + 0.25, "gz2": ORIGIN[2],
+        }])
 
     if with_poses:
         poses = {"images": [{
@@ -53,11 +58,21 @@ def _write_pipeline_folder(tmp_path, with_georef=True, with_poses=True):
     return str(tmp_path)
 
 
+def _stored_class(folder):
+    """The species the store resolved the detection to.
+
+    The viewer builds its boxes from the same rows, so a test box has to use
+    the resolved species rather than the detector's raw class.
+    """
+    rows = track_store.load_georeferenced(folder, "t")
+    return rows[0]["species_id"] if rows else 0
+
+
 def _make_worker(folder, frames=None):
     if frames is None:
         frames = [{
             "frame_idx": 0,
-            "boxes_green": [(10, 10, 20, 20, 0.9, 1)],
+            "boxes_green": [(10, 10, 20, 20, 0.9, _stored_class(folder))],
             "boxes_blue": [],
         }]
     return BoxProjectionWorker(
@@ -93,7 +108,7 @@ class TestProject:
         assert len(green) == 1
         assert green[0][:4] == pytest.approx(EXPECTED_BBOX)
         assert green[0][4] == 0.9   # confidence carried over
-        assert green[0][5] == 1     # class id carried over
+        assert green[0][5] == _stored_class(folder)   # class carried over
         assert worker.progress.calls[-1] == (100,)
 
     def test_origin_found_via_folder_scan_fallback(self, fake_render_stack, tmp_path):

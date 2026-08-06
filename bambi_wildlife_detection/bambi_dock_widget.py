@@ -37,6 +37,9 @@ from .bambi_click_tool import BambiClickTool
 # Built-in calibration presets live in bambi_calibrations.py (Qt-free module
 # so they are importable without QGIS, e.g. by the integration tests).
 from .bambi_calibrations import THERMAL_CALIBRATIONS, RGB_CALIBRATIONS  # noqa: F401
+# Stage kinds, for asking whether a step has results rather than whether its
+# legacy text file happens to be on disk.
+from .core import store as _store_kinds
 
 # Plugin scope for project settings storage
 PLUGIN_SCOPE = "BambiWildlifeDetection"
@@ -5923,6 +5926,19 @@ class BambiDockWidget(QDockWidget):
             return False
         return True
 
+    def has_stage(self, kind: str, modality: str, folder: str = "") -> bool:
+        """True when a stage has results for this modality.
+
+        On the store, not on the 5.x text file beside it: those are written for
+        external scripts and can be switched off, so their presence says
+        nothing about whether a step has run (§11).
+        """
+        folder = folder or self.target_folder_edit.text().strip()
+        if not folder or modality not in _store_kinds.MODALITIES:
+            return False
+        return os.path.isfile(
+            _store_kinds.stage_path(folder, kind, modality))
+
     def analytics_outputs(self, analytics_folder: str, stem: str, ext: str):
         """``(species, path)`` for the results the current mode produced.
 
@@ -7187,13 +7203,12 @@ class BambiDockWidget(QDockWidget):
         source = config.get("density_source", "detections")
         if source == "tracks":
             suffix = "t" if config.get("tracking_camera", "T") == "T" else "w"
-            required = os.path.join(target_folder, f"tracks_{suffix}")
-            ok = os.path.isdir(required)
-            msg = "Geo-referenced tracks (run 'Track Animals' first)"
+            ok = self.has_stage(_store_kinds.TRACKS, suffix, target_folder)
+            msg = "Tracks (run 'Track Animals' first)"
         else:
             suffix = "t" if config.get("detection_camera", "T") == "T" else "w"
-            required = os.path.join(target_folder, f"georeferenced_{suffix}", "georeferenced.txt")
-            ok = os.path.exists(required)
+            ok = self.has_stage(_store_kinds.GEOREFERENCED, suffix,
+                                target_folder)
             msg = "Geo-referenced detections (run 'Geo-Reference Detections' first)"
 
         if not ok:
@@ -7536,8 +7551,7 @@ class BambiDockWidget(QDockWidget):
                 missing.append(
                     f"{camera_label} transect definitions "
                     "(define them with the Transect Splitting Tool)")
-            if not os.path.exists(os.path.join(
-                    folder, f"fov_{suffix}", "fov_polygons.txt")):
+            if not self.has_stage(_store_kinds.FOV, suffix, folder):
                 missing.append(
                     f"{camera_label} FoV footprints "
                     "(run 'Calculate Field of View')")
@@ -8456,12 +8470,12 @@ class BambiDockWidget(QDockWidget):
         det_suffix = "t" if config.get("detection_camera", "T") == "T" else "w"
 
         route_file = os.path.join(target_folder, f"flight_route_{fr_suffix}", "flight_route.geojson")
-        georef_file = os.path.join(target_folder, f"georeferenced_{det_suffix}", "georeferenced.txt")
 
         missing = []
         if not os.path.exists(route_file):
             missing.append("Flight route (run Generate Flight Route first)")
-        if not os.path.exists(georef_file):
+        if not self.has_stage(_store_kinds.GEOREFERENCED, det_suffix,
+                              target_folder):
             missing.append("Geo-referenced detections (run Geo-Reference Detections first)")
 
         if missing:
@@ -9109,7 +9123,8 @@ class BambiDockWidget(QDockWidget):
         fov_folder = os.path.join(config["target_folder"], f"fov_{fov_suffix}")
         fov_file = os.path.join(fov_folder, "fov_polygons.txt")
 
-        if not os.path.exists(fov_file):
+        if not self.has_stage(_store_kinds.FOV, fov_suffix,
+                              config["target_folder"]):
             QMessageBox.warning(
                 self,
                 "Missing FoV Data",
@@ -9292,7 +9307,8 @@ class BambiDockWidget(QDockWidget):
         fov_folder = os.path.join(config["target_folder"], f"fov_{fov_suffix}")
         fov_file = os.path.join(fov_folder, "fov_polygons.txt")
 
-        if not os.path.exists(fov_file):
+        if not self.has_stage(_store_kinds.FOV, fov_suffix,
+                              config["target_folder"]):
             QMessageBox.warning(
                 self,
                 "Missing FoV Data",
@@ -9435,7 +9451,8 @@ class BambiDockWidget(QDockWidget):
         georef_folder = os.path.join(config["target_folder"], f"georeferenced_{det_suffix}")
         georef_file = os.path.join(georef_folder, "georeferenced.txt")
 
-        if not os.path.exists(georef_file):
+        if not self.has_stage(_store_kinds.GEOREFERENCED, det_suffix,
+                              config["target_folder"]):
             QMessageBox.warning(
                 self,
                 "Missing Data",

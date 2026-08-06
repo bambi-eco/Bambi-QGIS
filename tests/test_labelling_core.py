@@ -215,14 +215,21 @@ class TestLabelStore:
 
     def test_export_to_detections_and_round_trip(self, store):
         self._add_track(store)
-        det_file, count = store.export_to_detections()
+        _det_file, count = store.export_to_detections()
         assert count == 3
-        by_frame = _load_detections_by_frame(det_file)
+        by_frame = _load_detections_by_frame(store.target_folder, "t")
         assert sorted(by_frame.keys()) == [0, 1, 2]
         x1, y1, x2, y2, conf, cls = by_frame[1][0]
         assert (x1, y1) == (10.0, 10.0)
         assert conf == 1.0
-        assert cls == SPECIES_CLASSES.index("red deer")
+        # The store resolves the species by name, so the class is its
+        # species_id rather than the positional index detections.txt used.
+        from bambi_wildlife_detection.core import label_store
+
+        by_name = {entry["name"]: entry["species_id"]
+                   for entry in label_store.vocabulary(
+                       store.target_folder)["species"]}
+        assert cls == by_name["red deer"]
 
     def test_export_preserves_detector_output_and_replaces_block(self, store, tmp_path):
         det_dir = tmp_path / "detections_t"
@@ -262,7 +269,7 @@ class TestLabelStore:
         content = (det_dir / "detections.txt").read_text()
         assert "0.8000 1" not in content        # detector line discarded
         assert content.count(LabelStore.DETECTIONS_MARKER) == 1
-        by_frame = _load_detections_by_frame(det_file)
+        by_frame = _load_detections_by_frame(store.target_folder, "t")
         assert sorted(by_frame.keys()) == [0, 1, 2]
         assert not tracks_dir.exists()
         assert not px_dir.exists()
@@ -610,34 +617,65 @@ class TestFrameMatcher:
 
 
 class TestLoaders:
+    """The read-only overlays come from the store, like everything else.
+
+    They used to parse detections.txt and tracks_pixel.csv, so the overlay
+    could disagree with the store the tool writes into.
+    """
+
+    @staticmethod
+    def _project(root):
+        from bambi_wildlife_detection.core import detection_store, track_store
+
+        detection_store.record_detections(root, "t", [
+            {"frame": 0, "x1": 1.0, "y1": 2.0, "x2": 3.0, "y2": 4.0,
+             "confidence": 0.9, "source_class": "0"},
+            {"frame": 0, "x1": 5.0, "y1": 6.0, "x2": 7.0, "y2": 8.0,
+             "confidence": 0.8, "source_class": "0"},
+            {"frame": 1, "x1": 1.0, "y1": 1.0, "x2": 2.0, "y2": 2.0,
+             "confidence": 0.7, "source_class": "0"},
+        ])
+        ids = [d["detection_id"]
+               for d in track_store.load_detections(root, "t")]
+        track_store.record_tracks(root, "t", [
+            {"track_id": 1, "detection_id": ids[2]},
+            {"track_id": 1, "detection_id": ids[0]},
+        ])
+        return ids
+
     def test_load_detections_by_frame(self, tmp_path):
-        f = tmp_path / "detections.txt"
-        f.write_text(
-            "# header\n"
-            "0 1 2 3 4 0.9 2\n"
-            "0 5 6 7 8 0.8\n"      # legacy line without class id
-            "garbage line\n"
-            "1 1 1 2 2 0.7 0\n")
-        result = _load_detections_by_frame(str(f))
+        root = str(tmp_path)
+        self._project(root)
+        result = _load_detections_by_frame(root, "t")
         assert len(result[0]) == 2
-        assert result[0][0] == (1.0, 2.0, 3.0, 4.0, 0.9, 2)
-        assert result[0][1][5] == 0     # missing class id defaults to 0
+        assert result[0][0][:4] == (1.0, 2.0, 3.0, 4.0)
         assert len(result[1]) == 1
 
     def test_load_pixel_tracks_sorted_by_frame(self, tmp_path):
-        f = tmp_path / "tracks_pixel.csv"
-        f.write_text(
-            "# header\n"
-            "5,1,0,0,1,1,0.9,2\n"
-            "3,1,0,0,1,1,0.9,2,1\n"
-            "4,2,0,0,1,1,0.5,0\n")
-        result = _load_pixel_tracks(str(f))
-        assert [e["frame"] for e in result[1]] == [3, 5]
-        assert result[2][0]["conf"] == 0.5
+        root = str(tmp_path)
+        self._project(root)
+        result = _load_pixel_tracks(root, "t")
+        entries = list(result.values())[0]
+        assert [e["frame"] for e in entries] == [0, 1]
+
+    def test_the_text_files_are_not_read(self, tmp_path):
+        det = tmp_path / "detections_t"
+        det.mkdir()
+        (det / "detections.txt").write_text("0 1 2 3 4 0.9 2")
+        trk = tmp_path / "tracks_t"
+        trk.mkdir()
+        (trk / "tracks_pixel.csv").write_text("0,1,0,0,1,1,0.9,2")
+
+        assert _load_detections_by_frame(str(tmp_path), "t") == {}
+        assert _load_pixel_tracks(str(tmp_path), "t") == {}
 
     def test_missing_files_return_empty(self, tmp_path):
-        assert _load_detections_by_frame(str(tmp_path / "x.txt")) == {}
-        assert _load_pixel_tracks(str(tmp_path / "x.csv")) == {}
+        assert _load_detections_by_frame(str(tmp_path), "t") == {}
+        assert _load_pixel_tracks(str(tmp_path), "t") == {}
+
+    def test_an_unknown_modality_is_empty(self, tmp_path):
+        assert _load_detections_by_frame(str(tmp_path), "x") == {}
+        assert _load_pixel_tracks(str(tmp_path), "x") == {}
 
 
 # ---------------------------------------------------------------------------

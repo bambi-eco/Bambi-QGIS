@@ -48,14 +48,16 @@ MANUAL_CONFIDENCE = 1.0
 _BASE_SPECIES_ORDER = ("animal", "unknown", "not-an-animal")
 
 
-def vocabulary(target_folder: str) -> dict:
+def vocabulary(target_folder: str, create: bool = False) -> dict:
     """The project's species and enum values, ordered for display.
 
-    Returns ``{}`` when the project has no 6.0 store, which is what lets the
-    labelling tool fall back to its built-in lists on an un-migrated folder.
+    Returns ``{}`` when the project has no 6.0 store, which is what lets a
+    caller show its built-in lists instead. *create* seeds one first, for
+    callers about to write into it: resolving a species against an absent
+    vocabulary silently assigns the fallback to every track.
     """
     path = store.project_path(target_folder)
-    if not os.path.isfile(path):
+    if not os.path.isfile(path) and not create:
         return {}
 
     conn = store.open_store(path, store.PROJECT)
