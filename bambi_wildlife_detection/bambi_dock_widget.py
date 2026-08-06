@@ -6865,7 +6865,7 @@ class BambiDockWidget(QDockWidget):
             layer = QgsRasterLayer(ortho_file, f"BAMBI Orthomosaic ({camera_label})")
             if not layer.isValid():
                 raise RuntimeError(f"Failed to load raster: {ortho_file}")
-            QgsProject.instance().addMapLayer(layer)
+            self._add_layer_to_flight(layer)
 
             self.update_status("add_orthomosaic", "🟢 Added")
             self.iface.mapCanvas().refresh()
@@ -7254,7 +7254,7 @@ class BambiDockWidget(QDockWidget):
                 if not layer.isValid():
                     raise RuntimeError(f"Failed to load raster: {raster_file}")
                 self._apply_density_style(layer)
-                QgsProject.instance().addMapLayer(layer)
+                self._add_layer_to_flight(layer)
                 self.log(f"Added density heatmap layer: {layer_name}")
             self.update_status("add_density", "🟢 Added")
             self.iface.mapCanvas().refresh()
@@ -7346,7 +7346,7 @@ class BambiDockWidget(QDockWidget):
             if not layer.isValid():
                 raise RuntimeError(f"Failed to load raster: {raster_file}")
             self._apply_density_style(layer)
-            QgsProject.instance().addMapLayer(layer)
+            self._add_layer_to_flight(layer)
             self.update_status("add_coverage", "🟢 Added")
             self.iface.mapCanvas().refresh()
             self.log(f"Added coverage map layer: {layer_name}")
@@ -9295,7 +9295,7 @@ class BambiDockWidget(QDockWidget):
         layer.setCustomProperty("bambi_correction_path", self.correction_path_edit.text().strip())
 
         # Add layer to project
-        QgsProject.instance().addMapLayer(layer)
+        self._add_layer_to_flight(layer)
 
     def add_merged_fov_to_qgis(self):
         """Add merged (union) Field of View polygon as single QGIS layer.
@@ -9413,7 +9413,7 @@ class BambiDockWidget(QDockWidget):
             symbol.symbolLayer(0).setStrokeWidth(0.5)
 
             # Add layer to project
-            QgsProject.instance().addMapLayer(layer)
+            self._add_layer_to_flight(layer)
 
             self.log("Merged FoV layer added to QGIS")
             self.log(f"  Total coverage area: {area_m2:.2f} m² ({area_ha:.4f} ha)")
@@ -9645,7 +9645,7 @@ class BambiDockWidget(QDockWidget):
         layer.setCustomProperty("bambi_correction_path", self.correction_path_edit.text().strip())
 
         # Add layer to project
-        QgsProject.instance().addMapLayer(layer)
+        self._add_layer_to_flight(layer)
 
     def load_detections_by_frame(self, georef_file: str) -> Dict[int, list]:
         """Load geo-referenced detections grouped by frame (core.pipeline_outputs).
@@ -9696,7 +9696,7 @@ class BambiDockWidget(QDockWidget):
                 layer = QgsRasterLayer(tif_files[0], layer_name)
                 if not layer.isValid():
                     raise RuntimeError(f"Failed to load raster: {tif_files[0]}")
-                QgsProject.instance().addMapLayer(layer)
+                self._add_layer_to_flight(layer)
                 self.log(f"Added {camera_label} alfs layer to QGIS")
             else:
                 group = self._create_layer_group(f"BAMBI ALFS ({camera_label})")
@@ -10995,6 +10995,23 @@ class BambiDockWidget(QDockWidget):
         if group is None and create:
             group = root.insertGroup(0, name)
         return group or root
+
+    def _add_layer_to_flight(self, layer, at_top: bool = True):
+        """Add a single layer to the active flight's group.
+
+        ``QgsProject.addMapLayer(layer)`` puts it at the root of the layer
+        tree, outside the flight it belongs to — so the layer has to be added
+        without a tree node first and then placed by hand. Use this for the
+        products that are one layer and get no subgroup of their own
+        (orthomosaic, ALFS, density, coverage, merged FoV).
+        """
+        QgsProject.instance().addMapLayer(layer, False)
+        group = self._flight_group()
+        if at_top:
+            group.insertLayer(0, layer)
+        else:
+            group.addLayer(layer)
+        return layer
 
     def _remove_layer_group(self, group_name: str) -> bool:
         """Remove a layer group and every layer in it from the project.
