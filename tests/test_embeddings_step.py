@@ -91,7 +91,7 @@ def flight(tmp_path, monkeypatch):
 def _config(root, **overrides):
     config = {
         "target_folder": root,
-        "embeddings_camera": "T",
+        "embeddings_camera": "thermal",
         "classification_projection": "non_geo",
         "classification_backbone": "fake/backbone",
         "classification_device": "cpu",
@@ -238,7 +238,34 @@ def test_the_previous_runs_vectors_are_not_discarded(flight):
 
 def test_untracked_modality_is_refused(flight):
     with pytest.raises(ValueError, match="No RGB tracks"):
-        BambiProcessor().run_embeddings(_config(flight, embeddings_camera="W"))
+        BambiProcessor().run_embeddings(_config(flight, embeddings_camera="rgb"))
+
+
+def test_matched_embeds_both_cameras_in_one_run(flight):
+    """A matched head needs both, and running the most expensive step twice by
+    hand is mostly a way to forget the second one."""
+    import cv2
+
+    _add_rgb_side(flight)
+    frames = os.path.join(flight, "frames_w")
+    os.makedirs(frames, exist_ok=True)
+    name = "frame_000000.jpg"
+    cv2.imwrite(os.path.join(frames, name),
+                np.full((240, 320, 3), 100, dtype=np.uint8))
+    with open(os.path.join(flight, "poses_w.json"), "w",
+              encoding="utf-8") as fh:
+        json.dump({"images": [{"imagefile": name, "timestamp": ""}]}, fh)
+
+    BambiProcessor().run_embeddings(_config(flight, embeddings_camera="matched"))
+
+    assert classification_store.active_embedding_run(flight, "t") is not None
+    assert classification_store.active_embedding_run(flight, "w") is not None
+
+
+def test_an_unknown_input_is_refused_rather_than_guessed(flight):
+    """Falling back to 'both' would silently double the longest step."""
+    with pytest.raises(ValueError, match="Unknown embeddings input"):
+        BambiProcessor().run_embeddings(_config(flight, embeddings_camera="T"))
 
 
 def test_a_geo_projection_without_geotiffs_is_refused(flight):
@@ -294,7 +321,7 @@ def test_rgb_crops_are_sized_from_their_thermal_partner(flight):
     _add_rgb_side(flight)
     logs = []
     sizes = BambiProcessor()._thermal_anchor_sizes(
-        _config(flight, embeddings_camera="W"), flight, "w", logs.append)
+        _config(flight, embeddings_camera="rgb"), flight, "w", logs.append)
 
     # Thermal detection 1 is a 20x20 box; at half scale that is 40x40 in RGB —
     # much larger than the RGB box's own 10x10, which is the point: the
@@ -420,5 +447,5 @@ def test_anchoring_does_not_rewrite_the_stored_detections(flight):
     _add_rgb_side(flight)
     before = track_store.load_pixel_tracks(flight, "w")
     BambiProcessor()._thermal_anchor_sizes(
-        _config(flight, embeddings_camera="W"), flight, "w")
+        _config(flight, embeddings_camera="rgb"), flight, "w")
     assert track_store.load_pixel_tracks(flight, "w") == before

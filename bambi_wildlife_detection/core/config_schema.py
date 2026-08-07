@@ -202,7 +202,6 @@ CONFIG_ENTRIES: List[ConfigEntry] = [
     ConfigEntry("Classification/Quorum", "double", 0.5),
     ConfigEntry("Classification/MinFrames", "int_double", 1),
     ConfigEntry("Classification/Unmatched", "int_double", 0),
-    ConfigEntry("Classification/WriteResults", "bool", True),
     ConfigEntry("Classification/OverwriteSpecies", "bool", False),
     # ===== Life stage from box area =====
     ConfigEntry("LifeStage/Z", "double", -2.0),
@@ -351,7 +350,6 @@ WIDGET_BINDINGS: Dict[str, Tuple[str, str]] = {
     "Classification/Quorum": ("classification_quorum_spin", "spin"),
     "Classification/MinFrames": ("classification_min_frames_spin", "spin"),
     "Classification/Unmatched": ("classification_unmatched_combo", "combo_index"),
-    "Classification/WriteResults": ("classification_write_check", "check"),
     "Classification/OverwriteSpecies": ("classification_overwrite_check", "check"),
     "LifeStage/Z": ("life_stage_z_spin", "spin"),
     "LifeStage/IqrFactor": ("life_stage_iqr_spin", "spin"),

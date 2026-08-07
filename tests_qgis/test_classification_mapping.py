@@ -53,20 +53,22 @@ def test_both_demographic_tasks_are_configured_per_species(dock):
     assert set(hf_access.PER_SPECIES_TASKS) == {"sex", "life_stage"}
 
 
-def test_life_stage_has_no_published_model_yet(dock):
-    """So its Default is disabled, and the size estimate carries it."""
+def test_life_stage_defaults_to_the_size_estimate(dock):
+    """No life-stage head is published and size needs none, so the size
+    estimate *is* the default — offering a dead "Default" and starting on
+    "Off" only left the per-species dialog's Size-based looking orphaned."""
     combo = dock.classification_models_table.cellWidget(
-        dock._task_row("life_stage"), 2)
-    index = combo.findData("default")
-    assert not combo.model().item(index).isEnabled()
-    assert combo.currentData() == "off"
+        dock._task_row("life_stage"), 1)
+    assert combo.currentData() == "size"
+    assert combo.currentText() == "Default (size-based)"
+    assert combo.findData("default") == -1
 
 
 def test_species_cannot_be_set_to_a_default_that_does_not_exist(dock):
     """No species model is published yet, so offering 'Default' would only
     fail later."""
     row = dock._task_row("species")
-    combo = dock.classification_models_table.cellWidget(row, 2)
+    combo = dock.classification_models_table.cellWidget(row, 1)
     index = combo.findData("default")
     assert not combo.model().item(index).isEnabled()
     assert "not released" in combo.itemText(index)
@@ -76,44 +78,65 @@ def test_species_cannot_be_set_to_a_default_that_does_not_exist(dock):
 def test_released_tasks_default_to_their_published_model(dock):
     for task in ("occlusion", "sex"):
         combo = dock.classification_models_table.cellWidget(
-            dock._task_row(task), 2)
+            dock._task_row(task), 1)
         assert combo.currentData() == "default"
 
+
+# ---------------------------------------------------------------------------
+# The per-step Input combos
+# ---------------------------------------------------------------------------
 
 def test_matched_is_the_default_input(dock):
     """Fusion is where the two sensors complement each other most."""
     for task in hf_access.TASKS:
-        combo = dock.classification_models_table.cellWidget(
-            dock._task_row(task), 1)
-        assert combo.currentData() == "matched"
+        assert dock._classification_input_combo(task).currentData() == "matched"
 
 
-def test_editing_the_table_updates_the_saved_mapping(dock):
-    row = dock._task_row("occlusion")
-    table = dock.classification_models_table
-    table.cellWidget(row, 1).setCurrentIndex(1)      # RGB
+def test_every_task_has_its_own_input_combo(dock):
+    """The classifiers are separate models, and one may read a camera another
+    cannot use — so the choice sits on each step rather than once."""
+    combos = [dock._classification_input_combo(t) for t in hf_access.TASKS]
+    assert len({id(c) for c in combos}) == len(hf_access.TASKS)
+
+
+def test_the_input_combos_offer_both_cameras_and_matched(dock):
+    combo = dock._classification_input_combo("species")
+    assert [combo.itemData(i) for i in range(combo.count())] == \
+        ["thermal", "rgb", "matched"]
+
+
+def test_editing_the_input_updates_the_saved_mapping(dock):
+    dock._classification_input_combo("occlusion").setCurrentIndex(1)   # RGB
 
     spec = dock._classification_spec("occlusion")
     assert spec["modality"] == "rgb"
 
 
+def test_one_tasks_input_leaves_the_others_alone(dock):
+    dock._classification_input_combo("species").setCurrentIndex(0)     # thermal
+
+    assert dock._classification_spec("species")["modality"] == "thermal"
+    assert dock._classification_spec("sex")["modality"] == "matched"
+
+
 def test_the_mapping_survives_a_project_round_trip(dock):
     row = dock._task_row("sex")
     table = dock.classification_models_table
-    table.cellWidget(row, 1).setCurrentIndex(0)      # thermal
-    table.item(row, 3).setText("/models/sex.pt")
-    table.cellWidget(row, 2).setCurrentIndex(2)      # custom
+    modality = dock._classification_input_combo("sex")
+    modality.setCurrentIndex(0)                      # thermal
+    table.item(row, 2).setText("/models/sex.pt")
+    table.cellWidget(row, 1).setCurrentIndex(2)      # custom
 
     dock.target_folder_edit.setText("/tmp/bambi_mapping_roundtrip")
     dock.save_config_to_project()
 
-    table.cellWidget(row, 1).setCurrentIndex(2)
-    table.item(row, 3).setText("")
+    modality.setCurrentIndex(2)
+    table.item(row, 2).setText("")
     dock.load_config_from_project()
 
-    assert table.cellWidget(row, 1).currentData() == "thermal"
-    assert table.cellWidget(row, 2).currentData() == "custom"
-    assert table.item(row, 3).text() == "/models/sex.pt"
+    assert modality.currentData() == "thermal"
+    assert table.cellWidget(row, 1).currentData() == "custom"
+    assert table.item(row, 2).text() == "/models/sex.pt"
 
 
 def test_the_config_reports_every_task(dock):
@@ -163,8 +186,7 @@ def test_the_download_follows_the_configured_input(dock, monkeypatch,
         staticmethod(lambda repo, task, projection, modality, destination,
                      token, log_fn=None: calls.append((task, modality))))
 
-    row = dock._task_row("occlusion")
-    dock.classification_models_table.cellWidget(row, 1).setCurrentIndex(1)
+    dock._classification_input_combo("occlusion").setCurrentIndex(1)
     dock.classification_projection_combo.setCurrentIndex(2)
     dock.download_classification_models()
 
@@ -184,7 +206,7 @@ def test_a_custom_model_is_not_downloaded(dock, monkeypatch, tmp_path):
 
     for task in ("occlusion", "sex"):
         combo = dock.classification_models_table.cellWidget(
-            dock._task_row(task), 2)
+            dock._task_row(task), 1)
         combo.setCurrentIndex(combo.findData("custom"))
 
     monkeypatch.setattr(
@@ -385,6 +407,24 @@ def test_a_saved_selection_is_reloaded(project_folder):
                if dialog.table.item(r, 0).text() == "wild boar")
     assert dialog.table.cellWidget(row, 1).currentData() == "custom"
     assert dialog.table.item(row, 2).text() == "/x.pt"
+
+
+def test_life_stage_species_offer_size_as_the_default(project_folder):
+    """The same wording as the main table, so the two views agree."""
+    dialog = BambiClassificationModelDialog(
+        {}, project_folder, task="life_stage")
+    combo = dialog.table.cellWidget(0, 1)
+    assert [combo.itemData(i) for i in range(combo.count())] == \
+        ["off", "size", "custom"]
+    assert combo.itemText(1) == "Default (size-based)"
+
+
+def test_every_species_starts_on_the_size_estimate(project_folder):
+    """It needs no model, so there is nothing to configure before it works."""
+    dialog = BambiClassificationModelDialog(
+        {}, project_folder, task="life_stage")
+    for row in range(dialog.table.rowCount()):
+        assert dialog.table.cellWidget(row, 1).currentData() == "size"
 
 
 def test_a_project_without_a_store_still_offers_red_deer(tmp_path):

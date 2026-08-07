@@ -183,10 +183,10 @@ def _polygon_rings(raw):
     if not isinstance(parsed, list) or not parsed:
         return None
 
-    first = parsed[0]
     # [[x, y], …] is one ring; [[[x, y], …], …] is already a ring list.
-    rings = parsed if (isinstance(first, list) and first
-                       and isinstance(first[0], list)) else [parsed]
+    first = parsed[0]
+    nested = isinstance(first, list) and first and isinstance(first[0], list)
+    rings = parsed if nested else [parsed]
 
     cleaned = []
     for ring in rings:

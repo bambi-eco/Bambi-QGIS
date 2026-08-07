@@ -266,9 +266,27 @@ def test_matching_defaults_match_the_published_gates(dock):
 
 
 def test_matching_step_and_layer_buttons_exist(dock):
-    assert dock.track_matching_btn.text().strip().startswith("C1.")
+    assert dock.track_matching_btn.text().strip().startswith("A3.")
     assert dock.add_matches_btn is not None
     assert dock.track_matching_status is not None
+
+
+def test_matching_is_configured_beside_tracking(dock):
+    """It decides which two tracks are one animal, so it belongs with the
+    tracks — the classifiers are one consumer of the answer, not its owner."""
+    from qgis.PyQt.QtWidgets import QGroupBox
+
+    def _group_of(widget):
+        while widget is not None and not isinstance(widget, QGroupBox):
+            widget = widget.parent()
+        return widget
+
+    group = _group_of(dock.match_gate_spin)
+    assert group.title() == "Cross-Modal Track Matching"
+    # Same tab page as the tracker settings, not the classifier settings.
+    assert group.parent() is _group_of(dock.tracker_backend_combo).parent()
+    assert group.parent() is not _group_of(
+        dock.classification_batch_spin).parent()
 
 
 def test_matching_needs_both_modalities(dock, tmp_path, monkeypatch):
@@ -322,9 +340,17 @@ def test_crop_defaults_match_the_core_defaults(dock):
 
 
 def test_embedding_step_row_exists(dock):
-    assert dock.embeddings_btn.text().strip().startswith("C2.")
-    assert dock.embeddings_camera_combo.count() == 2
+    assert dock.embeddings_btn.text().strip().startswith("C1.")
     assert dock.embeddings_status is not None
+
+
+def test_embeddings_offer_the_same_choices_as_the_classifiers(dock):
+    """So whatever the stages below are set to can be embedded in one run,
+    rather than the same expensive step being started twice by hand."""
+    combo = dock.embeddings_camera_combo
+    assert [combo.itemData(i) for i in range(combo.count())] == \
+        ["thermal", "rgb", "matched"]
+    assert dock.get_config()["embeddings_camera"] == "matched"
 
 
 def test_embeddings_needs_tracking_first(dock, tmp_path, monkeypatch):
@@ -342,10 +368,12 @@ def test_embeddings_needs_tracking_first(dock, tmp_path, monkeypatch):
     assert "tracking" in warned["text"].lower()
 
 
-def test_result_writing_is_on_by_default(dock):
-    """Otherwise the classifications would be invisible everywhere else."""
-    assert dock.classification_write_check.isChecked() is True
-    assert dock.get_config()["classification_write_results"] is True
+def test_results_are_always_written(dock):
+    """There is no switch for it: results nobody can see are not results, and
+    the classification store keeps the full record either way."""
+    config = dock.get_config()
+    assert "classification_write_results" not in config
+    assert not hasattr(dock, "classification_write_check")
 
 
 def test_the_detector_species_is_protected_by_default(dock):
@@ -354,12 +382,23 @@ def test_the_detector_species_is_protected_by_default(dock):
     assert dock.get_config()["classification_overwrite_species"] is False
 
 
-def test_the_apply_action_exists(dock):
-    assert dock.apply_results_btn is not None
-    assert dock.apply_results_status is not None
+def test_there_is_no_separate_apply_step(dock):
+    """Applying happens after every classifier, so a step for it was only ever
+    a repair button standing in the numbered sequence."""
+    assert not hasattr(dock, "apply_results_btn")
+    assert not hasattr(dock, "apply_classification_results")
 
 
-def test_applying_without_results_says_so(dock, tmp_path, monkeypatch):
+def test_the_sync_action_exists(dock):
+    assert dock.sync_labels_btn is not None
+    assert dock.sync_labels_status is not None
+    assert [dock.sync_labels_combo.itemText(i)
+            for i in range(dock.sync_labels_combo.count())] == \
+        ["Thermal → RGB", "RGB → Thermal"]
+
+
+def test_syncing_without_matches_says_so(dock, tmp_path, monkeypatch):
+    """Labels travel along the match, so there is nothing to travel on."""
     from bambi_wildlife_detection.core import store
 
     warned = {}
@@ -370,9 +409,9 @@ def test_applying_without_results_says_so(dock, tmp_path, monkeypatch):
     store.open_store(store.project_path(str(tmp_path)),
                      store.PROJECT).close()
     dock.target_folder_edit.setText(str(tmp_path))
-    dock.apply_classification_results()
+    dock.sync_labels()
 
-    assert "No Results" in warned["title"]
+    assert "No Matches" in warned["title"]
 
 
 def test_voting_settings_survive_a_project_round_trip(dock):
@@ -380,7 +419,6 @@ def test_voting_settings_survive_a_project_round_trip(dock):
     dock.classification_min_frames_spin.setValue(5)
     dock.classification_frames_combo.setCurrentIndex(1)
     dock.classification_unmatched_combo.setCurrentIndex(2)
-    dock.classification_write_check.setChecked(False)
     dock.life_stage_z_spin.setValue(-3.5)
     dock.target_folder_edit.setText("/tmp/bambi_voting_settings")
     dock.save_config_to_project()
@@ -388,7 +426,6 @@ def test_voting_settings_survive_a_project_round_trip(dock):
     dock.classification_quorum_spin.setValue(0.5)
     dock.classification_min_frames_spin.setValue(1)
     dock.classification_frames_combo.setCurrentIndex(0)
-    dock.classification_write_check.setChecked(True)
     dock.life_stage_z_spin.setValue(-2.0)
 
     dock.load_config_from_project()
@@ -396,7 +433,6 @@ def test_voting_settings_survive_a_project_round_trip(dock):
     assert dock.classification_min_frames_spin.value() == 5
     assert dock.get_config()["classification_frame_selection"] == "all"
     assert dock.get_config()["classification_unmatched"] == "thermal"
-    assert dock.classification_write_check.isChecked() is False
     assert dock.life_stage_z_spin.value() == -3.5
 
 

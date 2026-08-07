@@ -61,14 +61,18 @@ PRE_BUTTONS = [
 PROC_BUTTONS = [
     ("detect_btn", "A1"),
     ("track_btn", "A2"),
+    # Matching is a statement about the tracks — which two of them are one
+    # animal — so it belongs with tracking rather than with the classifiers
+    # that happen to read the answer.
+    ("track_matching_btn", "A3"),
     # The Processing tab is grouped into Detection and Tracking (A…),
     # Classification (C…) and Segmentation (S…), so the prefix says which
     # section a step belongs to.
-    ("classify_occlusion_btn", "C3"),
-    ("classify_species_btn", "C4"),
-    ("classify_sex_btn", "C5"),
-    ("life_stage_btn", "C6"),
-    ("apply_results_btn", "C7"),
+    ("embeddings_btn", "C1"),
+    ("classify_occlusion_btn", "C2"),
+    ("classify_species_btn", "C3"),
+    ("classify_sex_btn", "C4"),
+    ("life_stage_btn", "C5"),
     ("sam3_segment_btn", "S1"),
 ]
 
@@ -94,6 +98,11 @@ def test_sub_steps_are_still_present(dock):
     assert dock.track_perpendicular_btn is not None
 
 
+def test_syncing_labels_is_a_sub_step(dock):
+    """It runs on demand over results the numbered steps already produced."""
+    assert dock.sync_labels_btn.text().strip().startswith("→")
+
+
 def test_segmentation_geo_referencing_is_a_sub_step(dock):
     """It follows SAM3 segmentation exactly as geo-referencing follows A1."""
     assert dock.sam3_georef_btn.text().strip().startswith("→")
@@ -112,13 +121,14 @@ def test_processing_is_grouped_into_three_sections(dock):
     section found, and segmentation neither needs that section nor feeds into
     it. Separate boxes stop the tab reading as a single chain.
     """
-    detection = {dock.detect_btn.parent(), dock.track_btn.parent()}
+    detection = {dock.detect_btn.parent(), dock.track_btn.parent(),
+                 dock.track_matching_btn.parent()}
     classification = {getattr(dock, attribute).parent()
                       for attribute in ("classify_occlusion_btn",
                                         "classify_species_btn",
                                         "classify_sex_btn",
                                         "life_stage_btn",
-                                        "apply_results_btn")}
+                                        "sync_labels_btn")}
     segmentation = {dock.sam3_segment_btn.parent()}
 
     assert len(detection) == 1

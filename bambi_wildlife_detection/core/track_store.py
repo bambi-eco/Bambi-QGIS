@@ -361,6 +361,43 @@ def load_pixel_tracks(target_folder: str, modality: str,
         conn.close()
 
 
+def track_species(target_folder: str, modality: str) -> Dict[int, int]:
+    """``{track_id: species_id}`` for the tracks of the active run(s).
+
+    The individual-level species as it stands on the track, whoever put it
+    there — a classifier, a hand annotation, or a label synced across from the
+    other camera. Rows still on the fallback species are left out, so a caller
+    can treat a missing key as "nobody has identified this animal".
+    """
+    path = store.stage_path(target_folder, store.TRACKS, modality)
+    if not os.path.isfile(path):
+        return {}
+
+    run_ids = analysis_runs(target_folder, modality)
+    if not run_ids:
+        return {}
+    superseded = superseded_track_ids(target_folder, modality)
+    placeholders = ", ".join("?" for _ in run_ids)
+
+    conn = store.open_store(path, store.TRACKS, modality)
+    try:
+        rows = conn.execute(
+            "SELECT track_id, species_id FROM tracks "
+            f"WHERE run_id IN ({placeholders})", run_ids).fetchall()  # nosec B608
+    finally:
+        conn.close()
+
+    identified: Dict[int, int] = {}
+    for row in rows:
+        track_id = int(row["track_id"])
+        if row["species_id"] is None or track_id in superseded:
+            continue
+        species_id = int(row["species_id"])
+        if species_id != store.FALLBACK_SPECIES_ID:
+            identified[track_id] = species_id
+    return identified
+
+
 def track_orphans(target_folder: str, modality: str) -> List[int]:
     """Track members pointing at a detection that no longer exists.
 

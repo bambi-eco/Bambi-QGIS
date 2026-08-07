@@ -354,6 +354,24 @@ UNMATCHED_SKIP = "skip"
 UNMATCHED_RGB = "rgb"
 UNMATCHED_THERMAL = "thermal"
 
+#: A stage's Input answers one question, not two: which feature view its head
+#: reads, and therefore which modalities' animals carry the answer. ``matched``
+#: fuses both cameras, so both sides of a pair are the same animal and both
+#: get the call; a single-camera view labels only that camera's tracks.
+INPUT_TARGETS = {
+    "thermal": ("t",),
+    "rgb": ("w",),
+    "matched": ("t", "w"),
+}
+
+#: Feature view name of a modality suffix, as a head's ``modality`` reads.
+MODALITY_NAMES = {"t": "thermal", "w": "rgb"}
+
+
+def targets_of(spec: dict) -> tuple:
+    """Modalities a stage configured by *spec* records its answers on."""
+    return INPUT_TARGETS.get(spec.get("modality", "matched"), ("t", "w"))
+
 
 class FeatureResolver:
     """Assembles the feature vector a head expects, per detection.

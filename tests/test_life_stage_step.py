@@ -51,9 +51,9 @@ def flight(tmp_path):
 def _config(root, **overrides):
     config = {
         "target_folder": root,
-        "classification_camera": "T",
         "classification_models": {
-            "life_stage": {"species": {name: {"model": "size"}
+            "life_stage": {"modality": "thermal",
+                           "species": {name: {"model": "size"}
                                        for name in ("red deer", "roe deer",
                                                     "wild boar")}}},
         "life_stage_z": -2.0,
@@ -227,9 +227,12 @@ def test_a_female_call_does_not_protect_a_juvenile(flight):
 # ---------------------------------------------------------------------------
 
 def test_untracked_modality_is_refused(flight):
+    """The stage's Input says which camera's animals it measures, so pointing
+    it at one that was never tracked is an error rather than a silent skip."""
+    config = _config(flight)
+    config["classification_models"]["life_stage"]["modality"] = "rgb"
     with pytest.raises(ValueError, match="No RGB tracks"):
-        BambiProcessor().run_life_stage(
-            _config(flight, classification_camera="W"))
+        BambiProcessor().run_life_stage(config)
 
 
 def test_too_few_individuals_writes_nothing_and_says_so(flight):
@@ -270,7 +273,8 @@ def test_the_verdict_reaches_the_track_age_field(flight):
     assert _json.loads(attributes[1])["age"] == juvenile
 
 
-def test_writing_can_be_switched_off(flight):
+def test_writing_cannot_be_switched_off(flight):
+    """The old switch is gone: the verdict always reaches the animal."""
     _run(flight, classification_write_results=False)
     conn = store.open_store(
         store.stage_path(flight, store.TRACKS, "t"), store.TRACKS, "t")
@@ -279,8 +283,7 @@ def test_writing_can_be_switched_off(flight):
             "SELECT attributes FROM tracks")]
     finally:
         conn.close()
-    assert all(not row for row in rows)
-    # Still recorded, just not projected.
+    assert any(row for row in rows)
     assert _labels(flight)[1] == life_stage.JUVENILE
 
 
@@ -351,7 +354,8 @@ def test_only_the_species_set_to_size_are_measured(flight):
         {"track_id": 2, "label": "wild boar", "votes": 3, "n": 3,
          "fraction": 1.0}])
     _run(flight, classification_models={
-        "life_stage": {"species": {"red deer": {"model": "size"},
+        "life_stage": {"modality": "thermal",
+                       "species": {"red deer": {"model": "size"},
                                    "wild boar": {"model": "off"}}}})
 
     called = _labels(flight)

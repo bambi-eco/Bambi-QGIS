@@ -304,6 +304,27 @@ def _modality_name(modality: str) -> str:
     return "thermal" if modality == "t" else "rgb"
 
 
+def _modality_label(modality: str) -> str:
+    """The camera name a user reads (``t`` -> ``Thermal``)."""
+    return "Thermal" if modality == "t" else "RGB"
+
+
+def _slice_progress(progress_fn, index: int, total: int):
+    """Map a 0-100 sub-progress onto slice *index* of *total*.
+
+    Classification runs one pass per modality, and a bar that restarts halfway
+    through reads as a stall rather than as progress.
+    """
+    if progress_fn is None or total <= 0:
+        return None
+
+    def _scaled(percent):
+        span = 100.0 / total
+        progress_fn(int(index * span + max(0, min(100, percent)) * span / 100))
+
+    return _scaled
+
+
 def _describe_frame_source(source: str) -> str:
     """A human phrase for where the votable frames came from."""
     from .core import classification
@@ -1818,7 +1839,7 @@ class BambiProcessor:
 
     def run_track_matching(self, config: Dict[str, Any], progress_fn=None,
                            log_fn=None, cancel_check=None):
-        """Match thermal tracks to RGB tracks — paper §3.2, step C1.
+        """Match thermal tracks to RGB tracks — paper §3.2, step A3.
 
         Confirmation *is* the track definition for the census: a pair seen in
         both modalities is a real animal, a long confident single-modality
@@ -1934,20 +1955,45 @@ class BambiProcessor:
 
     def run_embeddings(self, config: Dict[str, Any], progress_fn=None,
                        log_fn=None, cancel_check=None):
-        """Embed every tracked detection with DINOv3 — step C2.
+        """Embed every tracked detection with DINOv3 — step C1.
 
         The vectors are the expensive part of classification and every head
         reads the same ones, so they are computed once, written beside the
         frames as ``embeddings_{m}/{projection}/<frame>.npz``, and reused. A
         re-run embeds only what is missing, which is what makes an interrupted
         run resumable rather than repeatable.
+
+        ``Matched`` embeds both cameras in one go, since that is what a matched
+        head needs and running the same expensive step twice by hand is only a
+        way to forget the second one.
         """
+        from .core import classification
+
+        choice = config.get("embeddings_camera", "thermal")
+        if choice not in classification.INPUT_TARGETS:
+            # Loud rather than falling back to both cameras, which would
+            # silently double the most expensive step in the pipeline.
+            raise ValueError(f"Unknown embeddings input: {choice!r}")
+        targets = classification.INPUT_TARGETS[choice]
+        for index, suffix in enumerate(targets):
+            # Only between passes: the pass itself checks per frame, and an
+            # extra call here would consume a cancel budget it owns.
+            if index and cancel_check and cancel_check():
+                raise CancelledException("Embedding cancelled")
+            self._embed_modality(
+                config, suffix,
+                progress_fn=_slice_progress(progress_fn, index, len(targets)),
+                log_fn=log_fn, cancel_check=cancel_check)
+        if progress_fn:
+            progress_fn(100)
+
+    def _embed_modality(self, config: Dict[str, Any], suffix: str,
+                        progress_fn=None, log_fn=None, cancel_check=None):
+        """Embed one camera's tracked crops."""
         from .core import (classification, classification_store,
                            embedding_files, geo_crops, track_store)
 
-        camera = config.get("embeddings_camera", "T")
-        suffix = "t" if camera == "T" else "w"
-        camera_name = "Thermal" if camera == "T" else "RGB"
+        camera_name = _modality_label(suffix)
         target_folder = config["target_folder"]
         projection = config.get("classification_projection", "non_geo")
 
@@ -2159,7 +2205,7 @@ class BambiProcessor:
 
     def run_classification(self, config: Dict[str, Any], progress_fn=None,
                            log_fn=None, cancel_check=None):
-        """Occlusion, then species, then sex — step C3.
+        """Occlusion, then species, then sex.
 
         The order is load-bearing (paper §3.3): occlusion decides which frames
         carry usable evidence, species fixes what the animal is, and sex reuses
@@ -2168,19 +2214,16 @@ class BambiProcessor:
         makes a noisy per-frame call safe — an antler resolves only from some
         angles, so many frames of a true male look female.
 
-        Everything is anchored on one modality: its tracks are what the answers
-        are recorded against, while a ``matched`` head reads both sides through
-        the cross-modal pairing.
+        Each stage's Input decides which animals it is about: a single-camera
+        view labels that camera's tracks, ``matched`` labels both sides of a
+        pair because they are one animal. So the work is grouped by modality
+        and each group is one pass over that modality's tracks — a ``matched``
+        stage runs in both passes, fusing the same two vectors either way
+        (concatenation is always ``[RGB, thermal]``), which is what makes the
+        two passes agree rather than merely coincide.
         """
-        from .core import (classification, classification_store,
-                           embedding_files, hf_access, match_store,
-                           track_store)
+        from .core import classification, hf_access
 
-        camera = config.get("classification_camera", "T")
-        suffix = "t" if camera == "T" else "w"
-        other = "w" if suffix == "t" else "t"
-        camera_name = "Thermal" if camera == "T" else "RGB"
-        target_folder = config["target_folder"]
         models = config.get("classification_models") or {}
 
         # Each classifier is its own step, so a run is usually one task. An
@@ -2204,6 +2247,39 @@ class BambiProcessor:
             raise ValueError(
                 "No classifier is enabled. Choose a model for at least one of "
                 "them in the Classification tab.")
+
+        passes = []
+        for suffix in ("t", "w"):
+            wanted = [task for task in tasks
+                      if suffix in classification.targets_of(models[task])]
+            if wanted:
+                passes.append((suffix, wanted))
+
+        done = 0
+        for suffix, wanted in passes:
+            # Only between passes — each pass checks as it goes.
+            if done and cancel_check and cancel_check():
+                raise CancelledException("Classification cancelled")
+            self._classify_modality(
+                config, suffix, wanted,
+                progress_fn=_slice_progress(progress_fn, done, len(passes)),
+                log_fn=log_fn, cancel_check=cancel_check)
+            done += 1
+        if progress_fn:
+            progress_fn(100)
+
+    def _classify_modality(self, config: Dict[str, Any], suffix: str,
+                           tasks: Sequence[str], progress_fn=None,
+                           log_fn=None, cancel_check=None):
+        """One pass over *suffix*'s tracks, running the *tasks* that land on it."""
+        from .core import (classification, classification_store,
+                           embedding_files, hf_access, match_store,
+                           track_store)
+
+        other = "w" if suffix == "t" else "t"
+        camera_name = _modality_label(suffix)
+        target_folder = config["target_folder"]
+        models = config.get("classification_models") or {}
 
         run = classification_store.active_embedding_run(target_folder, suffix)
         if run is None:
@@ -2237,9 +2313,8 @@ class BambiProcessor:
                 "The embedding vectors are missing from disk. Re-run 'Compute "
                 "DINOv3 Embeddings'.")
 
-        # Anything but this modality's own single-modality view needs the other
-        # side: 'matched' by definition, and the opposite single modality
-        # because its vectors live in the other store.
+        # Only a 'matched' head needs the other side; a single-camera stage
+        # lands on the camera it reads, so this pass already holds its vectors.
         primary_name = _modality_name(suffix)
         needs_partner = any(
             (models.get(task) or {}).get("modality", "matched") != primary_name
@@ -2336,6 +2411,13 @@ class BambiProcessor:
             row["track_id"]: row["label"] for row in
             classification_store.track_predictions(
                 target_folder, suffix, "species")}
+        # A track this modality's classifier never called may still be
+        # identified — by hand in the labelling tool, or by a species label
+        # synced across from the other camera. Either outranks "unknown", so
+        # the per-species model choice reads them too.
+        for track_id, name in self._named_track_species(
+                target_folder, suffix).items():
+            species_of_track.setdefault(track_id, name)
         voted = [task for task in ("species", "sex", "life_stage")
                  if task in tasks]
         if voted and "species" not in voted and not species_of_track:
@@ -2343,9 +2425,10 @@ class BambiProcessor:
                              if task in hf_access.PER_SPECIES_TASKS]
             if needs_species and log_fn:
                 names = " and ".join(needs_species)
-                log_fn(f"No species call is stored, so {names} has no way to "
-                       "choose a model per species. Run the species "
-                       "classifier first.")
+                log_fn(f"No species is known for the {camera_name} animals, so "
+                       f"{names} has no way to choose a model per species. Run "
+                       "the species classifier on this camera, or sync the "
+                       "labels across from the other one.")
         for index, task in enumerate(voted):
             if cancel_check and cancel_check():
                 raise CancelledException("Classification cancelled")
@@ -2364,22 +2447,37 @@ class BambiProcessor:
         if progress_fn:
             progress_fn(100)
 
+    @staticmethod
+    def _named_track_species(target_folder: str,
+                             modality: str) -> Dict[int, str]:
+        """``{track_id: species name}`` from the canonical track field.
+
+        The heads speak class labels while the store speaks species ids, so
+        this walks back through the project vocabulary. A species nobody in
+        this project has named is left out rather than guessed at.
+        """
+        from .core import label_store, track_store
+
+        vocabulary = label_store.vocabulary(target_folder)
+        if not vocabulary:
+            return {}
+        names = {int(row["species_id"]): row["name"]
+                 for row in vocabulary.get("species", [])}
+        return {track_id: names[species_id]
+                for track_id, species_id
+                in track_store.track_species(target_folder, modality).items()
+                if species_id in names}
+
     def _apply_classification_results(self, config: Dict[str, Any],
                                       modality: str, tasks: Sequence[str],
                                       log_fn=None) -> None:
         """Project stored results onto the fields everything else reads.
 
-        Optional, because the results are complete in ``classification.gpkg``
-        either way — this is what makes them visible to the exporters, the
-        layers, the analytics and the labelling tool.
+        Always runs: ``classification.gpkg`` keeps the full provenance, and
+        these are the fields the exporters, the layers, the analytics and the
+        labelling tool actually read. Idempotent, so a re-run costs nothing.
         """
         from .core import apply_results
-
-        if not config.get("classification_write_results", True):
-            if log_fn:
-                log_fn("Results kept in the classification store only — "
-                       "'Write results into tracks and detections' is off.")
-            return
 
         counts = apply_results.apply_all(
             config["target_folder"], modality,
@@ -2394,7 +2492,31 @@ class BambiProcessor:
 
     def run_life_stage(self, config: Dict[str, Any], progress_fn=None,
                        log_fn=None, cancel_check=None):
-        """Flag juveniles by body size — step C4.
+        """Flag juveniles by body size, on each camera the stage targets.
+
+        Box areas are not comparable across cameras — a thermal sensor and an
+        RGB sensor frame the same animal differently — so a stage set to
+        ``matched`` measures two independent cohorts rather than pooling them.
+        """
+        from .core import classification
+
+        spec = (config.get("classification_models") or {}).get(
+            "life_stage") or {}
+        targets = classification.targets_of(spec)
+        for index, suffix in enumerate(targets):
+            # Only between passes — each pass checks as it goes.
+            if index and cancel_check and cancel_check():
+                raise CancelledException("Life stage cancelled")
+            self._life_stage_modality(
+                config, suffix,
+                progress_fn=_slice_progress(progress_fn, index, len(targets)),
+                log_fn=log_fn, cancel_check=cancel_check)
+        if progress_fn:
+            progress_fn(100)
+
+    def _life_stage_modality(self, config: Dict[str, Any], suffix: str,
+                             progress_fn=None, log_fn=None, cancel_check=None):
+        """Size-based life stage over one modality's tracks.
 
         Appearance cannot separate a juvenile from an adult female at survey
         resolution, which is why the sex classifier's second class is
@@ -2402,16 +2524,14 @@ class BambiProcessor:
         below its cohort with a clear gap to the next animal.
 
         This is the **fallback**, not the only route. Where a life-stage
-        classifier is configured for a species, C3 has already called those
-        animals and they are left alone; size fills in the rest. Needs no
-        models and no embeddings — only tracks, and geo-referencing if the
-        metric areas are to be used.
+        classifier is configured for a species, the classifier step has already
+        called those animals and they are left alone; size fills in the rest.
+        Needs no models and no embeddings — only tracks, and geo-referencing if
+        the metric areas are to be used.
         """
         from .core import classification_store, life_stage, track_store
 
-        camera = config.get("classification_camera", "T")
-        suffix = "t" if camera == "T" else "w"
-        camera_name = "Thermal" if camera == "T" else "RGB"
+        camera_name = _modality_label(suffix)
         target_folder = config["target_folder"]
 
         # Which species are measured rather than classified is chosen in the
@@ -2453,6 +2573,9 @@ class BambiProcessor:
             int(row["track_id"]): row["label"] for row in
             classification_store.track_predictions(
                 target_folder, suffix, "species")}
+        for track_id, name in self._named_track_species(
+                target_folder, suffix).items():
+            species_of_track.setdefault(track_id, name)
         if species_of_track:
             to_measure = {track_id for track_id, name
                           in species_of_track.items() if name in measured}
@@ -2462,9 +2585,9 @@ class BambiProcessor:
             # silently doing nothing.
             to_measure = None
             if log_fn:
-                log_fn("No species call is stored, so every animal is "
-                       "measured. Run Species Classification first to apply "
-                       "the per-species choice.")
+                log_fn(f"No species is known for the {camera_name} animals, so "
+                       "every one is measured. Run Species Classification on "
+                       "this camera first to apply the per-species choice.")
 
         if progress_fn:
             progress_fn(10)
@@ -2511,10 +2634,14 @@ class BambiProcessor:
         # The cohort keeps every animal — a robust median over the whole herd
         # is the point — but only the ones set to be measured, and not already
         # called by a classifier, take a verdict from it.
+        def _takes_a_verdict(track_id):
+            if track_id in called_by_model:
+                return False
+            return to_measure is None or track_id in to_measure
+
         found = [item for item in life_stage.assess(areas, settings,
                                                     adults=males)
-                 if item.track_id not in called_by_model
-                 and (to_measure is None or item.track_id in to_measure)]
+                 if _takes_a_verdict(item.track_id)]
         if log_fn:
             log_fn(life_stage.explain(found, settings, source))
 
@@ -2626,10 +2753,10 @@ class BambiProcessor:
                 # life stage the size estimate then fills the gap.
                 key = resolved_species.get(track_id, "")
                 per_species = (spec.get("species") or {}).get(key)
-                chosen = (per_species or {}).get("model", "off")
+                selected = (per_species or {}).get("model", "off")
                 # "size" is a measurement, not a head — the life-stage step
                 # makes those calls.
-                if per_species is None or chosen in ("off", "size"):
+                if per_species is None or selected in ("off", "size"):
                     continue
                 spec_for_track = dict(spec, **per_species)
             else:

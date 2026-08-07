@@ -25,19 +25,32 @@ DEFAULT_SPECIES = "red deer"
 
 _SOURCES = (("Off", "off"), ("Default", "default"), ("Custom…", "custom"))
 
-#: Life stage has a fourth option: a measurement rather than a model. It sits
-#: in the same column because it answers the same question, and because "which
-#: of these decides this species" is one decision, not a model choice plus a
+#: Life stage's default is a measurement rather than a model, and takes the
+#: "Default" slot because that is what it is: no life-stage head has been
+#: published, size needs none, and it is what runs unless you say otherwise.
+#: It sits in the same column as the models because it answers the same
+#: question — "what decides this?" is one decision, not a model choice plus a
 #: separate switch somewhere else.
-SIZE_SOURCE = ("Size-based", "size")
+SIZE_SOURCE = ("Default (size-based)", "size")
 
 
 def sources_for(task: str):
     """Model options offered for *task*."""
     if task == "life_stage":
-        off, *models = _SOURCES
-        return (off, SIZE_SOURCE) + tuple(models)
+        # No published head to offer, so the plain "Default" would only fail
+        # later; the size estimate is the default that actually runs.
+        off, _default, *rest = _SOURCES
+        return (off, SIZE_SOURCE) + tuple(rest)
     return _SOURCES
+
+
+def default_source_for(task: str) -> str:
+    """The option *task* starts on, and falls back to after a bad load."""
+    from .core import hf_access
+
+    if hf_access.has_default_head(task):
+        return "default"
+    return "size" if task == "life_stage" else "off"
 
 
 class BambiClassificationModelDialog(QDialog):
@@ -95,10 +108,11 @@ class BambiClassificationModelDialog(QDialog):
         if self.task == "life_stage":
             return (
                 "Choose what decides life stage for each species.\n\n"
-                "<b>Size-based</b> needs no model: a juvenile sits far below "
-                "its cohort, measured within this flight. It is the default, "
-                "because no life-stage classifier has been published yet. A "
-                "species left <b>Off</b> is not called at all."
+                "<b>Default (size-based)</b> needs no model: a juvenile sits "
+                "far below its cohort, measured within this flight. It is the "
+                "default because no life-stage classifier has been published "
+                "yet, and it is what step C5 runs. A species left <b>Off</b> "
+                "is not called at all."
             )
         return (
             "Choose which classifier decides sex for each species.\n\n"
@@ -161,7 +175,8 @@ class BambiClassificationModelDialog(QDialog):
 
         if not hf_access.has_default_head(self.task):
             extra = ("" if self.task != "life_stage" else
-                     " Size-based needs none, and is what these default to.")
+                     " The size-based estimate needs none, and is what these "
+                     "default to.")
             self.status.setText(
                 f"No {self._label} classifier has been published yet; choose "
                 f"a custom model for any species you want called by one."

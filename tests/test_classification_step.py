@@ -15,7 +15,7 @@ import pytest
 
 from bambi_wildlife_detection.bambi_processing import BambiProcessor
 from bambi_wildlife_detection.core import (
-    classification_store, embedding_files, store, track_store,
+    classification_store, embedding_files, match_store, store, track_store,
 )
 
 torch = pytest.importorskip("torch")
@@ -49,24 +49,22 @@ def _write_head(path, classes, channel=0):
     return path
 
 
-@pytest.fixture
-def flight(tmp_path):
-    """Three tracks: two red deer (one male-ish) and one with occluded frames.
+#: detection_id -> (track, occlusion, species, sex). Channel 0 drives
+#: occlusion, channel 1 species, channel 2 sex.
+PLAN = {
+    1: (1, 0, 1, 1), 2: (1, 0, 1, 1), 3: (1, 0, 1, 1), 4: (1, 0, 1, 0),
+    5: (2, 0, 1, 0), 6: (2, 0, 1, 0), 7: (2, 0, 1, 0), 8: (2, 0, 1, 0),
+    9: (3, 1, 1, 1), 10: (3, 1, 1, 1), 11: (3, 0, 0, 0), 12: (3, 1, 1, 1),
+}
 
-    Channel 0 drives occlusion, channel 1 species, channel 2 sex.
-    """
-    root = str(tmp_path)
-    store.open_store(store.project_path(root), store.PROJECT).close()
 
-    # detection_id -> (track, occlusion, species, sex)
-    plan = {
-        1: (1, 0, 1, 1), 2: (1, 0, 1, 1), 3: (1, 0, 1, 1), 4: (1, 0, 1, 0),
-        5: (2, 0, 1, 0), 6: (2, 0, 1, 0), 7: (2, 0, 1, 0), 8: (2, 0, 1, 0),
-        9: (3, 1, 1, 1), 10: (3, 1, 1, 1), 11: (3, 0, 0, 0), 12: (3, 1, 1, 1),
-    }
+def _build_modality(root, suffix, plan=None):
+    """Detections, tracks, poses and embeddings for one camera."""
+    plan = plan or PLAN
 
     conn = store.open_store(
-        store.stage_path(root, store.DETECTIONS, "t"), store.DETECTIONS, "t")
+        store.stage_path(root, store.DETECTIONS, suffix),
+        store.DETECTIONS, suffix)
     with store.transaction(conn):
         for detection_id in sorted(plan):
             conn.execute(
@@ -75,31 +73,61 @@ def flight(tmp_path):
                 (detection_id - 1,))
     conn.close()
 
-    track_store.record_tracks(root, "t", [
+    track_store.record_tracks(root, suffix, [
         {"track_id": spec[0], "detection_id": detection_id}
         for detection_id, spec in sorted(plan.items())])
 
-    with open(os.path.join(root, "poses_t.json"), "w", encoding="utf-8") as fh:
+    poses = os.path.join(root, f"poses_{suffix}.json")
+    with open(poses, "w", encoding="utf-8") as fh:
         json.dump({"images": [{"imagefile": f"f{i:03d}.jpg"}
                               for i in range(len(plan))]}, fh)
 
     run_id = classification_store.start_embedding_run(
-        root, "t", backbone="fake", dim=DIM, crop_size=32, padding=0.1,
-        projection="non_geo", folder="embeddings_t/non_geo")
+        root, suffix, backbone="fake", dim=DIM, crop_size=32, padding=0.1,
+        projection="non_geo", folder=f"embeddings_{suffix}/non_geo")
     for detection_id, (_track, occ, species, sex) in plan.items():
         frame = detection_id - 1
         embedding_files.write_frame(
-            embedding_files.frame_path(root, "t", "non_geo", frame,
+            embedding_files.frame_path(root, suffix, "non_geo", frame,
                                        f"f{frame:03d}.jpg"),
             {detection_id: np.array([occ, species, sex, 0.0],
                                     dtype=np.float32)})
-    classification_store.record_embedded(root, "t", run_id, list(plan))
+    classification_store.record_embedded(root, suffix, run_id, list(plan))
+
+
+@pytest.fixture
+def flight(tmp_path):
+    """Three tracks: two red deer (one male-ish) and one with occluded frames."""
+    root = str(tmp_path)
+    store.open_store(store.project_path(root), store.PROJECT).close()
+    _build_modality(root, "t")
 
     heads = os.path.join(root, "heads")
     _write_head(os.path.join(heads, "occ.pt"), ("clear", "occluded"), 0)
     _write_head(os.path.join(heads, "spe.pt"), ("roe deer", "red deer"), 1)
     _write_head(os.path.join(heads, "sex.pt"), ("female_juvenile", "male"), 2)
     return root
+
+
+@pytest.fixture
+def paired_flight(flight):
+    """The same flight seen by both cameras, with every track matched.
+
+    The RGB side carries the same feature channels, so a matched head reading
+    ``[RGB, thermal]`` sees each value twice and lands on the same class — what
+    is being tested is which animals the answer reaches, not the answer.
+    """
+    _build_modality(flight, "w")
+    match_store.record_matches(flight, [
+        {"track_id_t": track, "track_id_w": track, "shared": 4,
+         "median_dist": 1.0, "conf_t": 0.9, "conf_w": 0.9,
+         "pairs": [{"frame_t": detection_id - 1, "frame_w": detection_id - 1,
+                    "detection_id_t": detection_id,
+                    "detection_id_w": detection_id, "dist": 1.0}
+                   for detection_id, spec in sorted(PLAN.items())
+                   if spec[0] == track]}
+        for track in (1, 2, 3)])
+    return flight
 
 
 def _models(root, **overrides):
@@ -125,7 +153,6 @@ def _models(root, **overrides):
 def _config(root, models=None, **overrides):
     config = {
         "target_folder": root,
-        "classification_camera": "T",
         "classification_models": models or _models(root),
         "classification_backbone_dim": DIM,
         "classification_quorum": 0.5,
@@ -416,17 +443,67 @@ def test_results_reach_the_tracks_and_detections(flight):
     assert _detection_species(flight)[1] == red_deer
 
 
-def test_writing_can_be_switched_off(flight):
+def test_writing_cannot_be_switched_off(flight):
+    """There is no such switch any more: a result nobody can see is not a
+    result, and the store keeps the full record regardless."""
     _run(flight, classification_write_results=False)
 
-    assert all(species == 0 for species in _track_species(flight).values())
-    # The results are still recorded in full, just not projected.
+    assert any(species for species in _track_species(flight).values())
+
+
+# ---------------------------------------------------------------------------
+# Which camera's animals a stage is about
+# ---------------------------------------------------------------------------
+
+def test_a_thermal_stage_labels_only_the_thermal_animals(flight):
+    _run(flight)
+
     assert classification_store.track_predictions(flight, "t", "species")
+    assert classification_store.track_predictions(flight, "w", "species") == []
 
 
-def test_switching_writing_off_is_said_out_loud(flight):
-    logs = _run(flight, classification_write_results=False)
-    assert any("classification store only" in line for line in logs)
+def test_an_rgb_stage_labels_only_the_rgb_animals(paired_flight):
+    root = paired_flight
+    models = _models(root)
+    for spec in models.values():
+        spec["modality"] = "rgb"
+    _run(root, models)
+
+    assert classification_store.track_predictions(root, "t", "species") == []
+    assert classification_store.track_predictions(root, "w", "species")
+
+
+def test_a_matched_stage_labels_both_sides_of_the_pair(paired_flight):
+    """They are one animal, so both carry the call."""
+    root = paired_flight
+    models = _models(root)
+    for spec in models.values():
+        spec["modality"] = "matched"
+    _run(root, models)
+
+    thermal = {row["track_id"]: row["label"] for row in
+               classification_store.track_predictions(root, "t", "species")}
+    rgb = {row["track_id"]: row["label"] for row in
+           classification_store.track_predictions(root, "w", "species")}
+    assert thermal and rgb
+    # Concatenation is [RGB, thermal] whichever side is primary, so the two
+    # passes see the same vector and must agree rather than merely coincide.
+    partners = match_store.partner_tracks(root, "t")
+    for track_t, label in thermal.items():
+        if track_t in partners:
+            assert rgb.get(partners[track_t]) == label
+
+
+def test_stages_can_target_different_cameras(paired_flight):
+    root = paired_flight
+    models = _models(root)
+    models["occlusion"]["modality"] = "rgb"
+    models["species"]["modality"] = "thermal"
+    _run(root, models)
+
+    assert classification_store.frame_predictions(root, "w", "occlusion")
+    assert classification_store.frame_predictions(root, "t", "occlusion") == []
+    assert classification_store.track_predictions(root, "t", "species")
 
 
 # ---------------------------------------------------------------------------
@@ -468,7 +545,26 @@ def test_sex_without_a_species_call_says_what_is_missing(flight):
     logs = _run(flight, classification_only=["sex"])
 
     assert classification_store.track_predictions(flight, "t", "sex") == []
-    assert any("Run the species classifier first" in line for line in logs)
+    assert any("Run the species classifier on this camera" in line
+               for line in logs)
+
+
+def test_a_species_synced_from_the_other_camera_counts(paired_flight):
+    """Which is what makes syncing a way out rather than a dead end: the label
+    lands on the animal, and the demographic head reads it from there."""
+    from bambi_wildlife_detection.core import label_store, label_sync
+
+    root = paired_flight
+    _run(root, classification_only=["species"])       # thermal only
+    label_sync.sync_all(root, "t", "w")
+
+    models = _models(root)
+    models["sex"]["modality"] = "rgb"
+    _run(root, models, classification_only=["sex"])
+
+    red_deer = label_store.vocabulary(root)["species_by_name"]["red deer"]
+    assert track_store.track_species(root, "w")[1] == red_deer
+    assert classification_store.track_predictions(root, "w", "sex")
 
 
 def test_running_a_switched_off_task_is_refused_by_name(flight):
