@@ -5,6 +5,8 @@ What matters here is that the mapping survives a project round trip and stays
 keyed on class *index* — a model returns positions, so a mapping keyed on
 names would silently re-point itself the moment a label was edited.
 """
+import os
+
 import pytest
 
 from qgis.PyQt.QtWidgets import QTableWidget
@@ -12,8 +14,8 @@ from qgis.PyQt.QtWidgets import QTableWidget
 from bambi_wildlife_detection.bambi_label_mapping_dialog import (
     BambiLabelMappingDialog,
 )
-from bambi_wildlife_detection.bambi_sex_model_dialog import (
-    DEFAULT_SPECIES, BambiSexModelDialog,
+from bambi_wildlife_detection.bambi_classification_model_dialog import (
+    DEFAULT_SPECIES, BambiClassificationModelDialog,
 )
 from bambi_wildlife_detection.core import hf_access, store
 
@@ -32,16 +34,32 @@ def project_folder(tmp_path):
 
 def test_the_table_has_a_row_per_task(dock):
     table = dock.classification_models_table
-    assert table.rowCount() == 3
-    assert [table.item(r, 0).text() for r in range(3)] == \
-        ["Occlusion", "Species", "Sex"]
+    assert table.rowCount() == 4
+    assert [table.item(r, 0).text() for r in range(4)] == \
+        ["Occlusion", "Species", "Sex", "Life stage"]
 
 
 def test_the_tasks_are_in_the_order_they_run(dock):
-    """Occlusion gates the frames; sex reuses the species frames."""
+    """Occlusion gates the frames; sex and life stage reuse the species
+    frames and pick their model from the species call."""
     table = dock.classification_models_table
-    names = [table.item(r, 0).text().lower() for r in range(3)]
+    names = [table.item(r, 0).text().lower().replace(" ", "_")
+             for r in range(table.rowCount())]
     assert names == list(hf_access.TASKS)
+
+
+def test_both_demographic_tasks_are_configured_per_species(dock):
+    """The cue is species-specific for each of them."""
+    assert set(hf_access.PER_SPECIES_TASKS) == {"sex", "life_stage"}
+
+
+def test_life_stage_has_no_published_model_yet(dock):
+    """So its Default is disabled, and the size estimate carries it."""
+    combo = dock.classification_models_table.cellWidget(
+        dock._task_row("life_stage"), 2)
+    index = combo.findData("default")
+    assert not combo.model().item(index).isEnabled()
+    assert combo.currentData() == "off"
 
 
 def test_species_cannot_be_set_to_a_default_that_does_not_exist(dock):
@@ -101,6 +119,128 @@ def test_the_mapping_survives_a_project_round_trip(dock):
 def test_the_config_reports_every_task(dock):
     models = dock.get_config()["classification_models"]
     assert set(models) == set(hf_access.TASKS)
+
+
+# ---------------------------------------------------------------------------
+# Downloading the published models
+# ---------------------------------------------------------------------------
+
+def test_the_download_button_exists(dock):
+    assert dock.download_models_btn is not None
+    assert dock.download_models_status is not None
+
+
+def test_it_downloads_every_task_set_to_default(dock, monkeypatch, tmp_path):
+    """So the class mapping can be set up before anything is run — asking a
+    user to run a classifier once before they can configure it is backwards."""
+    calls = []
+    monkeypatch.setattr(
+        "bambi_wildlife_detection.bambi_dock_widget.BambiProcessor."
+        "_get_default_model_dir", staticmethod(lambda: str(tmp_path)))
+    monkeypatch.setattr(
+        "bambi_wildlife_detection.bambi_dock_widget.BambiProcessor."
+        "_download_head",
+        staticmethod(lambda repo, task, projection, modality, destination,
+                     token, log_fn=None: calls.append((task, projection,
+                                                       modality))))
+
+    dock.download_classification_models()
+
+    # Occlusion and sex have published models; species does not yet.
+    assert sorted(task for task, _p, _m in calls) == ["occlusion", "sex"]
+    assert all(projection == "non_geo" for _t, projection, _m in calls)
+
+
+def test_the_download_follows_the_configured_input(dock, monkeypatch,
+                                                   tmp_path):
+    calls = []
+    monkeypatch.setattr(
+        "bambi_wildlife_detection.bambi_dock_widget.BambiProcessor."
+        "_get_default_model_dir", staticmethod(lambda: str(tmp_path)))
+    monkeypatch.setattr(
+        "bambi_wildlife_detection.bambi_dock_widget.BambiProcessor."
+        "_download_head",
+        staticmethod(lambda repo, task, projection, modality, destination,
+                     token, log_fn=None: calls.append((task, modality))))
+
+    row = dock._task_row("occlusion")
+    dock.classification_models_table.cellWidget(row, 1).setCurrentIndex(1)
+    dock.classification_projection_combo.setCurrentIndex(2)
+    dock.download_classification_models()
+
+    assert ("occlusion", "rgb") in calls
+
+
+def test_a_custom_model_is_not_downloaded(dock, monkeypatch, tmp_path):
+    """A file you chose is used from where it is."""
+    calls = []
+    monkeypatch.setattr(
+        "bambi_wildlife_detection.bambi_dock_widget.BambiProcessor."
+        "_get_default_model_dir", staticmethod(lambda: str(tmp_path)))
+    monkeypatch.setattr(
+        "bambi_wildlife_detection.bambi_dock_widget.BambiProcessor."
+        "_download_head",
+        staticmethod(lambda *a, **k: calls.append(a[1])))
+
+    for task in ("occlusion", "sex"):
+        combo = dock.classification_models_table.cellWidget(
+            dock._task_row(task), 2)
+        combo.setCurrentIndex(combo.findData("custom"))
+
+    monkeypatch.setattr(
+        "bambi_wildlife_detection.bambi_dock_widget.QMessageBox.information",
+        lambda *a, **k: None)
+    dock.download_classification_models()
+
+    assert calls == []
+    assert "Nothing to download" in dock.download_models_status.text()
+
+
+def test_already_present_models_are_not_fetched_again(dock, monkeypatch,
+                                                      tmp_path):
+    calls = []
+    monkeypatch.setattr(
+        "bambi_wildlife_detection.bambi_dock_widget.BambiProcessor."
+        "_get_default_model_dir", staticmethod(lambda: str(tmp_path)))
+    monkeypatch.setattr(
+        "bambi_wildlife_detection.bambi_dock_widget.BambiProcessor."
+        "_download_head",
+        staticmethod(lambda *a, **k: calls.append(a[1])))
+
+    for task in ("occlusion", "sex"):
+        path = hf_access.head_local_path(
+            str(tmp_path), task, "non_geo", "matched")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as handle:
+            handle.write(b"weights")
+
+    dock.download_classification_models()
+
+    assert calls == []
+    assert "already downloaded" in dock.download_models_status.text()
+
+
+def test_a_failure_is_reported_and_the_button_recovers(dock, monkeypatch,
+                                                       tmp_path):
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("gated repo")
+
+    monkeypatch.setattr(
+        "bambi_wildlife_detection.bambi_dock_widget.BambiProcessor."
+        "_get_default_model_dir", staticmethod(lambda: str(tmp_path)))
+    monkeypatch.setattr(
+        "bambi_wildlife_detection.bambi_dock_widget.BambiProcessor."
+        "_download_head", staticmethod(_boom))
+    warned = {}
+    monkeypatch.setattr(
+        "bambi_wildlife_detection.bambi_dock_widget.QMessageBox.warning",
+        lambda _p, title, text: warned.update(title=title, text=text))
+
+    dock.download_classification_models()
+
+    assert "gated repo" in warned["text"]
+    # One failure must not leave the button dead for the rest of the session.
+    assert dock.download_models_btn.isEnabled()
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +334,7 @@ def test_a_saved_mapping_is_reloaded(project_folder):
 # ---------------------------------------------------------------------------
 
 def test_sex_dialog_lists_the_projects_species(project_folder):
-    dialog = BambiSexModelDialog({}, project_folder)
+    dialog = BambiClassificationModelDialog({}, project_folder)
     names = [dialog.table.item(r, 0).text()
              for r in range(dialog.table.rowCount())]
     assert "red deer" in names and "wild boar" in names
@@ -202,7 +342,7 @@ def test_sex_dialog_lists_the_projects_species(project_folder):
 
 def test_base_classes_are_not_offered(project_folder):
     """'animal' and 'unknown' are not species anyone has a model for."""
-    dialog = BambiSexModelDialog({}, project_folder)
+    dialog = BambiClassificationModelDialog({}, project_folder)
     names = [dialog.table.item(r, 0).text()
              for r in range(dialog.table.rowCount())]
     for base in ("animal", "unknown", "not-an-animal"):
@@ -210,7 +350,7 @@ def test_base_classes_are_not_offered(project_folder):
 
 
 def test_only_red_deer_defaults_to_the_published_model(project_folder):
-    dialog = BambiSexModelDialog({}, project_folder)
+    dialog = BambiClassificationModelDialog({}, project_folder)
     for row in range(dialog.table.rowCount()):
         species = dialog.table.item(row, 0).text()
         chosen = dialog.table.cellWidget(row, 1).currentData()
@@ -220,13 +360,13 @@ def test_only_red_deer_defaults_to_the_published_model(project_folder):
 def test_species_left_off_are_absent_from_the_result(project_folder):
     """Absent means 'not sexed', which is the honest answer for a species with
     no classifier."""
-    dialog = BambiSexModelDialog({}, project_folder)
+    dialog = BambiClassificationModelDialog({}, project_folder)
     per_species = dialog.result_spec()["species"]
     assert set(per_species) == {DEFAULT_SPECIES}
 
 
 def test_a_custom_model_per_species_round_trips(project_folder):
-    dialog = BambiSexModelDialog({}, project_folder)
+    dialog = BambiClassificationModelDialog({}, project_folder)
     row = next(r for r in range(dialog.table.rowCount())
                if dialog.table.item(r, 0).text() == "wild boar")
     combo = dialog.table.cellWidget(row, 1)
@@ -240,7 +380,7 @@ def test_a_custom_model_per_species_round_trips(project_folder):
 
 def test_a_saved_selection_is_reloaded(project_folder):
     spec = {"species": {"wild boar": {"model": "custom", "path": "/x.pt"}}}
-    dialog = BambiSexModelDialog(spec, project_folder)
+    dialog = BambiClassificationModelDialog(spec, project_folder)
     row = next(r for r in range(dialog.table.rowCount())
                if dialog.table.item(r, 0).text() == "wild boar")
     assert dialog.table.cellWidget(row, 1).currentData() == "custom"
@@ -248,7 +388,7 @@ def test_a_saved_selection_is_reloaded(project_folder):
 
 
 def test_a_project_without_a_store_still_offers_red_deer(tmp_path):
-    dialog = BambiSexModelDialog({}, str(tmp_path))
+    dialog = BambiClassificationModelDialog({}, str(tmp_path))
     names = [dialog.table.item(r, 0).text()
              for r in range(dialog.table.rowCount())]
     assert names == [DEFAULT_SPECIES]
@@ -256,5 +396,5 @@ def test_a_project_without_a_store_still_offers_red_deer(tmp_path):
 
 def test_dialogs_are_tables_not_free_text(project_folder):
     """Typed species names were what made class ids unstable before 6.0."""
-    assert isinstance(BambiSexModelDialog({}, project_folder).table,
+    assert isinstance(BambiClassificationModelDialog({}, project_folder).table,
                       QTableWidget)

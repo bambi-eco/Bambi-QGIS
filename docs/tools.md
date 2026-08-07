@@ -141,7 +141,7 @@ Label tracks are also written as **real tracks**, so labelled animals reach the 
 
 ## Classifier configuration
 
-The **Configuration → Classification** tab holds everything the [A3 classification steps](pipeline.md#a3-classification) read. Two dialogs open from it.
+The **Configuration → Classification** tab holds everything the [classification steps](pipeline.md#classification) read. Two dialogs open from it.
 
 ### Classifiers table
 
@@ -153,9 +153,11 @@ One row per task — occlusion, species, sex — in the order they run.
 | **Model** | *Default* (our published model, downloaded on first use), *Custom* (your own file), or *Off*. |
 | **File / repository** | The model file, for a custom choice. |
 | **Labels** | Opens the class mapping, below. |
-| **Species…** | Sex only: which classifier to use per species. |
+| **Species…** | Sex and life stage: which classifier to use per species. |
 
 Species shows **Default (not released)** and is disabled until a species classifier is published; supply a custom model, or leave the task off. The occlusion and sex classifiers are available now.
+
+**Download models** fetches every classifier set to *Default*, for the projection and input chosen above. Worth pressing first: with the files present, **Labels** can read each model's own class list and the mapping can be set up before anything is run. They are small — a few megabytes each. The DINOv3 model is *not* downloaded here; that happens on the first embedding run, and is much larger.
 
 ### Class mapping
 
@@ -169,11 +171,15 @@ With the project's own occlusion vocabulary (`clear` / `occluded`) the mapping f
 
 For occlusion the mapping additionally decides **which class means "this frame is usable"** — taken from whichever class you map onto the project's first occlusion value. Frame selection depends on it, so it is recorded rather than guessed from the word.
 
-### Sex classifiers per species
+### Classifiers per species
 
-Sex is not one problem across animals. The published classifier reads antlers on red deer; nothing about it transfers to a wild boar, and applying it anyway would produce confident nonsense rather than nothing.
+Sex and life stage are not one problem across animals. The published sex classifier reads antlers on red deer; nothing about it transfers to a wild boar, and applying it anyway would produce confident nonsense rather than nothing.
 
-So the choice is made per species, and a species left **Off** is simply not sexed. Red deer is the only species with a released model, so it is the only row switched on by default.
+So the choice is made per species. For **sex** the options are a model or **Off**, and Off means simply not sexed — the honest answer for a species nobody has a classifier for.
+
+**Life stage** has a third option, **Size-based**: not a model at all, but the box-area measurement described under [C6](pipeline.md#c6-age-classification). It sits in the same column because it answers the same question, and because which of the two decides a species is one decision rather than a model choice plus a switch elsewhere.
+
+Red deer is the only species with a released sex model, so it is the only sex row switched on by default. No life-stage model has been published yet, so every species there defaults to Size-based.
 
 ## Interactive selection tools
 

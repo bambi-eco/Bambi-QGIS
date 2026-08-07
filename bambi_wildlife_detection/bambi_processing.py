@@ -125,6 +125,20 @@ def _make_curve_colorizer(parse_fn, colormap: str, curve_cfg: Dict[str, Any]):
     )
 
 
+#: Worker steps that run a classifier, and which task each restricts itself
+#: to. Every one dispatches to ``run_classification``; the restriction travels
+#: in the config as ``classification_only``, so they share one entry point and
+#: one set of prerequisites. ``classification`` runs whatever is enabled, which
+#: is what a scripted run of the whole block wants.
+CLASSIFY_STEPS = {
+    "classification": (),
+    "classify_occlusion": ("occlusion",),
+    "classify_species": ("species",),
+    "classify_sex": ("sex",),
+    "classify_life_stage": ("life_stage",),
+}
+
+
 class ProcessingWorker(QObject):
     """Worker class for background processing."""
 
@@ -186,7 +200,9 @@ class ProcessingWorker(QObject):
                     self.config, self.progress.emit, self.log.emit,
                     self.is_cancelled
                 )
-            elif self.step == "classification":
+            elif self.step in CLASSIFY_STEPS:
+                # One step per classifier; which one is carried in the config
+                # as "classification_only", so the signature stays uniform.
                 self.processor.run_classification(
                     self.config, self.progress.emit, self.log.emit,
                     self.is_cancelled
@@ -2167,12 +2183,27 @@ class BambiProcessor:
         target_folder = config["target_folder"]
         models = config.get("classification_models") or {}
 
-        tasks = [task for task in hf_access.TASKS
-                 if (models.get(task) or {}).get("model", "off") != "off"]
+        # Each classifier is its own step, so a run is usually one task. An
+        # empty restriction means "everything enabled", which is what a
+        # scripted run of the whole block gets.
+        only = tuple(config.get("classification_only") or ())
+
+        def _enabled(task):
+            wanted = not only or task in only
+            chosen = (models.get(task) or {}).get("model", "off") != "off"
+            return wanted and chosen
+
+        tasks = [task for task in hf_access.TASKS if _enabled(task)]
         if not tasks:
+            if only:
+                names = ", ".join(only)
+                raise ValueError(
+                    f"The {names} classifier is switched off. Choose a model "
+                    "for it in the Classification tab, or run a different "
+                    "step.")
             raise ValueError(
                 "No classifier is enabled. Choose a model for at least one of "
-                "occlusion, species or sex in the Classification tab.")
+                "them in the Classification tab.")
 
         run = classification_store.active_embedding_run(target_folder, suffix)
         if run is None:
@@ -2253,7 +2284,13 @@ class BambiProcessor:
             "classification_frame_selection", "visible") == "all"
 
         # -- occlusion ------------------------------------------------------
-        occlusion_labels: Dict[int, str] = {}
+        # Each classifier is a separate step, so what an earlier one produced
+        # is read back from the store rather than assumed to be in hand. That
+        # is what lets species be classified today and sex tomorrow.
+        occlusion_labels: Dict[int, str] = {
+            row["detection_id"]: row["label"] for row in
+            classification_store.frame_predictions(
+                target_folder, suffix, "occlusion")}
         if "occlusion" in tasks:
             if cancel_check and cancel_check():
                 raise CancelledException("Classification cancelled")
@@ -2261,6 +2298,9 @@ class BambiProcessor:
                 config, target_folder, suffix, "occlusion", models["occlusion"],
                 [row["detection_id"] for row in rows], resolver, unmatched,
                 projection, log_fn)
+        elif occlusion_labels and log_fn:
+            log_fn(f"Using the occlusion classifier's {len(occlusion_labels)} "
+                   "stored frame call(s) to choose what may vote")
         if progress_fn:
             progress_fn(35)
 
@@ -2287,11 +2327,26 @@ class BambiProcessor:
             log_fn(f"{total} of {len(rows)} frame(s) will vote "
                    f"({_describe_frame_source(frame_source)})")
 
-        # -- species, then sex over exactly the same frames -----------------
-        species_of_track: Dict[int, str] = {}
-        for task in ("species", "sex"):
-            if task not in tasks:
-                continue
+        # -- species, then the demographic heads over the same frames -------
+        # Sex and life stage both reuse exactly the species frames, and both
+        # pick their model from the species that vote assigned.
+        # Sex and life stage choose their model by species, so a run that does
+        # not include species reads the call it made earlier.
+        species_of_track: Dict[int, str] = {
+            row["track_id"]: row["label"] for row in
+            classification_store.track_predictions(
+                target_folder, suffix, "species")}
+        voted = [task for task in ("species", "sex", "life_stage")
+                 if task in tasks]
+        if voted and "species" not in voted and not species_of_track:
+            needs_species = [task for task in voted
+                             if task in hf_access.PER_SPECIES_TASKS]
+            if needs_species and log_fn:
+                names = " and ".join(needs_species)
+                log_fn(f"No species call is stored, so {names} has no way to "
+                       "choose a model per species. Run the species "
+                       "classifier first.")
+        for index, task in enumerate(voted):
             if cancel_check and cancel_check():
                 raise CancelledException("Classification cancelled")
             species_of_track = self._run_voted_task(
@@ -2299,7 +2354,7 @@ class BambiProcessor:
                 by_track, voting_frames, resolver, unmatched, projection,
                 quorum, min_frames, frame_source, species_of_track, log_fn)
             if progress_fn:
-                progress_fn(60 if task == "species" else 90)
+                progress_fn(40 + int(55 * (index + 1) / len(voted)))
 
         self._apply_classification_results(
             config, suffix, tasks, log_fn=log_fn)
@@ -2346,8 +2401,11 @@ class BambiProcessor:
         ``female_juvenile``. Size can, within one flight: a juvenile sits far
         below its cohort with a clear gap to the next animal.
 
-        Needs no models and no embeddings — only tracks, and geo-referencing
-        if the metric areas are to be used.
+        This is the **fallback**, not the only route. Where a life-stage
+        classifier is configured for a species, C3 has already called those
+        animals and they are left alone; size fills in the rest. Needs no
+        models and no embeddings — only tracks, and geo-referencing if the
+        metric areas are to be used.
         """
         from .core import classification_store, life_stage, track_store
 
@@ -2356,11 +2414,57 @@ class BambiProcessor:
         camera_name = "Thermal" if camera == "T" else "RGB"
         target_folder = config["target_folder"]
 
+        # Which species are measured rather than classified is chosen in the
+        # per-species dialog, so the two routes are one decision rather than a
+        # model choice plus a switch somewhere else.
+        per_species = ((config.get("classification_models") or {})
+                       .get("life_stage") or {}).get("species") or {}
+        measured = {name for name, entry in per_species.items()
+                    if (entry or {}).get("model") == "size"}
+        if not measured:
+            if log_fn:
+                log_fn("No species is set to the size-based estimate, so "
+                       "there is nothing to measure. Choose it per species "
+                       "under the life-stage classifier's Species… button.")
+            if progress_fn:
+                progress_fn(100)
+            return
+
         rows = track_store.load_pixel_tracks(target_folder, suffix)
         if not rows:
             raise ValueError(
                 f"No {camera_name} tracks found. Run tracking for this camera "
                 "first.")
+
+        # Animals a life-stage classifier already called keep that answer.
+        existing = classification_store.track_predictions(
+            target_folder, suffix, classification_store.LIFE_STAGE)
+        from_model = [row for row in existing
+                      if row.get("model") != classification_store.SIZE_MODEL]
+        called_by_model = {int(row["track_id"]) for row in from_model}
+        if called_by_model and log_fn:
+            log_fn(f"{len(called_by_model)} animal(s) were called by a "
+                   "life-stage classifier and are left as they are")
+
+        # Only the species set to Size-based take a verdict from the
+        # measurement; the rest still count towards the cohort statistics,
+        # because removing them would shift everyone else's score.
+        species_of_track = {
+            int(row["track_id"]): row["label"] for row in
+            classification_store.track_predictions(
+                target_folder, suffix, "species")}
+        if species_of_track:
+            to_measure = {track_id for track_id, name
+                          in species_of_track.items() if name in measured}
+        else:
+            # Nothing has been classified by species yet, so the selection
+            # cannot be applied per animal — measure them all rather than
+            # silently doing nothing.
+            to_measure = None
+            if log_fn:
+                log_fn("No species call is stored, so every animal is "
+                       "measured. Run Species Classification first to apply "
+                       "the per-species choice.")
 
         if progress_fn:
             progress_fn(10)
@@ -2404,11 +2508,17 @@ class BambiProcessor:
                      target_folder, suffix, "sex")
                  if row["label"].lower() == "male"]
 
-        found = life_stage.assess(areas, settings, adults=males)
+        # The cohort keeps every animal — a robust median over the whole herd
+        # is the point — but only the ones set to be measured, and not already
+        # called by a classifier, take a verdict from it.
+        found = [item for item in life_stage.assess(areas, settings,
+                                                    adults=males)
+                 if item.track_id not in called_by_model
+                 and (to_measure is None or item.track_id in to_measure)]
         if log_fn:
             log_fn(life_stage.explain(found, settings, source))
 
-        if not found:
+        if not found and not from_model:
             if progress_fn:
                 progress_fn(100)
             return
@@ -2416,12 +2526,13 @@ class BambiProcessor:
         ratios = life_stage.cohort_ratio(found)
         classification_store.record_track_predictions(
             target_folder, suffix, classification_store.LIFE_STAGE,
-            [{
+            from_model + [{
                 "track_id": item.track_id, "label": item.label,
                 # Size is one measurement per animal, not a vote — recorded as
                 # a unanimous call of one so the table stays uniform.
                 "votes": 1, "n": 1, "fraction": 1.0,
-                "modality_in": source, "model": "box-area",
+                "modality_in": source,
+                "model": classification_store.SIZE_MODEL,
                 "evidence": {
                     "area": item.area, "z": item.z, "gap": item.gap,
                     "cohort_ratio": ratios.get(item.track_id),
@@ -2492,7 +2603,7 @@ class BambiProcessor:
                         projection, quorum, min_frames, frame_source,
                         species_of_track, log_fn):
         """Run a per-frame head and aggregate it per track by quorum vote."""
-        from .core import classification, classification_store
+        from .core import classification, classification_store, hf_access
 
         modality_in = spec.get("modality", "matched")
         frame_rows, track_rows = [], []
@@ -2508,12 +2619,18 @@ class BambiProcessor:
                 continue
 
             key = ""
-            if task == "sex":
+            if task in hf_access.PER_SPECIES_TASKS:
+                # The cue is species-specific, so the model is chosen by the
+                # species the vote just assigned. A species nobody has a
+                # classifier for is left uncalled rather than guessed at — for
+                # life stage the size estimate then fills the gap.
                 key = resolved_species.get(track_id, "")
                 per_species = (spec.get("species") or {}).get(key)
-                if per_species is None or per_species.get("model",
-                                                          "off") == "off":
-                    continue    # no sex classifier configured for this species
+                chosen = (per_species or {}).get("model", "off")
+                # "size" is a measurement, not a head — the life-stage step
+                # makes those calls.
+                if per_species is None or chosen in ("off", "size"):
+                    continue
                 spec_for_track = dict(spec, **per_species)
             else:
                 spec_for_track = spec

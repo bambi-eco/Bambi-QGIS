@@ -29,7 +29,9 @@ import os
 from typing import Dict, List, Optional, Tuple
 
 #: The backbone every published head was trained against. Gated on Hugging Face.
-DEFAULT_BACKBONE = "facebook/dinov3-vith16plus-pretrain-lvd1689m"
+#: The trailing "lvd1689m" makes this read as high-entropy to a secret scanner;
+#: it is a public model name, not a credential.
+DEFAULT_BACKBONE = "facebook/dinov3-vith16plus-pretrain-lvd1689m"  # pragma: allowlist secret
 
 #: CLS-token width of :data:`DEFAULT_BACKBONE`. A ``matched`` head takes twice
 #: this, being the concatenation of the two modalities.
@@ -43,17 +45,34 @@ PROJECTIONS = ("non_geo", "geo_1k", "geo_2k")
 #: Input configurations a head can be trained for.
 MODALITIES = ("rgb", "thermal", "matched")
 
-#: The classification tasks, in the order they must run: occlusion decides which
-#: frames the other two are allowed to see (see the plan, §5.2a).
-TASKS = ("occlusion", "species", "sex")
+#: The classification tasks, in the order they must run: occlusion decides
+#: which frames the others are allowed to see (see the plan, §5.2a), species
+#: fixes what the animal is, and the two demographic heads are chosen by that
+#: species.
+TASKS = ("occlusion", "species", "sex", "life_stage")
 
-#: Default head repository per task. ``species`` is not released yet — the code
-#: path is complete, so it starts working the day the repo appears, and until
-#: then a custom model is the only option.
+#: Tasks whose model is chosen per species, because the cue is
+#: species-specific: antlers mark a male red deer, and nothing about that
+#: transfers to another animal. A species with no model is left uncalled
+#: rather than guessed at.
+PER_SPECIES_TASKS = ("sex", "life_stage")
+
+#: Default head repository per task. ``species`` and ``life_stage`` are not
+#: released yet — the code paths are complete, so they start working the day
+#: the repos appear, and until then a custom model is the only option.
 DEFAULT_HEAD_REPOS: Dict[str, Optional[str]] = {
     "occlusion": "cpraschl/bambi-occlusion-classifiers",
     "sex": "cpraschl/bambi-red-deer-sex-classifiers",
     "species": None,
+    "life_stage": None,
+}
+
+#: Human labels for the tasks, since ``life_stage`` does not capitalise well.
+TASK_LABELS = {
+    "occlusion": "Occlusion",
+    "species": "Species",
+    "sex": "Sex",
+    "life_stage": "Life stage",
 }
 
 #: Where the token came from, for the UI to report.

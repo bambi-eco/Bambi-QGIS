@@ -107,6 +107,14 @@ class TestClassificationEntries:
         for key in cs.CONFIG_KEYS:
             assert "token" not in key.lower(), key
 
+    def test_a_fresh_project_classifies_on_the_camera_frames(self):
+        """Index 0 is Perspective. The orthorectified variants need a GeoTIFF
+        export a flight may not have, so the default has to be the one that
+        always works."""
+        entry = next(e for e in cs.CONFIG_ENTRIES
+                     if e.key == "Classification/Projection")
+        assert entry.default == 0
+
     def test_backbone_defaults_to_empty_so_the_code_default_wins(self):
         entry = next(e for e in cs.CONFIG_ENTRIES
                      if e.key == "Classification/Backbone")

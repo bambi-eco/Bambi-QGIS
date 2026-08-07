@@ -429,6 +429,62 @@ def test_switching_writing_off_is_said_out_loud(flight):
     assert any("classification store only" in line for line in logs)
 
 
+# ---------------------------------------------------------------------------
+# One step per classifier
+# ---------------------------------------------------------------------------
+
+def test_a_single_task_can_be_run_alone(flight):
+    _run(flight, classification_only=["occlusion"])
+
+    assert classification_store.frame_predictions(flight, "t", "occlusion")
+    assert classification_store.track_predictions(flight, "t", "species") == []
+
+
+def test_a_later_step_reads_what_an_earlier_one_stored(flight):
+    """The steps run separately, so species must reach sex through the store
+    rather than through the same run."""
+    _run(flight, classification_only=["occlusion"])
+    _run(flight, classification_only=["species"])
+    _run(flight, classification_only=["sex"])
+
+    sexed = {row["track_id"] for row in
+             classification_store.track_predictions(flight, "t", "sex")}
+    assert sexed == {1, 2}      # the red deer, which have a sex model
+
+
+def test_the_stored_occlusion_still_selects_the_voting_frames(flight):
+    """Occlusion ran in its own step; species must still honour it."""
+    _run(flight, classification_only=["occlusion"])
+    logs = _run(flight, classification_only=["species"])
+
+    species = {r["track_id"]: r for r in
+               classification_store.track_predictions(flight, "t", "species")}
+    assert species[3]["n"] == 1          # three of its four frames are occluded
+    assert species[3]["evidence"]["frames"] == "occlusion-head"
+    assert any("stored frame call" in line for line in logs)
+
+
+def test_sex_without_a_species_call_says_what_is_missing(flight):
+    logs = _run(flight, classification_only=["sex"])
+
+    assert classification_store.track_predictions(flight, "t", "sex") == []
+    assert any("Run the species classifier first" in line for line in logs)
+
+
+def test_running_a_switched_off_task_is_refused_by_name(flight):
+    models = _models(flight)
+    models["species"]["model"] = "off"
+    with pytest.raises(ValueError, match="species classifier is switched off"):
+        BambiProcessor().run_classification(
+            _config(flight, models, classification_only=["species"]))
+
+
+def test_an_empty_restriction_runs_everything_enabled(flight):
+    _run(flight, classification_only=[])
+    assert classification_store.frame_predictions(flight, "t", "occlusion")
+    assert classification_store.track_predictions(flight, "t", "species")
+
+
 def test_the_stage_is_recorded(flight):
     from bambi_wildlife_detection.core import stages
 

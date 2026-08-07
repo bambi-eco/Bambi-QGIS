@@ -126,6 +126,20 @@ def test_backbone_falls_back_to_the_default_when_empty(dock):
     assert HF_DEFAULT_BACKBONE == hf_access.DEFAULT_BACKBONE
 
 
+def test_perspective_is_the_default_projection(dock):
+    """The camera's own frames, not the orthorectified ones.
+
+    Orthorectification smears animals that are already small and low in
+    contrast — the paper measures RGB detection dropping from 0.809 to 0.724
+    mAP@50 — and the geo variants additionally need a GeoTIFF export that a
+    flight may not have. Perspective is the option that always works.
+    """
+    assert dock.classification_projection_combo.currentIndex() == 0
+    assert dock.classification_projection_combo.currentText().startswith(
+        "Perspective")
+    assert dock.get_config()["classification_projection"] == "non_geo"
+
+
 def test_projection_reports_the_repo_folder_not_the_label(dock):
     for index, expected in enumerate(("non_geo", "geo_1k", "geo_2k")):
         dock.classification_projection_combo.setCurrentIndex(index)

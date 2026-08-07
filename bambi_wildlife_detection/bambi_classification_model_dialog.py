@@ -1,14 +1,15 @@
 # -*- coding: utf-8 -*-
-"""Choose a sex classifier per species.
+"""Choose a classifier per species, for the demographic tasks.
 
-Sex is not one problem across animals. The published classifier reads antlers
-on red deer; nothing about it transfers to a wild boar, and a model applied to
-a species it was never fitted for would return confident nonsense rather than
-nothing. So the choice is made per species, and a species with no classifier is
-simply left unsexed.
+Sex and life stage are not one problem across animals. The published sex
+classifier reads antlers on red deer; nothing about it transfers to a wild
+boar, and a model applied to a species it was never fitted for would return
+confident nonsense rather than nothing. So the choice is made per species, and
+a species with no classifier is simply left uncalled — for life stage the
+box-area estimate then fills the gap, if it is switched on.
 
-That is also why the default table has exactly one entry: red deer is the only
-species with a released model today.
+That is also why the sex table has exactly one entry switched on: red deer is
+the only species with a released model today.
 """
 
 from qgis.PyQt.QtCore import Qt
@@ -24,27 +25,38 @@ DEFAULT_SPECIES = "red deer"
 
 _SOURCES = (("Off", "off"), ("Default", "default"), ("Custom…", "custom"))
 
+#: Life stage has a fourth option: a measurement rather than a model. It sits
+#: in the same column because it answers the same question, and because "which
+#: of these decides this species" is one decision, not a model choice plus a
+#: separate switch somewhere else.
+SIZE_SOURCE = ("Size-based", "size")
 
-class BambiSexModelDialog(QDialog):
-    """Per-species sex classifier selection."""
 
-    def __init__(self, spec: dict, target_folder: str, parent=None):
+def sources_for(task: str):
+    """Model options offered for *task*."""
+    if task == "life_stage":
+        off, *models = _SOURCES
+        return (off, SIZE_SOURCE) + tuple(models)
+    return _SOURCES
+
+
+class BambiClassificationModelDialog(QDialog):
+    """Per-species classifier selection for one demographic task."""
+
+    def __init__(self, spec: dict, target_folder: str, task: str = "sex",
+                 parent=None):
         super().__init__(parent)
         self.spec = dict(spec or {})
         self.target_folder = target_folder
+        self.task = task
+        self._label = hf_access.TASK_LABELS.get(task, task).lower()
 
-        self.setWindowTitle("Sex classifiers per species")
+        self.setWindowTitle(f"{self._label.capitalize()} classifiers per species")
         self.setMinimumSize(560, 380)
 
         layout = QVBoxLayout(self)
 
-        info = QLabel(
-            "Choose which classifier decides sex for each species.\n\n"
-            "Sex is read from a species-specific cue — antlers, for red deer — "
-            "so a model fitted on one species says nothing useful about "
-            "another. A species left <b>Off</b> is simply not sexed, which is "
-            "the honest answer rather than a guess."
-        )
+        info = QLabel(self._describe())
         info.setWordWrap(True)
         info.setTextFormat(Qt.TextFormat.RichText)
         info.setStyleSheet("color: gray; font-size: 10px;")
@@ -78,11 +90,29 @@ class BambiSexModelDialog(QDialog):
 
     # -- contents --------------------------------------------------------
 
+    def _describe(self) -> str:
+        """What this task reads, and what happens to a species left off."""
+        if self.task == "life_stage":
+            return (
+                "Choose what decides life stage for each species.\n\n"
+                "<b>Size-based</b> needs no model: a juvenile sits far below "
+                "its cohort, measured within this flight. It is the default, "
+                "because no life-stage classifier has been published yet. A "
+                "species left <b>Off</b> is not called at all."
+            )
+        return (
+            "Choose which classifier decides sex for each species.\n\n"
+            "Sex is read from a species-specific cue — antlers, for red "
+            "deer — so a model fitted on one species says nothing useful "
+            "about another. A species left <b>Off</b> is simply not sexed, "
+            "which is the honest answer rather than a guess."
+        )
+
     def _species(self):
         """Concrete species from the project, base classes excluded.
 
         ``animal`` / ``unknown`` / ``not-an-animal`` are not species anyone has
-        a sex classifier for.
+        a classifier for.
         """
         vocabulary = label_store.vocabulary(self.target_folder)
         rows = vocabulary.get("species", []) if vocabulary else []
@@ -106,10 +136,19 @@ class BambiSexModelDialog(QDialog):
             if source is None:
                 # Nothing saved yet: offer the published model for the one
                 # species it was fitted on, and leave the rest alone.
-                source = "default" if name == DEFAULT_SPECIES else "off"
+                fitted = name == DEFAULT_SPECIES
+                published = hf_access.has_default_head(self.task)
+                if fitted and published:
+                    source = "default"
+                elif self.task == "life_stage":
+                    # No life-stage model exists, and size needs none — so it
+                    # is the useful default rather than "off".
+                    source = "size"
+                else:
+                    source = "off"
 
             combo = QComboBox()
-            for label, value in _SOURCES:
+            for label, value in sources_for(self.task):
                 combo.addItem(label, value)
             found = combo.findData(source)
             combo.setCurrentIndex(max(0, found))
@@ -120,10 +159,13 @@ class BambiSexModelDialog(QDialog):
             self.table.setItem(row, 2, QTableWidgetItem(entry.get("path", "")))
             self._on_source_changed(row)
 
-        if not hf_access.has_default_head("sex"):  # pragma: no cover
+        if not hf_access.has_default_head(self.task):
+            extra = ("" if self.task != "life_stage" else
+                     " Size-based needs none, and is what these default to.")
             self.status.setText(
-                "No sex classifier has been published yet; choose a custom "
-                "model for any species you want sexed.")
+                f"No {self._label} classifier has been published yet; choose "
+                f"a custom model for any species you want called by one."
+                f"{extra}")
         else:
             self.status.setText(
                 f"The published model covers {DEFAULT_SPECIES}. For anything "
@@ -145,8 +187,10 @@ class BambiSexModelDialog(QDialog):
             if source == "default":
                 species = self.table.item(row, 0).text()
                 item.setText(
-                    hf_access.default_head_repo("sex") or ""
+                    hf_access.default_head_repo(self.task) or ""
                     if species == DEFAULT_SPECIES else "")
+            elif source == "size":
+                item.setText("measured from the box area, per flight")
             else:
                 item.setText("")
 
@@ -162,7 +206,7 @@ class BambiSexModelDialog(QDialog):
     def browse_for(self, row: int):
         """Pick a custom model file for one species."""
         path, _filter = QFileDialog.getOpenFileName(
-            self, "Choose a sex classifier", "",
+            self, f"Choose a {self._label} classifier", "",
             "TorchScript model (*.pt *.pth);;All files (*)")
         if path:
             self.table.item(row, 2).setText(path)
@@ -170,14 +214,14 @@ class BambiSexModelDialog(QDialog):
     # -- result ----------------------------------------------------------
 
     def result_spec(self) -> dict:
-        """The sex spec with its per-species selection updated."""
+        """The task's spec with its per-species selection updated."""
         per_species = {}
         for row in range(self.table.rowCount()):
             name = self.table.item(row, 0).text()
             combo = self.table.cellWidget(row, 1)
             source = combo.currentData() if combo else "off"
             if source == "off":
-                continue      # absent means "not sexed", which is the default
+                continue      # absent means "not called", which is the default
             entry = {"model": source}
             if source == "custom":
                 entry["path"] = (self.table.item(row, 2).text() or "").strip()

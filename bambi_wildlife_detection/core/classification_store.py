@@ -28,11 +28,15 @@ from . import store
 #: Tasks that produce a per-track call. ``occlusion`` is deliberately absent:
 #: it stays per frame, because it selects which frames the others may vote
 #: over rather than describing the animal.
-VOTED_TASKS = ("species", "sex")
+VOTED_TASKS = ("species", "sex", "life_stage")
 
-#: Task name of the box-area life-stage cue. It has no frame rows at all — it
-#: is computed from geometry per flight, not from features per frame.
+#: Life stage is the one task with two possible authors: a classifier where
+#: someone has one, and the box-area estimate everywhere else. Both write here,
+#: and ``model`` says which produced a given row.
 LIFE_STAGE = "life_stage"
+
+#: ``track_predictions.model`` of a row the size estimate produced.
+SIZE_MODEL = "box-area"
 
 
 def _utc_now() -> str:

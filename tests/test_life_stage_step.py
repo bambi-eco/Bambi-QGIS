@@ -52,6 +52,10 @@ def _config(root, **overrides):
     config = {
         "target_folder": root,
         "classification_camera": "T",
+        "classification_models": {
+            "life_stage": {"species": {name: {"model": "size"}
+                                       for name in ("red deer", "roe deer",
+                                                    "wild boar")}}},
         "life_stage_z": -2.0,
         "life_stage_iqr_factor": 2.0,
         "life_stage_min_individuals": 4,
@@ -125,6 +129,50 @@ def test_pixel_areas_are_used_without_geo_referencing(flight):
     row = classification_store.track_predictions(
         flight, "t", classification_store.LIFE_STAGE)[0]
     assert row["evidence"]["source"] == life_stage.AREA_PIXEL
+
+
+def test_the_metric_areas_are_what_actually_decide(flight):
+    """Not just labelled 'orthorectified' — actually used.
+
+    The pixel boxes and the world boxes are made to disagree about *which*
+    animal is the outlier, so the verdict itself says which was measured. With
+    proportional fixtures both answers coincide and the test proves nothing.
+    """
+    # By pixel area, track 7 is the small one (the fixture's last entry).
+    # By world area, track 1 is — the opposite animal. The adults are given
+    # slightly different sizes, because a herd of exactly equal animals has a
+    # zero median-absolute-deviation and nothing can be an outlier of it.
+    geo_areas = {1: 0.25, 2: 9.0, 3: 9.1, 4: 9.2, 5: 9.3, 6: 9.4, 7: 9.5}
+    conn = store.open_store(
+        store.stage_path(flight, store.GEOREFERENCED, "t"),
+        store.GEOREFERENCED, "t")
+    with store.transaction(conn):
+        for detection_id in range(1, len(HERD) * 3 + 1):
+            track = (detection_id - 1) // 3 + 1
+            side = geo_areas[track] ** 0.5
+            conn.execute(
+                "INSERT INTO detections_geo (detection_id, gx1, gy1, gz1, "
+                "gx2, gy2, gz2) VALUES (?, 0, 0, 0, ?, ?, 0)",
+                (detection_id, side, side))
+    conn.close()
+
+    # Reverse the pixel areas so the pixel outlier is a *different* track.
+    conn = store.open_store(
+        store.stage_path(flight, store.DETECTIONS, "t"), store.DETECTIONS, "t")
+    with store.transaction(conn):
+        for detection_id in range(1, len(HERD) * 3 + 1):
+            track = (detection_id - 1) // 3
+            side = HERD[len(HERD) - 1 - track] ** 0.5
+            conn.execute(
+                "UPDATE detections SET x2 = ?, y2 = ? WHERE detection_id = ?",
+                (side, side, detection_id))
+    conn.close()
+
+    _run(flight)
+
+    labels = _labels(flight)
+    assert labels[1] == life_stage.JUVENILE      # the world-space outlier
+    assert labels[len(HERD)] == life_stage.ADULT  # the pixel-space one
 
 
 def test_metric_areas_are_preferred_when_available(flight):
@@ -234,6 +282,81 @@ def test_writing_can_be_switched_off(flight):
     assert all(not row for row in rows)
     # Still recorded, just not projected.
     assert _labels(flight)[1] == life_stage.JUVENILE
+
+
+# ---------------------------------------------------------------------------
+# Size is the fallback, not the only route
+# ---------------------------------------------------------------------------
+
+def test_an_animal_a_classifier_called_is_left_alone(flight):
+    """A model that looked at the animal beats a measurement of its box."""
+    classification_store.record_track_predictions(
+        flight, "t", classification_store.LIFE_STAGE, [
+            {"track_id": 1, "label": "adult", "votes": 9, "n": 10,
+             "fraction": 0.9, "model": "life_stage_matched.pt"}])
+    logs = _run(flight)
+
+    rows = {r["track_id"]: r for r in
+            classification_store.track_predictions(
+                flight, "t", classification_store.LIFE_STAGE)}
+    # Track 1 is the size outlier, but the classifier already called it adult.
+    assert rows[1]["label"] == life_stage.ADULT
+    assert rows[1]["model"] == "life_stage_matched.pt"
+    assert any("left as they are" in line for line in logs)
+
+
+def test_size_still_fills_in_the_animals_no_model_called(flight):
+    classification_store.record_track_predictions(
+        flight, "t", classification_store.LIFE_STAGE, [
+            {"track_id": 2, "label": "adult", "votes": 9, "n": 10,
+             "fraction": 0.9, "model": "life_stage_matched.pt"}])
+    _run(flight)
+
+    rows = {r["track_id"]: r for r in
+            classification_store.track_predictions(
+                flight, "t", classification_store.LIFE_STAGE)}
+    assert rows[1]["label"] == life_stage.JUVENILE
+    assert rows[1]["model"] == classification_store.SIZE_MODEL
+    assert rows[2]["model"] == "life_stage_matched.pt"
+
+
+def test_a_called_animal_still_counts_towards_the_cohort(flight):
+    """The comparison is against the whole herd, so excluding called animals
+    from the statistics would shift everyone else's z-score."""
+    classification_store.record_track_predictions(
+        flight, "t", classification_store.LIFE_STAGE, [
+            {"track_id": 4, "label": "adult", "votes": 9, "n": 10,
+             "fraction": 0.9, "model": "m.pt"}])
+    _run(flight)
+
+    rows = {r["track_id"]: r for r in
+            classification_store.track_predictions(
+                flight, "t", classification_store.LIFE_STAGE)}
+    assert rows[1]["label"] == life_stage.JUVENILE
+
+
+def test_no_species_set_to_size_measures_nothing(flight):
+    logs = _run(flight, classification_models={"life_stage": {"species": {}}})
+
+    assert classification_store.track_predictions(
+        flight, "t", classification_store.LIFE_STAGE) == []
+    assert any("nothing to measure" in line for line in logs)
+
+
+def test_only_the_species_set_to_size_are_measured(flight):
+    """The choice is per species, in the same place the models are chosen."""
+    classification_store.record_track_predictions(flight, "t", "species", [
+        {"track_id": 1, "label": "red deer", "votes": 3, "n": 3,
+         "fraction": 1.0},
+        {"track_id": 2, "label": "wild boar", "votes": 3, "n": 3,
+         "fraction": 1.0}])
+    _run(flight, classification_models={
+        "life_stage": {"species": {"red deer": {"model": "size"},
+                                   "wild boar": {"model": "off"}}}})
+
+    called = _labels(flight)
+    assert 1 in called            # red deer is measured
+    assert 2 not in called        # wild boar is left uncalled
 
 
 def test_the_stage_is_recorded(flight):

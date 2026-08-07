@@ -121,7 +121,27 @@ def test_export_without_a_store_is_refused(tmp_path):
 
 def test_registry_lists_every_format():
     assert set(exporters.EXPORTERS) == {
-        "coco", "yolo", "mot", "trex", "geojson", "camtrap", "dwca"}
+        "coco", "yolo", "mot", "trex", "geojson", "geojson_segmentation",
+        "camtrap", "dwca"}
+
+
+def test_the_two_geojson_formats_say_what_they_hold():
+    """'geo-referenced' described how they were made, not what is in them —
+    which is no help when choosing between two of them."""
+    labels = {key: exporters.EXPORTERS[key][0]
+              for key in ("geojson", "geojson_segmentation")}
+    assert labels["geojson"] == "GeoJSON (animals)"
+    assert labels["geojson_segmentation"] == "GeoJSON (segmentations)"
+
+
+def test_both_geojson_formats_get_the_project_crs():
+    for key in ("geojson", "geojson_segmentation"):
+        assert key in exporters.NEEDS_CRS
+
+
+def test_each_single_file_format_offers_a_distinct_name():
+    names = [name for key, name in exporters.DEFAULT_FILENAME.items()]
+    assert len(names) == len(set(names))
 
 
 # ---------------------------------------------------------------------------
@@ -332,7 +352,123 @@ def test_mot_omits_untracked_detections(survey, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# GeoJSON
+# GeoJSON — segmentations
+# ---------------------------------------------------------------------------
+
+def _add_segments(root, rows):
+    conn = store.open_store(
+        store.stage_path(root, store.SEGMENTATION, "t"),
+        store.SEGMENTATION, "t")
+    with store.transaction(conn):
+        for row in rows:
+            conn.execute(
+                "INSERT INTO segments (detection_id, frame, polygon_px, "
+                "polygon_geo, attributes) VALUES (?, ?, ?, ?, ?)",
+                (row.get("detection_id"), row["frame"],
+                 json.dumps(row.get("polygon_px") or []),
+                 json.dumps(row["polygon_geo"])
+                 if row.get("polygon_geo") is not None else None,
+                 json.dumps(row.get("attributes") or {})))
+    conn.close()
+
+
+SQUARE = [[10.0, 20.0], [30.0, 20.0], [30.0, 40.0], [10.0, 40.0]]
+
+
+def test_segmentation_geojson_writes_polygons(survey, tmp_path):
+    _add_segments(survey, [{"detection_id": 1, "frame": 0,
+                            "polygon_geo": SQUARE}])
+    path = str(tmp_path / "segmentations.geojson")
+    exporters.export_segmentation_geojson(survey, "t", path, epsg=32633)
+
+    with open(path, encoding="utf-8") as fh:
+        document = json.load(fh)
+    assert len(document["features"]) == 1
+    feature = document["features"][0]
+    assert feature["geometry"]["type"] == "Polygon"
+    assert feature["properties"]["detection_id"] == 1
+    assert "EPSG::32633" in document["crs"]["properties"]["name"]
+
+
+def test_segmentation_rings_are_closed(survey, tmp_path):
+    """GeoJSON polygons must close; the store need not."""
+    _add_segments(survey, [{"frame": 0, "polygon_geo": SQUARE}])
+    path = str(tmp_path / "s.geojson")
+    exporters.export_segmentation_geojson(survey, "t", path)
+
+    ring = json.load(open(path, encoding="utf-8"))[
+        "features"][0]["geometry"]["coordinates"][0]
+    assert ring[0] == ring[-1]
+    assert len(ring) == len(SQUARE) + 1
+
+
+def test_an_already_nested_ring_list_is_accepted(survey, tmp_path):
+    _add_segments(survey, [{"frame": 0, "polygon_geo": [SQUARE]}])
+    path = str(tmp_path / "s.geojson")
+    exporters.export_segmentation_geojson(survey, "t", path)
+
+    rings = json.load(open(path, encoding="utf-8"))[
+        "features"][0]["geometry"]["coordinates"]
+    assert len(rings) == 1 and len(rings[0]) == len(SQUARE) + 1
+
+
+def test_masks_without_world_coordinates_are_reported(survey, tmp_path):
+    """A pixel-space polygon has no place in a world-coordinate document."""
+    _add_segments(survey, [{"frame": 0, "polygon_geo": None,
+                            "polygon_px": SQUARE},
+                           {"frame": 1, "polygon_geo": SQUARE}])
+    logs = []
+    path = str(tmp_path / "s.geojson")
+    exporters.export_segmentation_geojson(survey, "t", path,
+                                          log_fn=logs.append)
+
+    assert len(json.load(open(path, encoding="utf-8"))["features"]) == 1
+    assert any("Geo-Reference Segmentation" in line for line in logs)
+
+
+def test_a_degenerate_polygon_is_skipped(survey, tmp_path):
+    _add_segments(survey, [{"frame": 0, "polygon_geo": [[1.0, 2.0]]}])
+    path = str(tmp_path / "s.geojson")
+    exporters.export_segmentation_geojson(survey, "t", path)
+    assert json.load(open(path, encoding="utf-8"))["features"] == []
+
+
+def test_segment_attributes_reach_the_properties(survey, tmp_path):
+    _add_segments(survey, [{"frame": 0, "polygon_geo": SQUARE,
+                            "attributes": {"prompt": "deer", "score": 0.8}}])
+    path = str(tmp_path / "s.geojson")
+    exporters.export_segmentation_geojson(survey, "t", path)
+
+    properties = json.load(open(path, encoding="utf-8"))[
+        "features"][0]["properties"]
+    assert properties["prompt"] == "deer"
+    assert properties["score"] == 0.8
+
+
+def test_exporting_without_any_segmentation_says_so(survey, tmp_path):
+    with pytest.raises(exporters.ExportError, match="No segmentation"):
+        exporters.export_segmentation_geojson(
+            survey, "t", str(tmp_path / "s.geojson"))
+
+
+def test_the_two_geojson_exports_are_separate_documents(survey, tmp_path):
+    """Different geometries answering different questions — one mixed
+    collection could not be styled sensibly in any GIS."""
+    _add_segments(survey, [{"frame": 0, "polygon_geo": SQUARE}])
+    animals = str(tmp_path / "animals.geojson")
+    segments = str(tmp_path / "segmentations.geojson")
+    exporters.export_geojson(survey, "t", animals)
+    exporters.export_segmentation_geojson(survey, "t", segments)
+
+    kinds = set()
+    for path in (animals, segments):
+        for feature in json.load(open(path, encoding="utf-8"))["features"]:
+            kinds.add(feature["geometry"]["type"])
+    assert "Polygon" in kinds and "Point" in kinds
+
+
+# ---------------------------------------------------------------------------
+# GeoJSON — animals
 # ---------------------------------------------------------------------------
 
 def test_geojson_points(survey, tmp_path):

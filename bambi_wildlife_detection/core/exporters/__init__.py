@@ -18,7 +18,9 @@ Two families:
 from .biodiversity import export_camtrap_dp, export_darwin_core
 from .common import ExportError
 from .detections import export_coco, export_mot, export_yolo
-from .geo import export_geojson, export_trex_npz
+from .geo import (
+    export_geojson, export_segmentation_geojson, export_trex_npz,
+)
 
 #: ``key -> (label, callable, output_is_folder)``, for the export UI.
 EXPORTERS = {
@@ -26,17 +28,21 @@ EXPORTERS = {
     "yolo": ("YOLO (training labels)", export_yolo, True),
     "mot": ("MOT (tracking)", export_mot, True),
     "trex": ("TRex tracklets (.npz)", export_trex_npz, True),
-    "geojson": ("GeoJSON (geo-referenced)", export_geojson, False),
+    "geojson": ("GeoJSON (animals)", export_geojson, False),
+    "geojson_segmentation": ("GeoJSON (segmentations)",
+                             export_segmentation_geojson, False),
     "camtrap": ("Camtrap DP (survey package)", export_camtrap_dp, True),
     "dwca": ("Darwin Core Archive (GBIF)", export_darwin_core, True),
 }
 
 #: Default file name offered for the single-file formats.
 DEFAULT_FILENAME = {"coco": "detections_coco.json",
-                    "geojson": "detections.geojson"}
+                    "geojson": "animals.geojson",
+                    "geojson_segmentation": "segmentations.geojson"}
 
 #: Formats that publish latitude/longitude and therefore need the project CRS.
-NEEDS_CRS = frozenset({"geojson", "camtrap", "dwca"})
+NEEDS_CRS = frozenset({"geojson", "geojson_segmentation",
+                       "camtrap", "dwca"})
 
 #: Formats describing boxes for training or tracking, which drop
 #: ``not-an-animal`` by default. The rest are survey records and keep it (§8.1).
@@ -93,5 +99,6 @@ __all__ = [
     "DEFAULT_FILENAME", "EXPORTERS", "ExportError", "NEEDS_CRS",
     "NEEDS_FRAME_SIZE", "SUPPORTS_IMAGES", "TRAINING_FORMATS", "run_export",
     "export_camtrap_dp", "export_coco", "export_darwin_core",
-    "export_geojson", "export_mot", "export_trex_npz", "export_yolo",
+    "export_geojson", "export_mot", "export_segmentation_geojson",
+    "export_trex_npz", "export_yolo",
 ]

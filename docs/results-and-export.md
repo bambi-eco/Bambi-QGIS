@@ -185,7 +185,7 @@ tracking stay valid; only the species-dependent analytics need re-running.
 
 ### Classification results, and how they reach everything else
 
-The [classifiers](pipeline.md#a3-classification) record their answers in
+The [classifiers](pipeline.md#classification) record their answers in
 `classification.gpkg` with the evidence behind each one — the model used, the
 per-frame probability, and the vote margin per animal. Nothing else in the
 plugin reads that file, so a further step copies the answers onto the animals
@@ -264,7 +264,8 @@ receives an internal id, and custom fields travel where the format has room.
 | **YOLO** | training dataset: `images/`, `labels/` and `data.yaml` | dropped |
 | **MOT** | tracking benchmarks, with a sidecar for what the columns cannot hold | dropped |
 | **TRex `.npz`** | back to TRex | dropped |
-| **GeoJSON** | detections or tracks in the project CRS | kept |
+| **GeoJSON (animals)** | detections as points, or tracks as lines, in the project CRS | kept |
+| **GeoJSON (segmentations)** | SAM3 mask outlines as polygons, in the project CRS | n/a |
 | **Camtrap DP** | survey package: deployment, media, observations | kept as `blank` |
 | **Darwin Core Archive** | GBIF publishing | never included |
 
@@ -274,7 +275,7 @@ Two things worth knowing:
   is one animal seen once, and publishing every detection would report the same
   roe deer hundreds of times. Tracks whose species has no scientific name are
   held back, and the export says how many.
-- **GeoJSON, Camtrap DP and Darwin Core need the target CRS**, and refuse
+- **The GeoJSON formats, Camtrap DP and Darwin Core need the target CRS**, and refuse
   before asking where to save rather than writing coordinates in the wrong
   reference system.
 - **"Include images"** copies the frames the export refers to alongside it.
@@ -290,7 +291,7 @@ Two things worth knowing:
   Only frames carrying a detection are copied, and frames with no image on
   disk are reported rather than silently skipped. Turn it off when the
   annotations are all you need — the frames are usually the heaviest part of a
-  project. GeoJSON and TRex `.npz` reference no image, so the option is
+  project. The GeoJSON formats and TRex `.npz` reference no image, so the option is
   disabled for them.
 
   Two consequences worth knowing. YOLO is a folder layout rather than a

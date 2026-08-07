@@ -674,7 +674,7 @@ crops).
 | `bambi_labelling_tool.py` | four `occlusion="none"` defaults → `OCCLUSION_LEVELS[0]` |
 | `bambi_processing.py` | `run_track_matching`, `run_embeddings`, `run_classification`, `run_life_stage`; `ProcessingWorker` dispatch |
 | `bambi_dock_widget.py` | Classification config sub-tab, A3 rows, statuses, `get_config`, QGIS layer, info text |
-| `bambi_sex_model_dialog.py` | **new** — per-species sex model mapping |
+| `bambi_classification_model_dialog.py` | **new** — per-species model choice for sex and life stage |
 | `bambi_label_mapping_dialog.py` | **new** — head class → project value mapping (§5.3) |
 | `bambi_dependency_manager.py` | Classification dependency group |
 | `docs/pipeline.md`, `docs/tools.md`, `docs/installation.md`, `docs/results-and-export.md` | new steps, config tab, HF token, occlusion enum change |

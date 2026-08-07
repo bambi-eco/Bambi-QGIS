@@ -60,7 +60,7 @@ _CLASSIFICATION_UNMATCHED = ("skip", "rgb", "thermal")
 # The classification tasks, in the order they run: occlusion decides which
 # frames the other two may vote over, and sex reuses exactly the species
 # frames.
-_CLASSIFICATION_TASKS = ("occlusion", "species", "sex")
+_CLASSIFICATION_TASKS = ("occlusion", "species", "sex", "life_stage")
 _CLASSIFICATION_INPUTS = (("Thermal", "thermal"), ("RGB", "rgb"),
                           ("Matched", "matched"))
 _CLASSIFICATION_SOURCES = (("Off", "off"), ("Default", "default"),
@@ -1973,6 +1973,88 @@ class BambiDockWidget(QDockWidget):
 
         classification_tab_layout.addWidget(source_group)
 
+        # --- Cross-modal matching ---
+        match_group = QGroupBox("Cross-Modal Track Matching")
+        match_layout = QFormLayout(match_group)
+
+        match_info = QLabel(
+            "Decides which thermal track and which RGB track are the same "
+            "animal. Needed for the <i>matched</i> classifiers, and useful on "
+            "its own: an animal both cameras saw is a confirmed animal, which "
+            "is what keeps a census free of tracks that fired on shadow."
+        )
+        match_info.setWordWrap(True)
+        match_info.setTextFormat(Qt.TextFormat.RichText)
+        match_info.setStyleSheet("color: gray; font-size: 10px;")
+        match_layout.addRow(match_info)
+
+        self.match_min_shared_spin = QSpinBox()
+        self.match_min_shared_spin.setRange(1, 1000)
+        self.match_min_shared_spin.setValue(8)
+        self.match_min_shared_spin.setToolTip(
+            "Frames two tracks must have in common before they can be "
+            "matched. Below this the median distance is not a median of much."
+        )
+        match_layout.addRow("Min shared frames:", self.match_min_shared_spin)
+
+        self.match_gate_spin = QDoubleSpinBox()
+        self.match_gate_spin.setRange(0.1, 10000.0)
+        self.match_gate_spin.setDecimals(1)
+        self.match_gate_spin.setSingleStep(1.0)
+        self.match_gate_spin.setValue(28.0)
+        self.match_gate_spin.setSuffix(" px")
+        self.match_gate_spin.setToolTip(
+            "Largest median inter-centre distance still counted as the same "
+            "animal, in thermal pixels.\n\n"
+            "The default of 28 px is the value published for 1024×1024 "
+            "inference — raise it if your frames are larger, and check the "
+            "run log, which reports how far the closest rejected candidate "
+            "was."
+        )
+        match_layout.addRow("Distance gate:", self.match_gate_spin)
+
+        self.match_min_confidence_spin = QDoubleSpinBox()
+        self.match_min_confidence_spin.setRange(0.0, 1.0)
+        self.match_min_confidence_spin.setDecimals(2)
+        self.match_min_confidence_spin.setSingleStep(0.05)
+        self.match_min_confidence_spin.setValue(0.20)
+        self.match_min_confidence_spin.setToolTip(
+            "Mean detection confidence both tracks must reach. Stops a match "
+            "being built on a track that fired on shadow."
+        )
+        match_layout.addRow("Min mean confidence:",
+                            self.match_min_confidence_spin)
+
+        self.match_max_time_offset_spin = QDoubleSpinBox()
+        self.match_max_time_offset_spin.setRange(0.001, 10.0)
+        self.match_max_time_offset_spin.setDecimals(3)
+        self.match_max_time_offset_spin.setSingleStep(0.01)
+        self.match_max_time_offset_spin.setValue(0.10)
+        self.match_max_time_offset_spin.setSuffix(" s")
+        self.match_max_time_offset_spin.setToolTip(
+            "How far apart two frames may be on the shared capture clock and "
+            "still count as the same moment. The two cameras record at "
+            "different rates, so frame numbers never line up; at the ends of "
+            "a flight the nearest frame in time can be seconds away, and "
+            "pairing across such a gap would invent correspondences."
+        )
+        match_layout.addRow("Max frame time offset:",
+                            self.match_max_time_offset_spin)
+
+        self.match_thermal_anchored_check = QCheckBox(
+            "Size RGB crops from the thermal box")
+        self.match_thermal_anchored_check.setChecked(True)
+        self.match_thermal_anchored_check.setToolTip(
+            "For a matched pair, take the crop size from the thermal box — "
+            "the looser of the two, so it more reliably encloses the whole "
+            "animal, antlers included.\n\n"
+            "Affects only the crop the classifier sees. The stored detections "
+            "are never rewritten, so geo-referencing and tracking stay valid."
+        )
+        match_layout.addRow("", self.match_thermal_anchored_check)
+
+        classification_tab_layout.addWidget(match_group)
+
         # --- Classifier mapping ---
         models_group = QGroupBox("Classifiers")
         models_layout = QVBoxLayout(models_group)
@@ -2003,11 +2085,49 @@ class BambiDockWidget(QDockWidget):
         models_layout.addWidget(self.classification_models_table)
 
         self._build_classification_models_table()
+
+        download_row = QHBoxLayout()
+        self.download_models_btn = QPushButton("Download models")
+        self.download_models_btn.setToolTip(
+            "Fetch every classifier above that is set to Default, for the "
+            "chosen projection and input.\n\n"
+            "Worth doing before anything else: with the files present, "
+            "'Labels' can read each model's classes and the mapping can be "
+            "set up without running the classifiers first. These are small — "
+            "a few megabytes each. The DINOv3 model itself is not downloaded "
+            "here; that happens on the first embedding run."
+        )
+        self.download_models_btn.clicked.connect(
+            self.download_classification_models)
+        download_row.addWidget(self.download_models_btn)
+
+        self.download_models_status = QLabel("")
+        self.download_models_status.setWordWrap(True)
+        self.download_models_status.setStyleSheet("font-size: 10px;")
+        download_row.addWidget(self.download_models_status, 1)
+        models_layout.addLayout(download_row)
+
         classification_tab_layout.addWidget(models_group)
 
         # --- Crops ---
         crop_group = QGroupBox("Crops")
         crop_layout = QFormLayout(crop_group)
+
+        crop_info = QLabel(
+            "The classifiers never see a whole frame. Each animal is cut out "
+            "of its frame as a small square image — a <i>crop</i> — and it is "
+            "that picture, and only that picture, which decides what the "
+            "animal is called.\n\n"
+            "So these settings decide what the classifier gets to look at: "
+            "how much ground around the animal comes with it, and whether its "
+            "proportions are preserved. The defaults match how the published "
+            "classifiers were trained; change them only for a model that "
+            "expects something else."
+        )
+        crop_info.setWordWrap(True)
+        crop_info.setTextFormat(Qt.TextFormat.RichText)
+        crop_info.setStyleSheet("color: gray; font-size: 10px;")
+        crop_layout.addRow(crop_info)
 
         self.classification_padding_spin = QDoubleSpinBox()
         self.classification_padding_spin.setRange(0.0, 2.0)
@@ -2147,7 +2267,9 @@ class BambiDockWidget(QDockWidget):
             "sits far below its cohort with a clear gap to the next animal.\n\n"
             "Sizes are only ever compared <b>within one flight</b>, because "
             "how tightly boxes fit varies between recordings. There is "
-            "deliberately no absolute threshold."
+            "deliberately no absolute threshold.\n\n"
+            "These settings apply to the species you set to <b>Size-based</b> "
+            "under the life-stage classifier's <i>Species…</i> button."
         )
         life_info.setWordWrap(True)
         life_info.setTextFormat(Qt.TextFormat.RichText)
@@ -2189,88 +2311,6 @@ class BambiDockWidget(QDockWidget):
         life_layout.addRow("Min individuals:", self.life_stage_min_spin)
 
         classification_tab_layout.addWidget(life_group)
-
-        # --- Cross-modal matching ---
-        match_group = QGroupBox("Cross-Modal Track Matching")
-        match_layout = QFormLayout(match_group)
-
-        match_info = QLabel(
-            "Decides which thermal track and which RGB track are the same "
-            "animal. Needed for the <i>matched</i> classifiers, and useful on "
-            "its own: an animal both cameras saw is a confirmed animal, which "
-            "is what keeps a census free of tracks that fired on shadow."
-        )
-        match_info.setWordWrap(True)
-        match_info.setTextFormat(Qt.TextFormat.RichText)
-        match_info.setStyleSheet("color: gray; font-size: 10px;")
-        match_layout.addRow(match_info)
-
-        self.match_min_shared_spin = QSpinBox()
-        self.match_min_shared_spin.setRange(1, 1000)
-        self.match_min_shared_spin.setValue(8)
-        self.match_min_shared_spin.setToolTip(
-            "Frames two tracks must have in common before they can be "
-            "matched. Below this the median distance is not a median of much."
-        )
-        match_layout.addRow("Min shared frames:", self.match_min_shared_spin)
-
-        self.match_gate_spin = QDoubleSpinBox()
-        self.match_gate_spin.setRange(0.1, 10000.0)
-        self.match_gate_spin.setDecimals(1)
-        self.match_gate_spin.setSingleStep(1.0)
-        self.match_gate_spin.setValue(28.0)
-        self.match_gate_spin.setSuffix(" px")
-        self.match_gate_spin.setToolTip(
-            "Largest median inter-centre distance still counted as the same "
-            "animal, in thermal pixels.\n\n"
-            "The default of 28 px is the value published for 1024×1024 "
-            "inference — raise it if your frames are larger, and check the "
-            "run log, which reports how far the closest rejected candidate "
-            "was."
-        )
-        match_layout.addRow("Distance gate:", self.match_gate_spin)
-
-        self.match_min_confidence_spin = QDoubleSpinBox()
-        self.match_min_confidence_spin.setRange(0.0, 1.0)
-        self.match_min_confidence_spin.setDecimals(2)
-        self.match_min_confidence_spin.setSingleStep(0.05)
-        self.match_min_confidence_spin.setValue(0.20)
-        self.match_min_confidence_spin.setToolTip(
-            "Mean detection confidence both tracks must reach. Stops a match "
-            "being built on a track that fired on shadow."
-        )
-        match_layout.addRow("Min mean confidence:",
-                            self.match_min_confidence_spin)
-
-        self.match_max_time_offset_spin = QDoubleSpinBox()
-        self.match_max_time_offset_spin.setRange(0.001, 10.0)
-        self.match_max_time_offset_spin.setDecimals(3)
-        self.match_max_time_offset_spin.setSingleStep(0.01)
-        self.match_max_time_offset_spin.setValue(0.10)
-        self.match_max_time_offset_spin.setSuffix(" s")
-        self.match_max_time_offset_spin.setToolTip(
-            "How far apart two frames may be on the shared capture clock and "
-            "still count as the same moment. The two cameras record at "
-            "different rates, so frame numbers never line up; at the ends of "
-            "a flight the nearest frame in time can be seconds away, and "
-            "pairing across such a gap would invent correspondences."
-        )
-        match_layout.addRow("Max frame time offset:",
-                            self.match_max_time_offset_spin)
-
-        self.match_thermal_anchored_check = QCheckBox(
-            "Size RGB crops from the thermal box")
-        self.match_thermal_anchored_check.setChecked(True)
-        self.match_thermal_anchored_check.setToolTip(
-            "For a matched pair, take the crop size from the thermal box — "
-            "the looser of the two, so it more reliably encloses the whole "
-            "animal, antlers included.\n\n"
-            "Affects only the crop the classifier sees. The stored detections "
-            "are never rewritten, so geo-referencing and tracking stay valid."
-        )
-        match_layout.addRow("", self.match_thermal_anchored_check)
-
-        classification_tab_layout.addWidget(match_group)
 
         # --- Compute ---
         compute_group = QGroupBox("Compute")
@@ -2707,7 +2747,7 @@ class BambiDockWidget(QDockWidget):
         steps_group = QGroupBox("Pre-Processing Steps")
         steps_btn_layout = QVBoxLayout(steps_group)
 
-        proc_steps_group = QGroupBox("Processing Steps")
+        proc_steps_group = QGroupBox("Detection and Tracking")
         proc_steps_layout = QVBoxLayout(proc_steps_group)
 
         # ----- P1: Extract Frames -----
@@ -2987,10 +3027,14 @@ class BambiDockWidget(QDockWidget):
         add_ortho_row.addWidget(self.add_orthomosaic_status)
         steps_btn_layout.addLayout(add_ortho_row)
 
-        # ----- A3: Classification -----
-        classify_header = QLabel("A3. Classification")
-        classify_header.setStyleSheet("font-weight: bold; margin-top: 6px;")
-        proc_steps_layout.addWidget(classify_header)
+        # =====================================================================
+        # Classification
+        # =====================================================================
+        # Its own section: everything here works on animals the steps above
+        # already found, and none of it is needed to produce detections or
+        # tracks.
+        classify_steps_group = QGroupBox("Classification")
+        classify_steps_layout = QVBoxLayout(classify_steps_group)
 
         classify_note = QLabel(
             "ℹ Tracks you annotated in the labelling tool are never changed "
@@ -3002,11 +3046,11 @@ class BambiDockWidget(QDockWidget):
         classify_note.setStyleSheet(
             "color: #31708f; background: #d9edf7; border: 1px solid #bce8f1; "
             "border-radius: 4px; padding: 5px; font-size: 10px;")
-        proc_steps_layout.addWidget(classify_note)
+        classify_steps_layout.addWidget(classify_note)
 
         # ----- C1: Match RGB <-> Thermal tracks -----
         match_row = QHBoxLayout()
-        self.track_matching_btn = QPushButton("   C1. Match RGB ↔ Thermal Tracks")
+        self.track_matching_btn = QPushButton("C1. Match RGB ↔ Thermal Tracks")
         self.track_matching_btn.clicked.connect(self.run_track_matching)
         self.track_matching_btn.setToolTip(
             "Work out which thermal track and which RGB track are the same "
@@ -3018,11 +3062,11 @@ class BambiDockWidget(QDockWidget):
         self.track_matching_status = QLabel("⚪ Not started")
         match_row.addWidget(self.track_matching_btn)
         match_row.addWidget(self.track_matching_status)
-        proc_steps_layout.addLayout(match_row)
+        classify_steps_layout.addLayout(match_row)
 
         # -> Add matched pairs to QGIS
         add_matches_row = QHBoxLayout()
-        self.add_matches_btn = QPushButton("      → Add Matched Pairs to QGIS")
+        self.add_matches_btn = QPushButton("   → Add Matched Pairs to QGIS")
         self.add_matches_btn.clicked.connect(self.add_matches_to_qgis)
         self.add_matches_btn.setToolTip(
             "Draw a line between each matched pair's geo-referenced positions, "
@@ -3032,11 +3076,11 @@ class BambiDockWidget(QDockWidget):
         self.add_matches_status = QLabel("⚪")
         add_matches_row.addWidget(self.add_matches_btn)
         add_matches_row.addWidget(self.add_matches_status)
-        proc_steps_layout.addLayout(add_matches_row)
+        classify_steps_layout.addLayout(add_matches_row)
 
         # ----- C2: Compute DINOv3 embeddings -----
         embeddings_row = QHBoxLayout()
-        self.embeddings_btn = QPushButton("   C2. Compute DINOv3 Embeddings")
+        self.embeddings_btn = QPushButton("C2. Compute DINOv3 Embeddings")
         self.embeddings_btn.clicked.connect(self.run_embeddings)
         self.embeddings_btn.setToolTip(
             "Embed every tracked animal's crop with DINOv3, once, so the "
@@ -3056,69 +3100,125 @@ class BambiDockWidget(QDockWidget):
         embeddings_row.addWidget(self.embeddings_btn)
         embeddings_row.addWidget(self.embeddings_camera_combo)
         embeddings_row.addWidget(self.embeddings_status)
-        proc_steps_layout.addLayout(embeddings_row)
+        classify_steps_layout.addLayout(embeddings_row)
 
-        # ----- C3: Classify -----
-        classify_row = QHBoxLayout()
-        self.classify_btn = QPushButton(
-            "   C3. Classify (occlusion → species → sex)")
-        self.classify_btn.clicked.connect(self.run_classification)
-        self.classify_btn.setToolTip(
-            "Run the enabled classifiers in order.\n\n"
-            "Occlusion decides which frames carry usable evidence, species "
-            "fixes what the animal is, and sex reuses exactly those frames "
-            "and picks its model from the species. Species and sex are "
-            "decided per animal by a vote; occlusion stays per frame."
-        )
+        # The camera applies to every classification step, so it is chosen
+        # once on the first of them rather than repeated on each row.
         self.classification_camera_combo = QComboBox()
         self.classification_camera_combo.addItems(["T - Thermal", "W - RGB"])
         self.classification_camera_combo.setFixedWidth(100)
         self.classification_camera_combo.setToolTip(
-            "Which camera's tracks the answers are recorded against. A "
-            "'matched' classifier still reads both cameras."
+            "Which camera's tracks the answers are recorded against, for every "
+            "classification step. A 'matched' classifier still reads both "
+            "cameras."
         )
-        self.classify_status = QLabel("⚪ Not started")
-        classify_row.addWidget(self.classify_btn)
-        classify_row.addWidget(self.classification_camera_combo)
-        classify_row.addWidget(self.classify_status)
-        proc_steps_layout.addLayout(classify_row)
 
-        # ----- C4: Life stage -----
+        # ----- C3-C6: one step per classifier -----
+        # Separate steps rather than one: they take very different times, and
+        # each reads what the earlier ones stored, so they can be run on
+        # different days or repeated one at a time.
+        classify_row = QHBoxLayout()
+        self.classify_occlusion_btn = QPushButton(
+            "C3. Occlusion Classification")
+        self.classify_occlusion_btn.clicked.connect(
+            lambda: self.run_classification("occlusion"))
+        self.classify_occlusion_btn.setToolTip(
+            "Label each frame of each animal clear or occluded.\n\n"
+            "A quality filter rather than a verdict about the animal: it "
+            "decides which frames the species and sex votes may use. Optional "
+            "— those run either way."
+        )
+        self.classify_occlusion_status = QLabel("⚪ Not started")
+        classify_row.addWidget(self.classify_occlusion_btn)
+        classify_row.addWidget(self.classification_camera_combo)
+        classify_row.addWidget(self.classify_occlusion_status)
+        classify_steps_layout.addLayout(classify_row)
+
+        species_row = QHBoxLayout()
+        self.classify_species_btn = QPushButton(
+            "C4. Species Classification")
+        self.classify_species_btn.clicked.connect(
+            lambda: self.run_classification("species"))
+        self.classify_species_btn.setToolTip(
+            "Decide what each animal is, by a vote across its frames.\n\n"
+            "Sex and age read this answer to choose their own model, so run "
+            "it before them."
+        )
+        self.classify_species_status = QLabel("⚪ Not started")
+        species_row.addWidget(self.classify_species_btn)
+        species_row.addWidget(self.classify_species_status)
+        classify_steps_layout.addLayout(species_row)
+
+        sex_row = QHBoxLayout()
+        self.classify_sex_btn = QPushButton("C5. Sex Classification")
+        self.classify_sex_btn.clicked.connect(
+            lambda: self.run_classification("sex"))
+        self.classify_sex_btn.setToolTip(
+            "Decide each animal's sex, by a vote across exactly the frames "
+            "species used.\n\n"
+            "The model is chosen by species — the cue is species-specific — so "
+            "species has to have run first."
+        )
+        self.classify_sex_status = QLabel("⚪ Not started")
+        sex_row.addWidget(self.classify_sex_btn)
+        sex_row.addWidget(self.classify_sex_status)
+        classify_steps_layout.addLayout(sex_row)
+
+        # ----- C6: Age -----
         life_stage_row = QHBoxLayout()
-        self.life_stage_btn = QPushButton("   C4. Estimate Life Stage by Size")
+        self.life_stage_btn = QPushButton("C6. Age Classification")
         self.life_stage_btn.clicked.connect(self.run_life_stage)
         self.life_stage_btn.setToolTip(
-            "Flag juveniles by body size, within this flight.\n\n"
-            "Needs no models — only tracks, and geo-referencing if the metric "
-            "areas are to be used. A juvenile cannot be told from an adult "
-            "female by appearance at survey resolution, so size is what "
-            "separates them."
+            "Decide whether each animal is a juvenile or an adult.\n\n"
+            "Uses a classifier where one is configured for the species, and "
+            "otherwise body size within this flight — a juvenile cannot be "
+            "told from an adult female by appearance at survey resolution, so "
+            "size is what separates them. The size estimate needs no models."
         )
         self.life_stage_status = QLabel("⚪ Not started")
         life_stage_row.addWidget(self.life_stage_btn)
         life_stage_row.addWidget(self.life_stage_status)
-        proc_steps_layout.addLayout(life_stage_row)
+        classify_steps_layout.addLayout(life_stage_row)
 
-        # -> Apply results to the tracks and detections
+        # ----- C7: Apply -----
         apply_row = QHBoxLayout()
         self.apply_results_btn = QPushButton(
-            "      → Apply Results to Tracks and Detections")
+            "C7. Apply Classifications to Tracks and Detections")
         self.apply_results_btn.clicked.connect(self.apply_classification_results)
         self.apply_results_btn.setToolTip(
             "Copy the stored classifications onto the animals themselves, so "
             "the exports, layers, analytics and labelling tool all see them.\n\n"
-            "Runs automatically after classifying unless that is switched off. "
-            "Repeat it any time — for instance after re-applying a detector "
-            "class mapping, which resets the species on the detections."
+            "Runs automatically after each classifier unless that is switched "
+            "off. Repeat it any time — for instance after re-applying a "
+            "detector class mapping, which resets the species on the "
+            "detections."
         )
-        self.apply_results_status = QLabel("⚪")
+        self.apply_results_status = QLabel("⚪ Not started")
         apply_row.addWidget(self.apply_results_btn)
         apply_row.addWidget(self.apply_results_status)
-        proc_steps_layout.addLayout(apply_row)
+        classify_steps_layout.addLayout(apply_row)
 
-        # ----- A4: Run SAM3 Segmentation -----
+        # =====================================================================
+        # Segmentation
+        # =====================================================================
+        # Stands apart from the detect-track-classify chain: it reads the
+        # frames directly, nothing downstream consumes it, and it calls out to
+        # a third-party service. Its own section stops it reading as the next
+        # step in a sequence it is not part of.
+        extra_steps_group = QGroupBox("Segmentation")
+        extra_steps_layout = QVBoxLayout(extra_steps_group)
+
+        extra_info = QLabel(
+            "Independent of the steps above — it neither needs them, nor "
+            "feeds into them."
+        )
+        extra_info.setWordWrap(True)
+        extra_info.setStyleSheet("color: gray; font-size: 10px;")
+        extra_steps_layout.addWidget(extra_info)
+
+        # ----- Run SAM3 Segmentation -----
         step9_row = QHBoxLayout()
-        self.sam3_segment_btn = QPushButton("A4. Run SAM3 Segmentation")
+        self.sam3_segment_btn = QPushButton("S1. Run SAM3 Segmentation")
         self.sam3_segment_btn.clicked.connect(self.run_sam3_segmentation)
         self.sam3_segment_btn.setToolTip("Run SAM3 segmentation on extracted frames using Roboflow API")
         self.sam3_camera_combo = QComboBox()
@@ -3129,9 +3229,9 @@ class BambiDockWidget(QDockWidget):
         step9_row.addWidget(self.sam3_segment_btn)
         step9_row.addWidget(self.sam3_camera_combo)
         step9_row.addWidget(self.sam3_segment_status)
-        proc_steps_layout.addLayout(step9_row)
+        extra_steps_layout.addLayout(step9_row)
 
-        # ----- -> Geo-Reference Segmentation (sub-step of A4) -----
+        # ----- -> Geo-Reference Segmentation -----
         step10_row = QHBoxLayout()
         self.sam3_georef_btn = QPushButton("   → Geo-Reference Segmentation")
         self.sam3_georef_btn.clicked.connect(self.run_sam3_georeference)
@@ -3139,7 +3239,7 @@ class BambiDockWidget(QDockWidget):
         self.sam3_georef_status = QLabel("⚪ Not started")
         step10_row.addWidget(self.sam3_georef_btn)
         step10_row.addWidget(self.sam3_georef_status)
-        proc_steps_layout.addLayout(step10_row)
+        extra_steps_layout.addLayout(step10_row)
 
         # -> Add SAM3 Segmentation to QGIS
         add_sam3_row = QHBoxLayout()
@@ -3149,7 +3249,7 @@ class BambiDockWidget(QDockWidget):
         self.add_sam3_status = QLabel("⚪")
         add_sam3_row.addWidget(self.add_sam3_btn)
         add_sam3_row.addWidget(self.add_sam3_status)
-        proc_steps_layout.addLayout(add_sam3_row)
+        extra_steps_layout.addLayout(add_sam3_row)
 
         # Re-evaluate step statuses when a camera selection changes so the
         # indicators always reflect the selected modality's outputs.
@@ -3179,6 +3279,8 @@ class BambiDockWidget(QDockWidget):
         animal_layout.addLayout(animal_info_row)
 
         animal_layout.addWidget(proc_steps_group)
+        animal_layout.addWidget(classify_steps_group)
+        animal_layout.addWidget(extra_steps_group)
 
         # ----- Export -----
         from .core import exporters as _exporters
@@ -4077,6 +4179,8 @@ class BambiDockWidget(QDockWidget):
                 else "W") if hasattr(self, 'embeddings_camera_combo') else "T",
             "classification_camera": self._combo_camera(
                 'classification_camera_combo'),
+            "classification_only": list(
+                getattr(self, '_classification_only', ()) or ()),
             "classification_frame_selection": self._combo_choice(
                 'classification_frames_combo', ("visible", "all")),
             "classification_quorum": (
@@ -7336,7 +7440,8 @@ class BambiDockWidget(QDockWidget):
 
         table = self.classification_models_table
         for row, task in enumerate(_CLASSIFICATION_TASKS):
-            name = QTableWidgetItem(task.capitalize())
+            name = QTableWidgetItem(
+                hf_access.TASK_LABELS.get(task, task.capitalize()))
             name.setFlags(name.flags() & ~Qt.ItemFlag.ItemIsEditable)
             table.setItem(row, 0, name)
 
@@ -7385,12 +7490,14 @@ class BambiDockWidget(QDockWidget):
                 lambda _c=False, t=task: self._edit_classification_labels(t))
             actions_layout.addWidget(labels)
 
-            if task == "sex":
+            if task in hf_access.PER_SPECIES_TASKS:
                 species = QPushButton("Species…")
                 species.setToolTip(
-                    "Choose a sex classifier per species — the cue is "
+                    "Choose a classifier per species — the cue is "
                     "species-specific, so one model does not transfer")
-                species.clicked.connect(self._edit_sex_species_models)
+                species.clicked.connect(
+                    lambda _c=False, t=task:
+                    self._edit_species_models(t))
                 actions_layout.addWidget(species)
 
             table.setCellWidget(row, 4, actions)
@@ -7447,6 +7554,96 @@ class BambiDockWidget(QDockWidget):
             table.item(row, 3).setText(spec.get("path", ""))
             self._on_classification_model_changed(task)
 
+    def _default_head_specs(self, projection: str):
+        """``(task, projection, modality)`` for every task set to Default.
+
+        The per-species sex selections need no separate entry: they all use
+        the one published sex model, so downloading it once covers them.
+        """
+        from .core import hf_access
+
+        wanted = []
+        for task in _CLASSIFICATION_TASKS:
+            spec = self._classification_spec(task)
+            if spec.get("model") != "default":
+                continue
+            if not hf_access.has_default_head(task):
+                continue      # nothing published for this task yet
+            wanted.append((task, projection, spec.get("modality", "matched")))
+        return wanted
+
+    def download_classification_models(self):
+        """Fetch the published classifiers the table is set to use.
+
+        Deliberately separate from running anything: the class mapping needs
+        the file present to read a model's classes from it, and asking a user
+        to run a classifier once before they can configure it is backwards.
+        """
+        from .core import hf_access
+
+        config = self.get_config()
+        models_dir = BambiProcessor._get_default_model_dir()
+        projection = config.get("classification_projection", "non_geo")
+        wanted = self._default_head_specs(projection)
+
+        if not wanted:
+            self.download_models_status.setText(
+                "Nothing to download — no classifier is set to Default.")
+            QMessageBox.information(
+                self, "Download Models",
+                "None of the classifiers is set to Default.\n\n"
+                "Set one to Default in the table above, or choose a custom "
+                "model file — those are used from where they are and need no "
+                "download."
+            )
+            return
+
+        missing = hf_access.missing_heads(models_dir, wanted)
+        if not missing:
+            self.download_models_status.setText(
+                f"🟢 All {len(wanted)} model(s) are already downloaded.")
+            self.log(f"Classification models already present in {models_dir}")
+            return
+
+        token, _source = hf_access.resolve_token(
+            self.hf_token_edit.text() if hasattr(self, 'hf_token_edit') else "")
+
+        self.download_models_btn.setEnabled(False)
+        self.download_models_status.setText(
+            f"🟡 Downloading {len(missing)} model(s)…")
+        downloaded, failures = 0, []
+        try:
+            for task, projection_name, modality in missing:
+                repo = hf_access.default_head_repo(task)
+                destination = hf_access.head_local_path(
+                    models_dir, task, projection_name, modality)
+                try:
+                    BambiProcessor._download_head(
+                        repo, task, projection_name, modality, destination,
+                        token, self.log)
+                    downloaded += 1
+                except Exception as exc:      # noqa: BLE001 — reported below
+                    failures.append(f"{task}: {exc}")
+                    self.log(f"Could not download the {task} classifier: {exc}")
+        finally:
+            self.download_models_btn.setEnabled(True)
+
+        if failures:
+            self.download_models_status.setText(
+                f"🔴 {downloaded} downloaded, {len(failures)} failed.")
+            detail = "\n\n".join(failures)
+            QMessageBox.warning(
+                self, "Download Models",
+                f"Some classifiers could not be downloaded:\n\n{detail}"
+            )
+            return
+
+        self.download_models_status.setText(
+            f"🟢 Downloaded {downloaded} model(s) — 'Labels' can now read "
+            "their classes.")
+        self.log(f"Downloaded {downloaded} classification model(s) into "
+                 f"{models_dir}")
+
     def _browse_classification_model(self, task: str):
         path, _filter = QFileDialog.getOpenFileName(
             self, f"Choose a {task} classifier", "",
@@ -7477,18 +7674,23 @@ class BambiDockWidget(QDockWidget):
             self._set_classification_spec(task, dialog.result_spec())
             self.log(f"Updated the {task} class mapping")
 
-    def _edit_sex_species_models(self):
-        from .bambi_sex_model_dialog import BambiSexModelDialog
+    def _edit_species_models(self, task: str):
+        """Per-species model selection for a demographic task."""
+        from .bambi_classification_model_dialog import BambiClassificationModelDialog
+        from .core import hf_access
 
         config = self.get_config()
-        self._on_classification_model_changed("sex")
-        dialog = BambiSexModelDialog(
-            self._classification_spec("sex"),
-            target_folder=config.get("target_folder", ""), parent=self)
+        self._on_classification_model_changed(task)
+        dialog = BambiClassificationModelDialog(
+            self._classification_spec(task),
+            target_folder=config.get("target_folder", ""), task=task,
+            parent=self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            self._set_classification_spec("sex", dialog.result_spec())
+            self._set_classification_spec(task, dialog.result_spec())
             chosen = len(dialog.result_spec().get("species") or {})
-            self.log(f"Sex classifiers configured for {chosen} species")
+            label = hf_access.TASK_LABELS.get(task, task).lower()
+            self.log(f"{label.capitalize()} classifiers configured for "
+                     f"{chosen} species")
 
     def _combo_choice(self, attr: str, values) -> str:
         """The value a combo's current index stands for.
@@ -7926,10 +8128,17 @@ class BambiDockWidget(QDockWidget):
 
         self.start_worker("embeddings")
 
-    def run_classification(self):
-        """Run the enabled classifiers on the selected camera (step C3)."""
+    def run_classification(self, task: str = ""):
+        """Run one classifier on the selected camera (steps C3–C5).
+
+        *task* empty runs everything enabled, which is what a scripted run of
+        the whole block does.
+        """
         from .core import classification_store, hf_access
 
+        # Carried in the config rather than the step name, so the worker's
+        # entry point stays uniform.
+        self._classification_only = (task,) if task else ()
         config = self.get_config()
         camera = config.get("classification_camera", "T")
         suffix = "t" if camera == "T" else "w"
@@ -7937,16 +8146,37 @@ class BambiDockWidget(QDockWidget):
         target_folder = config["target_folder"]
 
         models = config.get("classification_models") or {}
-        enabled = [task for task in hf_access.TASKS
-                   if (models.get(task) or {}).get("model", "off") != "off"]
+        wanted = (task,) if task else hf_access.TASKS
+        enabled = [name for name in wanted
+                   if (models.get(name) or {}).get("model", "off") != "off"]
         if not enabled:
+            label = (hf_access.TASK_LABELS.get(task, task).lower() if task
+                     else "")
             QMessageBox.warning(
                 self, "No Classifier Enabled",
+                f"The {label} classifier is switched off.\n\n"
+                "Choose a model for it in the Classification configuration "
+                "tab." if task else
                 "No classifier is switched on.\n\n"
-                "Choose a model for occlusion, species or sex in the "
-                "Classification configuration tab."
+                "Choose a model for one of them in the Classification "
+                "configuration tab."
             )
             return
+
+        # Sex and age pick their model by species, so the species call has to
+        # exist first — from this run or an earlier one.
+        if task in hf_access.PER_SPECIES_TASKS:
+            if not classification_store.track_predictions(
+                    target_folder, suffix, "species"):
+                QMessageBox.warning(
+                    self, "Species Not Classified",
+                    f"No species has been assigned to the {camera_name} "
+                    "animals yet.\n\n"
+                    f"The {hf_access.TASK_LABELS.get(task, task).lower()} "
+                    "classifier is chosen per species, so run Species "
+                    "Classification first."
+                )
+                return
 
         if classification_store.active_embedding_run(
                 target_folder, suffix) is None:
@@ -7983,10 +8213,10 @@ class BambiDockWidget(QDockWidget):
                 if answer != QMessageBox.StandardButton.Yes:
                     return
 
-        self.start_worker("classification")
+        self.start_worker(f"classify_{task}" if task else "classification")
 
     def run_life_stage(self):
-        """Flag juveniles by body size (step C4)."""
+        """Decide each animal's age class (step C6)."""
         from .core import store, track_store
 
         config = self.get_config()
@@ -9703,7 +9933,10 @@ class BambiDockWidget(QDockWidget):
             "track_matching": self.track_matching_status,
             "add_matches": self.add_matches_status,
             "embeddings": self.embeddings_status,
-            "classification": self.classify_status,
+            "classification": self.classify_occlusion_status,
+            "classify_occlusion": self.classify_occlusion_status,
+            "classify_species": self.classify_species_status,
+            "classify_sex": self.classify_sex_status,
             "life_stage": self.life_stage_status,
             "apply_results": self.apply_results_status,
             "sam3_segmentation": self.sam3_segment_status,

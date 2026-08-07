@@ -61,9 +61,15 @@ PRE_BUTTONS = [
 PROC_BUTTONS = [
     ("detect_btn", "A1"),
     ("track_btn", "A2"),
-    # A3 is the classification block; its steps are numbered C1, C2, … inside
-    # it, so the block header carries the A3 rather than a button.
-    ("sam3_segment_btn", "A4"),
+    # The Processing tab is grouped into Detection and Tracking (A…),
+    # Classification (C…) and Segmentation (S…), so the prefix says which
+    # section a step belongs to.
+    ("classify_occlusion_btn", "C3"),
+    ("classify_species_btn", "C4"),
+    ("classify_sex_btn", "C5"),
+    ("life_stage_btn", "C6"),
+    ("apply_results_btn", "C7"),
+    ("sam3_segment_btn", "S1"),
 ]
 
 
@@ -99,9 +105,35 @@ def test_pre_processing_steps_share_a_parent(dock):
     assert len(parents) == 1
 
 
-def test_processing_steps_share_a_parent(dock):
-    parents = {getattr(dock, attribute).parent() for attribute, _ in PROC_BUTTONS}
-    assert len(parents) == 1
+def test_processing_is_grouped_into_three_sections(dock):
+    """Detection and Tracking, Classification, Segmentation.
+
+    They are not one sequence: classification works on animals the first
+    section found, and segmentation neither needs that section nor feeds into
+    it. Separate boxes stop the tab reading as a single chain.
+    """
+    detection = {dock.detect_btn.parent(), dock.track_btn.parent()}
+    classification = {getattr(dock, attribute).parent()
+                      for attribute in ("classify_occlusion_btn",
+                                        "classify_species_btn",
+                                        "classify_sex_btn",
+                                        "life_stage_btn",
+                                        "apply_results_btn")}
+    segmentation = {dock.sam3_segment_btn.parent()}
+
+    assert len(detection) == 1
+    assert len(classification) == 1
+    assert len(segmentation) == 1
+    assert len(detection | classification | segmentation) == 3
+
+
+def test_each_section_is_titled(dock):
+    from qgis.PyQt.QtWidgets import QGroupBox
+
+    titles = {box.title() for box in dock.findChildren(QGroupBox)}
+    for expected in ("Detection and Tracking", "Classification",
+                     "Segmentation"):
+        assert expected in titles
 
 
 def test_the_two_groups_are_different_parents(dock):

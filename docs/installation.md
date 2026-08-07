@@ -113,7 +113,7 @@ pip install simplekml==1.3.6
 
 ### Optional: Classification
 
-The [classification steps](pipeline.md#a3-classification) — occlusion, species and sex — need:
+The [classification steps](pipeline.md#classification) — occlusion, species and sex — need:
 
 ```bash
 pip install "transformers>=4.56.0" huggingface-hub

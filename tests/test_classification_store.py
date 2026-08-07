@@ -253,7 +253,22 @@ def test_occlusion_is_not_a_voted_task(root):
     # It selects the frames the others vote over rather than describing the
     # animal, so it never produces a per-track call.
     assert "occlusion" not in cs.VOTED_TASKS
-    assert set(cs.VOTED_TASKS) == {"species", "sex"}
+    assert set(cs.VOTED_TASKS) == {"species", "sex", "life_stage"}
+
+
+def test_life_stage_can_come_from_a_model_or_from_size(root):
+    """The one task with two possible authors, distinguished by `model`."""
+    _run(root)
+    cs.record_track_predictions(root, "t", cs.LIFE_STAGE, [
+        {"track_id": 1, "label": "juvenile", "votes": 8, "n": 10,
+         "fraction": 0.8, "model": "life_stage_matched.pt"},
+        {"track_id": 2, "label": "adult", "votes": 1, "n": 1,
+         "fraction": 1.0, "model": cs.SIZE_MODEL}])
+
+    rows = {r["track_id"]: r for r in
+            cs.track_predictions(root, "t", cs.LIFE_STAGE)}
+    assert rows[1]["model"] != cs.SIZE_MODEL
+    assert rows[2]["model"] == cs.SIZE_MODEL
 
 
 # ---------------------------------------------------------------------------

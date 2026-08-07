@@ -104,7 +104,7 @@ The steps live on two tabs, split by what they depend on:
 | Tab | Steps | Depends on |
 |---|---|---|
 | **Pre-Processing** | P1 Extract Frames, P2 Generate Flight Route, P3 Calculate Field of View, P4 Generate ALFS, P5 Export Frames as GeoTIFF, P6 Generate Orthomosaic | the drone poses and the DEM — **no animals involved** |
-| **Processing** | A1 Detect Animals (with geo-referencing and perpendicular distances), A2 Track Animals Or Import, A3 Classification (C1 cross-modal matching, C2 embeddings, C3 occlusion/species/sex, C4 life stage), A4 SAM3 Segmentation (with its geo-referencing) | the detections |
+| **Processing** | Three sections: *Detection and Tracking* (A1 Detect Animals with geo-referencing and perpendicular distances, A2 Track Animals Or Import), *Classification* (C1–C7), and *Segmentation* (S1 SAM3 with its geo-referencing) | the detections |
 
 The numbering is prefixed so a bare number cannot mean two different steps.
 They are *not* one sequence: only P1 is a prerequisite for the Processing tab.
@@ -327,7 +327,7 @@ orthomosaic_t/    # or orthomosaic_w/ depending on camera selection
 └── orthomosaic.tif    # Merged georeferenced orthomosaic (LZW GeoTIFF with overviews)
 ```
 
-### A3. Classification
+### Classification
 
 Works out **what** each tracked animal is: whether a frame shows it clearly, what species it is, its sex, and whether it is a juvenile. Implements the pipeline of *When One Modality Is Not Enough: Multimodal Sex and Life-Stage Classification of Red Deer from Aerial RGB–Thermal Video*.
 
@@ -366,9 +366,9 @@ embeddings_t/            # or embeddings_w/
 bambi_t/classification.gpkg   # which detections are embedded, and by which run
 ```
 
-#### C3. Classify (occlusion → species → sex)
+#### C3–C5. Occlusion, Species and Sex Classification
 
-Runs the enabled classifiers in that order, because each depends on the one before:
+One step each, run in that order, because each depends on the one before:
 
 1. **Occlusion**, per frame, labels a crop *clear* or *occluded*. It is a quality filter, not a verdict about the animal, so it produces no per-animal answer — and it is **optional**.
 2. **Species** votes across the frames that are worth trusting, and its majority fixes what the animal is.
@@ -380,15 +380,21 @@ An animal the classifier cannot call is **left unknown, never discarded**: it ke
 
 **Frames used** decides what may vote. *Visible frames only* uses the occlusion classifier when it ran, otherwise occlusion values you annotated by hand, and otherwise every frame — the run log always says which of the three it used.
 
-**→ Apply Results to Tracks and Detections** copies the answers onto the animals themselves, which is what makes them visible to the exports, the map layers, the survey analytics and the labelling tool. It runs automatically unless switched off, and is safe to repeat.
+**C7. Apply Classifications to Tracks and Detections** copies the answers onto the animals themselves, which is what makes them visible to the exports, the map layers, the survey analytics and the labelling tool. It runs automatically unless switched off, and is safe to repeat.
 
-#### C4. Estimate Life Stage by Size
+#### C6. Age Classification
 
-Flags juveniles by body size. Needs no models — only tracks, and geo-referencing if the metric areas are to be used.
+Flags juveniles by body size — the **fallback** where no classifier called the animal.
+
+Life stage comes from whatever you chose for that species. Under the life-stage classifier's **Species…** button each species is set to **Size-based**, a model, or **Off** — one decision in one place, rather than a model choice plus a switch somewhere else. Size-based is the default, because no life-stage model has been published yet; a species set to a model is called by it in C3 and left alone here, and one set to Off is not called at all.
+
+Needs no models — only tracks, and geo-referencing if the metric areas are to be used.
 
 A juvenile cannot be told from an adult female by appearance at survey resolution, which is exactly why the sex classifier's second class is *female/juvenile*. Size settles it: a juvenile sits far below its cohort **and** has a clear gap to the next animal up. Both conditions are required, because in any herd someone is smallest and that alone is not evidence.
 
 Sizes are only ever compared **within one flight** — how tightly boxes fit varies between recordings, enough that the paper's own juvenile from one flight lands inside another flight's adult range. There is deliberately no absolute threshold.
+
+Areas come from the **geo-referenced** boxes where geo-referencing has run, which makes them metric; otherwise from the camera-frame boxes, which still work because the comparison never leaves the flight. Which was used is recorded with every verdict, so metric and pixel figures are never mixed. Animals a classifier already called still count towards the cohort statistics — excluding them would shift everyone else's score — they simply do not take a verdict from it.
 
 On a flight with only a handful of animals the test declines to call one, because the candidate sits in the lower half of the distribution and so widens the very spread it is measured against. The log says so rather than reporting a bare "no juvenile found": a cautious answer and an empty one look identical otherwise.
 
@@ -399,7 +405,7 @@ bambi_t/classification.gpkg
 └── track_predictions    # per animal: the call, and the vote behind it
 ```
 
-### A4. Run SAM3 Segmentation
+### S1. Run SAM3 Segmentation
 
 Segments individual detected objects from aerial images using Roboflow's SAM3 API. Recommended for RGB imagery.
 
