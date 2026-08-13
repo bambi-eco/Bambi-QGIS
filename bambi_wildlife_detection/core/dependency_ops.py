@@ -41,7 +41,9 @@ _bundled_versions_cache = None
 # None means no bound (any version is accepted).
 _VERSION_RANGES = {
     'bambi-detection': ("0.5.0", "0.5.0"),
-    'AlfsPy': ("0.0.0", "1.0.0"),
+    # 2.1.0 is the first release whose drone-pose rotation applies the gimbal
+    # heading about world up; anything older mis-points every oblique frame.
+    'AlfsPy': ("2.1.0", None),
     'pycolmap': ('4.0.3', '4.0.3'),
     'boxmot': ('17.0.0', '18.0.0'),
     'georef-tracker': ("0.1.0", "0.1.0"),

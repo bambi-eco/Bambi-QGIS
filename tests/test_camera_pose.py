@@ -3,11 +3,13 @@
 construction shared by geo-referencing, box projection, click inspection,
 labelling propagation and the correction wizard.
 
-The numeric assertions here pin the two conventions that have caused real
-bugs before and MUST NOT change silently:
+The numeric assertions here pin the conventions that have caused real bugs
+before and MUST NOT change silently:
 
 * the 1× rotation-correction rule (corrections subtracted exactly once),
-* the euler negation (``* -1``) converting pose rotation to camera rotation.
+* the corrected pose reaching ``quaternion_from_drone_pose`` in degrees, so
+  the heading is applied about world up rather than the optical axis,
+* the conjugation that adapts the result to a legacy alfspy's ray path.
 """
 import sys
 
@@ -30,10 +32,11 @@ T_CORR = {"x": 1.0, "y": 2.0, "z": -2.825}
 R_CORR = {"x": 0.0, "y": 0.0, "z": 0.011}
 
 
-def expected_eulers():
+def expected_pose_degrees():
+    """The corrected pose, in degrees, as handed to quaternion_from_drone_pose."""
     wrapped = np.deg2rad(np.array([10.0, 20.0, 350.0]))       # -10 % 360
     corr = np.array([0.0, 0.0, 0.011])
-    return -1 * (wrapped - corr)                              # 1× correction
+    return np.degrees(wrapped - corr)                         # 1× correction
 
 
 class TestBuildCamera:
@@ -45,21 +48,25 @@ class TestBuildCamera:
         camera = build_camera(META, T_CORR, R_CORR)
         assert np.allclose(camera.position, [11.0, 22.0, 97.175])
 
-    def test_rotation_correction_applied_once_and_negated(self):
+    def test_rotation_correction_applied_once(self):
         camera = build_camera(META, T_CORR, R_CORR)
-        # fakes.Quaternion.from_eulers returns its input as a tuple, so the
-        # camera's rotation exposes the euler maths directly.
-        assert np.allclose(camera.rotation, expected_eulers())
+        # fakes.quaternion_from_drone_pose records the degrees it received.
+        assert np.allclose(camera.rotation.degrees, expected_pose_degrees())
         # Regression pin: a 2x correction (the old GeoTIFF-export bug class)
         # must NOT match.
-        wrong_2x = -1 * (np.deg2rad([10.0, 20.0, 350.0]) - 2 * 0.011 * np.array([0, 0, 1]))
-        assert not np.allclose(camera.rotation, wrong_2x)
+        wrong_2x = np.degrees(
+            np.deg2rad([10.0, 20.0, 350.0]) - 2 * 0.011 * np.array([0, 0, 1]))
+        assert not np.allclose(camera.rotation.degrees, wrong_2x)
 
     def test_zero_correction_keeps_pose(self):
         camera = build_camera(META, {}, {})
         assert np.allclose(camera.position, META["location"])
-        assert np.allclose(camera.rotation,
-                           -np.deg2rad([10.0, 20.0, 350.0]))
+        assert np.allclose(camera.rotation.degrees, [10.0, 20.0, 350.0])
+
+    def test_pose_reaches_the_drone_pose_helper_in_degrees(self):
+        """Not radians — the helper's contract is degrees."""
+        camera = build_camera(META, {}, {})
+        assert max(abs(v) for v in camera.rotation.degrees) > 7.0
 
     @pytest.mark.parametrize("fovy_raw,expected", [
         ([50.0], 50.0),
@@ -115,6 +122,45 @@ class TestFrameCamera:
         assert np.allclose(
             frame_camera(images, 0, None).position,
             frame_camera(images, 0, {}).position)
+
+
+class TestRayConvention:
+    """The camera construction must follow the installed alfspy.
+
+    Older alfspy built world rays with ``dirs @ R33.T`` and callers negated the
+    eulers to compensate; alfs_py 86e0d92 changed it to ``dirs @ R33``, at which
+    point the negation silently corrupts every projection. ``build_camera``
+    picks the matching construction — these tests pin the selection, and
+    ``tests_qgis/test_camera_pose_conventions.py`` proves the two branches
+    produce the same world rays against the real pyrr.
+    """
+
+    def test_fixed_uses_the_helper_result_directly(self, monkeypatch):
+        install_fake_render_stack(monkeypatch, ray_convention="fixed")
+        rotation = build_camera(META, T_CORR, R_CORR).rotation
+        assert not rotation.conjugated
+        assert np.allclose(rotation.degrees, expected_pose_degrees())
+
+    def test_legacy_conjugates_the_helper_result(self, monkeypatch):
+        install_fake_render_stack(monkeypatch, ray_convention="legacy")
+        rotation = build_camera(META, T_CORR, R_CORR).rotation
+        assert rotation.conjugated
+        assert np.allclose(rotation.degrees, expected_pose_degrees())
+
+    def test_both_branches_start_from_the_same_pose(self, monkeypatch):
+        install_fake_render_stack(monkeypatch, ray_convention="legacy")
+        legacy = build_camera(META, T_CORR, R_CORR).rotation
+        install_fake_render_stack(monkeypatch, ray_convention="fixed")
+        fixed = build_camera(META, T_CORR, R_CORR).rotation
+        assert np.allclose(legacy.degrees, fixed.degrees)
+        assert legacy.conjugated != fixed.conjugated
+
+    def test_position_is_unaffected_by_the_convention(self, monkeypatch):
+        install_fake_render_stack(monkeypatch, ray_convention="legacy")
+        legacy = np.asarray(build_camera(META, T_CORR, R_CORR).position)
+        install_fake_render_stack(monkeypatch, ray_convention="fixed")
+        fixed = np.asarray(build_camera(META, T_CORR, R_CORR).position)
+        assert np.allclose(legacy, fixed)
 
 
 class TestWorldToPixel:

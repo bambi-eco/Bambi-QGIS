@@ -2472,6 +2472,42 @@ class BambiDockWidget(QDockWidget):
         self.alfs_resolution_spin.setToolTip("Ground resolution in meters per pixel")
         alfs_layout.addRow("Ground Resolution:", self.alfs_resolution_spin)
 
+        # Alternative to the ground resolution: give the raster size directly.
+        # With a large DEM a fine m/px explodes into an unusable pixel count,
+        # and per-frame GeoTIFFs are easier to consume on a fixed canvas.
+        self.alfs_fixed_size_check = QCheckBox("Use fixed render size instead")
+        self.alfs_fixed_size_check.setChecked(False)
+        self.alfs_fixed_size_check.setToolTip(
+            "Ignore the ground resolution and render into a raster of exactly\n"
+            "the given pixel size. The ground resolution then follows from the\n"
+            "extent being covered instead of the other way round."
+        )
+        self.alfs_fixed_size_check.stateChanged.connect(self.toggle_alfs_fixed_size)
+        alfs_layout.addRow("Render Size:", self.alfs_fixed_size_check)
+
+        self.alfs_render_size_widget = QWidget()
+        render_size_layout = QHBoxLayout(self.alfs_render_size_widget)
+        render_size_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.alfs_render_width_spin = QSpinBox()
+        self.alfs_render_width_spin.setRange(16, 16384)
+        self.alfs_render_width_spin.setValue(2048)
+        self.alfs_render_width_spin.setSingleStep(256)
+        self.alfs_render_width_spin.setToolTip("Output raster width in pixels")
+        render_size_layout.addWidget(QLabel("Width:"))
+        render_size_layout.addWidget(self.alfs_render_width_spin)
+
+        self.alfs_render_height_spin = QSpinBox()
+        self.alfs_render_height_spin.setRange(16, 16384)
+        self.alfs_render_height_spin.setValue(2048)
+        self.alfs_render_height_spin.setSingleStep(256)
+        self.alfs_render_height_spin.setToolTip("Output raster height in pixels")
+        render_size_layout.addWidget(QLabel("Height:"))
+        render_size_layout.addWidget(self.alfs_render_height_spin)
+
+        self.alfs_render_size_widget.setEnabled(False)
+        alfs_layout.addRow("", self.alfs_render_size_widget)
+
         frame_range_label = QLabel("Frame Range:")
         alfs_layout.addRow(frame_range_label)
 
@@ -4116,6 +4152,15 @@ class BambiDockWidget(QDockWidget):
 
             # ALFS
             "alfs_ground_resolution": self.alfs_resolution_spin.value(),
+            "alfs_fixed_render_size": (
+                self.alfs_fixed_size_check.isChecked()
+                if hasattr(self, 'alfs_fixed_size_check') else False),
+            "alfs_render_width": (
+                self.alfs_render_width_spin.value()
+                if hasattr(self, 'alfs_render_width_spin') else 2048),
+            "alfs_render_height": (
+                self.alfs_render_height_spin.value()
+                if hasattr(self, 'alfs_render_height_spin') else 2048),
             "alfs_dem_metadata_path": self.dem_metadata_path_edit.text() or None,
             "alfs_use_all_frames": self.alfs_all_frames_check.isChecked(),
             "alfs_start_frame": (
@@ -7239,6 +7284,16 @@ class BambiDockWidget(QDockWidget):
     def toggle_alfs_sampling(self, state):
         """Toggle sampling mode controls."""
         self.alfs_sampling_widget.setEnabled(bool(state))
+
+    def toggle_alfs_fixed_size(self, state):
+        """Swap between the ground-resolution and fixed-pixel-size inputs.
+
+        The two are alternatives, so only the active one stays editable —
+        a greyed-out m/px field is what tells the user it no longer applies.
+        """
+        fixed = bool(state)
+        self.alfs_render_size_widget.setEnabled(fixed)
+        self.alfs_resolution_spin.setEnabled(not fixed)
 
     def toggle_detect_frame_range(self, state):
         """Toggle the detection frame range controls based on checkbox state."""

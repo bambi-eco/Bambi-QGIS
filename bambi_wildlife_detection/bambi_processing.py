@@ -799,6 +799,14 @@ class BambiProcessor:
                 photo_extensions_t = ("*.JPG", "*.jpg", "*.jpeg", "*.JPEG",
                                       "*.tiff", "*.TIFF", "*.png", "*.PNG")
 
+            from .core.calibration_check import (
+                enforce_calibration_resolution, first_photo_in)
+            enforce_calibration_resolution(
+                calibration_res,
+                first_photo_in(config["thermal_photo_dir"], photo_extensions_t),
+                "thermal photo calibration", log_fn=log_fn,
+                allow_mismatch=config.get("allow_calibration_mismatch", False))
+
             # EXIF fallback: reconstruct AirData CSV when no flight log is available
             _use_ordered_t = False
             if not airdata_path or not os.path.exists(airdata_path):
@@ -883,6 +891,12 @@ class BambiProcessor:
             if calibration_res is None:
                 with open(config["thermal_calibration_path"]) as f:
                     calibration_res = json.load(f)
+
+            from .core.calibration_check import enforce_calibration_resolution
+            enforce_calibration_resolution(
+                calibration_res, thermal_video_paths, "thermal calibration",
+                log_fn=log_fn,
+                allow_mismatch=config.get("allow_calibration_mismatch", False))
 
             accessor = CalibratedVideoFrameAccessor(
                 calibration_res,
@@ -990,6 +1004,14 @@ class BambiProcessor:
                 photo_extensions_w = ("*.JPG", "*.jpg", "*.jpeg", "*.JPEG",
                                       "*.tiff", "*.TIFF", "*.png", "*.PNG")
 
+            from .core.calibration_check import (
+                enforce_calibration_resolution, first_photo_in)
+            enforce_calibration_resolution(
+                calibration_res,
+                first_photo_in(config["rgb_photo_dir"], photo_extensions_w),
+                "RGB photo calibration", log_fn=log_fn,
+                allow_mismatch=config.get("allow_calibration_mismatch", False))
+
             # EXIF fallback: reconstruct AirData CSV when no flight log is available
             _use_ordered_w = False
             if not airdata_path or not os.path.exists(airdata_path):
@@ -1068,6 +1090,12 @@ class BambiProcessor:
             if calibration_res is None:
                 with open(config["rgb_calibration_path"]) as f:
                     calibration_res = json.load(f)
+
+            from .core.calibration_check import enforce_calibration_resolution
+            enforce_calibration_resolution(
+                calibration_res, rgb_video_paths, "RGB calibration",
+                log_fn=log_fn,
+                allow_mismatch=config.get("allow_calibration_mismatch", False))
 
             accessor = CalibratedVideoFrameAccessor(
                 calibration_res,
@@ -5364,26 +5392,15 @@ class BambiProcessor:
                 correction = self.get_correction_for_frame(frame_idx, config)
                 translation = correction["translation"]
                 rotation = correction["rotation"]
-                cor_rotation_eulers = Vector3([rotation['x'], rotation['y'], rotation['z']], dtype='f4')
-                cor_translation = Vector3([translation['x'], translation['y'], translation['z']], dtype='f4')
 
                 image_metadata = poses["images"][frame_idx]
 
-                # Get camera for this frame
-                fovy = image_metadata.get("fovy", [50])
-                if isinstance(fovy, list):
-                    fovy = fovy[0]
-                position = Vector3(image_metadata["location"])
-                rot = image_metadata["rotation"]
-                rotation_eulers = (Vector3(
-                    [np.deg2rad(val % 360.0) for val in rot]) - cor_rotation_eulers) * -1
-                position += cor_translation
-                rotation_quat = Quaternion.from_eulers(rotation_eulers)
-
-                # Create camera-like object for projection
-                from alfspy.core.rendering import Camera
+                # Get camera for this frame — build_camera owns the rotation
+                # convention, which depends on the installed alfspy version.
+                from .core.camera_pose import build_camera
                 aspect_ratio = input_resolution.width / input_resolution.height
-                camera = Camera(fovy=fovy, aspect_ratio=aspect_ratio, position=position, rotation=rotation_quat)
+                camera = build_camera(image_metadata, translation, rotation,
+                                      aspect_ratio=aspect_ratio)
 
                 # Project bounding box corners
                 x1, y1, x2, y2 = det["x1"], det["y1"], det["x2"], det["y2"]
@@ -5871,23 +5888,11 @@ class BambiProcessor:
                         correction = self.get_correction_for_frame(frame_idx, config)
                         trans = correction["translation"]
                         rot = correction["rotation"]
-                        cor_rot = Vector3([rot["x"], rot["y"], rot["z"]], dtype="f4")
-                        cor_trans = Vector3([trans["x"], trans["y"], trans["z"]], dtype="f4")
-
                         img_data = poses["images"][frame_idx]
-                        fovy = img_data.get("fovy", [50])
-                        if isinstance(fovy, list):
-                            fovy = fovy[0]
-                        position = Vector3(img_data["location"]) + cor_trans
-                        rotation_eulers = (
-                            Vector3([np.deg2rad(v % 360.0) for v in img_data["rotation"]]) - cor_rot
-                        ) * -1
-                        rotation_q = Quaternion.from_eulers(rotation_eulers)
                         aspect = input_resolution.width / input_resolution.height
-                        camera_cache[frame_idx] = Camera(
-                            fovy=fovy, aspect_ratio=aspect,
-                            position=position, rotation=rotation_q
-                        )
+                        from .core.camera_pose import build_camera
+                        camera_cache[frame_idx] = build_camera(
+                            img_data, trans, rot, aspect_ratio=aspect)
 
                     cam = camera_cache[frame_idx]
                     poly = corners.reshape(-1).tolist()
@@ -6167,27 +6172,15 @@ class BambiProcessor:
                     correction = self.get_correction_for_frame(frame_idx, config)
                     translation = correction["translation"]
                     rotation = correction["rotation"]
-                    cor_rotation_eulers = Vector3([rotation['x'], rotation['y'], rotation['z']], dtype='f4')
-                    cor_translation = Vector3([translation['x'], translation['y'], translation['z']], dtype='f4')
 
                     image_metadata = poses["images"][frame_idx]
-                    # Get camera for this frame
-                    fovy = image_metadata.get("fovy", [50])
-                    if isinstance(fovy, list):
-                        fovy = fovy[0]
-                    position = Vector3(image_metadata["location"])
-                    rot = image_metadata["rotation"]
-                    # Apply the rotation correction at 1× — the same amount alfspy's
-                    # renderer applies via CtxShot.get_correction() — so the FoV
-                    # footprint matches the rendered alfs and GeoTIFF content.
-                    rotation_eulers = (Vector3(
-                        [np.deg2rad(val % 360.0) for val in rot]) - cor_rotation_eulers) * -1
-                    position += cor_translation
-                    rotation_quat = Quaternion.from_eulers(rotation_eulers)
-
-                    # Create camera for projection
-                    from alfspy.core.rendering import Camera
-                    camera = Camera(fovy=fovy, aspect_ratio=aspect_ratio, position=position, rotation=rotation_quat)
+                    # Get camera for this frame.  The rotation correction is
+                    # applied at 1× — the same amount alfspy's renderer applies
+                    # via CtxShot.get_correction() — so the FoV footprint matches
+                    # the rendered alfs and GeoTIFF content.
+                    from .core.camera_pose import build_camera
+                    camera = build_camera(image_metadata, translation, rotation,
+                                          aspect_ratio=aspect_ratio)
 
                     # Georeference the mask polygon points
                     georef_points = self._georeference_polygon(
@@ -7152,23 +7145,13 @@ class BambiProcessor:
                 correction = self.get_correction_for_frame(frame_idx, config)
                 translation = correction["translation"]
                 rotation = correction["rotation"]
-                cor_rotation_eulers = Vector3([rotation['x'], rotation['y'], rotation['z']], dtype='f4')
-                cor_translation = Vector3([translation['x'], translation['y'], translation['z']], dtype='f4')
-
                 image_metadata = poses["images"][frame_idx]
 
-                # Get camera for this frame
-                fovy = image_metadata.get("fovy", [50])
-                if isinstance(fovy, list):
-                    fovy = fovy[0]
-                position = Vector3(image_metadata["location"])
-                rot = image_metadata["rotation"]
-                rotation_eulers = (Vector3(
-                    [np.deg2rad(val % 360.0) for val in rot]) - cor_rotation_eulers) * -1
-                position += cor_translation
-                rotation_quat = Quaternion.from_eulers(rotation_eulers)
-
-                camera = Camera(fovy=fovy, aspect_ratio=aspect_ratio, position=position, rotation=rotation_quat)
+                # Get camera for this frame — build_camera owns the rotation
+                # convention, which depends on the installed alfspy version.
+                from .core.camera_pose import build_camera
+                camera = build_camera(image_metadata, translation, rotation,
+                                      aspect_ratio=aspect_ratio)
 
                 # Project bounding box corners to world coordinates
                 x1, y1, x2, y2 = pt['x1'], pt['y1'], pt['x2'], pt['y2']
@@ -7346,8 +7329,10 @@ class BambiProcessor:
         max_tile_size = config.get("alfs_max_tile_size", 8192)
         frame_step = config.get("alfs_frame_step", 1)
 
+        from .core import render_size
+
         if log_fn:
-            log_fn(f"Ground resolution: {ground_resolution} m/px")
+            log_fn(render_size.describe(config, ground_resolution))
             if use_all_frames:
                 log_fn("Frame range: All frames")
             else:
@@ -7534,6 +7519,7 @@ class BambiProcessor:
         from alfspy.render.render import (
             make_mgl_context, read_gltf, process_render_data
         )
+        from .core import render_size
 
         if log_fn:
             log_fn("Loading DEM mesh (sampling mode)...")
@@ -7676,8 +7662,8 @@ class BambiProcessor:
 
             width_meters = max_x - min_x
             height_meters = max_y - min_y
-            width_pixels = max(1, int(math.ceil(width_meters / ground_resolution)))
-            height_pixels = max(1, int(math.ceil(height_meters / ground_resolution)))
+            width_pixels, height_pixels = render_size.resolve_render_size(
+                width_meters, height_meters, ground_resolution, config)
             global_resolution = Resolution(width_pixels, height_pixels)
 
             center_x = (min_x + max_x) / 2.0
@@ -7934,16 +7920,22 @@ class BambiProcessor:
         global_bounds = (min_x, min_y, max_x, max_y)
 
         # 6. Compute Resolution & Camera
+        from .core import render_size
+
         width_meters = max_x - min_x
         height_meters = max_y - min_y
-        width_pixels = int(math.ceil(width_meters / ground_resolution))
-        height_pixels = int(math.ceil(height_meters / ground_resolution))
+        width_pixels, height_pixels = render_size.resolve_render_size(
+            width_meters, height_meters, ground_resolution, config)
 
         global_resolution = Resolution(width_pixels, height_pixels)
 
         if log_fn:
             log_fn(f"Output resolution: {width_pixels} x {height_pixels}")
             log_fn(f"Global bounds: X[{min_x:.1f}, {max_x:.1f}] Y[{min_y:.1f}, {max_y:.1f}]")
+            if render_size.uses_fixed_size(config):
+                log_fn(f"Effective ground resolution: "
+                       f"{width_meters / width_pixels:.4f} x "
+                       f"{height_meters / height_pixels:.4f} m/px")
 
         # Create global camera (using logic from orthomosaic.py)
         center_x = (min_x + max_x) / 2.0
@@ -8154,25 +8146,24 @@ class BambiProcessor:
         if log_fn:
             log_fn(f"Canvas bounds: X=[{min_x:.2f}, {max_x:.2f}], Y=[{min_y:.2f}, {max_y:.2f}]")
 
-        # Compute output size
+        # Compute output size (memory-capped)
+        from .core import render_size
+
         width_meters = max_x - min_x
         height_meters = max_y - min_y
-        width_pixels = int(math.ceil(width_meters / ground_resolution))
-        height_pixels = int(math.ceil(height_meters / ground_resolution))
+        width_pixels, height_pixels = render_size.resolve_render_size(
+            width_meters, height_meters, ground_resolution, config, max_dim=16384)
 
-        # Limit size for memory
-        max_dim = 16384
-        if width_pixels > max_dim or height_pixels > max_dim:
-            scale = min(max_dim / width_pixels, max_dim / height_pixels)
-            width_pixels = int(width_pixels * scale)
-            height_pixels = int(height_pixels * scale)
-            # Adjust ground resolution accordingly
-            ground_resolution = max(width_meters / width_pixels, height_meters / height_pixels)
-            if log_fn:
-                log_fn(f"Limiting output size, adjusted resolution: {ground_resolution:.4f} m/px")
+        # Frame placement below works in a single scalar m/px, so derive it back
+        # from the resolved raster size: it is the authority once a fixed size
+        # was requested or the memory cap kicked in, and in plain
+        # ground-resolution mode this only undoes the rounding-up above.
+        ground_resolution = max(width_meters / width_pixels,
+                                height_meters / height_pixels)
 
         if log_fn:
-            log_fn(f"Output size: {width_pixels} x {height_pixels} pixels")
+            log_fn(f"Output size: {width_pixels} x {height_pixels} pixels "
+                   f"({ground_resolution:.4f} m/px)")
 
         if progress_fn:
             progress_fn(30)
@@ -8739,8 +8730,10 @@ class BambiProcessor:
 
         frames_folder = os.path.join(target_folder, f"frames_{camera_suffix}")
 
+        from .core import render_size
+
         if log_fn:
-            log_fn(f"Output resolution: {ground_resolution} m/px")
+            log_fn(render_size.describe(config, ground_resolution))
 
         if progress_fn:
             progress_fn(2)
@@ -8890,27 +8883,16 @@ class BambiProcessor:
                     correction_data = self.get_correction_for_frame(frame_idx, config)
                     cor_t = correction_data["translation"]
                     cor_r = correction_data["rotation"]
-                    cor_translation_v = Vector3(
-                        [cor_t.get('x', 0), cor_t.get('y', 0), cor_t.get('z', 0)], dtype='f4'
-                    )
-                    cor_rotation_v = Vector3(
-                        [cor_r.get('x', 0), cor_r.get('y', 0), cor_r.get('z', 0)], dtype='f4'
-                    )
-
                     # Projection camera: 2× correction matches CtxShot's effective rotation.
                     # alfspy CtxShot doubles correction_transform.rotation in its shader;
                     # multiplying by 2 here keeps geographic bounds consistent with the
                     # rendered content and with TRexConnector (which uses the full correction
                     # value directly, i.e. 2× the QGIS calibration value).
-                    proj_position = Vector3(location, dtype='f4') + cor_translation_v
-                    proj_eulers = (
-                        Vector3([np.deg2rad(val % 360.0) for val in rotation]) - cor_rotation_v * 2.0
-                    ) * -1
-                    proj_camera = Camera(
-                        fovy=fovy, aspect_ratio=aspect_ratio,
-                        position=proj_position,
-                        rotation=Quaternion.from_eulers(proj_eulers)
-                    )
+                    from .core.camera_pose import build_camera
+                    proj_camera = build_camera(
+                        img_info, cor_t,
+                        {k: cor_r.get(k, 0) * 2.0 for k in ('x', 'y', 'z')},
+                        aspect_ratio=aspect_ratio)
 
                     # Project mask polygon → world coords → UTM bounds
                     georef_points = self._georeference_polygon(
@@ -8932,13 +8914,9 @@ class BambiProcessor:
                     if width_m <= 0 or height_m <= 0:
                         continue
 
-                    out_w = max(1, int(np.ceil(width_m / ground_resolution)))
-                    out_h = max(1, int(np.ceil(height_m / ground_resolution)))
-                    max_dim = 8000
-                    if out_w > max_dim or out_h > max_dim:
-                        scale = max_dim / max(out_w, out_h)
-                        out_w = int(out_w * scale)
-                        out_h = int(out_h * scale)
+                    out_w, out_h = render_size.resolve_render_size(
+                        width_m, height_m, ground_resolution, config,
+                        max_dim=8000)
 
                     # Build the shot rotation exactly like bambi's canonical create_shot
                     # (alfspy CtxShot rendering convention): no negation, 'zyx' Euler order.
@@ -9468,23 +9446,13 @@ class BambiProcessor:
                 correction = self.get_correction_for_frame(frame_idx, config)
                 translation = correction["translation"]
                 rotation = correction["rotation"]
-                cor_rotation_eulers = Vector3([rotation['x'], rotation['y'], rotation['z']], dtype='f4')
-                cor_translation = Vector3([translation['x'], translation['y'], translation['z']], dtype='f4')
-
                 image_metadata = poses["images"][frame_idx]
 
-                # Get camera for this frame
-                fovy = image_metadata.get("fovy", [50])
-                if isinstance(fovy, list):
-                    fovy = fovy[0]
-                position = Vector3(image_metadata["location"])
-                rot = image_metadata["rotation"]
-                rotation_eulers = (Vector3(
-                    [np.deg2rad(val % 360.0) for val in rot]) - cor_rotation_eulers) * -1
-                position += cor_translation
-                rotation_quat = Quaternion.from_eulers(rotation_eulers)
-
-                camera = Camera(fovy=fovy, aspect_ratio=aspect_ratio, position=position, rotation=rotation_quat)
+                # Get camera for this frame — build_camera owns the rotation
+                # convention, which depends on the installed alfspy version.
+                from .core.camera_pose import build_camera
+                camera = build_camera(image_metadata, translation, rotation,
+                                      aspect_ratio=aspect_ratio)
 
                 # Process each prompt's predictions
                 georef_frame = {

@@ -126,8 +126,14 @@ class IdentityCamera:
         return np.eye(4)
 
 
-def install_fake_render_stack(monkeypatch, camera_cls=IdentityCamera):
-    """Install fake ``pyrr`` and ``alfspy`` modules into sys.modules."""
+def install_fake_render_stack(monkeypatch, camera_cls=IdentityCamera,
+                              ray_convention="legacy"):
+    """Install fake ``pyrr`` and ``alfspy`` modules into sys.modules.
+
+    :param ray_convention: pins ``core.camera_pose.ray_convention`` so the
+        camera construction is exercised without a real alfspy to probe.
+        ``None`` leaves the probe alone.
+    """
     pyrr = make_module("pyrr")
     pyrr.Vector3 = lambda values, dtype=None: np.asarray(values, dtype=np.float64)
 
@@ -144,6 +150,34 @@ def install_fake_render_stack(monkeypatch, camera_cls=IdentityCamera):
     core.__path__ = []
     rendering = make_module("alfspy.core.rendering")
     rendering.Camera = camera_cls
+    util = make_module("alfspy.core.util")
+    util.__path__ = []
+    pyrrs = make_module("alfspy.core.util.pyrrs")
+
+    class DronePoseQuat:
+        """Records the degrees it was built from; ``conjugate`` flags the flip."""
+
+        def __init__(self, degrees, conjugated=False):
+            self.degrees = tuple(degrees)
+            self.conjugated = conjugated
+
+        @property
+        def conjugate(self):
+            return DronePoseQuat(self.degrees, not self.conjugated)
+
+        def __iter__(self):
+            return iter(self.degrees)
+
+    def quaternion_from_eulers(eulers, order="xyz", dtype=None):
+        return tuple(eulers)
+
+    def quaternion_from_drone_pose(rotation_deg, dtype=None):
+        return DronePoseQuat(rotation_deg)
+
+    pyrrs.quaternion_from_eulers = quaternion_from_eulers
+    pyrrs.quaternion_from_drone_pose = quaternion_from_drone_pose
+    util.pyrrs = pyrrs
+    core.util = util
     alfspy.core = core
     core.rendering = rendering
 
@@ -151,6 +185,12 @@ def install_fake_render_stack(monkeypatch, camera_cls=IdentityCamera):
     monkeypatch.setitem(sys.modules, "alfspy", alfspy)
     monkeypatch.setitem(sys.modules, "alfspy.core", core)
     monkeypatch.setitem(sys.modules, "alfspy.core.rendering", rendering)
+    monkeypatch.setitem(sys.modules, "alfspy.core.util", util)
+    monkeypatch.setitem(sys.modules, "alfspy.core.util.pyrrs", pyrrs)
+
+    if ray_convention is not None:
+        from bambi_wildlife_detection.core import camera_pose
+        monkeypatch.setattr(camera_pose, "_RAY_CONVENTION", ray_convention)
     return alfspy
 
 

@@ -87,8 +87,12 @@
         "interpolate": true
     },
     
+    "_alfs_comment": "Output sizing: with fixed_render_size false the ground_resolution (m/px) sets the scale and the pixel count follows from the extent; with it true render_width/render_height set the pixel count and the ground resolution follows from the extent.",
     "alfs": {
         "ground_resolution": 0.05,
+        "fixed_render_size": false,
+        "render_width": 2048,
+        "render_height": 2048,
         "dem_metadata_path": null,
         "use_all_frames": true,
         "start_frame": null,
