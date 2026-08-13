@@ -28,6 +28,7 @@ from qgis.PyQt.QtGui import QFont
 
 from .core.hf_access import DEFAULT_BACKBONE as _DEFAULT_BACKBONE
 from .core.dependency_ops import (  # noqa: F401 — re-exported API
+    ALFS_PY_TAG,
     _DJI_SDK_URL,
     _VERSION_RANGES,
     _find_python,
@@ -479,11 +480,11 @@ class DependencyManagerDialog(QDialog):
         )
 
     def _install_alfs_py(self):
-        self._log_line('─── ALFS-PY Framework ───')
+        self._log_line(f'─── ALFS-PY Framework {ALFS_PY_TAG} ───')
         self._install_github_pkg(
             'alfs_py', 'alfs_py',
-            'https://github.com/bambi-eco/alfs_py/archive/refs/heads/main.zip',
-            'git+https://github.com/bambi-eco/alfs_py.git',
+            f'https://github.com/bambi-eco/alfs_py/archive/refs/tags/{ALFS_PY_TAG}.zip',
+            f'git+https://github.com/bambi-eco/alfs_py.git@{ALFS_PY_TAG}',
         )
 
     def _install_pycolmap(self):

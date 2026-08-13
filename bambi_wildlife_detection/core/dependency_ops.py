@@ -37,6 +37,13 @@ _BUNDLED_PIN_PACKAGES = ('numpy', 'scipy')
 # Cache for _detect_bundled_versions: None = not probed yet, dict = result.
 _bundled_versions_cache = None
 
+#: alfs_py release the dependency manager installs.  Pinned to a tag rather than
+#: ``main`` so an install is reproducible and cannot silently pick up a breaking
+#: change to the pose→camera convention.  Kept in step with the lower bound of
+#: ``_VERSION_RANGES['AlfsPy']`` below, which is what flags an out-of-date
+#: install (``tests/test_alfspy_pin.py``).
+ALFS_PY_TAG = 'v2.1.0'
+
 # Tested version ranges per pip distribution name (or special key for non-pip packages).
 # None means no bound (any version is accepted).
 _VERSION_RANGES = {
