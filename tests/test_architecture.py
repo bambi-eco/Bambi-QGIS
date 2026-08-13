@@ -68,7 +68,7 @@ def test_no_gui_or_heavy_imports_at_module_level(module_name):
         if _is_forbidden_anywhere(name) or _is_heavy(name)
     ]
     assert not violations, (
-        f"core/{module_name}.py imports {violations} at module level — "
+        f"core/{module_name}.py imports {violations} at module level - "
         "GUI toolkits are forbidden in core; heavy dependencies must be "
         "imported lazily inside functions (see core/__init__.py)."
     )
@@ -83,7 +83,7 @@ def test_no_gui_imports_even_lazily(module_name):
         if _is_forbidden_anywhere(name)
     ]
     assert not violations, (
-        f"core/{module_name}.py imports GUI/QGIS modules {violations} — "
+        f"core/{module_name}.py imports GUI/QGIS modules {violations} - "
         "these are forbidden in core even inside functions."
     )
 
@@ -104,7 +104,7 @@ def test_plugin_never_imports_moderngl():
 
     Naming ModernGL here would tie the plugin to one alfspy backend and break
     the moment it is swapped for the PyTorch build. Contexts come from
-    ``core.render_context`` instead — see ``tests/test_render_context.py``.
+    ``core.render_context`` instead - see ``tests/test_render_context.py``.
     """
     offenders = []
     for path in PLUGIN_DIR.rglob("*.py"):

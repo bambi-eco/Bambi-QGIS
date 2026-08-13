@@ -2,7 +2,7 @@
 """The C3 classification step, end to end.
 
 Built on real TorchScript heads whose weights are chosen so the answers are
-known in advance — the point is to prove the *pipeline* does what §3.3 says:
+known in advance - the point is to prove the *pipeline* does what §3.3 says:
 occlusion gates the frames, species fixes what the animal is, and sex reuses
 exactly the species frames and picks its model from the species call.
 """
@@ -114,7 +114,7 @@ def paired_flight(flight):
     """The same flight seen by both cameras, with every track matched.
 
     The RGB side carries the same feature channels, so a matched head reading
-    ``[RGB, thermal]`` sees each value twice and lands on the same class — what
+    ``[RGB, thermal]`` sees each value twice and lands on the same class - what
     is being tested is which animals the answer reaches, not the answer.
     """
     _build_modality(flight, "w")
@@ -193,7 +193,7 @@ def test_species_and_sex_are_voted_per_track(flight):
     species = {row["track_id"]: row["label"] for row in
                classification_store.track_predictions(flight, "t", "species")}
     # Track 3 is occluded on three frames of four; its one clear frame is the
-    # roe deer one, so that is what it is called — the occluded majority never
+    # roe deer one, so that is what it is called - the occluded majority never
     # gets a say.
     assert species == {1: "red deer", 2: "red deer", 3: "roe deer"}
 
@@ -249,7 +249,7 @@ def test_species_and_sex_run_without_any_occlusion_model(flight):
 
     species = classification_store.track_predictions(flight, "t", "species")
     assert len(species) == 3
-    # With nothing to filter by, every frame votes — and that is said out loud.
+    # With nothing to filter by, every frame votes - and that is said out loud.
     assert species[0]["evidence"]["frames"] == "all-frames-unfiltered"
 
 
@@ -299,7 +299,7 @@ def test_the_log_says_where_the_voting_frames_came_from(flight):
 # ---------------------------------------------------------------------------
 
 def test_a_species_without_a_sex_model_is_left_alone(flight):
-    """Sex is only defined for species someone has a classifier for — red deer
+    """Sex is only defined for species someone has a classifier for - red deer
     today, and nothing else."""
     models = _models(flight)
     models["sex"]["species"] = {
@@ -338,7 +338,7 @@ def test_a_track_below_quorum_is_left_undecided_not_dropped(flight):
     _run(flight, classification_quorum=1.0)
 
     assert classification_store.track_predictions(flight, "t", "species") == []
-    # The frames were still classified — only the per-animal call abstained,
+    # The frames were still classified - only the per-animal call abstained,
     # which is the difference between "we do not know" and "we did not look".
     assert classification_store.frame_predictions(flight, "t", "species")
 

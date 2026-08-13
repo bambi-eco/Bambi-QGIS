@@ -21,13 +21,14 @@ import datetime
 from qgis.PyQt.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QGroupBox, QTextEdit, QScrollArea, QWidget, QFrame, QCheckBox,
+    QSizePolicy,
 )
 from qgis.PyQt.QtCore import Qt, QTimer
 from qgis.PyQt.QtGui import QFont
 
 
 from .core.hf_access import DEFAULT_BACKBONE as _DEFAULT_BACKBONE
-from .core.dependency_ops import (  # noqa: F401 — re-exported API
+from .core.dependency_ops import (  # noqa: F401 - re-exported API
     ALFS_BACKENDS,
     ALFS_PY_TAG,
     ALFS_TORCH_TAG,
@@ -45,7 +46,7 @@ from .core.dependency_ops import (  # noqa: F401 — re-exported API
 )
 
 # ---------------------------------------------------------------------------
-# (no background-worker class needed — threading.Thread + Queue is used instead)
+# (no background-worker class needed - threading.Thread + Queue is used instead)
 # ---------------------------------------------------------------------------
 
 
@@ -100,23 +101,56 @@ class DependencyManagerDialog(QDialog):
         # ---- Required dependencies ----
         # The backend checkbox starts from what is actually installed rather
         # than a stored preference, so it can never disagree with reality.
-        self._torch_backend_check = QCheckBox(
-            'Use the PyTorch backend (experimental) — renders on the GPU when '
-            'CUDA is available and needs no OpenGL driver, but is slower on CPU'
-        )
+        # The box carries no text of its own: a QCheckBox cannot wrap its label
+        # and would pin the whole dialog to that label's width.  The caption is
+        # a word-wrapping QLabel beside it, clickable so it still toggles.
+        self._torch_backend_check = QCheckBox()
         self._torch_backend_check.setChecked(
             _get_version_status('AlfsTorch', self._plugins_dir)[1] != 'not_found'
         )
-        self._torch_backend_check.setToolTip(
+        tooltip = (
             'Off: install alfs_py, which rasterises through ModernGL.\n'
             'On: install alfs_pytorch, which rasterises through PyTorch.\n\n'
             'Both provide the same "alfspy" package and cannot be installed '
             'side by side, so switching removes the other one. Their results '
             'agree to well under one 8-bit level.'
         )
+        self._torch_backend_check.setToolTip(tooltip)
         # ``toggled`` rather than ``stateChanged``: stable across Qt5 and Qt6,
         # where the latter is deprecated in favour of ``checkStateChanged``.
         self._torch_backend_check.toggled.connect(self._on_backend_toggled)
+
+        backend_caption = QLabel('Use the PyTorch backend (experimental)')
+        backend_hint = QLabel(
+            'Renders on the GPU when CUDA is available and needs no OpenGL '
+            'driver. Switching removes the other implementation.'
+        )
+        backend_hint.setStyleSheet('color:#777;')
+        for backend_lbl in (backend_caption, backend_hint):
+            backend_lbl.setWordWrap(True)
+            backend_lbl.setToolTip(tooltip)
+            # Ignored lets the label shrink below its text width, so the wrap
+            # follows the dialog instead of the label widening the dialog.
+            backend_lbl.setSizePolicy(QSizePolicy.Policy.Ignored,
+                                      QSizePolicy.Policy.Minimum)
+            backend_lbl.setMinimumWidth(0)
+            backend_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
+            backend_lbl.mousePressEvent = (
+                lambda _event: self._torch_backend_check.toggle())
+
+        caption_col = QVBoxLayout()
+        caption_col.setContentsMargins(0, 0, 0, 0)
+        caption_col.setSpacing(1)
+        caption_col.addWidget(backend_caption)
+        caption_col.addWidget(backend_hint)
+
+        backend_box = QWidget()
+        backend_layout = QHBoxLayout(backend_box)
+        backend_layout.setContentsMargins(0, 2, 0, 0)
+        backend_layout.setSpacing(4)
+        backend_layout.addWidget(self._torch_backend_check, 0,
+                                 Qt.AlignmentFlag.AlignTop)
+        backend_layout.addLayout(caption_col, 1)
 
         vbox.addWidget(self._build_group('Required Dependencies', [
             dict(
@@ -125,7 +159,7 @@ class DependencyManagerDialog(QDialog):
                 desc='Airborne light-field sampling framework for the actual geo-referencing processing.',
                 callback=self._install_alfs_py,
                 dist_name='AlfsPy',
-                extra_widget=self._torch_backend_check,
+                extra_widget=backend_box,
             ),
             dict(
                 key='bambi_detection',
@@ -173,7 +207,7 @@ class DependencyManagerDialog(QDialog):
                 desc=(
                     'DINOv3 feature extraction for the occlusion, species and '
                     'sex classifiers. The backbone itself is a gated Hugging '
-                    'Face model — request access and enter a token in the '
+                    'Face model - request access and enter a token in the '
                     'Classification configuration tab.'
                 ),
                 callback=self._install_classification,
@@ -308,6 +342,10 @@ class DependencyManagerDialog(QDialog):
 
         name_lbl = QLabel(f'<b>{label}</b>')
         name_lbl.setTextFormat(Qt.TextFormat.RichText)
+        # Wrap rather than force the whole dialog wider than its 700px minimum;
+        # without this the scroll area scrolls sideways and nothing else in the
+        # row (descriptions, the backend selector) ever gets to re-wrap.
+        name_lbl.setWordWrap(True)
         desc_lbl = QLabel(f'<span style="color:#555;">{desc}</span>')
         desc_lbl.setWordWrap(True)
         desc_lbl.setTextFormat(Qt.TextFormat.RichText)
@@ -353,7 +391,7 @@ class DependencyManagerDialog(QDialog):
                 ver, status = _get_version_status(dist_name, self._plugins_dir)
                 self._apply_status_label(status_lbl, dist_name, ver, status)
             else:
-                status_lbl.setText('<span style="color:#888;">—</span>')
+                status_lbl.setText('<span style="color:#888;">-</span>')
             self._status_labels[key] = status_lbl  # single QLabel
             row.addWidget(btn)
             row.addLayout(text_col, 1)
@@ -381,7 +419,7 @@ class DependencyManagerDialog(QDialog):
                     f'<span style="color:#e67e00;">{pre}⚠ v{ver}'
                     '<br><small>CPU build</small></span>'
                 )
-                lbl.setToolTip('CPU-only build installed — use Install to replace it '
+                lbl.setToolTip('CPU-only build installed - use Install to replace it '
                                'with the CUDA (cu121) variant for GPU support.')
             elif variant_note:
                 lbl.setText(
@@ -536,7 +574,7 @@ class DependencyManagerDialog(QDialog):
         self._dist_names['alfs_py'] = spec['dist']
         self._refresh_single_status('alfs_py')
         self._log_line(
-            f"Backend set to {spec['label']} — press Install to switch to "
+            f"Backend set to {spec['label']} - press Install to switch to "
             f"{spec['repo']} {spec['tag']}."
         )
 

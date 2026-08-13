@@ -80,7 +80,7 @@ class TestTheTextFilesAreNotRead:
         assert load_georef_detections_by_frame(str(f)) == {}
 
     def test_a_missing_file_is_not_an_error_either(self, tmp_path):
-        """Nothing to show is a normal state — a step that has not run."""
+        """Nothing to show is a normal state - a step that has not run."""
         assert load_geo_tracks_by_id(str(tmp_path / "nope.csv")) == {}
         assert load_fov_polygons_3d(str(tmp_path / "nope.txt")) == {}
         assert load_georef_detections_by_frame(str(tmp_path / "no.txt")) == {}

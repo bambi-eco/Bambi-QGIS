@@ -2,7 +2,7 @@
 """The Export action on the Processing tab (EXCHANGE_FORMAT_PLAN.md §8.1).
 
 The exporters themselves are covered headlessly in ``tests/test_exporters.py``;
-what needs a real QGIS is the wiring — that every format is offered, that the
+what needs a real QGIS is the wiring - that every format is offered, that the
 per-format defaults are reflected rather than silently applied, and that a
 format needing the CRS refuses before opening a file dialog.
 

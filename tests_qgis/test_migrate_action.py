@@ -2,7 +2,7 @@
 """The "Migrate 5.x…" action on the dock widget (EXCHANGE_FORMAT_PLAN.md §10, Phase 1).
 
 The migration logic itself is headless and covered by ``tests/test_migration.py``;
-what needs a real QGIS is the widget wiring — that the button appears exactly
+what needs a real QGIS is the widget wiring - that the button appears exactly
 when there is something to migrate, and disappears once there is not.
 
 Run via the QGIS image only::

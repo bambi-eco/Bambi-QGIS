@@ -173,7 +173,7 @@ class ThermalViewerDialog(QDialog):
         file_row.addWidget(self._path_label, 1)
         root.addLayout(file_row)
 
-        # Navigation row — visible only in folder mode
+        # Navigation row - visible only in folder mode
         nav_widget = QWidget()
         nav_layout = QHBoxLayout(nav_widget)
         nav_layout.setContentsMargins(0, 0, 0, 0)
@@ -361,7 +361,7 @@ class ThermalViewerDialog(QDialog):
         thermal = self._ensure_thermal()
         if thermal is None:
             raise RuntimeError("thermal parser could not be loaded")
-        # The viewer owns the instance — nothing to close after the scan.
+        # The viewer owns the instance - nothing to close after the scan.
         return thermal.parse, (lambda: None)
 
     def _load(self, path):

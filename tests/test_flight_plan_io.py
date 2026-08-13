@@ -42,7 +42,7 @@ class TestToBool:
 
 class TestDefaults:
     def test_contains_every_strategy_parameter(self):
-        # keys the dialog binds to widgets — a removal would silently break
+        # keys the dialog binds to widgets - a removal would silently break
         # settings persistence
         for key in ("strategy", "grid_size", "min_transects", "max_distance",
                     "target_crs_epsg", "seed", "random_search", "target_folder"):

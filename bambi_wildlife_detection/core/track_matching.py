@@ -4,7 +4,7 @@ same animal.
 
 Implements §3.2 of *When One Modality Is Not Enough*. Three steps:
 
-1. **Frame correspondence** by capture time (:mod:`core.frame_matching`) — the
+1. **Frame correspondence** by capture time (:mod:`core.frame_matching`) - the
    two cameras run at different rates, so "the same frame" only means anything
    on the shared clock.
 2. **A 2D affine** ``T: RGB -> thermal`` fitted from corresponding detection
@@ -19,14 +19,14 @@ Two departures from the paper, both deliberate:
 * **The affine is bootstrapped, not given.** The paper fits ``T`` from
   corresponding centres, but on real data the correspondence is exactly what is
   being solved for. We seed from frames where each modality holds exactly one
-  detection — where correspondence is not in doubt — and then alternate
+  detection - where correspondence is not in doubt - and then alternate
   assignment and refitting.
 * **Assignment is Hungarian, not greedy.** The paper takes the smallest median
   distance first; a global optimum costs nothing extra here (the matrices are
   tiny) and cannot be led astray by an unlucky first pick.
 
 What confirmation *means* is the point of all this: a pair seen in both
-modalities is a real animal, and the paper's own numbers show why it matters —
+modalities is a real animal, and the paper's own numbers show why it matters -
 of 34 unmatched tracks only one was real, while applying a length-and-
 confidence fallback uniformly would have admitted six phantoms.
 
@@ -145,7 +145,7 @@ def fit_affine(pairs: Sequence[Tuple[Tuple[float, float],
     """Least-squares fit of ``T`` from ``((rgb_x, rgb_y), (th_x, th_y))`` pairs.
 
     Returns ``None`` when there is too little to fit, or when the points are
-    degenerate (all on one line, or all at one place) — an affine through
+    degenerate (all on one line, or all at one place) - an affine through
     collinear points is unconstrained perpendicular to that line, and would
     send every off-line detection somewhere arbitrary.
     """
@@ -218,7 +218,7 @@ def seed_pairs(detections_t: Iterable[Detection],
     """Correspondences from frames where neither modality is ambiguous.
 
     A frame holding exactly one detection in each modality pairs them without
-    any assumption about the transform — which is what makes it possible to
+    any assumption about the transform - which is what makes it possible to
     estimate the transform at all.
     """
     grouped_t = by_frame(detections_t)
@@ -265,7 +265,7 @@ def estimate_affine(detections_t: Iterable[Detection],
     Starts from the best initial guess available and then alternates one-to-one
     assignment with refitting until the residual stops improving:
 
-    * **Unambiguous frames** — one detection in each modality — pair without
+    * **Unambiguous frames** - one detection in each modality - pair without
       assuming anything about the transform, so they are the preferred start.
     * **Failing that, the pure scale implied by the two frame sizes.** A herd
       can put several animals in *every* frame, leaving no unambiguous frame at
@@ -330,7 +330,7 @@ def estimate_affine(detections_t: Iterable[Detection],
 
 def _size_fallback(frame_size_t: Optional[Tuple[float, float]],
                    frame_size_w: Optional[Tuple[float, float]]) -> Affine:
-    """Scale RGB onto thermal by frame size alone — the last resort."""
+    """Scale RGB onto thermal by frame size alone - the last resort."""
     if not frame_size_t or not frame_size_w:
         return Affine.identity()
     width_t, height_t = frame_size_t
@@ -519,11 +519,11 @@ def match_tracks(detections_t: Iterable[dict], detections_w: Iterable[dict],
         else:
             # "No matches" and "the gate is wrong" look identical from the
             # outside, and the defaults are calibrated to a resolution the
-            # user may not share — so say which gate did the rejecting.
+            # user may not share - so say which gate did the rejecting.
             reasons = rejection_reasons(everything, config)
             closest = min(c.median_dist for c in everything)
             log_fn(f"Cross-modal matching: no pair confirmed out of "
-                   f"{len(everything)} candidate(s) — "
+                   f"{len(everything)} candidate(s) - "
                    f"{reasons['shared_frames']} shared too few frames, "
                    f"{reasons['distance']} were too far apart, "
                    f"{reasons['confidence']} were too low-confidence. The "

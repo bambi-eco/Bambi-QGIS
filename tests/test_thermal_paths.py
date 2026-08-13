@@ -2,7 +2,7 @@
 """Unit tests for the bambi_thermal shim (DJI SDK / exiftool discovery).
 
 The real parsing lives in the ``bambi.thermal`` package (bambi_detection),
-which is not installed in the unit image — a fake module is injected before
+which is not installed in the unit image - a fake module is injected before
 importing the shim. Only the path-discovery logic is under test here.
 """
 import os

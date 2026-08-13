@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """Tracking has to land in the store, or nothing downstream can see it.
 
-Tracks written only to ``tracks_{m}/tracks.csv`` look like a successful run —
-the file is there, the log says "5 tracks" — while every export and analytic,
+Tracks written only to ``tracks_{m}/tracks.csv`` look like a successful run -
+the file is there, the log says "5 tracks" - while every export and analytic,
 which read the store, report the detections as untracked. Two ways in:
 
 * the built-in tracker falling back to ``georeferenced.txt`` because the geo
@@ -100,7 +100,7 @@ def test_the_recorded_run_covers_the_detections(processor, detected):
 
 
 def test_a_project_without_a_store_is_told_to_migrate(processor, tmp_path):
-    """A 5.x folder is not silently tracked from its text files — the result
+    """A 5.x folder is not silently tracked from its text files - the result
     would exist only as tracks.csv and be invisible to everything else."""
     root = str(tmp_path / "legacy")
     folder = os.path.join(root, "georeferenced_t")

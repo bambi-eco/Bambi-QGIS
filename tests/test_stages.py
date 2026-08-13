@@ -115,7 +115,7 @@ def test_dependencies_are_reported():
 
 
 def test_the_graph_has_no_cycles():
-    """A cycle would deadlock the cascade — the reason labelling is not a node."""
+    """A cycle would deadlock the cascade - the reason labelling is not a node."""
     for stage in stages.known_stages():
         assert stage not in stages.dependents(stage)
 
@@ -236,7 +236,7 @@ def test_completed_stages_are_listed(project):
 
 
 # ---------------------------------------------------------------------------
-# Reconciliation — the files win (§7)
+# Reconciliation - the files win (§7)
 # ---------------------------------------------------------------------------
 
 def test_deleting_a_stage_file_by_hand_is_noticed(project):
@@ -265,7 +265,7 @@ def test_reconciliation_cascades(project):
 
 
 def test_reconciliation_demotes_an_output_less_dependent_to_pending(project):
-    """'Stale' means out of date, not missing — a stage with no output is pending."""
+    """'Stale' means out of date, not missing - a stage with no output is pending."""
     _make_output(project, "georeference")
     stages.mark_complete(project, "georeference", "t")
     stages.mark_complete(project, "tracking", "t")     # recorded, never wrote

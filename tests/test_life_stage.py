@@ -3,7 +3,7 @@
 
 The fixtures follow the paper's flights: A2 holds a juvenile that must be
 flagged, while A1 and C hold none and must not produce a false one. That last
-property is the harder half — in any herd someone is smallest.
+property is the harder half - in any herd someone is smallest.
 
 One departure worth knowing: on a flight with only a handful of individuals the
 candidate sits in the lower half of the distribution and so inflates the very
@@ -53,8 +53,8 @@ class TestPaperCohorts:
     def test_a_small_flight_is_answered_cautiously(self):
         """With few individuals the outlier sits in the lower half and so
         inflates the very interquartile range its gap is tested against. The
-        rule then declines — the right failure mode for a census, where a
-        false juvenile is worse than a missing one — but it must say so."""
+        rule then declines - the right failure mode for a census, where a
+        false juvenile is worse than a missing one - but it must say so."""
         areas = _areas([673, 1050, 1120, 1180, 1210])
         found = life_stage.assess(areas)
 
@@ -67,7 +67,7 @@ class TestPaperCohorts:
 
     def test_a1_has_no_juvenile_to_find(self):
         """A1's smallest animals lie on a smooth size continuum, so the test
-        must not over-fire — this is the half that matters."""
+        must not over-fire - this is the half that matters."""
         areas = _areas([900, 950, 1000, 1050, 1100, 1150, 1200, 1250])
         found = life_stage.assess(areas)
         assert all(item.label == life_stage.ADULT for item in found)
@@ -98,7 +98,7 @@ class TestConditions:
         assert all(item.label == life_stage.ADULT for item in found)
 
     def test_a_large_gap_alone_is_not_enough(self):
-        """A gap high up the range is not a juvenile — z must also be low."""
+        """A gap high up the range is not a juvenile - z must also be low."""
         areas = _areas([1000, 1010, 1020, 1030, 3000])
         found = life_stage.assess(areas)
         assert _labels(found)[5] == life_stage.ADULT

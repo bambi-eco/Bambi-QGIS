@@ -20,7 +20,7 @@ relief.
 The DEM/camera specifics are injected as callables so the solver is testable
 with synthetic geometry:
 
-* ``geo_ref(side_idx, correction) -> (x, y, z) | None`` — ray-cast the
+* ``geo_ref(side_idx, correction) -> (x, y, z) | None`` - ray-cast the
   side's reference click onto the DEM under *correction*
 * ``camera_xy(side_idx, correction) -> (x, y) | None``
 * ``camera_z(side_idx, correction) -> float | None``
@@ -188,7 +188,7 @@ class CorrectionSolver:
         dy = c2[1] - c1[1]
         d = math.hypot(dx, dy)
         if d < 1e-6:
-            return None   # coincident cameras — yaw is unconstrained
+            return None   # coincident cameras - yaw is unconstrained
 
         geom = {
             'c1': c1, 'c2': c2, 'd': d,
@@ -295,7 +295,7 @@ class CorrectionSolver:
             for step in range(self._max_steps):
                 tz += 1.0
                 self._status(
-                    f"Fallback  —  Probing z-offset…  "
+                    f"Fallback  -  Probing z-offset…  "
                     f"(step {step + 1} / {self._max_steps},  tz = {tz:.1f})"
                 )
                 if _ok(tz):
@@ -304,7 +304,7 @@ class CorrectionSolver:
             for step in range(self._max_steps):
                 tz -= 1.0
                 self._status(
-                    f"Fallback  —  Finding z boundary…  "
+                    f"Fallback  -  Finding z boundary…  "
                     f"(step {step + 1} / {self._max_steps},  tz = {tz:.1f})"
                 )
                 if not _ok(tz):
@@ -320,7 +320,7 @@ class CorrectionSolver:
         for i, rz in enumerate(angles):
             if i % 36 == 0:
                 self._status(
-                    f"Fallback  —  Scanning yaw…  ({i} / 360)"
+                    f"Fallback  -  Scanning yaw…  ({i} / 360)"
                 )
             c = {
                 'translation': dict(correction['translation']),

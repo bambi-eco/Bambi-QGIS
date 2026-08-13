@@ -2,7 +2,7 @@
 """Real-QGIS test of 'Add Transect Areas to QGIS'.
 
 Drives the dock widget's loader against a prepared analytics folder and
-inspects the layer tree it builds — the styling and labelling calls only fail
+inspects the layer tree it builds - the styling and labelling calls only fail
 inside a real QGIS, which the unit suite (with its qgis stub) cannot catch.
 """
 import json
@@ -18,13 +18,13 @@ def no_modal_dialogs(monkeypatch):
     """Turn a swallowed error into a test failure, not a hung modal.
 
     ``add_transect_areas_to_qgis`` reports failures with QMessageBox.critical.
-    Left alone, that opens a modal dialog which aborts the headless process —
+    Left alone, that opens a modal dialog which aborts the headless process -
     the error itself never reaches the report. Raising instead surfaces it.
     """
     from bambi_wildlife_detection import bambi_dock_widget as mod
 
     def fail(_parent, title, text, *args, **kwargs):
-        raise AssertionError(f"unexpected error dialog: {title} — {text}")
+        raise AssertionError(f"unexpected error dialog: {title} - {text}")
 
     monkeypatch.setattr(mod.QMessageBox, "critical", fail)
 
@@ -185,7 +185,7 @@ class TestAddTransectAreas:
         """An estimation run from before transect_routes.geojson existed.
 
         The route is only the poses of the transect's frame range, so the
-        loader rebuilds it instead of dropping the layer — the user must not
+        loader rebuilds it instead of dropping the layer - the user must not
         have to re-run the estimation to get it.
         """
         (analytics / "analytics_t" / "transect_routes.geojson").unlink()
@@ -214,7 +214,7 @@ class TestAddTransectAreas:
                                                                analytics):
         """The FoV step may not have covered a transect's frame range.
 
-        That transect has no area feature — it must still reach the map with
+        That transect has no area feature - it must still reach the map with
         its route rather than disappear from the group.
         """
         areas_file = analytics / "analytics_t" / "transect_areas.geojson"
@@ -295,7 +295,7 @@ class TestReAdding:
         """Windows keeps the .gpkg open via GDAL's dataset pool.
 
         The delete then fails with WinError 32. A GeoPackage is SQLite, so the
-        layer inside it is rewritten in place instead — the run must succeed
+        layer inside it is rewritten in place instead - the run must succeed
         rather than fall back to a temporary memory layer.
         """
         _configure(dock, analytics)
@@ -342,7 +342,7 @@ def _write_population_tracks_csv(folder):
         "1,1,1005.0,2003.0,0,1,North meadow,3.0,1,0",
         "2,2,1015.0,1998.0,1,1,North meadow,2.0,1,0",
         "3,4,1010.0,2098.0,0,2,Transect 2,2.0,1,0",
-        # unassigned (beyond the truncation distance) — must not be shown
+        # unassigned (beyond the truncation distance) - must not be shown
         "4,5,9999.0,9999.0,0,,,,,1",
     ]
     (folder / "analytics_t" / "population_tracks.csv").write_text(
@@ -409,7 +409,7 @@ class TestTransectTracks:
         assert shown == {1, 2, 3}
 
     def test_assignment_is_recomputed_without_the_csv(self, dock, analytics):
-        """No estimation run yet — assign_tracks is reused on the raw distances."""
+        """No estimation run yet - assign_tracks is reused on the raw distances."""
         _write_poses_and_transects(analytics)
         _write_perpendicular_tracks(analytics)
         _configure(dock, analytics)
@@ -448,7 +448,7 @@ class TestTransectTracks:
         """
         _write_poses_and_transects(analytics)
 
-        # Track 9 sits 60 m north of transect 1's line — the areas in this
+        # Track 9 sits 60 m north of transect 1's line - the areas in this
         # fixture only span y ∈ [0, 20] and y ∈ [100, 120], so nothing saw it.
         tracks = [
             {"track_id": 1, "last_frame": 1, "class_id": 0,

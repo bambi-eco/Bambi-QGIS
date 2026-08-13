@@ -126,7 +126,7 @@ def test_registry_lists_every_format():
 
 
 def test_the_two_geojson_formats_say_what_they_hold():
-    """'geo-referenced' described how they were made, not what is in them —
+    """'geo-referenced' described how they were made, not what is in them -
     which is no help when choosing between two of them."""
     labels = {key: exporters.EXPORTERS[key][0]
               for key in ("geojson", "geojson_segmentation")}
@@ -303,7 +303,7 @@ def test_yolo_reports_frames_it_could_not_find(survey, tmp_path):
 
 
 def test_yolo_copies_nothing_it_was_not_asked_for(survey, tmp_path):
-    """Only frames carrying a detection — not the whole flight."""
+    """Only frames carrying a detection - not the whole flight."""
     _with_frames(survey, names=("frame_000000.jpg", "frame_000001.jpg",
                                 "frame_000002.jpg", "frame_000003.jpg"))
     folder = str(tmp_path / "yolo")
@@ -352,7 +352,7 @@ def test_mot_omits_untracked_detections(survey, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# GeoJSON — segmentations
+# GeoJSON - segmentations
 # ---------------------------------------------------------------------------
 
 def _add_segments(root, rows):
@@ -452,7 +452,7 @@ def test_exporting_without_any_segmentation_says_so(survey, tmp_path):
 
 
 def test_the_two_geojson_exports_are_separate_documents(survey, tmp_path):
-    """Different geometries answering different questions — one mixed
+    """Different geometries answering different questions - one mixed
     collection could not be styled sensibly in any GIS."""
     _add_segments(survey, [{"frame": 0, "polygon_geo": SQUARE}])
     animals = str(tmp_path / "animals.geojson")
@@ -468,7 +468,7 @@ def test_the_two_geojson_exports_are_separate_documents(survey, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# GeoJSON — animals
+# GeoJSON - animals
 # ---------------------------------------------------------------------------
 
 def test_geojson_points(survey, tmp_path):
@@ -596,7 +596,7 @@ def test_camtrap_without_a_crs_is_refused(survey, tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_dwca_is_one_occurrence_per_track(survey, tmp_path):
-    """Not per detection — that would publish one animal hundreds of times."""
+    """Not per detection - that would publish one animal hundreds of times."""
     pytest.importorskip("pyproj")
     folder = str(tmp_path / "dwca")
     exporters.export_darwin_core(survey, "t", folder, epsg=32633)
@@ -842,7 +842,7 @@ def test_every_registered_format_declares_its_output_shape():
 # ---------------------------------------------------------------------------
 
 def _untracked(tmp_path):
-    """Detections in the store, but no tracking run — the state a project is
+    """Detections in the store, but no tracking run - the state a project is
     left in when a tracker read the legacy text files instead."""
     root = str(tmp_path / "untracked")
     os.makedirs(root, exist_ok=True)
@@ -855,7 +855,7 @@ def _untracked(tmp_path):
 
 
 def test_mot_explains_an_empty_export(tmp_path):
-    """"0 rows" is true but useless — the usual cause is a tracking run that
+    """"0 rows" is true but useless - the usual cause is a tracking run that
     never reached the store."""
     root = _untracked(tmp_path)
     messages = []
@@ -923,7 +923,7 @@ def test_trex_explains_an_empty_export(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# "Include images" — the frames are the heaviest thing a project owns
+# "Include images" - the frames are the heaviest thing a project owns
 # ---------------------------------------------------------------------------
 
 def test_the_formats_that_can_carry_images_are_the_ones_that_name_them():

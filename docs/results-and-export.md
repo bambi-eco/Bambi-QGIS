@@ -1,12 +1,12 @@
 # Results, Flights and Export
 
 New in 6.0. Where earlier versions wrote each processing step to a text file,
-results now live in GeoPackages that record what they mean — which detection a
+results now live in GeoPackages that record what they mean - which detection a
 track point came from, why a detection could not be placed on the DEM, what a
 density figure counted. This page covers what that changes for you.
 
 The 5.x text files are still **written** alongside, so external scripts keep
-working — but nothing in the plugin **reads** them any more. See
+working - but nothing in the plugin **reads** them any more. See
 [Legacy text outputs](#legacy-text-outputs).
 
 ---
@@ -35,13 +35,13 @@ Each flight's target folder contains:
 ```
 
 `matches.gpkg` sits beside `project.gpkg` rather than under one camera, because
-a match is a statement about both at once — filing it under one would make that
+a match is a statement about both at once - filing it under one would make that
 copy authoritative by accident, and resetting that camera would take the other's
 matches with it.
 
 These are ordinary GeoPackages: open one from the QGIS **Browser** panel to
 look at a table, or delete a file to make that step run again from scratch.
-Deleting `bambi_t/tracks.gpkg` in Explorer is a valid way to reset tracking —
+Deleting `bambi_t/tracks.gpkg` in Explorer is a valid way to reset tracking -
 the plugin reconciles what it recorded against what is actually on disk, and
 the files win.
 
@@ -66,7 +66,7 @@ never modified or deleted, so a migration that goes wrong is fixed by deleting
 the generated `.gpkg` files and trying again.
 
 Migration refuses to run over a folder that already has a store, because it
-adds rows rather than reconciling them — it would duplicate what is there.
+adds rows rather than reconciling them - it would duplicate what is there.
 
 Two limits of 5.x data, both reported when they apply:
 
@@ -103,7 +103,7 @@ notices the `project.gpkg` and result stores, lists what it found, and asks
 before adding.
 
 - Its **stored configuration is loaded**, so the inputs and settings come back
-  as they were — the copy/default question is not asked, because neither
+  as they were - the copy/default question is not asked, because neither
   answer applies.
 - Nothing is recomputed or overwritten. Steps that already ran show as done.
 - A folder with results but no stored configuration (a migrated 5.x project,
@@ -113,7 +113,7 @@ before adding.
 This is also what happens when you add back a flight you removed.
 
 Removing a flight (🗑) takes it out of the project and removes its layer group,
-after a confirmation. **Nothing on disk is deleted** — the target folder keeps
+after a confirmation. **Nothing on disk is deleted** - the target folder keeps
 its frames, detections, tracks and configuration, so pointing a flight at the
 folder again picks up exactly where it left off. To delete the results
 themselves, delete the folder in a file manager, or reset individual stages
@@ -127,7 +127,7 @@ folder, and behave exactly as before.
 ### Flights in the survey analytics
 
 Distance sampling and population estimation have always been able to pool
-several target folders, and still can — flights and projects can stay separate
+several target folders, and still can - flights and projects can stay separate
 if that suits you. **+ Add Flight…** is the shortcut for flights this project
 already knows about: the folder and the DEM are looked up rather than browsed
 for.
@@ -146,12 +146,12 @@ Every project has three base classes that cannot be renamed or removed:
 
 | Species | Meaning |
 |---|---|
-| `animal` | an animal, species not determined — what the detector reports |
+| `animal` | an animal, species not determined - what the detector reports |
 | `unknown` | not yet determined by a person |
 | `not-an-animal` | a labelled false positive |
 
 `not-an-animal` is **excluded from every survey analytic**: leaving it in would
-bias a density estimate upward. `unknown` and `animal` do count — the
+bias a density estimate upward. `unknown` and `animal` do count - the
 distinction is determinacy, not presence.
 
 Everything else is yours to define. Species keep their identity when renamed,
@@ -163,13 +163,13 @@ taxon key**. The name you work with (`roe deer`) is a vernacular name; Darwin
 Core needs the scientific one (`Capreolus capreolus`), and a GBIF key lets GBIF
 resolve the record exactly instead of matching a string. Scientific names are
 pre-filled for the built-in species as editable starting points; GBIF keys are
-not, because a wrong identifier publishes confidently wrong data — take them
+not, because a wrong identifier publishes confidently wrong data - take them
 from the species' page on gbif.org.
 
 ### Detector class mapping
 
-A detector reports whatever classes its weights were trained on — `0`, `1`, `2`,
-or names of its own — and those are not the project's species. **Edit Class
+A detector reports whatever classes its weights were trained on - `0`, `1`, `2`,
+or names of its own - and those are not the project's species. **Edit Class
 Mapping…** on the **Detection** configuration tab connects the two. It sits with
 the model rather than with the species, because the mapping describes *these
 weights*: a different model needs a different mapping even for the same species.
@@ -178,7 +178,7 @@ The table lists the classes the detector actually reported, with how often each
 one occurred, so there is nothing to guess. Anything left unmapped counts as
 `animal`, which is why a single-class detector needs no configuration at all.
 
-Applying a change **re-reads the detections already stored** — every detection
+Applying a change **re-reads the detections already stored** - every detection
 keeps the raw class it was reported with, so correcting a mapping never means
 running the detector again. The boxes do not move, so geo-referencing and
 tracking stay valid; only the species-dependent analytics need re-running.
@@ -186,7 +186,7 @@ tracking stay valid; only the species-dependent analytics need re-running.
 ### Classification results, and how they reach everything else
 
 The [classifiers](pipeline.md#classification) record their answers in
-`classification.gpkg` with the evidence behind each one — the model used, the
+`classification.gpkg` with the evidence behind each one - the model used, the
 per-frame probability, and the vote margin per animal. Nothing else in the
 plugin reads that file, so a further step copies the answers onto the animals
 themselves:
@@ -209,7 +209,7 @@ Three things this never does:
 
 - **It never changes a track you annotated by hand.** A labelling-tool track
   keeps everything you gave it.
-- **It never overwrites a species the detector itself identified** — only
+- **It never overwrites a species the detector itself identified** - only
   animals still recorded as `animal` are filled in, so a class mapping you
   configured is not quietly undone. There is an option to let the classifier
   win everywhere if you want that.
@@ -221,14 +221,14 @@ Three things this never does:
 
 ### Enums and custom fields
 
-An **enum** is a reusable list of values — `sex`, `age` and `occlusion` are
+An **enum** is a reusable list of values - `sex`, `age` and `occlusion` are
 ordinary enums you can extend. Values keep their identity when renamed, so
 fixing a label never orphans the data using it.
 
 > **Changed in 6.1.** New projects seed `occlusion` as `clear` / `occluded`,
 > matching what the occlusion classifier reports so that predictions need no
-> translation. Projects created earlier keep the values they have — enum ids
-> are append-only and are never renumbered — and a classifier is pointed at
+> translation. Projects created earlier keep the values they have - enum ids
+> are append-only and are never renumbered - and a classifier is pointed at
 > them through its label mapping. Migrating a 5.x flight appends any level it
 > carries (`none`, `partially`, `fully`) rather than dropping it.
 
@@ -237,7 +237,7 @@ project. Enum-typed fields are picked from a list, which is how typos are kept
 out; `string` fields remain available for genuinely free-form notes.
 
 Custom fields now travel with the data through geo-referencing and tracking and
-reach the exports — in 5.x they stayed in `labels.json`.
+reach the exports - in 5.x they stayed in `labels.json`.
 
 ---
 
@@ -245,7 +245,7 @@ reach the exports — in 5.x they stayed in `labels.json`.
 
 Steps know what they depend on. Re-running detection marks geo-referencing,
 tracking, the perpendicular distances and the population estimate as **out of
-date** — their files are kept, they are simply flagged.
+date** - their files are kept, they are simply flagged.
 
 **Reset Step…** (next to Refresh Status) deletes one step's outputs so it runs
 from scratch. It names what depended on the step before doing anything.
@@ -271,7 +271,7 @@ receives an internal id, and custom fields travel where the format has room.
 
 Two things worth knowing:
 
-- **Darwin Core writes one occurrence per track**, not per detection — a track
+- **Darwin Core writes one occurrence per track**, not per detection - a track
   is one animal seen once, and publishing every detection would report the same
   roe deer hundreds of times. Tracks whose species has no scientific name are
   held back, and the export says how many.
@@ -290,13 +290,13 @@ Two things worth knowing:
 
   Only frames carrying a detection are copied, and frames with no image on
   disk are reported rather than silently skipped. Turn it off when the
-  annotations are all you need — the frames are usually the heaviest part of a
+  annotations are all you need - the frames are usually the heaviest part of a
   project. The GeoJSON formats and TRex `.npz` reference no image, so the option is
   disabled for them.
 
   Two consequences worth knowing. YOLO is a folder layout rather than a
-  manifest — nothing in it names the images, and a label is found by swapping
-  `images` for `labels` in the path — so without the images the dataset does
+  manifest - nothing in it names the images, and a label is found by swapping
+  `images` for `labels` in the path - so without the images the dataset does
   not resolve at all. Camtrap DP's `filePath` follows the choice: with media it
   points at `media/`, without it stays relative to the target folder, so the
   package only resolves next to the flight it came from.
@@ -314,7 +314,7 @@ though it worked, but the exports and analytics read the store. Re-run
 ## What the analytics counted
 
 Density, coverage, distance sampling and population estimation now record the
-filter they used beside the result — which tracking run, whether manual tracks
+filter they used beside the result - which tracking run, whether manual tracks
 were included, which species, how many false positives were excluded. A number
 can be traced back to the rows behind it.
 
@@ -331,7 +331,7 @@ Two rules apply to all of them:
 
 The **Species** box at the top of the tab decides which species the analytics
 count. It applies to the whole tab, because a density map of roe deer and an
-abundance estimate of everything are not comparable — the filter belongs to the
+abundance estimate of everything are not comparable - the filter belongs to the
 question rather than to one product.
 
 - **All species** (the default) counts everything, as every earlier version
@@ -339,7 +339,7 @@ question rather than to one product.
   added later stays included without revisiting the tab.
 - Untick it to choose species individually. `not-an-animal` is never offered:
   it is excluded from every analytic either way.
-- The **coverage map is unaffected** — it counts frames rather than animals.
+- The **coverage map is unaffected** - it counts frames rather than animals.
 - The choice is recorded in the provenance, so a result says which species it
   counted.
 
@@ -362,7 +362,7 @@ names carry it through. Two details:
   and the skipped ones are named in the log.
 - **A species too thin to fit a detection function is reported and skipped**,
   rather than failing the whole run. With several species it is normal for the
-  rare ones to have too few distances — that is a result about those species,
+  rare ones to have too few distances - that is a result about those species,
   not an error about the others. If none can be fitted, the run fails and says
   so for each.
 
@@ -384,7 +384,7 @@ still written beside the new files, controlled by **Also write legacy text
 outputs (.txt / .csv; will be removed in future)** under Output Configuration.
 
 **Nothing in the plugin reads them.** Every step, layer, overlay and analytic
-reads the store, so turning the switch off costs nothing but disk writes — and
+reads the store, so turning the switch off costs nothing but disk writes - and
 it is how you find out whether scripts of your own still depend on them before
 the files disappear.
 
@@ -396,11 +396,11 @@ Two consequences of that:
   those reconstructions guessed at which detection a track point came from, so
   they are gone.
 - **A step that has run is decided by the store**, not by its text file being
-  on disk. Deleting `tracks.csv` no longer resets tracking — delete
+  on disk. Deleting `tracks.csv` no longer resets tracking - delete
   `bambi_t/tracks.gpkg`, or use **Reset Step**.
 
 `fov_polygons.txt` is written both ways: to the store, which is what the
 coverage map, the transect areas and the FoV layers read, and as text for
 external scripts. The segmentation JSON and `labels.csv` are not covered by the
-switch, because no step writes them to the store yet — turning it off would
+switch, because no step writes them to the store yet - turning it off would
 otherwise delete your only copy.

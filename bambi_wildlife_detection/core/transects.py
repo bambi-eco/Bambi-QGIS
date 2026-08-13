@@ -5,12 +5,12 @@ A *transect* is a contiguous frame range ``[start_frame, end_frame]`` of one
 modality's extracted frames.  Its length is measured along the flight path:
 the polyline through the per-frame camera ground positions (the ``location``
 x/y of the poses file, which live in the metric UTM CRS of the flight minus
-the DEM origin — so distances are metres without any CRS handling).
+the DEM origin - so distances are metres without any CRS handling).
 
 Files written (relative to *target_folder*, ``{m}`` = ``t`` / ``w``)
 --------------------------------------------------------------------
-``transects_{m}/transects.json`` — source of truth
-``transects_{m}/transects.csv``  — flat export
+``transects_{m}/transects.json`` - source of truth
+``transects_{m}/transects.csv``  - flat export
     format: ``id,name,start_frame,end_frame,start_time,end_time,length_m``
 
 Like every ``core`` module this file must stay importable without QGIS.
@@ -198,7 +198,7 @@ class TransectStore:
         """Write ``transects.json`` and the CSV export.
 
         When *images* (the poses list) is given, each transect is enriched
-        with its capture timestamps and flight-path length — informative
+        with its capture timestamps and flight-path length - informative
         metadata for downstream consumers; only ``id``/``name``/frames are
         read back by :meth:`load`.
         """

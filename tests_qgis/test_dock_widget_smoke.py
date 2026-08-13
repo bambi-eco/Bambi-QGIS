@@ -147,7 +147,7 @@ class TestUltralyticsLicenseNotice:
 
     def test_cancel_blocks_and_never_persists(self, dock, monkeypatch):
         # Even with "Remember my decision" ticked, cancelling must not be
-        # stored — otherwise detection would be silently blocked forever.
+        # stored - otherwise detection would be silently blocked forever.
         def fake_exec(box):
             box.checkBox().setChecked(True)
             box.button(QMessageBox.StandardButton.Cancel).click()

@@ -5,7 +5,7 @@ Implements EXCHANGE_FORMAT_PLAN.md §10.2. Two halves:
 
 * **Configuration lives in the flight's own ``project.gpkg``**, beside the
   species, enums and stage state that describe the same outputs. That makes a
-  flight folder self-describing — hand someone the folder and the settings that
+  flight folder self-describing - hand someone the folder and the settings that
   produced it come with it. The mirror image is the honest cost: lose the
   folder and the configuration goes with it, where today it survives in the
   ``.qgz``.
@@ -80,7 +80,7 @@ def config_readers(values: Dict[str, str]):
 
     ``core.config_schema`` already takes injected readers and writers, so
     moving the configuration out of the QGIS project is a matter of passing
-    these instead — every entry comes along unchanged.
+    these instead - every entry comes along unchanged.
     """
     def read_str(key: str, default: str = "") -> str:
         value = values.get(key)
@@ -121,7 +121,7 @@ def default_name(target_folder: str) -> str:
     """A readable name for a flight, derived from its folder.
 
     The default target folder is ``<input>/qgis``, so the folder name alone is
-    usually just "qgis" — the parent is what identifies the flight.
+    usually just "qgis" - the parent is what identifies the flight.
     """
     if not (target_folder or "").strip():
         return "Flight"
@@ -149,7 +149,7 @@ def validate_folder(folder: str, flights: List[dict],
         if normalise(flight.get("target_folder", "")) == target:
             raise FlightError(
                 f"'{flight.get('name')}' already uses this folder. Each flight "
-                "needs its own, because the stage files are per folder — two "
+                "needs its own, because the stage files are per folder - two "
                 "flights sharing one would overwrite each other's detections.")
 
 
@@ -201,7 +201,7 @@ def describe_existing(target_folder: str) -> dict:
     """What a folder already holds, for adding a flight processed earlier.
 
     A target folder is self-describing by design (§10.2), so a folder that has
-    been through the pipeline can simply be added back to a project — its
+    been through the pipeline can simply be added back to a project - its
     configuration and results are already there and are read rather than
     overwritten. Returns ``configured``, a ``results`` summary per kind, and
     ``is_flight`` for "there is something here worth adopting".
@@ -230,7 +230,7 @@ def remove_flight(flights: List[dict], index: int) -> List[dict]:
     """Return *flights* without the one at *index*.
 
     Only the project's list changes. The target folder keeps everything it
-    holds — a flight represents days of processing, and removing it from a
+    holds - a flight represents days of processing, and removing it from a
     project is not a statement about the outputs on disk.
     """
     if not 0 <= index < len(flights):
@@ -305,7 +305,7 @@ def analysis_entries(flights: List[dict], exclude: Optional[str] = None
                      ) -> List[dict]:
     """Flights as ``{name, target_folder, dem}`` rows for the analytics pickers.
 
-    *exclude* drops one folder — normally the active flight, which those tools
+    *exclude* drops one folder - normally the active flight, which those tools
     add separately via their "Add current project" tick.
     """
     skip = normalise(exclude) if exclude else ""
@@ -322,7 +322,7 @@ def analysis_entries(flights: List[dict], exclude: Optional[str] = None
     return entries
 
 
-#: Config keys describing *what was recorded* — the videos, photos, flight log,
+#: Config keys describing *what was recorded* - the videos, photos, flight log,
 #: calibrations, DEM and correction. A new flight is a different recording, so
 #: these start empty: carrying them over would invite reprocessing the previous
 #: flight's data into the new folder (§10.2).
@@ -348,7 +348,7 @@ def new_flight_values(current: Dict[str, object], copy_configuration: bool
                       ) -> Dict[str, object]:
     """Form values for a newly added flight.
 
-    The recordings are always cleared — a new flight is new data, and inheriting
+    The recordings are always cleared - a new flight is new data, and inheriting
     the previous flight's paths would quietly process it twice. The rest is the
     caller's choice: *copy_configuration* keeps the current detection, tracking
     and output settings, otherwise everything returns to its default.
@@ -372,7 +372,7 @@ def _entry_default(entry) -> object:
 
     ``entry.default`` of ``None`` means "leave the widget alone" when *loading*
     a project, but a new flight is written in full, so a typed empty value is
-    needed — and it has to match the widget, since a checkbox cannot be handed
+    needed - and it has to match the widget, since a checkbox cannot be handed
     an empty string.
     """
     if entry.default is not None:
@@ -387,7 +387,7 @@ def _entry_default(entry) -> object:
 
 
 def group_name(flight: dict) -> str:
-    """QGIS layer-group name for a flight — its name, and nothing derived.
+    """QGIS layer-group name for a flight - its name, and nothing derived.
 
     Renaming a flight renames the group, so the name is the only thing tying
     them together (§10.2). Deriving it from the folder instead would leave a

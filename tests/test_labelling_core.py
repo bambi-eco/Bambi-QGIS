@@ -922,7 +922,7 @@ class TestGeoPropagator:
             self, fake_geo_stack, tmp_path):
         cv2 = pytest.importorskip("cv2")
         import numpy as np
-        # WORLD_QUAD projects to (160, 192, 480, 320) on 640x512 — mask off
+        # WORLD_QUAD projects to (160, 192, 480, 320) on 640x512 - mask off
         # exactly that region, so the propagation must be rejected.
         mask = np.full((512, 640), 255, dtype=np.uint8)
         mask[192:321, 160:481] = 0

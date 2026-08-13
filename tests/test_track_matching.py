@@ -16,7 +16,7 @@ from bambi_wildlife_detection.core.track_matching import (
 )
 
 # The transform every fixture is built from: a mild zoom, a small rotation and
-# an offset — the kind of relationship two lenses on one airframe have.
+# an offset - the kind of relationship two lenses on one airframe have.
 TRUTH = Affine(a=0.80, b=0.05, c=-0.05, d=0.80, tx=30.0, ty=-12.0)
 
 
@@ -190,7 +190,7 @@ class TestEstimateAffine:
 
         A lone animal walking dead straight genuinely carries no information
         about the transform across its path, so the honest answer is an
-        infinite residual and a log line — not a confident wrong transform
+        infinite residual and a log line - not a confident wrong transform
         that would then mismatch everything.
         """
         rgb = _rows(1, range(20), 100.0, 120.0, curve=0.0)
@@ -227,7 +227,7 @@ class TestEstimateAffine:
         assert affine.d == pytest.approx(0.5)
         assert rmse == float("inf")
         # A silently bad affine yields zero matches, which looks exactly like
-        # "there were no animals" — so it has to be said out loud.
+        # "there were no animals" - so it has to be said out loud.
         assert any("nothing could be fitted" in line for line in logged)
 
     def test_fallback_without_frame_sizes_is_the_identity(self):

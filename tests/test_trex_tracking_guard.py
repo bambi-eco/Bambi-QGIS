@@ -3,7 +3,7 @@
 
 A configured TRex tracklet folder means the tracks already exist and were
 computed elsewhere. Running a tracker as well would produce a second, competing
-set of tracks for the same animals — and since manual and tracker runs are now
+set of tracks for the same animals - and since manual and tracker runs are now
 pooled (EXCHANGE_FORMAT_PLAN.md §8.2), a stray extra run is exactly the kind of
 thing that quietly doubles a population estimate.
 """

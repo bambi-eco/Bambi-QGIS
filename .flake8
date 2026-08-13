@@ -3,7 +3,7 @@ max-line-length = 120
 extend-ignore =
     # QGIS plugins commonly place imports after sys.path manipulation
     E402,
-    # Whitespace before ':' — false positives with slice notation
+    # Whitespace before ':' - false positives with slice notation
     E203,
 extend-select =
     # Multiple spaces after ',' or ':' (off by default)

@@ -6,13 +6,13 @@ The camera build applies the drone-pose correction exactly like
 
 * the **1× rotation-correction rule**: corrections are subtracted once from
   the pose eulers (alfspy applies them exactly once when rendering, so all
-  reprojection code must match — see the GeoTIFF rotation-sign incident);
+  reprojection code must match - see the GeoTIFF rotation-sign incident);
 * the corrected pose goes through alfspy's ``quaternion_from_drone_pose``,
   which applies the heading about **world up** after the tilt (the older
   ``quaternion_from_eulers(e, 'zyx')`` spelling applied it about the camera's
-  own optical axis — correct at nadir, up to 128° wrong at the horizon);
+  own optical axis - correct at nadir, up to 128° wrong at the horizon);
 * the result is conjugated when the *installed* alfspy still builds rays with
-  the transposed rotation — see :func:`ray_convention`.
+  the transposed rotation - see :func:`ray_convention`.
 
 Before this module the same construction existed in five places
 (box projector, click tool, labelling tool, correction wizard dialog and
@@ -22,8 +22,8 @@ The rotation convention
 -----------------------
 
 ``alfspy.core.convert.pixel_to_world_coord`` has shipped in two incompatible
-forms.  Older releases built rays with ``dirs @ R33.T`` — the *inverse* camera
-rotation — and callers compensated by negating every Euler angle.  alfs_py
+forms.  Older releases built rays with ``dirs @ R33.T`` - the *inverse* camera
+rotation - and callers compensated by negating every Euler angle.  alfs_py
 commit ``86e0d92`` (2026-08-04) fixed it to ``dirs @ R33``, at which point the
 negation stops cancelling and starts corrupting: measured ray errors of 29° to
 132° depending on pose, silently.
@@ -32,10 +32,10 @@ Rather than pin a version, this module probes the installed alfspy once and
 builds the matching camera.  Both branches produce the *same world rays*, equal
 to the renderer's own ``quaternion_from_eulers(eulers, 'zyx')``:
 
-* legacy — ``Quaternion.from_eulers(-e)``, since
+* legacy - ``Quaternion.from_eulers(-e)``, since
   ``from_eulers(-e).T == quaternion_from_eulers(e, 'zyx')`` exactly, and the
   legacy ray path transposes;
-* fixed — ``quaternion_from_eulers(e, 'zyx')`` directly, which is literally the
+* fixed - ``quaternion_from_eulers(e, 'zyx')`` directly, which is literally the
   construction ``bambi.util.projection_util.create_shot`` uses for rendering.
 
 Raises ``RuntimeError`` when alfspy/pyrr are not installed.
@@ -43,15 +43,15 @@ Raises ``RuntimeError`` when alfspy/pyrr are not installed.
 
 from typing import Optional, Tuple
 
-#: Cached result of :func:`ray_convention` — ``"legacy"``, ``"fixed"`` or ``None``.
+#: Cached result of :func:`ray_convention` - ``"legacy"``, ``"fixed"`` or ``None``.
 _RAY_CONVENTION = None
 
 
 def ray_convention(force_probe: bool = False) -> str:
     """Detect how the installed alfspy rotates camera-space rays into the world.
 
-    Casts one ray through a sphere centred on the camera — every direction hits
-    it exactly once — and compares the hit against both candidate rotations.
+    Casts one ray through a sphere centred on the camera - every direction hits
+    it exactly once - and compares the hit against both candidate rotations.
 
     :param force_probe: re-run the probe instead of using the cached answer
     :return: ``"legacy"`` when rays are built with ``R33.T``, ``"fixed"`` when
@@ -189,7 +189,7 @@ def world_to_pixel(
     cam_coords = homo @ view  # (N, 4)
     ndc = cam_coords @ proj  # (N, 4)
 
-    # Perspective divide — use column slice [:,3:4] so shape stays (N,1)
+    # Perspective divide - use column slice [:,3:4] so shape stays (N,1)
     w = ndc[:, 3:4]
     ndc_norm = ndc / w  # (N, 4)
 

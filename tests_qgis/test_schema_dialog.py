@@ -2,7 +2,7 @@
 """The Project Schema dialog (EXCHANGE_FORMAT_PLAN.md §5.3, §10 Phase 2).
 
 The vocabulary rules are covered headlessly in ``tests/test_schema_editor.py``;
-what needs a real QGIS is that the dialog presents them — that base classes are
+what needs a real QGIS is that the dialog presents them - that base classes are
 not editable through the UI, that accepting persists and cancelling does not,
 and that the Project tab can open it.
 

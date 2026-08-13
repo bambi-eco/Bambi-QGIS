@@ -2,7 +2,7 @@
 """Cross-modality frame correspondence, by capture timestamp.
 
 Thermal and RGB are recorded by two cameras on one aircraft at different frame
-rates, so "frame 100" means nothing across them — but both stamp every frame
+rates, so "frame 100" means nothing across them - but both stamp every frame
 with the same real-world clock, taken from the SRT capture time. Matching by
 that clock is therefore the only correspondence that holds, and it is the
 foundation of everything cross-modal in the plugin:
@@ -87,7 +87,7 @@ class FrameMatcher:
         """The corresponding frame, or ``None`` when nothing is close enough.
 
         A tolerance is what separates "the other camera saw this moment" from
-        "the other camera was not recording" — at the ends of a flight the
+        "the other camera was not recording" - at the ends of a flight the
         nearest frame in time can be many seconds away, and pairing detections
         across such a gap would invent correspondences.
         """

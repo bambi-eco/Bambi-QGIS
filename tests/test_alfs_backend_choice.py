@@ -3,7 +3,7 @@
 
 The Dependency Manager's "Use the PyTorch backend" checkbox resolves to an
 install spec here. Both backends provide a package called ``alfspy``, so the
-spec must also name the distribution to remove — otherwise two dists end up
+spec must also name the distribution to remove - otherwise two dists end up
 owning the same import path and pip will not clean it up on its own.
 """
 import pathlib
@@ -66,7 +66,7 @@ def test_backends_are_labelled_for_the_ui():
 
 
 # ---------------------------------------------------------------------------
-# Dialog wiring — read as text, the dialog module needs QtWidgets
+# Dialog wiring - read as text, the dialog module needs QtWidgets
 # ---------------------------------------------------------------------------
 
 def _manager_source():
@@ -110,3 +110,39 @@ def test_checkbox_uses_the_qt6_safe_signal():
     source = _manager_source()
     assert "_torch_backend_check.toggled.connect" in source
     assert "_torch_backend_check.stateChanged" not in source
+
+
+def test_checkbox_carries_no_label_of_its_own():
+    """A QCheckBox cannot wrap its text and would pin the dialog's width.
+
+    The caption is a separate word-wrapping QLabel, so the whole toggle
+    re-flows with the form instead of forcing a horizontal scrollbar.
+    """
+    source = _manager_source()
+    assert "self._torch_backend_check = QCheckBox()" in source
+
+
+def test_backend_labels_wrap_and_may_shrink():
+    source = _manager_source()
+    start = source.index("backend_caption = QLabel")
+    body = source[start:start + 1400]
+    assert "setWordWrap(True)" in body
+    # Ignored horizontal policy is what lets the label go narrower than its text.
+    assert "QSizePolicy.Policy.Ignored" in body
+    assert "setMinimumWidth(0)" in body
+
+
+def test_backend_labels_toggle_the_checkbox_when_clicked():
+    """Moving the caption out of the checkbox must not cost click-to-toggle."""
+    source = _manager_source()
+    start = source.index("backend_caption = QLabel")
+    body = source[start:start + 1400]
+    assert "mousePressEvent" in body
+    assert "_torch_backend_check.toggle()" in body
+
+
+def test_row_titles_wrap_so_the_dialog_can_narrow():
+    """Non-wrapping bold titles used to pin the content to ~1140px."""
+    source = _manager_source()
+    start = source.index("name_lbl = QLabel")
+    assert "setWordWrap(True)" in source[start:start + 500]

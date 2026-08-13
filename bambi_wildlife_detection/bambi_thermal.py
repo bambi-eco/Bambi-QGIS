@@ -8,7 +8,7 @@ inside the ``bambi_deps/`` folder of the active QGIS profile and wiring
 those paths into the framework's ``Thermal`` class.
 
 The ``Thermal`` subclass exported here is a drop-in replacement for
-direct instantiation — callers do not need to know about the path discovery.
+direct instantiation - callers do not need to know about the path discovery.
 
 Required layout inside the QGIS profile directory
 (e.g. AppData/Roaming/QGIS/QGIS3/profiles/default/bambi_deps/):
@@ -110,7 +110,7 @@ class Thermal(_BaseThermal):
     """Thermal parser with paths auto-discovered from the QGIS plugin directory.
 
     Instantiate exactly like the base class but without supplying ``sdk_dir``
-    or ``exiftool_path`` — both are found automatically from the ``plugins/``
+    or ``exiftool_path`` - both are found automatically from the ``plugins/``
     subfolder that ships alongside this file.
     """
 

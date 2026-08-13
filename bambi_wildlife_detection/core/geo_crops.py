@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """Crops taken from the orthorectified frames rather than the camera frames.
 
-The classification heads ship in three projection variants — ``non_geo`` for
-the native camera view, ``geo_1k`` and ``geo_2k`` for orthophotos — because a
+The classification heads ship in three projection variants - ``non_geo`` for
+the native camera view, ``geo_1k`` and ``geo_2k`` for orthophotos - because a
 crop from a warped image does not look like a crop from a perspective one. A
 head has to see the kind of image it was trained on, so choosing the variant
 also chooses where the crops come from.
@@ -10,7 +10,7 @@ also chooses where the crops come from.
 The detections themselves never move: they are stored in the camera's pixel
 space and geo-referenced into world coordinates once. A geo crop is therefore
 the world box mapped through the *raster's* own affine transform into that
-GeoTIFF's pixel space — which keeps one geo-referencing result serving both
+GeoTIFF's pixel space - which keeps one geo-referencing result serving both
 projections, rather than re-detecting on the orthophotos.
 
 ``rasterio`` is imported lazily: a project that only ever uses perspective
@@ -22,7 +22,7 @@ from typing import Dict, Iterable, Optional, Sequence, Tuple
 
 #: Nominal source width of each orthorectified head variant, from the
 #: repositories' own naming. Used only to warn when the exported rasters are a
-#: long way off — the head was fitted to features at roughly that scale.
+#: long way off - the head was fitted to features at roughly that scale.
 NOMINAL_WIDTH = {"geo_1k": 1024, "geo_2k": 2048}
 
 #: How far from nominal a raster may be before it is worth mentioning.
@@ -110,7 +110,7 @@ def read_geotiff(path: str):
 
     try:
         import rasterio
-    except ImportError as exc:  # pragma: no cover — environment dependent
+    except ImportError as exc:  # pragma: no cover - environment dependent
         raise RuntimeError(
             "rasterio is required to crop from orthorectified frames. "
             "Install it from the Dependency Manager, or set the "
@@ -135,7 +135,7 @@ def read_geotiff(path: str):
         image = np.repeat(image, 3, axis=2)
     elif bands >= 4:
         image = image[:, :, :3]
-    elif bands == 2:  # pragma: no cover — unusual, but not worth crashing on
+    elif bands == 2:  # pragma: no cover - unusual, but not worth crashing on
         image = np.repeat(image[:, :, :1], 3, axis=2)
 
     return np.ascontiguousarray(image), transform
@@ -181,7 +181,7 @@ def resolution_warning(projection: str, width: int) -> Optional[str]:
         return None
     return (f"The exported GeoTIFFs are {width} px wide, but the "
             f"'{projection}' classifiers were fitted around {nominal} px. "
-            "The results are still produced, but treat them with care — or "
+            "The results are still produced, but treat them with care - or "
             f"pick the variant closer to your export.")
 
 

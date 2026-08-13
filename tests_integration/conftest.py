@@ -6,7 +6,7 @@ geo-referencing, GeoTIFF export, ALFS, orthomosaic) against a publicly
 available raw dataset flight:
 
 * Flight 6 of the BAMBI raw dataset (DJI M30T, red deer, Austria) is
-  downloaded from Zenodo once and cached — mirroring the logic of
+  downloaded from Zenodo once and cached - mirroring the logic of
   https://github.com/bambi-eco/Dataset/blob/main/download_from_zenodo.py.
 * The matching DEM is downloaded once from the Austrian BEV ATOM service via
   the plugin's own ``austria_dem_downloader`` module and also cached.
@@ -79,7 +79,7 @@ def _data_dir() -> Path:
     root = os.environ.get("BAMBI_TEST_DATA_DIR")
     if not root:
         pytest.skip(
-            "BAMBI_TEST_DATA_DIR is not set — integration tests need a cache "
+            "BAMBI_TEST_DATA_DIR is not set - integration tests need a cache "
             "directory (run via: docker compose run --rm integration)"
         )
     path = Path(root)
@@ -249,7 +249,7 @@ def dem_files(flight_files):
 
     downloader = BEVDownloader(cache_dir=data_dir / "bev_tiles", log_callback=log)
     tile_paths = downloader.download_tiles_for_bbox(bbox)
-    assert tile_paths, "No BEV DEM tiles downloaded — area outside Austria?"
+    assert tile_paths, "No BEV DEM tiles downloaded - area outside Austria?"
 
     processor = DEMProcessor(output_crs=f"EPSG:{TARGET_EPSG}", log_callback=log)
     with tempfile.TemporaryDirectory() as temp_dir:

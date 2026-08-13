@@ -91,7 +91,7 @@ class TestNearestOnFovLinestring:
 
     def test_camera_position_selects_flown_transect(self):
         # Detection at y=26 is *closer* to the top transect (24 m) than to the
-        # bottom one (26 m), but the drone was flying the bottom transect —
+        # bottom one (26 m), but the drone was flying the bottom transect -
         # the camera position must win over raw proximity.
         fx, fy, dist = BambiProcessor._nearest_on_fov_linestring(
             self.ROUTE, [], 50.0, 26.0, cam_x=50.0, cam_y=1.0)

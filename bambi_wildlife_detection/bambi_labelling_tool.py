@@ -10,17 +10,17 @@ Features
 --------
 * Visualises the pipeline's detections and tracks (from ``bambi_{m}/*.gpkg``)
   as read-only overlays, so what is drawn is what every other tool counts.
-* Modality selector: label either on thermal or RGB frames — never mixed.
+* Modality selector: label either on thermal or RGB frames - never mixed.
   Label tracks are stored per modality in ``labels_{m}/labels.json``.
 * Key-frame based annotation: bounding boxes are only stored on key frames
   (e.g. every 10th frame); all frames in between are linearly interpolated.
 * Stop frames: a key frame can be flagged as "stop" when the animal
-  disappears — no interpolation happens between a stop frame and the next
+  disappears - no interpolation happens between a stop frame and the next
   key frame (where the track resumes), leaving a gap in the track.
 * New tracks are drawn as bounding boxes and carry a species class, sex
   class, age class (per track) and an occlusion level (per key frame).
 * Custom fields: the settings dialog (gear button) defines additional
-  attributes — a name, a data type (int / float / string / bool / datetime)
+  attributes - a name, a data type (int / float / string / bool / datetime)
   and a scope (per track, like species, or per key frame, like occlusion).
   Each one adds an input widget to the side panel and is stored in
   ``labels.json`` only (see below).  The configuration can be exported to a
@@ -29,7 +29,7 @@ Features
   current frame) and their classes edited at any time.
 * Existing pipeline tracks can be imported as editable label tracks.
 * Merging & splitting: several tracks of the same animal (it left the frame,
-  the detector lost it) are merged into one — either manually by selecting
+  the detector lost it) are merged into one - either manually by selecting
   them in the track list, or from their ground positions: every label box is
   ray-cast onto the DEM and track pairs seen at nearly the same position are
   proposed in a confirmation dialog before anything is changed.  A track that
@@ -37,23 +37,23 @@ Features
   start → frame and a frame → end track.
 * Geo-referenced propagation: the current bounding box is ray-cast onto the
   DEM (pixel → world) with the camera pose of the current frame and
-  back-projected (world → pixel) with the pose of an offset frame — the
+  back-projected (world → pixel) with the pose of an offset frame - the
   result usually only needs small size adaptions.  A sampling rate adds
   intermediate key frames on the way to the target frame, so the linear
   interpolation between key frames never has to bridge a long span of curved
   drone ego-motion.  Selecting several tracks in the list propagates all of
   their boxes on the current frame in one step.
 * Cross-modality copy: the label tracks of the other modality (RGB ↔
-  thermal) are projected onto this modality's frames — frames are matched by
+  thermal) are projected onto this modality's frames - frames are matched by
   capture time, each box is ray-cast onto the DEM with the source camera and
-  back-projected with this modality's camera — and added as new, editable
+  back-projected with this modality's camera - and added as new, editable
   label tracks that typically need small manual adaptions.
 
 Files written (relative to *target_folder*, ``{m}`` = ``t`` / ``w``)
 --------------------------------------------------------------------
-``labels_{m}/labels.json``  — key-frame source of truth, including the custom
+``labels_{m}/labels.json``  - key-frame source of truth, including the custom
     field schema (``custom_fields``) and their values (``attributes``)
-``labels_{m}/labels.csv``   — per-frame interpolated export
+``labels_{m}/labels.csv``   - per-frame interpolated export
     format: ``frame,track_id,x1,y1,x2,y2,species,sex,age,occlusion,keyframe``
 
 Custom field values live in ``labels.json`` alone: the CSV export and
@@ -96,13 +96,13 @@ from qgis.PyQt.QtWidgets import (
 
 
 # ---------------------------------------------------------------------------
-# Headless data model & geometry — moved to core.labelling; re-exported here
+# Headless data model & geometry - moved to core.labelling; re-exported here
 # so existing imports keep working.
 # ---------------------------------------------------------------------------
 
 from .gui_utils import fit_to_screen
 
-from .core.labelling import (  # noqa: F401 — re-exported API
+from .core.labelling import (  # noqa: F401 - re-exported API
     AGE_CLASSES,
     FIELD_SCOPES,
     FIELD_TYPES,
@@ -582,7 +582,7 @@ class _CustomFieldsDialog(QDialog):
             "per label track (like species); <b>key frame</b> fields hold one "
             "value per key frame (like occlusion) and are inherited by the "
             "interpolated frames that follow.<br><br>"
-            "Values are stored in <code>labels.json</code> only — the CSV "
+            "Values are stored in <code>labels.json</code> only - the CSV "
             "export and <code>detections.txt</code> keep their fixed columns "
             "so the rest of the pipeline can still read them.<br><br>"
             "<b>Export</b> writes this configuration to a JSON file you can "
@@ -702,7 +702,7 @@ class _CustomFieldsDialog(QDialog):
 
         self._remember_dir(path)
         self.set_fields(fields)
-        # Nothing is applied to the labels yet — OK still has to be pressed,
+        # Nothing is applied to the labels yet - OK still has to be pressed,
         # which is where the data-loss check for the new schema runs.
         QMessageBox.information(
             self, "Import Fields",
@@ -768,9 +768,9 @@ class _CustomFieldsDialog(QDialog):
 class _MergeProposalsDialog(QDialog):
     """Human-in-the-loop confirmation of automatically found merge candidates.
 
-    Lists the track pairs :func:`find_overlapping_tracks` proposed — each
+    Lists the track pairs :func:`find_overlapping_tracks` proposed - each
     with the distance between their closest ground positions and the gap
-    between their frame ranges — and lets the user tick the ones to merge.
+    between their frame ranges - and lets the user tick the ones to merge.
     Nothing is merged until this dialog is accepted.
     """
 
@@ -786,7 +786,7 @@ class _MergeProposalsDialog(QDialog):
         intro = QLabel(
             f"{len(proposals)} track pair(s) were seen at nearly the same "
             "ground position and may be the same animal.<br><br>"
-            "Tick the pairs to merge — pairs that share a track are merged "
+            "Tick the pairs to merge - pairs that share a track are merged "
             "into one track together. <b>Nothing is changed until you press "
             "OK.</b>")
         intro.setWordWrap(True)
@@ -1086,7 +1086,7 @@ class LabellingToolDialog(QDialog):
         self.track_list.setSelectionMode(
             QListWidget.SelectionMode.ExtendedSelection)
         self.track_list.setToolTip(
-            "Ctrl / Shift click selects several tracks — for merging, "
+            "Ctrl / Shift click selects several tracks - for merging, "
             "deleting or geo-propagating them together.")
         self.track_list.currentItemChanged.connect(self._on_track_list_selection)
         tg.addWidget(self.track_list)
@@ -1107,7 +1107,7 @@ class LabellingToolDialog(QDialog):
         tg.addLayout(btn_row)
 
         # Merging / splitting: one animal is often labelled as several tracks
-        # (it left the frame, the detector lost it) — or one track wrongly
+        # (it left the frame, the detector lost it) - or one track wrongly
         # covers two animals.
         merge_row = QHBoxLayout()
         self.merge_btn = QPushButton("Merge Selected")
@@ -1130,7 +1130,7 @@ class LabellingToolDialog(QDialog):
         self.auto_merge_btn = QPushButton("Find mergeable tracks (geo)…")
         self.auto_merge_btn.setToolTip(
             "Ray-cast every label box onto the DEM and list the track pairs "
-            "that were seen at (nearly) the same ground position — they are "
+            "that were seen at (nearly) the same ground position - they are "
             "likely the same animal. Nothing is merged before you confirm "
             "the proposals.")
         self.auto_merge_btn.clicked.connect(self._on_auto_merge)
@@ -1183,7 +1183,7 @@ class LabellingToolDialog(QDialog):
         self.manage_species_btn = QPushButton("…")
         self.manage_species_btn.setFixedWidth(30)
         self.manage_species_btn.setToolTip(
-            "Manage the project's species — opens the shared Project Schema "
+            "Manage the project's species - opens the shared Project Schema "
             "editor without leaving this tool.")
         self.manage_species_btn.clicked.connect(self._on_manage_species)
         self.manage_species_btn.setVisible(False)
@@ -1235,7 +1235,7 @@ class LabellingToolDialog(QDialog):
         self.draw_kf_btn = QPushButton("Draw key frame (B)")
         self.draw_kf_btn.setCheckable(True)
         self.draw_kf_btn.setToolTip(
-            "Draw the selected track's bounding box on the current frame — "
+            "Draw the selected track's bounding box on the current frame - "
             "also on frames outside the track's current range, extending "
             "the track without geo-propagation.")
         self.draw_kf_btn.toggled.connect(self._on_draw_kf_toggled)
@@ -1255,7 +1255,7 @@ class LabellingToolDialog(QDialog):
         self.occlusion_combo = QComboBox()
         self.occlusion_combo.addItems(OCCLUSION_LEVELS)
         self.occlusion_combo.setToolTip(
-            "Occlusion level of the box at the current frame — stored per "
+            "Occlusion level of the box at the current frame - stored per "
             "key frame, so it can change along the track. Interpolated "
             "frames inherit the previous key frame's occlusion; changing it "
             "on an interpolated frame promotes that frame to a key frame.")
@@ -1303,14 +1303,14 @@ class LabellingToolDialog(QDialog):
             "Also create intermediate key frames at this spacing between the "
             "current frame and the target. Boxes are interpolated linearly "
             "between key frames, which only holds while the drone flies "
-            "straight — sampling shortens the interpolated spans so curved "
+            "straight - sampling shortens the interpolated spans so curved "
             "ego-motion is followed. 0 propagates to the target frame only.")
         sample_row.addWidget(self.prop_sample_spin)
         pg.addLayout(sample_row)
         self.propagate_btn = QPushButton("Propagate box (geo)")
         self.propagate_btn.setToolTip(
             "Ray-cast the current box onto the DEM and back-project it into "
-            "the offset frame — and, if sampling is enabled, into the "
+            "the offset frame - and, if sampling is enabled, into the "
             "intermediate frames; a key frame is created at each. Usually "
             "only small size adaptions are needed afterwards.\n\n"
             "Select several tracks in the list (Ctrl / Shift click) to "
@@ -1343,7 +1343,7 @@ class LabellingToolDialog(QDialog):
         self.replace_det_btn = QPushButton("Replace detections in project")
         self.replace_det_btn.setToolTip(
             "Save the labels and REPLACE detections_{t,w}/detections.txt "
-            "with the interpolated label boxes — the detector output is "
+            "with the interpolated label boxes - the detector output is "
             "discarded and the derived tracking outputs (tracks_{t,w}/, "
             "tracks_pixel_{t,w}/) are deleted. Asks for confirmation "
             "before touching anything.")
@@ -1389,7 +1389,7 @@ class LabellingToolDialog(QDialog):
         if self._store is None:
             QMessageBox.information(
                 self, "BAMBI Labelling Tool",
-                "Load a target folder first — custom fields belong to a "
+                "Load a target folder first - custom fields belong to a "
                 "project.")
             return
 
@@ -1439,16 +1439,16 @@ class LabellingToolDialog(QDialog):
             new = by_name.get(old.name)
             if new is None:
                 messages.append(
-                    f"'{old.name}' is removed — its {count} stored value(s) "
+                    f"'{old.name}' is removed - its {count} stored value(s) "
                     "will be deleted.")
             elif new.scope != old.scope:
                 messages.append(
                     f"'{old.name}' moves from {_SCOPE_LABELS[old.scope]} to "
-                    f"{_SCOPE_LABELS[new.scope]} scope — its {count} stored "
+                    f"{_SCOPE_LABELS[new.scope]} scope - its {count} stored "
                     "value(s) will be deleted.")
             elif new.type != old.type:
                 messages.append(
-                    f"'{old.name}' becomes a {new.type} — its {count} stored "
+                    f"'{old.name}' becomes a {new.type} - its {count} stored "
                     f"{old.type} value(s) will be converted where possible "
                     "and deleted otherwise.")
         return messages
@@ -1539,7 +1539,7 @@ class LabellingToolDialog(QDialog):
         self._updating_ui = False
 
     def _on_custom_track_changed(self, name: str, *_args):
-        """A track-scope custom field was edited — store it on the track.
+        """A track-scope custom field was edited - store it on the track.
 
         Only the edited field is written, so fields the user never touched
         keep their "unset" state instead of picking up a widget default.
@@ -1583,7 +1583,7 @@ class LabellingToolDialog(QDialog):
         """Frame navigation / labelling shortcuts.
 
         Handled at the dialog level so widgets that need the keys themselves
-        (line edits, spin boxes, the editable species combo) keep working —
+        (line edits, spin boxes, the editable species combo) keep working -
         keys only arrive here when the focused widget did not consume them.
         The canvas has ``Qt.NoFocus`` so arrow keys navigate frames instead
         of scrolling the view.
@@ -1609,7 +1609,7 @@ class LabellingToolDialog(QDialog):
         elif key == Qt.Key.Key_Delete:
             self._on_delete_keyframe()
         elif key == Qt.Key.Key_Escape:
-            # Do not close the dialog on Escape — just cancel draw modes.
+            # Do not close the dialog on Escape - just cancel draw modes.
             if self.new_track_btn.isChecked():
                 self.new_track_btn.setChecked(False)
             if self.draw_kf_btn.isChecked():
@@ -1953,7 +1953,7 @@ class LabellingToolDialog(QDialog):
             kfs = track.frames()
 
             def _kf_anchor(f: int) -> str:
-                # Anchor per key frame — clicking jumps to that frame.
+                # Anchor per key frame - clicking jumps to that frame.
                 # Stop frames are red, matching the timeline; the current
                 # frame is bold.
                 text = str(f)
@@ -1980,7 +1980,7 @@ class LabellingToolDialog(QDialog):
 
     def _refresh_track_list(self):
         # Rebuilding drops the selection, but the list is also refreshed after
-        # ordinary edits — so a multi-track selection made for merging is
+        # ordinary edits - so a multi-track selection made for merging is
         # restored afterwards.
         previous = set(self._selected_track_ids())
         self._updating_ui = True
@@ -2023,7 +2023,7 @@ class LabellingToolDialog(QDialog):
             return
         self._selected_track = track_id
         self._refresh_track_list()
-        # Deferred: this is reached from a _BoxItem mouse event — re-rendering
+        # Deferred: this is reached from a _BoxItem mouse event - re-rendering
         # immediately would delete the item that is still handling the event.
         QTimer.singleShot(0, self._render_frame)
 
@@ -2076,7 +2076,7 @@ class LabellingToolDialog(QDialog):
         rect = self._clamp_rect(rect)
 
         if self.draw_kf_btn.isChecked():
-            # Key frame for the selected track at the current frame — also
+            # Key frame for the selected track at the current frame - also
             # valid outside the track's current range (extends the track).
             self.draw_kf_btn.setChecked(False)
             track = self._current_track()
@@ -2151,7 +2151,7 @@ class LabellingToolDialog(QDialog):
         if len(ids) < 2:
             QMessageBox.information(
                 self, "Merge Tracks",
-                "Select at least two label tracks to merge — hold Ctrl or "
+                "Select at least two label tracks to merge - hold Ctrl or "
                 "Shift while clicking in the track list.")
             return
 
@@ -2235,7 +2235,7 @@ class LabellingToolDialog(QDialog):
         if self._img_size is None:
             QMessageBox.warning(
                 self, "Merge Tracks",
-                "Frame image size unknown — cannot project the boxes.")
+                "Frame image size unknown - cannot project the boxes.")
             return
 
         positions: Dict[int, Dict[int, Tuple[float, float]]] = {}
@@ -2339,7 +2339,7 @@ class LabellingToolDialog(QDialog):
         """Pipeline tracks to offer for import, keyed by track id.
 
         Read from the store when there is one, because its rows carry a
-        ``detection_id`` — that is what lets an imported label record which
+        ``detection_id`` - that is what lets an imported label record which
         detection each key frame came from (§6.3). Falls back to the legacy
         ``tracks_pixel.csv`` otherwise.
         """
@@ -2576,7 +2576,7 @@ class LabellingToolDialog(QDialog):
                 if new_track.keyframes:
                     self._store.tracks[new_track.track_id] = new_track
                     added_tracks += 1
-            # The source modality may define other custom fields — keep only
+            # The source modality may define other custom fields - keep only
             # the values this modality's schema knows about.
             self._store.set_custom_fields(self._store.custom_fields)
         finally:
@@ -2603,7 +2603,7 @@ class LabellingToolDialog(QDialog):
             msg += (f"\n\n{skipped_keyframes} key frame(s) were skipped "
                     "(no DEM intersection, outside the target frame, or no "
                     "time-matched frame).")
-        msg += "\n\nThe projected boxes were added as new tracks — review and "
+        msg += "\n\nThe projected boxes were added as new tracks - review and "
         msg += "adjust them before exporting."
         QMessageBox.information(self, "BAMBI Labelling Tool", msg)
 
@@ -2612,7 +2612,7 @@ class LabellingToolDialog(QDialog):
     # ------------------------------------------------------------------
 
     def _on_box_committed(self, track_id: int, rect: QRectF):
-        """Selected box was moved/resized — write a key frame here.
+        """Selected box was moved/resized - write a key frame here.
 
         In "Move/resize whole track" mode the same shift and scaling is
         applied to all key frames of the track instead.
@@ -2633,7 +2633,7 @@ class LabellingToolDialog(QDialog):
             track.set_keyframe(self._current_frame, new_box)
         self._mark_dirty()
         self._refresh_track_list()
-        # Deferred: reached from the _BoxItem's mouseReleaseEvent — see
+        # Deferred: reached from the _BoxItem's mouseReleaseEvent - see
         # _select_track.
         QTimer.singleShot(0, self._render_frame)
 
@@ -2705,7 +2705,7 @@ class LabellingToolDialog(QDialog):
         self._render_frame()
 
     def _on_kf_link_clicked(self, href: str):
-        """A key-frame anchor in the overview label was clicked — jump there."""
+        """A key-frame anchor in the overview label was clicked - jump there."""
         try:
             self._goto_frame(int(href))
         except ValueError:
@@ -2752,7 +2752,7 @@ class LabellingToolDialog(QDialog):
         """Show the number of tracks a propagation would cover."""
         count = len(self._propagation_tracks())
         self.propagate_btn.setText(
-            f"Propagate boxes (geo) — {count} tracks" if count > 1
+            f"Propagate boxes (geo) - {count} tracks" if count > 1
             else "Propagate box (geo)")
 
     def _on_propagate(self):
@@ -2797,7 +2797,7 @@ class LabellingToolDialog(QDialog):
         if self._img_size is None:
             QMessageBox.warning(
                 self, "BAMBI Labelling Tool",
-                "Frame image size unknown — cannot project.")
+                "Frame image size unknown - cannot project.")
             return
 
         # (track, res, boxes, failures) per successfully projected track; the
@@ -2838,7 +2838,7 @@ class LabellingToolDialog(QDialog):
             for frame, new_box in boxes:
                 track.set_keyframe(frame, new_box, occlusion=res[2])
         # Jump to the frame furthest from the source frame (the target frame,
-        # unless it was skipped for every track) — also correct for backwards
+        # unless it was skipped for every track) - also correct for backwards
         # propagation, where the target is the *lowest* frame.
         landing = max(
             (frame for _t, _r, boxes, _f in results for frame, _b in boxes),
@@ -2857,7 +2857,7 @@ class LabellingToolDialog(QDialog):
         """Summarise a propagation run; empty when there is nothing to report.
 
         A single fully successful track stays silent (as before); anything
-        skipped — frames, whole tracks — is listed per track.
+        skipped - frames, whole tracks - is listed per track.
         """
         multi = len(results) + len(missing) + len(errors) > 1
         lines: List[str] = []
@@ -2869,19 +2869,19 @@ class LabellingToolDialog(QDialog):
             skipped = ", ".join(str(f) for f, _ in failures)
             lines.append(
                 f"• L{track.track_id}: {len(boxes)} key frame(s), skipped "
-                f"frame(s) {skipped} — the projected box lies outside the "
+                f"frame(s) {skipped} - the projected box lies outside the "
                 "frame or the valid (white) mask area."
                 if multi else
                 f"Skipped frame(s) {skipped}: the projected box lies outside "
                 "the frame or the valid (white) mask area.")
         for tid in missing:
-            lines.append(f"• L{tid}: no box on frame {src_frame} — skipped.")
+            lines.append(f"• L{tid}: no box on frame {src_frame} - skipped.")
         for tid, message in errors:
             lines.append(f"• L{tid}: {message}")
         if not lines:
             return ""
 
-        if not results:  # nothing was created — the reasons say it all
+        if not results:  # nothing was created - the reasons say it all
             header = ""
         elif multi:
             header = (f"Created {created} key frame(s) in "
@@ -2907,7 +2907,7 @@ class LabellingToolDialog(QDialog):
             self._autosave_timer.stop()
 
     def _autosave_now(self):
-        """Debounced autosave — silent except for the status line."""
+        """Debounced autosave - silent except for the status line."""
         if not self._dirty or self._store is None:
             return
         try:
@@ -2917,7 +2917,7 @@ class LabellingToolDialog(QDialog):
             self.autosave_check.setChecked(False)
             QMessageBox.warning(
                 self, "BAMBI Labelling Tool",
-                f"Autosave failed — autosave has been disabled:\n{exc}")
+                f"Autosave failed - autosave has been disabled:\n{exc}")
             return
         self._dirty = False
         self._update_status()
@@ -2987,7 +2987,7 @@ class LabellingToolDialog(QDialog):
             f"This replaces the {modality_name} pipeline results with the "
             "label tracks:\n\n"
             f"• detections_{m}/detections.txt is overwritten with the "
-            "interpolated label boxes — all detector output is discarded\n"
+            "interpolated label boxes - all detector output is discarded\n"
             f"• the derived tracking outputs (tracks_{m}/, "
             f"tracks_pixel_{m}/) are deleted\n\n"
             "This cannot be undone. Replace them?",

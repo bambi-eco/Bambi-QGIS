@@ -2,20 +2,20 @@
 """Editing the project vocabulary: species, enums and custom fields.
 
 Implements EXCHANGE_FORMAT_PLAN.md §3.1 and §5.3. This is the *only* place the
-vocabulary changes — confining creation to one editor is what actually fixes the
+vocabulary changes - confining creation to one editor is what actually fixes the
 unstable-class-id bug (§1.3), because ``species_class_ids()`` can no longer mint
 an id from an arbitrary string typed into a combo box.
 
 The rules it enforces, all of which exist so that stored data cannot change
 meaning behind the user's back:
 
-* base species (``species_id <= 0``) are permanent — no rename, no delete;
+* base species (``species_id <= 0``) are permanent - no rename, no delete;
 * species and enum-value ids are append-only, so a deleted id is never reissued;
 * nothing referenced may be deleted;
 * renaming a species or an enum value touches no stored row, because rows hold
   ids rather than labels;
 * renaming a *field* does rewrite stored rows, because ``attributes`` is keyed
-  by field name — a deliberate trade for readable attribute blobs (§5.1).
+  by field name - a deliberate trade for readable attribute blobs (§5.1).
 
 Headless: the Qt dialog in ``bambi_schema_dialog.py`` is a thin shell over this.
 """
@@ -26,7 +26,7 @@ from typing import Dict, List, Optional
 
 from . import store
 
-#: Names a custom field may not take — they are already columns or reserved
+#: Names a custom field may not take - they are already columns or reserved
 #: keys in the label model. Mirrors ``core.labelling.RESERVED_FIELD_NAMES``.
 RESERVED_FIELD_NAMES = frozenset({
     "track_id", "species", "species_id", "keyframes", "attributes",
@@ -115,7 +115,7 @@ class SchemaEditor:
         record exactly instead of matching a name string. A project that never
         publishes can leave both empty.
 
-        Base classes are rejected — ``animal`` and ``unknown`` are deliberately
+        Base classes are rejected - ``animal`` and ``unknown`` are deliberately
         *not* taxa, and giving them one would publish nonsense.
         """
         row = self.conn.execute(
@@ -158,7 +158,7 @@ class SchemaEditor:
         return species_id
 
     def rename_species(self, species_id: int, name: str) -> None:
-        """Rename a concrete species; its id — and every stored row — is kept."""
+        """Rename a concrete species; its id - and every stored row - is kept."""
         name = (name or "").strip()
         if not name:
             raise SchemaError("A species needs a name.")
@@ -170,7 +170,7 @@ class SchemaEditor:
         if row["protected"]:
             raise SchemaError(
                 "The base classes (animal, unknown, not-an-animal) cannot be "
-                "renamed — other data and exports rely on them.")
+                "renamed - other data and exports rely on them.")
         clash = self.species_by_name(name)
         if clash is not None and clash["species_id"] != species_id:
             raise SchemaError(f"A species called '{name}' already exists.")
@@ -244,7 +244,7 @@ class SchemaEditor:
         return int(cur.lastrowid)
 
     def enum_values(self, enum_id: int) -> List[dict]:
-        """Values in display order — ``ordinal``, not id."""
+        """Values in display order - ``ordinal``, not id."""
         return [dict(row) for row in self.conn.execute(
             "SELECT value_id, label, ordinal FROM enum_values "
             "WHERE enum_id = ? ORDER BY ordinal, value_id", (enum_id,))]
@@ -283,7 +283,7 @@ class SchemaEditor:
             (label, enum_id, value_id))
 
     def reorder_enum_values(self, enum_id: int, value_ids: List[int]) -> None:
-        """Set the display order. Ids are untouched — only ``ordinal`` moves."""
+        """Set the display order. Ids are untouched - only ``ordinal`` moves."""
         known = {row["value_id"] for row in self.enum_values(enum_id)}
         if set(value_ids) != known:
             raise SchemaError(

@@ -3,16 +3,16 @@
 
 Implements EXCHANGE_FORMAT_PLAN.md §6. Two jobs:
 
-* **persistence** — the sparse key frames go to ``labels.gpkg`` instead of
+* **persistence** - the sparse key frames go to ``labels.gpkg`` instead of
   ``labels.json``, with species and enum values stored as ids;
-* **materialisation** — the interpolated boxes are upserted into ``detections``
+* **materialisation** - the interpolated boxes are upserted into ``detections``
   under the labelling tool's own producer, and their grouping into ``tracks``
   under its own run.
 
 The upsert is the delicate part (§6.2). Labels are *generated*: every export
 re-derives every box from the key frames. If that re-minted ``detection_id``s,
 editing one key frame would invalidate geo-referencing and tracking for the
-whole flight — and labelling is inherently iterative, so that would make the
+whole flight - and labelling is inherently iterative, so that would make the
 tool unusable. Keying the upsert on ``(label_track_id, frame)`` means:
 
 ===========================  ==================================================
@@ -24,7 +24,7 @@ frame no longer covered      the row is deleted
 ===========================  ==================================================
 
 Re-running geo-referencing therefore becomes a left join rather than a rebuild.
-Tracking cannot be incremental — it is sequential and global — so it is fully
+Tracking cannot be incremental - it is sequential and global - so it is fully
 invalidated instead, and that asymmetry is deliberate.
 """
 
@@ -43,7 +43,7 @@ MANUAL_KIND = "manual"
 MANUAL_CONFIDENCE = 1.0
 
 
-#: Base classes in the order they should be offered, rather than by id — the
+#: Base classes in the order they should be offered, rather than by id - the
 #: ids are ``0, -1, -2`` and ascending order would read oddly in a combo box.
 _BASE_SPECIES_ORDER = ("animal", "unknown", "not-an-animal")
 
@@ -392,8 +392,8 @@ def _write_manual_tracks(target_folder: str, modality: str,
                          log_fn=None) -> int:
     """Record the label tracks as tracks under the labelling tool's own run.
 
-    A label track *is* a track — its membership is given by the annotator
-    rather than computed — so downstream consumers stop special-casing manual
+    A label track *is* a track - its membership is given by the annotator
+    rather than computed - so downstream consumers stop special-casing manual
     data (§6.5). No association logic happens here (§6.6).
     """
     conn = store.open_store(
@@ -489,7 +489,7 @@ def clear_materialised(target_folder: str, modality: str,
     """Remove every detection the labelling tool produced.
 
     The destructive sibling of :func:`materialise`, and the store equivalent of
-    "Replace detections in project" — except that it removes only the tool's own
+    "Replace detections in project" - except that it removes only the tool's own
     rows, so what happens to the detector's output is a separate, explicit
     decision rather than a side effect.
     """

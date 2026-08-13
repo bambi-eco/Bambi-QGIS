@@ -5,8 +5,8 @@ Moved from ``bambi_camera_calibration.py`` (whose helpers re-export and
 whose ``_CalibWorker`` delegates here):
 
 * image/video frame helpers and intrinsics estimation,
-* :func:`run_single_calibration` — single-camera SfM via pycolmap,
-* :func:`run_stereo_calibration` — RGB↔thermal alignment via homography
+* :func:`run_single_calibration` - single-camera SfM via pycolmap,
+* :func:`run_stereo_calibration` - RGB↔thermal alignment via homography
   check + Nelder-Mead reprojection minimisation (mirrors the standalone
   camera-calib toolkit).
 
@@ -227,7 +227,7 @@ def run_single_calibration(params: dict, log_fn=None, progress_fn=None,
 
         if not maps:
             raise RuntimeError(
-                "SfM reconstruction failed — no valid reconstruction found.\n\n"
+                "SfM reconstruction failed - no valid reconstruction found.\n\n"
                 "Tips:\n"
                 "• Images need significant overlap (≥60%)\n"
                 "• Images must have rich, distinct features\n"

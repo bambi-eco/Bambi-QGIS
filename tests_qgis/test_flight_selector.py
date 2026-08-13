@@ -2,7 +2,7 @@
 """The flight selector and flight-scoped configuration (§10.2).
 
 The headless rules live in ``tests/test_flights.py``; what needs a real QGIS is
-the wiring — that switching flights swaps the whole form, that configuration
+the wiring - that switching flights swaps the whole form, that configuration
 lands in the flight's own store rather than the ``.qgz``, and that renaming a
 flight renames its layer group instead of orphaning it.
 
@@ -260,7 +260,7 @@ def test_adding_a_flight_needs_no_path(dock, quiet, monkeypatch, two_flights):
     dock.flight_combo.setCurrentIndex(0)          # back to the meadow
 
     monkeypatch.setattr(QInputDialog, "getItem",
-                        lambda *a_, **k: ("Forest  —  " + b, True))
+                        lambda *a_, **k: ("Forest  -  " + b, True))
     dock._add_project_from_flight("ds", with_dem=False)
 
     assert [e.get("target") for e in _flight_entries(dock, "ds")] == [b]
@@ -291,7 +291,7 @@ def test_the_dem_comes_from_the_flights_own_config(dock, quiet, monkeypatch,
     dock.flight_combo.setCurrentIndex(0)
 
     monkeypatch.setattr(QInputDialog, "getItem",
-                        lambda *a_, **k: ("Forest  —  " + b, True))
+                        lambda *a_, **k: ("Forest  -  " + b, True))
     dock._add_project_from_flight("pop", with_dem=True)
 
     entries = _flight_entries(dock, "pop")
@@ -307,7 +307,7 @@ def test_a_flight_without_a_dem_is_refused_where_one_is_needed(
     dock.flight_combo.setCurrentIndex(0)
 
     monkeypatch.setattr(QInputDialog, "getItem",
-                        lambda *a_, **k: ("Forest  —  " + b, True))
+                        lambda *a_, **k: ("Forest  -  " + b, True))
     dock._add_project_from_flight("pop", with_dem=True)
 
     assert quiet["warn"]
@@ -379,7 +379,7 @@ def test_the_new_flight_keeps_its_own_target_folder(dock, quiet, monkeypatch,
 
 
 def test_the_prompt_offers_three_choices(dock):
-    """Copy, default, cancel — cancel must not read as "use defaults"."""
+    """Copy, default, cancel - cancel must not read as "use defaults"."""
     import inspect
 
     source = inspect.getsource(type(dock)._ask_new_flight_configuration)

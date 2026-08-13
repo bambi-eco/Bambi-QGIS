@@ -2,14 +2,14 @@
 """One-directional exports from the 6.0 store (EXCHANGE_FORMAT_PLAN.md §8.1).
 
 Every exporter reads the store and writes throwaway files. None of them is an
-input format, so nothing here has to survive a round trip — the store is the
+input format, so nothing here has to survive a round trip - the store is the
 source of truth and these are views onto it.
 
 Two families:
 
-* **training and tracking** — COCO, YOLO, MOT, TRex ``.npz``. These describe
+* **training and tracking** - COCO, YOLO, MOT, TRex ``.npz``. These describe
   boxes, so ``not-an-animal`` is dropped by default.
-* **recording and publishing** — GeoJSON, Camtrap DP, Darwin Core Archive.
+* **recording and publishing** - GeoJSON, Camtrap DP, Darwin Core Archive.
   These describe a survey, so a labelled false positive is information and is
   kept (Darwin Core excepted: it publishes taxa, and a rejected detection is
   not one).
@@ -52,7 +52,7 @@ TRAINING_FORMATS = frozenset({"coco", "yolo", "mot", "trex"})
 NEEDS_FRAME_SIZE = frozenset({"coco", "yolo"})
 
 #: Formats that reference the frames, and can therefore carry them. The frames
-#: are the heaviest thing a project owns, so copying them is always a choice —
+#: are the heaviest thing a project owns, so copying them is always a choice -
 #: but YOLO and MOT are folder layouts that do not resolve without them, and a
 #: Camtrap DP package is only self-contained with its media. GeoJSON and the
 #: TRex ``.npz`` reference no image at all and are absent for that reason.
@@ -66,7 +66,7 @@ def run_export(key: str, target_folder: str, modality: str, output: str,
 
     The formats differ in what they can carry, so the caller should not have to
     know which takes an ``epsg``, which needs the frame size, or which drops
-    false positives by default — those are the per-format decisions of §8.1,
+    false positives by default - those are the per-format decisions of §8.1,
     made here once.
 
     *image_size* is optional even for the formats that need it: they fall back

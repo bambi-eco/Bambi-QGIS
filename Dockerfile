@@ -11,5 +11,5 @@ RUN pip install --no-cache-dir \
     detect-secrets \
     flake8
 
-# Code is mounted at runtime via docker-compose volume — no COPY needed.
+# Code is mounted at runtime via docker-compose volume - no COPY needed.
 CMD ["bash", "run_checks.sh"]

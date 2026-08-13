@@ -345,7 +345,7 @@ class CurveEditorPanel(QWidget):
             self._init_preview()
 
     def _build_ui(self):
-        import numpy as np  # noqa: F401 — ensures availability early
+        import numpy as np  # noqa: F401 - ensures availability early
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -461,7 +461,7 @@ class CurveEditorPanel(QWidget):
     def set_temperature_array(self, arr):
         """Use a single image as the histogram source (viewer preview).
 
-        Replaces a previous "Auto Detect" scan as the histogram source —
+        Replaces a previous "Auto Detect" scan as the histogram source -
         the detected temperature range itself stays in the spin boxes.
         """
         self._temp_array = arr
@@ -589,7 +589,7 @@ class CurveEditorPanel(QWidget):
             self.hi_spin.blockSignals(False)
         self._on_domain_changed()
 
-        note = " (scan cancelled — partial result)" if scan.cancelled else ""
+        note = " (scan cancelled - partial result)" if scan.cancelled else ""
         skipped = (f", {scan.n_errors} unreadable image(s) skipped"
                    if scan.n_errors else "")
         QMessageBox.information(
@@ -646,7 +646,7 @@ class CurveEditorPanel(QWidget):
         total = len(self._preview_paths)
         if total:
             self.preview_counter_label.setText(
-                f"{self._preview_index + 1} / {total}  —  "
+                f"{self._preview_index + 1} / {total}  -  "
                 f"{os.path.basename(self._preview_paths[self._preview_index])}")
         else:
             self.preview_counter_label.setText("")
@@ -757,7 +757,7 @@ class CurveEditorDialog(QDialog):
             "(y-axis). Left-click adds or drags a control point, "
             "right-click removes one. \"Auto Detect\" scans the configured "
             "thermal photo directory for the actual temperature range. The "
-            "preview below shows a flight image with the curve applied — use "
+            "preview below shows a flight image with the curve applied - use "
             "◀ / ▶ to page through the images.")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: grey;")

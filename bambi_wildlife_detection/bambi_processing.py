@@ -101,7 +101,7 @@ def _make_curve_colorizer(parse_fn, colormap: str, curve_cfg: Dict[str, Any]):
     The curve (see ``core.thermal_curve.ThermalCurve``) normalizes the
     temperatures into its own domain and shapes them through the control-
     point curve; out-of-domain pixels clamp to the curve's endpoint values
-    rather than being rendered black. Only ``_apply_colormap`` is replaced —
+    rather than being rendered black. Only ``_apply_colormap`` is replaced -
     parsing and BGR conversion stay in the framework class.
     """
     import numpy as np
@@ -270,7 +270,7 @@ def _legacy_text_writer(config: Dict[str, Any], path: str, stack):
     """Open *path* for the legacy text output, or discard the writes.
 
     Only files with a complete equivalent in the 6.0 store may be routed
-    through this — switching the toggle off must never remove the only copy of
+    through this - switching the toggle off must never remove the only copy of
     something (EXCHANGE_FORMAT_PLAN.md §9).
     """
     if not config.get("write_legacy_text_outputs", True):
@@ -335,7 +335,7 @@ def _describe_frame_source(source: str) -> str:
         classification.FRAMES_FROM_ANNOTATIONS: "clear frames per the stored "
                                                 "annotations",
         classification.FRAMES_FROM_ALL: "all frames, as configured",
-        classification.FRAMES_FROM_NOTHING: "all frames — no occlusion labels "
+        classification.FRAMES_FROM_NOTHING: "all frames - no occlusion labels "
                                             "were available to filter by",
     }.get(source, source)
 
@@ -679,7 +679,7 @@ class BambiProcessor:
         #
         # The fallback must only fire when the origin field really *is* in degrees.  For
         # survey areas near the equator a correct origin_wgs84 latitude is legitimately
-        # close to zero while origin holds projected UTM metres (northings up to 10⁷) —
+        # close to zero while origin holds projected UTM metres (northings up to 10⁷) -
         # feeding those into the WGS84→UTM transformer yields inf and every camera
         # position becomes -Infinity.  Require plausible lon/lat magnitudes first.
         _origin_looks_like_degrees = len(origin_list) >= 2 and all([
@@ -697,7 +697,7 @@ class BambiProcessor:
                 f"(lat={origin_lat}, lon={origin_lon}).  Camera positions cannot be "
                 f"computed relative to it.\n\n"
                 f"Check the 'origin_wgs84' / 'origin' fields in "
-                f"{os.path.basename(path_to_dem_json)} — regenerating the DEM mesh "
+                f"{os.path.basename(path_to_dem_json)} - regenerating the DEM mesh "
                 f"(Load/Generate DEM) usually repairs them."
             )
 
@@ -849,7 +849,7 @@ class BambiProcessor:
                 if log_fn:
                     log_fn(f"Photo mode: processing images in {config['thermal_photo_dir']}")
                     # Monkey-patch per-image progress logging onto this instance
-                    # only — the class method is never touched.
+                    # only - the class method is never touched.
                     _orig_undistort = extractor._undistort_and_save
                     _img_counter = [0]
 
@@ -1051,7 +1051,7 @@ class BambiProcessor:
             if log_fn:
                 log_fn(f"Photo mode: processing images in {config['rgb_photo_dir']}")
                 # Monkey-patch per-image progress logging onto this instance
-                # only — the class method is never touched.
+                # only - the class method is never touched.
                 _orig_undistort = extractor._undistort_and_save
                 _img_counter = [0]
 
@@ -1180,7 +1180,7 @@ class BambiProcessor:
         if progress_fn:
             progress_fn(10)
 
-        # Load poses file for camera position markers (optional — without it
+        # Load poses file for camera position markers (optional - without it
         # only the AirData route line is generated)
         poses_file = os.path.join(target_folder, f"poses_{camera_suffix}.json")
         images = []
@@ -1198,12 +1198,12 @@ class BambiProcessor:
             if not (airdata_path and os.path.exists(airdata_path)):
                 raise FileNotFoundError(
                     f"poses_{camera_suffix}.json not found at {poses_file} and no "
-                    "AirData file is available — nothing to generate. Run 'Extract "
+                    "AirData file is available - nothing to generate. Run 'Extract "
                     "Frames' or select an AirData CSV first."
                 )
             if log_fn:
                 log_fn(
-                    f"Warning: poses_{camera_suffix}.json not found — camera "
+                    f"Warning: poses_{camera_suffix}.json not found - camera "
                     "positions will not be generated, only the AirData route line. "
                     "Run 'Extract Frames' and re-run this step to add them."
                 )
@@ -1241,7 +1241,7 @@ class BambiProcessor:
 
         if coord_offset_x != 0 or coord_offset_y != 0:
             if abs(coord_offset_x) <= 180 and abs(coord_offset_y) <= 90:
-                # DEM origin looks like WGS84 degrees — applying it as a UTM offset
+                # DEM origin looks like WGS84 degrees - applying it as a UTM offset
                 # would place camera positions in the wrong location.  Reset to zero so
                 # poses are shown as-is (they are already in the target projected CRS).
                 if log_fn:
@@ -1389,7 +1389,7 @@ class BambiProcessor:
 
         if not route_coordinates and not point_features:
             raise RuntimeError(
-                "No flight route data could be generated — the AirData file "
+                "No flight route data could be generated - the AirData file "
                 "contained no usable GPS positions and no poses are available."
             )
 
@@ -1528,7 +1528,7 @@ class BambiProcessor:
         """Perpendicular foot on the flight-route segment associated with this frame.
 
         When the camera position (cam_x, cam_y) is provided the segment is
-        chosen by finding whichever route segment lies nearest to the camera —
+        chosen by finding whichever route segment lies nearest to the camera -
         i.e. the segment the drone was actually flying on.  This prevents
         snapping to a parallel transect whose FOV overlap or shorter distance
         might otherwise win.
@@ -1754,7 +1754,7 @@ class BambiProcessor:
 
         if log_fn:
             summary = analytics_source.describe_filter(provenance)
-            log_fn(f"Loaded {len(detections)} detection(s) from the store — "
+            log_fn(f"Loaded {len(detections)} detection(s) from the store - "
                    f"{summary}")
 
         if progress_fn:
@@ -1867,12 +1867,12 @@ class BambiProcessor:
 
     def run_track_matching(self, config: Dict[str, Any], progress_fn=None,
                            log_fn=None, cancel_check=None):
-        """Match thermal tracks to RGB tracks — paper §3.2, step A3.
+        """Match thermal tracks to RGB tracks - paper §3.2, step A3.
 
         Confirmation *is* the track definition for the census: a pair seen in
         both modalities is a real animal, a long confident single-modality
         track is an animal one sensor cannot see, and the rest is sensor noise.
-        The paper's own numbers make the case — of 34 unmatched tracks only one
+        The paper's own numbers make the case - of 34 unmatched tracks only one
         was real, while admitting them wholesale would have added six phantom
         individuals.
 
@@ -1897,7 +1897,7 @@ class BambiProcessor:
             missing = "thermal" if not rows_t else "RGB"
             raise ValueError(
                 f"No {missing} tracks found. Cross-modal matching needs both "
-                "modalities tracked — run detection, geo-referencing and "
+                "modalities tracked - run detection, geo-referencing and "
                 "tracking for each camera first.")
 
         if log_fn:
@@ -1983,7 +1983,7 @@ class BambiProcessor:
 
     def run_embeddings(self, config: Dict[str, Any], progress_fn=None,
                        log_fn=None, cancel_check=None):
-        """Embed every tracked detection with DINOv3 — step C1.
+        """Embed every tracked detection with DINOv3 - step C1.
 
         The vectors are the expensive part of classification and every head
         reads the same ones, so they are computed once, written beside the
@@ -2038,14 +2038,14 @@ class BambiProcessor:
 
         # Orthorectified crops come from the exported GeoTIFFs, and the boxes
         # reach them through the world coordinates geo-referencing already
-        # produced — so one geo-referencing result serves both projections.
+        # produced - so one geo-referencing result serves both projections.
         geo_boxes: Dict[int, tuple] = {}
         if geo_crops.is_geo(projection):
             if not geo_crops.available_frames(target_folder, suffix):
                 raise ValueError(
                     f"No {camera_name} GeoTIFFs found. Orthorectified crops "
                     "come from the per-frame GeoTIFF export, so run 'Export "
-                    "Frames as GeoTIFF' for this camera first — or set the "
+                    "Frames as GeoTIFF' for this camera first - or set the "
                     "projection to Perspective.")
             geo_boxes = {
                 row["detection_id"]: (row["gx1"], row["gy1"],
@@ -2239,13 +2239,13 @@ class BambiProcessor:
         carry usable evidence, species fixes what the animal is, and sex reuses
         *exactly* the species frames. Occlusion itself stays per frame; the
         other two are aggregated per track by a quorum vote, which is what
-        makes a noisy per-frame call safe — an antler resolves only from some
+        makes a noisy per-frame call safe - an antler resolves only from some
         angles, so many frames of a true male look female.
 
         Each stage's Input decides which animals it is about: a single-camera
         view labels that camera's tracks, ``matched`` labels both sides of a
         pair because they are one animal. So the work is grouped by modality
-        and each group is one pass over that modality's tracks — a ``matched``
+        and each group is one pass over that modality's tracks - a ``matched``
         stage runs in both passes, fusing the same two vectors either way
         (concatenation is always ``[RGB, thermal]``), which is what makes the
         two passes agree rather than merely coincide.
@@ -2285,7 +2285,7 @@ class BambiProcessor:
 
         done = 0
         for suffix, wanted in passes:
-            # Only between passes — each pass checks as it goes.
+            # Only between passes - each pass checks as it goes.
             if done and cancel_check and cancel_check():
                 raise CancelledException("Classification cancelled")
             self._classify_modality(
@@ -2440,7 +2440,7 @@ class BambiProcessor:
             classification_store.track_predictions(
                 target_folder, suffix, "species")}
         # A track this modality's classifier never called may still be
-        # identified — by hand in the labelling tool, or by a species label
+        # identified - by hand in the labelling tool, or by a species label
         # synced across from the other camera. Either outranks "unknown", so
         # the per-species model choice reads them too.
         for track_id, name in self._named_track_species(
@@ -2522,8 +2522,8 @@ class BambiProcessor:
                        log_fn=None, cancel_check=None):
         """Flag juveniles by body size, on each camera the stage targets.
 
-        Box areas are not comparable across cameras — a thermal sensor and an
-        RGB sensor frame the same animal differently — so a stage set to
+        Box areas are not comparable across cameras - a thermal sensor and an
+        RGB sensor frame the same animal differently - so a stage set to
         ``matched`` measures two independent cohorts rather than pooling them.
         """
         from .core import classification
@@ -2532,7 +2532,7 @@ class BambiProcessor:
             "life_stage") or {}
         targets = classification.targets_of(spec)
         for index, suffix in enumerate(targets):
-            # Only between passes — each pass checks as it goes.
+            # Only between passes - each pass checks as it goes.
             if index and cancel_check and cancel_check():
                 raise CancelledException("Life stage cancelled")
             self._life_stage_modality(
@@ -2554,7 +2554,7 @@ class BambiProcessor:
         This is the **fallback**, not the only route. Where a life-stage
         classifier is configured for a species, the classifier step has already
         called those animals and they are left alone; size fills in the rest.
-        Needs no models and no embeddings — only tracks, and geo-referencing if
+        Needs no models and no embeddings - only tracks, and geo-referencing if
         the metric areas are to be used.
         """
         from .core import classification_store, life_stage, track_store
@@ -2609,7 +2609,7 @@ class BambiProcessor:
                           in species_of_track.items() if name in measured}
         else:
             # Nothing has been classified by species yet, so the selection
-            # cannot be applied per animal — measure them all rather than
+            # cannot be applied per animal - measure them all rather than
             # silently doing nothing.
             to_measure = None
             if log_fn:
@@ -2659,8 +2659,8 @@ class BambiProcessor:
                      target_folder, suffix, "sex")
                  if row["label"].lower() == "male"]
 
-        # The cohort keeps every animal — a robust median over the whole herd
-        # is the point — but only the ones set to be measured, and not already
+        # The cohort keeps every animal - a robust median over the whole herd
+        # is the point - but only the ones set to be measured, and not already
         # called by a classifier, take a verdict from it.
         def _takes_a_verdict(track_id):
             if track_id in called_by_model:
@@ -2683,7 +2683,7 @@ class BambiProcessor:
             target_folder, suffix, classification_store.LIFE_STAGE,
             from_model + [{
                 "track_id": item.track_id, "label": item.label,
-                # Size is one measurement per animal, not a vote — recorded as
+                # Size is one measurement per animal, not a vote - recorded as
                 # a unanimous call of one so the table stays uniform.
                 "votes": 1, "n": 1, "fraction": 1.0,
                 "modality_in": source,
@@ -2723,7 +2723,7 @@ class BambiProcessor:
 
         if not usable:
             if log_fn:
-                log_fn(f"No features available for '{task}' — nothing to do")
+                log_fn(f"No features available for '{task}' - nothing to do")
             return {}
 
         calls = head.predict(features)
@@ -2765,7 +2765,7 @@ class BambiProcessor:
         resolved_species = dict(species_of_track)
 
         # Sex is chosen per species, so its heads are opened lazily and cached
-        # — a flight with three species uses three different classifiers.
+        # - a flight with three species uses three different classifiers.
         heads: Dict[str, Any] = {}
 
         for track_id, members in sorted(by_track.items()):
@@ -2777,12 +2777,12 @@ class BambiProcessor:
             if task in hf_access.PER_SPECIES_TASKS:
                 # The cue is species-specific, so the model is chosen by the
                 # species the vote just assigned. A species nobody has a
-                # classifier for is left uncalled rather than guessed at — for
+                # classifier for is left uncalled rather than guessed at - for
                 # life stage the size estimate then fills the gap.
                 key = resolved_species.get(track_id, "")
                 per_species = (spec.get("species") or {}).get(key)
                 selected = (per_species or {}).get("model", "off")
-                # "size" is a measurement, not a head — the life-stage step
+                # "size" is a measurement, not a head - the life-stage step
                 # makes those calls.
                 if per_species is None or selected in ("off", "size"):
                     continue
@@ -2905,7 +2905,7 @@ class BambiProcessor:
             log_fn(f"Downloading {repo}/{remote} …")
         os.makedirs(os.path.dirname(destination), exist_ok=True)
         try:
-            # nosec B615 — deliberately unpinned, for the same reason as the
+            # nosec B615 - deliberately unpinned, for the same reason as the
             # backbone: the repository is user-overridable, so a hardcoded
             # revision would be wrong for a custom head. Reproducibility comes
             # from the model file itself, which is recorded with every
@@ -2956,7 +2956,7 @@ class BambiProcessor:
         """RGB crop sizes taken from each detection's thermal partner.
 
         The thermal box is the looser of the two and so more reliably encloses
-        the whole animal, antlers included. Only the *crop* is affected —
+        the whole animal, antlers included. Only the *crop* is affected -
         nothing rewrites the stored detections, so geo-referencing and tracking
         stay valid.
 
@@ -3023,7 +3023,7 @@ class BambiProcessor:
         poses_file = os.path.join(target_folder, f"poses_{camera_suffix}.json")
         if not os.path.exists(poses_file):
             raise FileNotFoundError(
-                f"poses_{camera_suffix}.json not found — run frame extraction "
+                f"poses_{camera_suffix}.json not found - run frame extraction "
                 f"for this camera first.")
         with open(poses_file, "r", encoding="utf-8") as handle:
             return json.load(handle).get("images", [])
@@ -3138,7 +3138,7 @@ class BambiProcessor:
         all_tracks: Dict[int, list] = defaultdict(list)
 
         # From the store: its track ids are the ones every other consumer uses,
-        # and it applies the population filter — so false positives and
+        # and it applies the population filter - so false positives and
         # unselected species never reach the distance sampling that reads these
         # distances (§8.2). The CSVs know nothing of either.
         from .core import analytics_source, store as _store
@@ -3164,7 +3164,7 @@ class BambiProcessor:
             })
         if all_tracks and log_fn:
             summary = analytics_source.describe_filter(provenance)
-            log_fn(f"Loaded {len(all_tracks)} track(s) from the store — "
+            log_fn(f"Loaded {len(all_tracks)} track(s) from the store - "
                    f"{summary}")
 
         if not all_tracks:
@@ -3298,8 +3298,8 @@ class BambiProcessor:
         """The path of a stage store, or an error naming the step that makes it.
 
         Every step reads its input from the store. The 5.x text files are no
-        longer read — they are written for external scripts, and a project can
-        turn that off — so "the text file is there" says nothing about whether
+        longer read - they are written for external scripts, and a project can
+        turn that off - so "the text file is there" says nothing about whether
         the step can run (EXCHANGE_FORMAT_PLAN.md §11).
         """
         from .core import store as _store
@@ -3329,7 +3329,7 @@ class BambiProcessor:
                          ) -> List[Tuple[str, Any]]:
         """The runs an analytic should perform, as ``(label, species_ids)``.
 
-        One entry — ``("", <the filter>)`` — unless "separate result per
+        One entry - ``("", <the filter>)`` - unless "separate result per
         species" is set, in which case one per species that actually has
         points. Species with nothing to count are left out rather than
         producing an empty result apiece, and reported instead.
@@ -3374,7 +3374,7 @@ class BambiProcessor:
                 empty.append(entry["name"])
 
         if log_fn and empty:
-            log_fn(f"No {source} for: {', '.join(empty)} — skipped.")
+            log_fn(f"No {source} for: {', '.join(empty)} - skipped.")
         if not strata:
             raise RuntimeError(
                 "No species has any geo-referenced "
@@ -3392,9 +3392,9 @@ class BambiProcessor:
         for ``"tracks"`` one point per track (the centroid of its box centres),
         so an animal followed across many frames counts once.
 
-        Read from the store, which applies the population filter of §8.2 —
+        Read from the store, which applies the population filter of §8.2 -
         false positives excluded, one tracker run plus the manual one,
-        superseded tracks dropped — and reports what it counted, so the number
+        superseded tracks dropped - and reports what it counted, so the number
         can be traced back to the rows behind it. The 5.x text files carry none
         of that and are not read.
 
@@ -3435,7 +3435,7 @@ class BambiProcessor:
 
     def run_density_heatmap(self, config: Dict[str, Any], progress_fn=None,
                             log_fn=None, cancel_check=None):
-        """Generate a density raster — one, or one per species (§8.2)."""
+        """Generate a density raster - one, or one per species (§8.2)."""
         source = config.get("density_source", "detections")
         strata = self.analytics_strata(config, source, log_fn)
 
@@ -3445,7 +3445,7 @@ class BambiProcessor:
             per_run = dict(config)
             per_run["analytics_species_ids"] = species_ids
             if log_fn and label:
-                log_fn(f"— {label} —")
+                log_fn(f"- {label} -")
 
             def scaled(value, index=index):
                 """Progress across all strata, not within one."""
@@ -3858,7 +3858,7 @@ class BambiProcessor:
 
     def run_distance_sampling(self, config: Dict[str, Any], progress_fn=None,
                               log_fn=None, cancel_check=None):
-        """Fit a detection function — once, or once per species (§8.2).
+        """Fit a detection function - once, or once per species (§8.2).
 
         A stratum too thin to fit is reported and skipped rather than failing
         the whole run: with several species it is normal for the rare ones to
@@ -3875,7 +3875,7 @@ class BambiProcessor:
             per_run = dict(config)
             per_run["analytics_species_ids"] = species_ids
             if log_fn and label:
-                log_fn(f"— {label} —")
+                log_fn(f"- {label} -")
 
             def scaled(value, index=index):
                 if progress_fn:
@@ -3891,7 +3891,7 @@ class BambiProcessor:
                     raise
                 failures.append((label, str(exc)))
                 if log_fn:
-                    log_fn(f"{label}: no estimate — {exc}")
+                    log_fn(f"{label}: no estimate - {exc}")
 
         if failures and len(failures) == len(strata):
             detail = "; ".join(f"{name} ({why})" for name, why in failures)
@@ -4095,7 +4095,7 @@ class BambiProcessor:
                                         log_fn=None):
         """Perpendicular distances and flight-route length L for one project.
 
-        Returns ``(distances, transect_length_m)`` — a numpy array of the
+        Returns ``(distances, transect_length_m)`` - a numpy array of the
         finite, non-negative perpendicular distances and the flight-route
         length in metres. Errors name the project folder so a multi-project run
         can say which flight is at fault.
@@ -4324,7 +4324,7 @@ class BambiProcessor:
     def run_population_estimation(self, config: Dict[str, Any],
                                   progress_fn=None, log_fn=None,
                                   cancel_check=None):
-        """Estimate a population — once, or once per species (§8.2)."""
+        """Estimate a population - once, or once per species (§8.2)."""
         strata = self.analytics_strata(config, "tracks", log_fn,
                                        camera_key="pop_camera")
 
@@ -4334,7 +4334,7 @@ class BambiProcessor:
             per_run = dict(config)
             per_run["analytics_species_ids"] = species_ids
             if log_fn and label:
-                log_fn(f"— {label} —")
+                log_fn(f"- {label} -")
 
             def scaled(value, index=index):
                 if progress_fn:
@@ -4357,10 +4357,10 @@ class BambiProcessor:
         al. 2026 works on and runs the naive, bootstrap and ZINB estimators on
         it (see :mod:`core.population`):
 
-        * **count** — every track is assigned to the transect whose centre
+        * **count** - every track is assigned to the transect whose centre
           line (the flight path between its start and end frame) is nearest in
           perpendicular distance, optionally truncated at ``pop_truncation``.
-        * **area** — the union of the per-frame field-of-view footprints of
+        * **area** - the union of the per-frame field-of-view footprints of
           the frames inside the transect's frame range, in hectares.
 
         The optional *study area* is what the densities are extrapolated to an
@@ -4369,7 +4369,7 @@ class BambiProcessor:
         former the region the density is assumed to hold over. Setting the
         study area to the monitored area therefore just returns the counted
         animals. ``pop_study_area_auto`` fills it with the flight's total FoV
-        coverage — the union of *every* frame's footprint, which unlike the
+        coverage - the union of *every* frame's footprint, which unlike the
         summed transect areas counts ground seen by two transects only once
         and also includes frames belonging to no transect.
 
@@ -4399,7 +4399,7 @@ class BambiProcessor:
 
         # One or more BAMBI projects: every project's transects are pooled into
         # a single count/area table and the estimators run over all of them
-        # together. Each project keeps its own DEM georeferencing — the active
+        # together. Each project keeps its own DEM georeferencing - the active
         # project from the config, added projects from their own dem.json.
         raw_entries = config.get("pop_project_folders") or [{"target": target_folder}]
         entries = []
@@ -4500,7 +4500,7 @@ class BambiProcessor:
             "Densities are per 100 ha (= per km²). The monitored area sums the "
             "transects (each is its own sample, so shared ground counts once "
             "per transect), while flight_fov_area_ha unions every frame and "
-            "counts shared ground once — they differ where transects overlap "
+            "counts shared ground once - they differ where transects overlap "
             "or where frames belong to no transect."
         )
         if multi:
@@ -4598,7 +4598,7 @@ class BambiProcessor:
             for name, est in result["estimates"].items():
                 density = est.get("density_per_100ha")
                 if density is None:
-                    log_fn(f"  {name}: failed — {est.get('error')}")
+                    log_fn(f"  {name}: failed - {est.get('error')}")
                     continue
                 ci = est.get("ci95")
                 ci_txt = (f" (95% CI {ci[0]:.2f}–{ci[1]:.2f})" if ci else "")
@@ -4617,9 +4617,9 @@ class BambiProcessor:
                                   progress_cb=None):
         """Build one project's transect count/area table and write its outputs.
 
-        Runs the per-project half of :meth:`run_population_estimation` — loads
+        Runs the per-project half of :meth:`run_population_estimation` - loads
         the transects, poses, FoV footprints and track perpendicular distances,
-        assigns the tracks and measures each transect's monitored area — then
+        assigns the tracks and measures each transect's monitored area - then
         writes that project's own ``population_transects.csv``,
         ``population_tracks.csv``, ``transect_areas.geojson`` and
         ``transect_routes.geojson`` into its ``analytics_{m}`` folder. The
@@ -4704,7 +4704,7 @@ class BambiProcessor:
             tracks = json.load(f).get("tracks", [])
 
         # class_id is the resolved species for anything the store wrote, so
-        # the filter is applied here rather than where the file was written —
+        # the filter is applied here rather than where the file was written -
         # otherwise every species in a per-species run gets the same tracks
         # and the same numbers under a different name.
         species_ids = config.get("analytics_species_ids")
@@ -4751,7 +4751,7 @@ class BambiProcessor:
                 len(frames), sum(1 for f in frames if f in fov_polygons))
             if area_m2 <= 0 and log_fn:
                 log_fn(f"Warning: {transect.display_name} has no FoV footprint "
-                       f"(frames {transect.first_frame}-{transect.last_frame}) — "
+                       f"(frames {transect.first_frame}-{transect.last_frame}) - "
                        "it contributes a zero area.")
             if progress_cb:
                 progress_cb(25 + int((i + 1) / len(transects) * 30))
@@ -4812,7 +4812,7 @@ class BambiProcessor:
 
         # ---- Flight FoV coverage (candidate study area) -------------------- #
         # The union over *every* frame, so ground seen by two transects counts
-        # once — unlike the summed transect areas, which the density needs to
+        # once - unlike the summed transect areas, which the density needs to
         # double-count because each transect is its own sample.
         if progress_cb:
             progress_cb(75)
@@ -4906,7 +4906,7 @@ class BambiProcessor:
             }, f, indent=2)
 
         # Tracks assigned to a transect they were not filmed in usually mean two
-        # transects run close together — worth surfacing, not worth failing on.
+        # transects run close together - worth surfacing, not worth failing on.
         def _filmed_elsewhere(a: dict) -> bool:
             tid, frame = a["transect_id"], a["last_frame"]
             if tid is None or frame is None:
@@ -4947,7 +4947,7 @@ class BambiProcessor:
         from .core.pipeline_outputs import read_dem_origin_xy
 
         # The active project takes its origin straight from the config's DEM
-        # metadata — unchanged from the single-project behaviour, including the
+        # metadata - unchanged from the single-project behaviour, including the
         # (0, 0) fallback of read_dem_origin_xy when no metadata is configured.
         if is_current:
             x_offset, y_offset = read_dem_origin_xy(
@@ -5143,7 +5143,7 @@ class BambiProcessor:
         mismatch = detection_store.compare_with_legacy_text(
             target_folder, camera_suffix, output_file)
         if mismatch and log_fn:
-            log_fn(f"Warning: store/text mismatch — {mismatch}")
+            log_fn(f"Warning: store/text mismatch - {mismatch}")
 
         _record_stage(config, "detection", camera_suffix,
                       row_count=detection_results, log_fn=log_fn)
@@ -5189,7 +5189,7 @@ class BambiProcessor:
                 -1.0,
             ])
             if direction[2] >= -1e-9:
-                # Ray is level or rising — it can never reach the terrain.
+                # Ray is level or rising - it can never reach the terrain.
                 saw_up = True
                 continue
             t = (z_mean - pos[2]) / direction[2]
@@ -5249,7 +5249,7 @@ class BambiProcessor:
         # Detect a common DJI DEM export issue: geographic (degree) coordinates mislabeled
         # as a UTM projected CRS.  When the mesh was built from such a file the origin is
         # in degrees (< 180) instead of UTM metres (> 1000), and mesh vertices are also in
-        # degree units — ray casting from UTM camera positions will never intersect the mesh.
+        # degree units - ray casting from UTM camera positions will never intersect the mesh.
         if abs(x_offset) <= 180 and abs(y_offset) <= 90:
             raise RuntimeError(
                 "DEM metadata 'origin' appears to be in WGS84 geographic coordinates "
@@ -5260,7 +5260,7 @@ class BambiProcessor:
                 "To fix:\n"
                 "  1. Delete the existing DEM mesh files (.glb / .json) in the project folder.\n"
                 "  2. Set the correct target EPSG in the plugin Parameters tab.\n"
-                "  3. Re-run 'Load/Generate DEM' — the plugin now auto-detects WGS84 source "
+                "  3. Re-run 'Load/Generate DEM' - the plugin now auto-detects WGS84 source "
                 "DEMs and reprojects them to UTM before building the mesh.\n"
                 "  4. Re-run 'Extract RGB/Thermal Frames' so camera positions are re-computed "
                 "relative to the corrected DEM origin.\n"
@@ -5298,7 +5298,7 @@ class BambiProcessor:
         # results are keyed on it instead of relying on two files staying in
         # step. A detections.txt that never went through the 6.0 detection
         # stage is adopted first, which is the one place the text is still
-        # read — and it reads it into the store rather than into this step.
+        # read - and it reads it into the store rather than into this step.
         from .core import detection_store, store as _store_module, track_store
 
         detection_store.adopt_legacy_detections(
@@ -5395,7 +5395,7 @@ class BambiProcessor:
 
                 image_metadata = poses["images"][frame_idx]
 
-                # Get camera for this frame — build_camera owns the rotation
+                # Get camera for this frame - build_camera owns the rotation
                 # convention, which depends on the installed alfspy version.
                 from .core.camera_pose import build_camera
                 aspect_ratio = input_resolution.width / input_resolution.height
@@ -5509,11 +5509,11 @@ class BambiProcessor:
                f"({100.0 * dropped / total_dets:.1f}%) could not be placed on the DEM:")
 
         if miss_stats["above_horizon"]:
-            log_fn(f"  - {miss_stats['above_horizon']} above the horizon — the camera "
+            log_fn(f"  - {miss_stats['above_horizon']} above the horizon - the camera "
                    f"was near-horizontal, so these pixels show sky and can never be "
                    f"geo-referenced.")
         if miss_stats["beyond_mesh"]:
-            msg = (f"  - {miss_stats['beyond_mesh']} beyond the DEM edge — the view "
+            msg = (f"  - {miss_stats['beyond_mesh']} beyond the DEM edge - the view "
                    f"reached ground that the DEM does not cover.")
             if miss_ranges:
                 msg += (f" Ground range: median "
@@ -5698,7 +5698,7 @@ class BambiProcessor:
         if not already_undistorted:
             if raw_size is None or raw_size == (0, 0):
                 raise ValueError(
-                    "Raw video size unknown — cannot undistort.  "
+                    "Raw video size unknown - cannot undistort.  "
                     "Ensure the .npz files contain a 'video_size' field, or enable "
                     "'Labels already in undistorted frame space'."
                 )
@@ -5960,7 +5960,7 @@ class BambiProcessor:
         """Group imported TRex detections into a ``kind='trex'`` track run.
 
         The tracklet id travels on each detection, so membership is read
-        straight off the import — nothing is matched back by coordinates. The
+        straight off the import - nothing is matched back by coordinates. The
         store rows were written in the same order, which is how each detection
         finds its id.
         """
@@ -5973,7 +5973,7 @@ class BambiProcessor:
         stored = track_store.load_detections(target_folder, camera_suffix)
         if len(stored) != len(detections):
             if log_fn:
-                log_fn("Warning: could not record TRex tracks — the store holds "
+                log_fn("Warning: could not record TRex tracks - the store holds "
                        f"{len(stored)} detection(s), the import produced "
                        f"{len(detections)}.")
             return
@@ -6175,8 +6175,8 @@ class BambiProcessor:
 
                     image_metadata = poses["images"][frame_idx]
                     # Get camera for this frame.  The rotation correction is
-                    # applied at 1× — the same amount alfspy's renderer applies
-                    # via CtxShot.get_correction() — so the FoV footprint matches
+                    # applied at 1× - the same amount alfspy's renderer applies
+                    # via CtxShot.get_correction() - so the FoV footprint matches
                     # the rendered alfs and GeoTIFF content.
                     from .core.camera_pose import build_camera
                     camera = build_camera(image_metadata, translation, rotation,
@@ -6340,10 +6340,10 @@ class BambiProcessor:
         # were computed elsewhere. Running a tracker over them as well would
         # produce a second, competing set for the same animals, so the step
         # imports and stops. The dock widget routes around this too; the guard
-        # lives here so every caller — worker, script, test — behaves the same.
+        # lives here so every caller - worker, script, test - behaves the same.
         if config.get("trex_npz_dir", "").strip():
             if log_fn:
-                log_fn("TRex tracklet folder configured — importing tracklets "
+                log_fn("TRex tracklet folder configured - importing tracklets "
                        "instead of running a tracker.")
             self.run_trex_import(config, progress_fn, log_fn, cancel_check)
             return
@@ -6383,7 +6383,7 @@ class BambiProcessor:
         This used to reconstruct the pixel/track linkage by rounding each
         geo-referenced box to three decimals and hashing it, relying on
         ``detections.txt`` and ``georeferenced.txt`` keeping the same per-frame
-        order — and discarding a whole frame whenever they did not
+        order - and discarding a whole frame whenever they did not
         (``core/track_export.py``, removed in 6.0). Track membership is now
         recorded as (track_id, detection_id) pairs, so this is a join.
 
@@ -6403,7 +6403,7 @@ class BambiProcessor:
         rows = track_store.load_pixel_tracks(target_folder, camera_suffix)
         if not rows:
             # Reachable when a 5.x project is tracked without ever passing
-            # through a 6.0 stage — say so, because the video creator, click
+            # through a 6.0 stage - say so, because the video creator, click
             # tool and labelling tool all read this file.
             if log_fn and os.path.isfile(os.path.join(
                     target_folder, f"tracks_{camera_suffix}", "tracks.csv")):
@@ -6503,7 +6503,7 @@ class BambiProcessor:
         # From the store: ``source_id`` carries the real detection_id all the
         # way through the tracker, so membership needs no reconstruction.
         # georeferenced.txt has no such id, so a run built from it could not be
-        # recorded — it would look like it worked (tracks.csv appears) while
+        # recorded - it would look like it worked (tracks.csv appears) while
         # MOT, GeoJSON, TRex and the analytics all saw nothing.
         from .core import store as _store, track_store
 
@@ -6643,8 +6643,8 @@ class BambiProcessor:
                         f"{d.conf:.6f},{d.cls},{d.interpolated}\n")
 
         # Record the run in the store. Membership comes straight from the
-        # tracker's own output — the detection_id travelled through as
-        # ``source_id`` — so nothing is matched back by coordinates.
+        # tracker's own output - the detection_id travelled through as
+        # ``source_id`` - so nothing is matched back by coordinates.
         track_store.record_tracks(
             target_folder, camera_suffix,
             [{"track_id": tid, "detection_id": d.source_id,
@@ -6814,7 +6814,7 @@ class BambiProcessor:
                 if log_fn:
                     log_fn(f"Loaded {sum(len(v) for v in frames_geo.values())} geo detections for geo-tracker")
             elif log_fn:
-                log_fn("Warning: no geo-referenced detections in the store — "
+                log_fn("Warning: no geo-referenced detections in the store - "
                        "this tracker uses them, so run 'Geo-Reference "
                        "Detections' first for best results")
 
@@ -6936,8 +6936,8 @@ class BambiProcessor:
                         f"{t.x2:.2f},{t.y2:.2f},{t.conf:.4f},{t.cls},{interp}\n")
 
         # Record the run in the store. Without this the tracks exist only in
-        # tracks_pixel.csv, and every export and analytic — which read the
-        # store — reports the detections as untracked.
+        # tracks_pixel.csv, and every export and analytic - which read the
+        # store - reports the detections as untracked.
         members = [{"track_id": t.track_id, "detection_id": t.source_id,
                     "interpolated": int(getattr(t, "interpolated", 0))}
                    for t in pixel_tracks if t.source_id is not None]
@@ -7147,7 +7147,7 @@ class BambiProcessor:
                 rotation = correction["rotation"]
                 image_metadata = poses["images"][frame_idx]
 
-                # Get camera for this frame — build_camera owns the rotation
+                # Get camera for this frame - build_camera owns the rotation
                 # convention, which depends on the installed alfspy version.
                 from .core.camera_pose import build_camera
                 camera = build_camera(image_metadata, translation, rotation,
@@ -7280,7 +7280,7 @@ class BambiProcessor:
             log_fn(f"Initializing alfs generation for {camera_name} frames...")
 
         # Check for required dependencies.  The rasteriser alfspy uses
-        # (ModernGL or PyTorch) is alfspy's own concern — see core/render_context.
+        # (ModernGL or PyTorch) is alfspy's own concern - see core/render_context.
         from .core.render_context import require_render_stack
         require_render_stack()
 
@@ -7970,7 +7970,7 @@ class BambiProcessor:
             log_fn(f"Processing {len(tiles)} tile(s) ({n_rows}x{n_cols} grid)...")
 
         # Bounded LRU of shots whose CPU-side image (tex_data, a float32 RGBA
-        # array — ~33 MB at 1080p, ~130 MB at 4K) is kept resident.  Previously
+        # array - ~33 MB at 1080p, ~130 MB at 4K) is kept resident.  Previously
         # tex_data was retained for every shot ever touched, so RAM grew without
         # bound as tiles were processed and eventually OOM'd on large flights.
         # We now keep only the most-recently-used shots cached; overlapping
@@ -8025,14 +8025,14 @@ class BambiProcessor:
                 tile_res = Resolution(tw, th)
 
                 # Only upload GPU textures for shots whose footprint overlaps
-                # this tile — reduces peak VRAM from ~2.7 GB (all shots) to the
+                # this tile - reduces peak VRAM from ~2.7 GB (all shots) to the
                 # few shots that actually cover the tile (~2-6 typically).
                 tile_shots = self._filter_shots_for_tile(shots, tile_geo_bounds, log_fn)
 
                 renderer = Renderer(tile_res, ctx, tile_camera, mesh_data, texture_data)
 
                 try:
-                    # Pass tile_shots list directly — re-iterable across tiles and
+                    # Pass tile_shots list directly - re-iterable across tiles and
                     # CtxShot.tex_use() handles lazy loading, so AsyncShotLoader
                     # (which spawns 12 threads and is one-shot) is not needed.
                     tile_img = renderer.render_integral(
@@ -8581,7 +8581,7 @@ class BambiProcessor:
             progress_fn(10)
 
         # Open all datasets. The exports already share the target CRS, so no
-        # reprojection is needed — we only capture a source CRS as a fallback.
+        # reprojection is needed - we only capture a source CRS as a fallback.
         datasets = []
         source_crs = None
         try:
@@ -8947,7 +8947,7 @@ class BambiProcessor:
 
                     # Render the frame as an orthophoto.
                     # Use ShotOnly mode so only pixels actually covered by this shot
-                    # are returned — render_integral bleeds the DEM mesh texture into
+                    # are returned - render_integral bleeds the DEM mesh texture into
                     # the background producing noise.
                     from alfspy.core.rendering import RenderResultMode
                     tile_res = Resolution(out_w, out_h)
@@ -9444,7 +9444,7 @@ class BambiProcessor:
                 rotation = correction["rotation"]
                 image_metadata = poses["images"][frame_idx]
 
-                # Get camera for this frame — build_camera owns the rotation
+                # Get camera for this frame - build_camera owns the rotation
                 # convention, which depends on the installed alfspy version.
                 from .core.camera_pose import build_camera
                 camera = build_camera(image_metadata, translation, rotation,

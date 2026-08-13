@@ -108,13 +108,13 @@ def export_yolo(target_folder: str, modality: str, output_folder: str,
 
     One ``.txt`` per frame that has detections, named after the frame image, in
     normalised ``cls cx cy w h``. Custom fields have nowhere to go in this
-    format and are deliberately not smuggled into it — use COCO for those.
+    format and are deliberately not smuggled into it - use COCO for those.
 
     With *include_images* the frames are copied in, because a YOLO dataset is a
     folder layout rather than a manifest: there is no field naming the images,
     so the labels are only found through ``images``/``labels`` siblings. Only
     frames carrying a detection are copied. Turning it off leaves the labels
-    alone for callers who already have the images arranged — and saves
+    alone for callers who already have the images arranged - and saves
     duplicating what is usually the heaviest part of a project.
     """
     vocabulary = common.load_vocabulary(target_folder)
@@ -179,7 +179,7 @@ def export_yolo(target_folder: str, modality: str, output_folder: str,
             for line in common.describe_copy(copied):
                 log_fn(f"YOLO: {line}")
         else:
-            log_fn("YOLO: images not included — point 'train' at the frames "
+            log_fn("YOLO: images not included - point 'train' at the frames "
                    "yourself, or the labels will not be found.")
     return output_folder
 
@@ -191,7 +191,7 @@ def export_mot(target_folder: str, modality: str, output_folder: str,
 
     Columns are ``frame,id,bb_left,bb_top,bb_width,bb_height,conf,x,y,z`` with
     1-based frame numbers, as MOT expects. Only detections belonging to a track
-    are written — MOT is a tracking format, and a detection with no track has no
+    are written - MOT is a tracking format, and a detection with no track has no
     id to give.
 
     *include_images* fills the ``img1`` folder MOTChallenge sequences use, which

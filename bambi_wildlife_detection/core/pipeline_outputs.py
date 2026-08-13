@@ -7,7 +7,7 @@ format-specific readers live in :mod:`core.inspection`,
 shapes for their specific consumers and are deliberately not unified.
 
 Everything here reads the 6.0 store. The functions still take a legacy file
-path, but only to locate the project — ``<target>/tracks_t/tracks.csv`` says
+path, but only to locate the project - ``<target>/tracks_t/tracks.csv`` says
 where ``<target>/bambi_t/tracks.gpkg`` is. The text files themselves are no
 longer parsed by anything except :mod:`core.migration`, which exists to import
 them once.
@@ -22,7 +22,7 @@ LogFn = Optional[Callable[[str], None]]
 
 def read_dem_origin_xy(dem_path: str = "",
                        dem_metadata_path: str = "") -> Tuple[float, float]:
-    """The DEM's ``origin`` (x, y) — the shift from mesh-local to world CRS.
+    """The DEM's ``origin`` (x, y) - the shift from mesh-local to world CRS.
 
     Poses store camera positions mesh-locally (world CRS minus this origin),
     while every geo-referenced product is in the world CRS, so anything that
@@ -98,7 +98,7 @@ def load_geo_tracks_by_id(csv_path: str, log_fn: LogFn = None) -> Dict[int, list
 def _no_store_message(path: str, kind: str) -> str:
     """Why nothing was loaded, and what to do about it."""
     return (f"No {kind} store for {os.path.dirname(path)}. The 5.x text files "
-            "are no longer read — use 'Migrate 5.x…' on the Input tab, or "
+            "are no longer read - use 'Migrate 5.x…' on the Input tab, or "
             "re-run the step.")
 
 
@@ -132,7 +132,7 @@ def _geo_tracks_from_store(target_folder: str, modality: str) -> Dict[int, list]
             "JOIN trk.tracks t ON t.track_id = m.track_id "
             "JOIN detections d ON d.detection_id = m.detection_id "
             "JOIN geo.detections_geo g ON g.detection_id = d.detection_id "
-            f"WHERE t.run_id IN ({placeholders}) "  # nosec B608 — ints only
+            f"WHERE t.run_id IN ({placeholders}) "  # nosec B608 - ints only
             "ORDER BY m.track_id, d.frame", run_ids).fetchall()
         gpkg.detach(conn, "geo")
         gpkg.detach(conn, "trk")

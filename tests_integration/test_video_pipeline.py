@@ -290,7 +290,7 @@ class TestMigrationOnRealOutput:
         """The legacy text outputs alone, in a folder with no 6.0 store.
 
         The pipeline now writes the store as it runs, and migration refuses to
-        touch a folder that already has one — so migrating a real 5.x project
+        touch a folder that already has one - so migrating a real 5.x project
         means migrating the text files without it.
         """
         import shutil
@@ -323,7 +323,7 @@ class TestMigrationOnRealOutput:
         assert n == synthetic_detections["count"]
 
     def test_every_detection_is_accounted_for(self, migrated, legacy_copy):
-        """Either geo-referenced or explicitly failed — never silently absent."""
+        """Either geo-referenced or explicitly failed - never silently absent."""
         from bambi_wildlife_detection.core import store
 
         det = store.open_store(

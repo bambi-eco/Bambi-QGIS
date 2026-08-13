@@ -11,7 +11,7 @@ size" checkbox in the ALFS/GeoTiff configuration:
 ``fixed render size``
     The user gives the pixel count directly and the ground resolution
     follows from the extent. Output size is fixed, scale varies with the
-    area — useful when every render has to land on the same canvas (fixed
+    area - useful when every render has to land on the same canvas (fixed
     per-frame GeoTIFFs, sampling-mode tiles of comparable weight) and when
     the DEM extent would otherwise make a fine ground resolution explode
     into a raster of unusable size.
@@ -38,7 +38,7 @@ def resolve_render_size(width_meters, height_meters, ground_resolution,
 
     In ground-resolution mode the extent is divided by *ground_resolution*
     (rounded up, as the callers have always done). In fixed-size mode the
-    extent is ignored and the configured pixel counts are returned — the two
+    extent is ignored and the configured pixel counts are returned - the two
     axes are independent, so a render whose extent is not the same shape as
     the requested canvas simply gets non-square pixels. That is fine for
     every consumer here: the GeoTIFF transform carries a separate x and y

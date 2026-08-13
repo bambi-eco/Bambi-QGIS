@@ -7,7 +7,7 @@ and :mod:`core.embedding_files`.
 
 ``torch`` and ``transformers`` are imported lazily inside functions, so a
 project that never classifies anything neither needs them installed nor pays
-their import cost — and the whole geometry half of this module stays testable
+their import cost - and the whole geometry half of this module stays testable
 without either.
 """
 
@@ -32,7 +32,7 @@ class CropConfig(NamedTuple):
     #: Side length of the crop handed to the backbone.
     size: int = 224
     #: Keep the aspect ratio and pad to square, rather than stretching. A deer
-    #: seen from above is elongated, and stretching changes its proportions —
+    #: seen from above is elongated, and stretching changes its proportions -
     #: which is part of what the sex head is reading.
     letterbox: bool = True
 
@@ -59,7 +59,7 @@ class Window(NamedTuple):
 
 
 # ---------------------------------------------------------------------------
-# Crop geometry — pure, and the part most worth pinning down
+# Crop geometry - pure, and the part most worth pinning down
 # ---------------------------------------------------------------------------
 
 def crop_window(box: Sequence[float], config: CropConfig = CropConfig(),
@@ -71,7 +71,7 @@ def crop_window(box: Sequence[float], config: CropConfig = CropConfig(),
     in. Clamping here instead would shift the animal off-centre exactly when it
     is already hardest to classify.
 
-    *size_override* replaces the box's own dimensions while keeping its centre —
+    *size_override* replaces the box's own dimensions while keeping its centre -
     this is how a matched RGB crop is sized from its thermal partner.
     """
     x1, y1, x2, y2 = (float(v) for v in box)
@@ -96,12 +96,12 @@ def anchored_size(thermal_box: Sequence[float],
     """Size an RGB crop from its thermal partner's box.
 
     The thermal box is the looser of the two and so more reliably encloses the
-    whole animal — antlers included, which is the cue the sex head depends on.
+    whole animal - antlers included, which is the cue the sex head depends on.
     *inverse_scale* is how many RGB pixels one thermal pixel spans, i.e. the
     scale of the inverse of the registration affine.
 
     Only the crop is affected. The stored detections are never rewritten, so
-    geo-referencing and tracking stay valid — the paper redraws the boxes, but
+    geo-referencing and tracking stay valid - the paper redraws the boxes, but
     doing that here would invalidate two upstream stages for a crop-quality
     gain.
     """
@@ -264,7 +264,7 @@ class Backbone:
             kwargs["revision"] = self.revision
 
         try:
-            # nosec B615 — the revision is deliberately optional: the model id
+            # nosec B615 - the revision is deliberately optional: the model id
             # is user-configurable, so a hardcoded pin would be wrong for a
             # custom backbone. See split_revision for how a user pins one.
             self._processor = AutoImageProcessor.from_pretrained(
@@ -376,8 +376,8 @@ def targets_of(spec: dict) -> tuple:
 class FeatureResolver:
     """Assembles the feature vector a head expects, per detection.
 
-    Classification is anchored on one modality — its tracks are what the
-    answers are recorded against — but a ``matched`` head needs both sides.
+    Classification is anchored on one modality - its tracks are what the
+    answers are recorded against - but a ``matched`` head needs both sides.
     This turns "detection 4711 of the primary modality" into whichever vector
     the configured head was trained on, or ``None`` when the pieces are not
     all there.
@@ -424,8 +424,8 @@ class FeatureResolver:
         if rgb is not None and thermal is not None:
             return np.concatenate([np.asarray(rgb), np.asarray(thermal)])
 
-        # No partner. Zeros are not an option — the matched heads were trained
-        # on real pairs — so fall back to a single-modality view or decline.
+        # No partner. Zeros are not an option - the matched heads were trained
+        # on real pairs - so fall back to a single-modality view or decline.
         if unmatched == UNMATCHED_RGB:
             return rgb
         if unmatched == UNMATCHED_THERMAL:
@@ -451,7 +451,7 @@ def head_classes(module, feature_dim: int = 0) -> Tuple[List[str], str]:
         the ``m.classes`` attribute our own heads export.
     ``probe``
         a forward pass with a zero feature vector, which yields the class
-        *count* but no names — enough structure that the user only has to
+        *count* but no names - enough structure that the user only has to
         supply labels.
     ``unknown``
         neither worked; the caller falls back to a mapping defined by hand.
@@ -568,7 +568,7 @@ class Head:
             raise HeadError(
                 f"{os.path.basename(self.path)} expects {expected}-d features "
                 f"but was given {array.shape[1]}-d. Check that the classifier "
-                "matches the configured modality — a 'matched' head takes both "
+                "matches the configured modality - a 'matched' head takes both "
                 "modalities concatenated.")
 
         with torch.no_grad():
@@ -600,7 +600,7 @@ def visible_detections(detection_ids: Sequence[int],
     """The frames a track's species and sex votes may use.
 
     Occlusion is a *quality filter, not a prerequisite*: species and sex have
-    to work whether or not it ran. Three sources, in order — the occlusion
+    to work whether or not it ran. Three sources, in order - the occlusion
     head if it ran, otherwise the stored annotations (which is what the
     labelling tool writes, and a hand annotation is better evidence than a
     78 %-accurate head), otherwise every frame.
@@ -645,7 +645,7 @@ def quorum_vote(calls: Sequence[Tuple[int, str]], quorum: float = 0.5,
 
     *calls* are ``(class_index, label)`` pairs, one per frame that was allowed
     to vote. Returns ``None`` when there are too few frames or no class clears
-    the quorum — an abstention, which the caller records as "unknown" rather
+    the quorum - an abstention, which the caller records as "unknown" rather
     than by discarding the animal. The paper's whole point is that voting makes
     a noisy per-frame call safe: an antler resolves only from some angles, so
     many frames of a true male look female, and the vote is what recovers him.

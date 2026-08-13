@@ -5,10 +5,10 @@
 frame-range overrides (``additional``). Two call conventions existed in the
 plugin and are both kept here:
 
-* :func:`read_correction` / :func:`correction_for_frame` — the raw-file
+* :func:`read_correction` / :func:`correction_for_frame` - the raw-file
   convention of the box projector, click tool and labelling tool
   (``additional`` key, returns the (translation, rotation) tuple).
-* :func:`correction_for_frame_config` — the pipeline-config convention of
+* :func:`correction_for_frame_config` - the pipeline-config convention of
   ``BambiProcessor`` and the dock widget (``additional_corrections`` key,
   returns a ``{"translation":…, "rotation":…}`` dict).
 

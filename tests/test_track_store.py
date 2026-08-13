@@ -103,7 +103,7 @@ def test_log_reports_the_split(project):
 
 
 # ---------------------------------------------------------------------------
-# Total accounting (§12.2) — the assertion the text format could not express
+# Total accounting (§12.2) - the assertion the text format could not express
 # ---------------------------------------------------------------------------
 
 def test_everything_accounted_for_when_all_resolve(project):

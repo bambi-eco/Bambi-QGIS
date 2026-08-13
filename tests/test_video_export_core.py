@@ -3,7 +3,7 @@
 checks and canvas maths).
 
 Everything the overlays draw comes from the store. The pairing strategies that
-used to sit below it — a pixel CSV, a geo-coordinate match, a row-index match —
+used to sit below it - a pixel CSV, a geo-coordinate match, a row-index match -
 are gone: each could hand a box to the wrong animal when a file was re-sorted
 or a detection was dropped (§8.2).
 """

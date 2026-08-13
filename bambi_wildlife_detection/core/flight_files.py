@@ -16,17 +16,17 @@ def detect_common_files(video_folder: str, log_fn: LogFn = None) -> Dict[str, st
 
     Returns a dict with any of these keys (only when found):
 
-    * ``airdata`` — first ``.csv`` in the folder
-    * ``dem`` — first ``.gltf`` / ``.glb``
-    * ``dem_metadata`` — matching DEM JSON (same stem, or common
+    * ``airdata`` - first ``.csv`` in the folder
+    * ``dem`` - first ``.gltf`` / ``.glb``
+    * ``dem_metadata`` - matching DEM JSON (same stem, or common
       ``_mesh``/``_dem``/``_metadata`` suffixes)
-    * ``thermal_calibration`` / ``rgb_calibration`` — ``T_calib.json`` /
+    * ``thermal_calibration`` / ``rgb_calibration`` - ``T_calib.json`` /
       ``W_calib.json``
-    * ``correction`` — ``correction.json``
-    * ``target_folder`` — the conventional ``qgis/`` output subfolder
+    * ``correction`` - ``correction.json``
+    * ``target_folder`` - the conventional ``qgis/`` output subfolder
       (always present; may not exist on disk yet)
 
-    Purely detective — nothing is created or modified.
+    Purely detective - nothing is created or modified.
     """
     found: Dict[str, str] = {}
     try:
@@ -65,7 +65,7 @@ def extract_embedded_srts(video_paths: List[str], cache_dir: str,
                           log_fn: LogFn = None) -> List[str]:
     """Extract embedded SRT subtitle streams from video files using ffmpeg.
 
-    *cache_dir* acts as a persistent cache — if a .srt file for a video
+    *cache_dir* acts as a persistent cache - if a .srt file for a video
     already exists there it is reused without re-running ffmpeg.
     Returns a list of extracted .srt paths (one per video that succeeded).
     """
@@ -77,7 +77,7 @@ def extract_embedded_srts(video_paths: List[str], cache_dir: str,
         import imageio_ffmpeg
         ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
     except Exception:
-        log("ERROR: imageio-ffmpeg not available — cannot extract embedded SRT.")
+        log("ERROR: imageio-ffmpeg not available - cannot extract embedded SRT.")
         return []
 
     extracted = []

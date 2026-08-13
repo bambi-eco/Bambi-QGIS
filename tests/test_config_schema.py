@@ -178,7 +178,7 @@ class TestRoundTrip:
             store.read_str, store.read_double, store.read_bool))
         for entry in cs.CONFIG_ENTRIES:
             if entry.kind == "bool01" and entry.default is None:
-                # "skip when missing" — omitted entirely
+                # "skip when missing" - omitted entirely
                 assert entry.key not in loaded, entry.key
             elif entry.kind == "str":
                 assert loaded[entry.key] == ""

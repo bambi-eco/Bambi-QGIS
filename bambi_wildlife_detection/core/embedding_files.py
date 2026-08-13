@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """Embedding vectors on disk, one ``.npz`` per frame.
 
-The vectors are hours of GPU time and are useful well beyond this plugin — a
-notebook, the authors' own analysis scripts, a future re-identification step —
+The vectors are hours of GPU time and are useful well beyond this plugin - a
+notebook, the authors' own analysis scripts, a future re-identification step -
 so they are written as ordinary files mirroring the frames folder rather than
 buried in a GeoPackage::
 
@@ -58,7 +58,7 @@ def frame_file_name(frame: int, imagefile: str = "") -> str:
     """The ``.npz`` a frame's vectors go in.
 
     Named after the image it came from so the correspondence is obvious in a
-    file manager — ``DJI_0042.JPG`` embeds to ``DJI_0042.npz``, and an
+    file manager - ``DJI_0042.JPG`` embeds to ``DJI_0042.npz``, and an
     extracted ``frame_000123.jpg`` to ``frame_000123.npz``. Frames with no
     recorded image name fall back to the frame number, which is the same
     convention the rest of the pipeline uses.
@@ -79,7 +79,7 @@ def run_folder(target_folder: str, modality: str, projection: str) -> str:
 
 
 def relative_run_folder(modality: str, projection: str) -> str:
-    """What ``embedding_runs.folder`` records — relative, so the flight moves."""
+    """What ``embedding_runs.folder`` records - relative, so the flight moves."""
     return f"embeddings_{modality}/{projection}"
 
 
@@ -135,7 +135,7 @@ def read_frame(path: str) -> Dict[int, "object"]:
                     result[detection_id] = archive[key]
             return result
     except (OSError, ValueError, EOFError, zipfile.BadZipFile):
-        # A truncated archive — an interrupted write, a full disk — is
+        # A truncated archive - an interrupted write, a full disk - is
         # indistinguishable from an absent one as far as the caller is
         # concerned: both mean "these vectors need computing again".
         # BadZipFile derives from Exception rather than OSError, so it has to

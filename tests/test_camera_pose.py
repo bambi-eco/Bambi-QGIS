@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Unit tests for core.camera_pose — the single source of pose→camera
+"""Unit tests for core.camera_pose - the single source of pose→camera
 construction shared by geo-referencing, box projection, click inspection,
 labelling propagation and the correction wizard.
 
@@ -64,7 +64,7 @@ class TestBuildCamera:
         assert np.allclose(camera.rotation.degrees, [10.0, 20.0, 350.0])
 
     def test_pose_reaches_the_drone_pose_helper_in_degrees(self):
-        """Not radians — the helper's contract is degrees."""
+        """Not radians - the helper's contract is degrees."""
         camera = build_camera(META, {}, {})
         assert max(abs(v) for v in camera.rotation.degrees) > 7.0
 
@@ -130,7 +130,7 @@ class TestRayConvention:
     Older alfspy built world rays with ``dirs @ R33.T`` and callers negated the
     eulers to compensate; alfs_py 86e0d92 changed it to ``dirs @ R33``, at which
     point the negation silently corrupts every projection. ``build_camera``
-    picks the matching construction — these tests pin the selection, and
+    picks the matching construction - these tests pin the selection, and
     ``tests_qgis/test_camera_pose_conventions.py`` proves the two branches
     produce the same world rays against the real pyrr.
     """

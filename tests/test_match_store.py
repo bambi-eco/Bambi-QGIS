@@ -152,7 +152,7 @@ def test_pairs_are_scoped_to_their_run(root):
 
 
 # ---------------------------------------------------------------------------
-# Partner lookups — what builds a matched feature vector
+# Partner lookups - what builds a matched feature vector
 # ---------------------------------------------------------------------------
 
 def test_partner_detections_both_directions(root):

@@ -2,7 +2,7 @@
 """The Reset Step action (EXCHANGE_FORMAT_PLAN.md §7, §10 Phase 5).
 
 The cascade itself is covered headlessly in ``tests/test_stages.py``; what needs
-a real QGIS is the wiring — that the button exists, refuses sensibly, and that
+a real QGIS is the wiring - that the button exists, refuses sensibly, and that
 a locked file produces an explanation rather than a traceback.
 
 Run via the QGIS image only::
@@ -31,7 +31,7 @@ def project_folder(tmp_path):
 
 @pytest.fixture
 def quiet(monkeypatch):
-    """Stub the modal dialogs — they abort a headless run."""
+    """Stub the modal dialogs - they abort a headless run."""
     shown = {"info": [], "warn": [], "question": []}
     monkeypatch.setattr(QMessageBox, "information",
                         lambda *a, **k: shown["info"].append(a))

@@ -3,8 +3,8 @@
 
 The split follows the dependency graph of §7: Pre-Processing derives from the
 poses and the DEM and is independent of any animal, Processing depends on the
-detections. This is presentation only — config keys, step ids and
-``output_inventory`` keys are unchanged — so the tests check that every step is
+detections. This is presentation only - config keys, step ids and
+``output_inventory`` keys are unchanged - so the tests check that every step is
 still reachable and that a saved configuration still loads.
 
 Run via the QGIS image only::
@@ -61,8 +61,8 @@ PRE_BUTTONS = [
 PROC_BUTTONS = [
     ("detect_btn", "A1"),
     ("track_btn", "A2"),
-    # Matching is a statement about the tracks — which two of them are one
-    # animal — so it belongs with tracking rather than with the classifiers
+    # Matching is a statement about the tracks - which two of them are one
+    # animal - so it belongs with tracking rather than with the classifiers
     # that happen to read the answer.
     ("track_matching_btn", "A3"),
     # The Processing tab is grouped into Detection and Tracking (A…),
@@ -281,9 +281,9 @@ def test_each_popup_describes_only_its_own_steps(dock, monkeypatch):
     dock._show_processing_info()
     proc_text = shown[-1]
 
-    for step in ("P1 —", "P6 —"):
+    for step in ("P1 -", "P6 -"):
         assert step in pre_text and step not in proc_text
-    for step in ("A1 —", "A3 —"):
+    for step in ("A1 -", "A3 -"):
         assert step in proc_text and step not in pre_text
 
 

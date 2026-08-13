@@ -132,14 +132,14 @@ def test_pixel_areas_are_used_without_geo_referencing(flight):
 
 
 def test_the_metric_areas_are_what_actually_decide(flight):
-    """Not just labelled 'orthorectified' — actually used.
+    """Not just labelled 'orthorectified' - actually used.
 
     The pixel boxes and the world boxes are made to disagree about *which*
     animal is the outlier, so the verdict itself says which was measured. With
     proportional fixtures both answers coincide and the test proves nothing.
     """
     # By pixel area, track 7 is the small one (the fixture's last entry).
-    # By world area, track 1 is — the opposite animal. The adults are given
+    # By world area, track 1 is - the opposite animal. The adults are given
     # slightly different sizes, because a herd of exactly equal animals has a
     # zero median-absolute-deviation and nothing can be an outlier of it.
     geo_areas = {1: 0.25, 2: 9.0, 3: 9.1, 4: 9.2, 5: 9.3, 6: 9.4, 7: 9.5}

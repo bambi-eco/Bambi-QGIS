@@ -479,7 +479,7 @@ def test_a_stored_configuration_makes_it_a_flight(tmp_path):
 
 
 def test_results_alone_make_it_a_flight(tmp_path):
-    """A folder can hold outputs without a configuration — a 5.x project that
+    """A folder can hold outputs without a configuration - a 5.x project that
     was migrated, for instance."""
     root = str(tmp_path)
     _stage(root, store.DETECTIONS, "t")

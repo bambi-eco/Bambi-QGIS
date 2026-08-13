@@ -12,7 +12,7 @@ deployment, extracted frames are media, detections are observations.
 
 **Darwin Core Archive** is the GBIF publishing format: an ``occurrence.txt``
 plus ``meta.xml`` describing it. One occurrence per *track* rather than per
-detection — a track is one animal seen once, whereas emitting every detection
+detection - a track is one animal seen once, whereas emitting every detection
 would publish the same roe deer two hundred times.
 
 Both need world coordinates in latitude/longitude. The store holds them in the
@@ -35,7 +35,7 @@ BASIS_OF_RECORD = "MachineObservation"
 def _to_wgs84(points, epsg: int):
     """Project ``[(x, y), …]`` from *epsg* to lon/lat.
 
-    Raises :class:`common.ExportError` rather than guessing — publishing
+    Raises :class:`common.ExportError` rather than guessing - publishing
     coordinates in the wrong reference system is worse than not publishing.
     """
     if not epsg:
@@ -44,7 +44,7 @@ def _to_wgs84(points, epsg: int):
             "be known. Set the target CRS before exporting.")
     try:
         from pyproj import Transformer
-    except ImportError as exc:  # pragma: no cover — environment dependent
+    except ImportError as exc:  # pragma: no cover - environment dependent
         raise common.ExportError(
             "pyproj is required to convert the project CRS to "
             "latitude/longitude. Install it from the Dependencies tab.") from exc
@@ -57,8 +57,8 @@ def _to_wgs84(points, epsg: int):
 def _scientific_name(taxonomy: dict) -> str:
     """The species' scientific name, or ``""`` when it has none.
 
-    ``species.name`` is the working label the user picks in the combo box —
-    "roe deer" — which is a *vernacular* name. Darwin Core and Camtrap DP both
+    ``species.name`` is the working label the user picks in the combo box -
+    "roe deer" - which is a *vernacular* name. Darwin Core and Camtrap DP both
     want the scientific one, and publishing a vernacular as ``scientificName``
     leaves GBIF fuzzy-matching a string.
     """
@@ -231,7 +231,7 @@ def export_camtrap_dp(target_folder: str, modality: str, output_folder: str,
         "name": deployment_id.lower().replace(" ", "-"),
         "profile": "https://raw.githubusercontent.com/tdwg/camtrap-dp/1.0/camtrap-dp-profile.json",
         "created": datetime.now(timezone.utc).isoformat(),
-        "title": f"BAMBI aerial survey — {deployment_id}",
+        "title": f"BAMBI aerial survey - {deployment_id}",
         "sources": [{"title": "BAMBI QGIS plugin"}],
         "resources": [
             {"name": "deployments", "path": "deployments.csv",
@@ -284,8 +284,8 @@ def export_darwin_core(target_folder: str, modality: str, output_folder: str,
     once, and publishing every detection would report the same roe deer as
     hundreds of separate occurrences.
 
-    ``not-an-animal`` is always excluded — it is by definition not an
-    occurrence of anything — and so are tracks still classed as ``unknown`` or
+    ``not-an-animal`` is always excluded - it is by definition not an
+    occurrence of anything - and so are tracks still classed as ``unknown`` or
     the generic ``animal``, because GBIF wants a taxon. How many were dropped
     for that reason is reported, since it is a publishing decision rather than a
     technicality.
@@ -297,7 +297,7 @@ def export_darwin_core(target_folder: str, modality: str, output_folder: str,
     summaries = _track_summary(rows, vocabulary)
 
     # A base class is not a taxon, and neither is a species whose scientific
-    # name has not been filled in — `name` is the working label ("roe deer"),
+    # name has not been filled in - `name` is the working label ("roe deer"),
     # which is a vernacular name. Publishing it as `scientificName` would leave
     # GBIF fuzzy-matching a string, so those tracks are held back and counted.
     def publishable(summary):

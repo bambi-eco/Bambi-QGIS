@@ -190,7 +190,7 @@ class TestGeoTIFFConversionWorkerSourceCrs:
     """
 
     def _write_crsless_rd_tile(self, tmp_path):
-        # 60 m tile at RD New (95000, 481250) — the corner of AHN tile 24HN2 —
+        # 60 m tile at RD New (95000, 481250) - the corner of AHN tile 24HN2 -
         # written without any CRS tag so rasterio reads crs=None.
         data = np.linspace(-1.3, 8.0, 6 * 6).reshape(6, 6)
         path = tmp_path / "ahn.tif"
@@ -236,7 +236,7 @@ class TestGeoTIFFConversionWorkerSourceCrs:
         meta = json.loads((tmp_path / "out" / "ahn.json").read_text())
         assert meta["crs"] == "EPSG:32631"
         # RD (95000, 481250) is UTM 31N (~602.6 km, ~5797.4 km), lat/lon
-        # (52.317, 4.505) in the Dutch dunes — not raw RD numbers.
+        # (52.317, 4.505) in the Dutch dunes - not raw RD numbers.
         assert 602000 < meta["origin"][0] < 603500
         assert 5.796e6 < meta["origin"][1] < 5.799e6
         assert meta["origin_wgs84"]["latitude"] == pytest.approx(52.317, abs=0.01)

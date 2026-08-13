@@ -9,7 +9,7 @@ mkdir -p "$REPORTS_DIR"
 RUN_TS=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 
 echo "============================================"
-echo " BAMBI Plugin — Security & Linting Checks"
+echo " BAMBI Plugin - Security & Linting Checks"
 echo " $RUN_TS"
 echo "============================================"
 

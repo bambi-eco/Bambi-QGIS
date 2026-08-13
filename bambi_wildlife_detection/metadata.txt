@@ -95,11 +95,11 @@ changelog=Version 6.1.0
 
     Version 5.2.0:
     Added:
-    - Thermal tone-curve mapping: both the Thermal Image Viewer and the photo-extraction thermal visualisation now offer a "Curve (custom mapping)" mode as a fine-granular alternative to the lower/upper thresholds — a curve with draggable control points maps a fixed temperature range to display intensity (with a live temperature histogram). The range can be entered manually or determined via "Auto Detect", which scans the flight's thermal images for the actual minimum/maximum temperature. The curve is stored in the QGIS project.
+    - Thermal tone-curve mapping: both the Thermal Image Viewer and the photo-extraction thermal visualisation now offer a "Curve (custom mapping)" mode as a fine-granular alternative to the lower/upper thresholds - a curve with draggable control points maps a fixed temperature range to display intensity (with a live temperature histogram). The range can be entered manually or determined via "Auto Detect", which scans the flight's thermal images for the actual minimum/maximum temperature. The curve is stored in the QGIS project.
     - Labelling tool: new "Replace detections in project" button that replaces the existing detections/tracks instead of appending to them.
     - Labelling tool: new "Import all as label tracks" button to import every pipeline track at once instead of one by one.
     - Labelling tool: now supports to merge/split tracks
-    - Labelling tool: the geo-referenced propagation now works on several tracks at once — select multiple tracks in the track list (Ctrl/Shift click) and the boxes of every selected track on the current frame are propagated in one step (the DEM is loaded once). Tracks without a box on the current frame, or whose box cannot be projected, are skipped instead of aborting the run and are listed in a summary afterwards.
+    - Labelling tool: the geo-referenced propagation now works on several tracks at once - select multiple tracks in the track list (Ctrl/Shift click) and the boxes of every selected track on the current frame are propagated in one step (the DEM is loaded once). Tracks without a box on the current frame, or whose box cannot be projected, are skipped instead of aborting the run and are listed in a summary afterwards.
     - Processing tool: Now also supports the "no images" flag of the pose extractors for debugging purposes.
     Changed:
     - Generate Flight Route is now also usable without frame extraction, based only on the AirData file (camera positions are skipped).

@@ -170,7 +170,7 @@ def test_the_stage_is_recorded(flight):
 
 
 # ---------------------------------------------------------------------------
-# Resuming — why membership is stored at all
+# Resuming - why membership is stored at all
 # ---------------------------------------------------------------------------
 
 def test_a_second_run_embeds_nothing(flight):
@@ -323,7 +323,7 @@ def test_rgb_crops_are_sized_from_their_thermal_partner(flight):
     sizes = BambiProcessor()._thermal_anchor_sizes(
         _config(flight, embeddings_camera="rgb"), flight, "w", logs.append)
 
-    # Thermal detection 1 is a 20x20 box; at half scale that is 40x40 in RGB —
+    # Thermal detection 1 is a 20x20 box; at half scale that is 40x40 in RGB -
     # much larger than the RGB box's own 10x10, which is the point: the
     # thermal box is the looser one and encloses the whole animal.
     assert sizes == {1: pytest.approx((40.0, 40.0))}
@@ -442,7 +442,7 @@ def test_thermal_anchoring_does_not_apply_to_geo_crops(flight):
 
 
 def test_anchoring_does_not_rewrite_the_stored_detections(flight):
-    """Only the crop is affected — rewriting boxes would invalidate
+    """Only the crop is affected - rewriting boxes would invalidate
     geo-referencing and tracking upstream."""
     _add_rgb_side(flight)
     before = track_store.load_pixel_tracks(flight, "w")

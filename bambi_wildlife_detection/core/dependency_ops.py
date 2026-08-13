@@ -31,7 +31,7 @@ _DJI_SDK_URL = (
 # these packages below what QGIS bundles (ultralytics 8.3.75 wants
 # ``numpy<=2.1.1`` while QGIS 3.34 ships 2.2.6), which makes the constrained
 # resolve impossible.  In that case we retry unpinned and then remove the
-# shadowing user-site copy again — see ``_repair_user_site_shadows``.
+# shadowing user-site copy again - see ``_repair_user_site_shadows``.
 _BUNDLED_PIN_PACKAGES = ('numpy', 'scipy')
 
 # Cache for _detect_bundled_versions: None = not probed yet, dict = result.
@@ -43,11 +43,11 @@ _bundled_versions_cache = None
 #: bound of its ``_VERSION_RANGES`` entry below, which is what flags an
 #: out-of-date install (``tests/test_alfspy_pin.py``).
 ALFS_PY_TAG = 'v2.1.0'
-ALFS_TORCH_TAG = 'v1.1.0'
+ALFS_TORCH_TAG = 'v1.1.1'
 BAMBI_DETECTION_TAG = 'v0.6.0'
 
 #: The two interchangeable alfspy backends.  Both install a package called
-#: ``alfspy`` and so cannot coexist — selecting one uninstalls the other.
+#: ``alfspy`` and so cannot coexist - selecting one uninstalls the other.
 #: ``alfs_py`` rasterises through ModernGL, ``alfs_pytorch`` through PyTorch
 #: tensors (and picks up CUDA on its own).  They agree to well under one 8-bit
 #: level on rendered output and to ~1e-11 m on geo-referencing.
@@ -92,8 +92,9 @@ _VERSION_RANGES = {
     'bambi-detection': ("0.6.0", None),
     # 2.1.0 / 1.1.0 are the first releases whose drone-pose rotation applies the
     # gimbal heading about world up; anything older mis-points every oblique frame.
+    # The torch floor tracks the pinned tag, which is ahead of that at 1.1.1.
     'AlfsPy': ("2.1.0", None),
-    'AlfsTorch': ("1.1.0", None),
+    'AlfsTorch': ("1.1.1", None),
     'pycolmap': ('4.0.3', '4.0.3'),
     'boxmot': ('17.0.0', '18.0.0'),
     'georef-tracker': ("0.1.0", "0.1.0"),
@@ -279,7 +280,7 @@ def _write_constraints_file(log_fn):
 def _detect_user_site_shadows(log_fn=None):
     """Return ``{pkg: version}`` for the ABI-sensitive packages that currently
     live in the *user* site-packages with a version differing from the build
-    QGIS bundles — i.e. the copies that shadow (and break) QGIS's own.
+    QGIS bundles - i.e. the copies that shadow (and break) QGIS's own.
 
     Never cached: this is probed after an install to see what pip just did.
     Failures degrade to an empty dict (nothing is removed).

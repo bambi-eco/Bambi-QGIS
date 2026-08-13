@@ -3,7 +3,7 @@
 
 6.0 stores detections, geo-referencing and tracks in GeoPackages and keeps the
 5.x text files alongside them for one release. The toggle turns the text files
-off — but only for outputs the store fully replaces. Switching it off must
+off - but only for outputs the store fully replaces. Switching it off must
 never remove the *only* copy of something, which is why FoV polygons and
 segmentation JSON are deliberately not routed through it.
 """

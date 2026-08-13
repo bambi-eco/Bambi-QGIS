@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Real-QGIS smoke tests: every plugin dialog must construct without error.
 
-These catch the most common breakage the unit and integration suites miss —
+These catch the most common breakage the unit and integration suites miss -
 a renamed widget attribute or a signal wired to a deleted slot surfaces the
 moment the dialog's ``__init__`` / ``_setup_ui`` runs. They do not exercise
 behaviour; the assertion is simply "constructs, then closes cleanly".
@@ -100,7 +100,7 @@ class TestDialogsConstruct:
     def test_correction_wizard_invalid_config_rejects_cleanly(self, iface):
         # With an empty config the wizard validates, schedules a deferred
         # rejection and returns from __init__ without building the UI or
-        # raising — the construction path (imports, super().__init__) still
+        # raising - the construction path (imports, super().__init__) still
         # runs, which is what we are smoke-testing.
         from bambi_wildlife_detection.bambi_correction_wizard import (
             BambiCorrectionWizard)

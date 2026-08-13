@@ -81,7 +81,7 @@ def test_loading_an_empty_project(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Interpolation — mirrors LabelTrack.box_at
+# Interpolation - mirrors LabelTrack.box_at
 # ---------------------------------------------------------------------------
 
 def test_interpolation_fills_the_gap():
@@ -338,7 +338,7 @@ def test_a_detector_rerun_never_touches_manual_detections(tmp_path):
 def test_the_manual_run_is_not_a_tracker_run(tmp_path):
     """It is additive, not an alternative (§8.2).
 
-    Tracker runs are alternatives — builtin, boxmot and TRex describe the same
+    Tracker runs are alternatives - builtin, boxmot and TRex describe the same
     animals differently, so one is active at a time. The labelling tool's run
     is pooled alongside whichever that is, because its tracks are usually
     animals the detector missed.

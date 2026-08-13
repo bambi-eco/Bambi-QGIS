@@ -2,7 +2,7 @@
 """Projecting classification results onto the canonical fields.
 
 This is the step that makes the classifiers visible to everything else, so the
-tests check where the values actually land — including at the detection level,
+tests check where the values actually land - including at the detection level,
 which is what the exporters and the analytics filter on.
 """
 import json

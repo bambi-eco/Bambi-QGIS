@@ -5,7 +5,7 @@ GeoJSON keeps ``not-an-animal`` by default: it is a record of what was seen and
 decided, not a training set, so a labelled false positive is information rather
 than noise.
 
-The TRex writer closes the loop with the importer that has existed since 5.x —
+The TRex writer closes the loop with the importer that has existed since 5.x -
 BAMBI could read TRex tracklets but never write them.
 """
 
@@ -91,7 +91,7 @@ def export_geojson(target_folder: str, modality: str, output_path: str,
         if not features and all_rows:
             if not rows:
                 # Everything was dropped before tracks were even considered.
-                message += (f" — none of the {len(all_rows)} detection(s) are "
+                message += (f" - none of the {len(all_rows)} detection(s) are "
                             "geo-referenced. Run 'Geo-reference detections'.")
             elif tracks_only:
                 message += common.no_tracks_hint(target_folder, modality)
@@ -110,7 +110,7 @@ def export_segmentation_geojson(target_folder: str, modality: str,
     geometries answering different questions, so they are separate files rather
     than one mixed collection that no GIS tool could style sensibly.
 
-    Masks that were never geo-referenced are skipped and reported — a
+    Masks that were never geo-referenced are skipped and reported - a
     pixel-space polygon has no place in a world-coordinate document.
     """
     from .. import store
@@ -161,7 +161,7 @@ def export_segmentation_geojson(target_folder: str, modality: str,
     if log_fn:
         message = f"GeoJSON: {len(features)} segmentation(s) → {output_path}"
         if without_world:
-            message += (f" — {without_world} mask(s) have no world "
+            message += (f" - {without_world} mask(s) have no world "
                         "coordinates. Run 'Geo-Reference Segmentation'.")
         log_fn(message)
     return output_path

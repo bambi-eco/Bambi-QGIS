@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Project Schema dialog — species, enums and custom fields.
+"""Project Schema dialog - species, enums and custom fields.
 
 The single editor for the project vocabulary (EXCHANGE_FORMAT_PLAN.md §5.3),
 reached from three places:
@@ -9,8 +9,8 @@ reached from three places:
 * "Manage species…" next to any species combo.
 
 All logic lives in :mod:`core.schema_editor`; this is a shell over it, so the
-rules — protected base classes, append-only ids, no deleting what is still
-referenced — are enforced whether or not the dialog is involved.
+rules - protected base classes, append-only ids, no deleting what is still
+referenced - are enforced whether or not the dialog is involved.
 
 Edits are committed when the dialog is accepted and rolled back when it is
 cancelled, so a half-finished taxonomy is never persisted.
@@ -112,7 +112,7 @@ class BambiSchemaDialog(QDialog):
             if species["protected"]:
                 label += "   (base class)"
             elif species.get("scientific_name"):
-                label += f"   — {species['scientific_name']}"
+                label += f"   - {species['scientific_name']}"
                 if species.get("gbif_taxon_key"):
                     label += f" [GBIF {species['gbif_taxon_key']}]"
             item = QListWidgetItem(label)
@@ -172,7 +172,7 @@ class BambiSchemaDialog(QDialog):
 
         scientific_name, ok = QInputDialog.getText(
             self, "Taxonomy",
-            f"Scientific name for '{current['name']}' — Darwin Core publishes "
+            f"Scientific name for '{current['name']}' - Darwin Core publishes "
             "this; the name above is the vernacular one:",
             text=current.get("scientific_name") or "")
         if not ok:
@@ -186,7 +186,7 @@ class BambiSchemaDialog(QDialog):
 
         key_text, ok = QInputDialog.getText(
             self, "Taxonomy",
-            "GBIF taxon key (optional — the number from the species' page on "
+            "GBIF taxon key (optional - the number from the species' page on "
             "gbif.org):",
             text=str(current.get("gbif_taxon_key") or ""))
         if not ok:
@@ -218,7 +218,7 @@ class BambiSchemaDialog(QDialog):
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.addWidget(QLabel(
-            "Reusable value sets. Renaming a value is safe — stored data holds "
+            "Reusable value sets. Renaming a value is safe - stored data holds "
             "the value's id, not its label."))
 
         picker = QHBoxLayout()
@@ -457,7 +457,7 @@ class BambiSchemaDialog(QDialog):
             if not enums:
                 QMessageBox.warning(
                     self, "No enums yet",
-                    "Define an enum first — an enum field draws its values "
+                    "Define an enum first - an enum field draws its values "
                     "from one.")
                 return
             names = [e["name"] for e in enums]

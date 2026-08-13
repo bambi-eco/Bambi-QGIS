@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """Writing detections into the 6.0 store (EXCHANGE_FORMAT_PLAN.md §3.1, §4).
 
-Every producer of detections — the detector, the TRex importer, the labelling
-tool — goes through :func:`record_detections`, which is what makes the
+Every producer of detections - the detector, the TRex importer, the labelling
+tool - goes through :func:`record_detections`, which is what makes the
 per-source generation model of §4.1 hold:
 
 * a producer owns a ``detection_sources`` row and may only delete or re-mint
@@ -70,7 +70,7 @@ def record_detections(target_folder: str, modality: str,
     Each row needs ``frame``, ``x1``, ``y1``, ``x2``, ``y2`` and may carry
     ``confidence``, ``source_class`` and ``attributes`` (a JSON string).
 
-    Only this producer's rows are removed — a re-run of the detector never
+    Only this producer's rows are removed - a re-run of the detector never
     disturbs manually labelled or TRex-imported detections sharing the table.
 
     Returns ``{"written": n, "replaced": m, "generation": g}``.
@@ -192,8 +192,8 @@ def adopt_legacy_detections(target_folder: str, modality: str,
     """Ingest a legacy ``detections.txt`` when the store has none yet.
 
     Everything downstream of detection now works through the store, so a
-    project whose ``detections.txt`` was produced by 5.x — or written by hand,
-    or by a tool outside the plugin — would otherwise reach geo-referencing
+    project whose ``detections.txt`` was produced by 5.x - or written by hand,
+    or by a tool outside the plugin - would otherwise reach geo-referencing
     with nothing to geo-reference against, and would silently produce no
     ``tracks_pixel.csv`` for the video creator, click tool or labelling tool.
 
@@ -208,7 +208,7 @@ def adopt_legacy_detections(target_folder: str, modality: str,
     if not os.path.isfile(path):
         return 0
     if detection_counts(target_folder, modality):
-        return 0   # the store is already populated — nothing to adopt
+        return 0   # the store is already populated - nothing to adopt
 
     from .migration import read_legacy_detections
 
@@ -227,7 +227,7 @@ def adopt_legacy_detections(target_folder: str, modality: str,
         log_fn(f"Adopted {len(detector_rows)} detection(s) from "
                f"detections_{modality}/detections.txt into the store")
         if label_rows:
-            log_fn(f"  {len(label_rows)} labelled row(s) were skipped — "
+            log_fn(f"  {len(label_rows)} labelled row(s) were skipped - "
                    "re-export them from the labelling tool to link them to "
                    "their label tracks")
     return len(detector_rows)
@@ -239,7 +239,7 @@ def compare_with_legacy_text(target_folder: str, modality: str,
     """Check the store against the legacy text file for one producer.
 
     Returns ``None`` when they agree, otherwise a description of the first
-    disagreement. This is the dual-write parity gate of §10 Phase 2 — the
+    disagreement. This is the dual-write parity gate of §10 Phase 2 - the
     strongest safety net available while both paths coexist, and it costs
     almost nothing to run.
     """

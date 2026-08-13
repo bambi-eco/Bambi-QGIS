@@ -4,11 +4,11 @@ BAMBI Correction Wizard
 =======================
 Three-step dialog for computing and storing camera correction factors.
 
-Step 1 — Point Selection
+Step 1 - Point Selection
     Side-by-side frame views; the user places one corresponding ground point
     in each view.
 
-Step 2 — Geo-referencing & Calibration
+Step 2 - Geo-referencing & Calibration
     * The selected pixels are projected onto the DEM to obtain world
       coordinates.  The camera XY position is the circle centre; the XY
       distance from camera to world point is the radius.
@@ -21,7 +21,7 @@ Step 2 — Geo-referencing & Calibration
     * All six correction values can be fine-tuned manually with live plot
       feedback.
 
-Step 3 — Light-field Preview & Save
+Step 3 - Light-field Preview & Save
     Renders an ALFS integral image from the selected frames (+ optional
     neighbour range) with the found correction.  The correction can be
     written to ``correction.json`` as a global default or as a local
@@ -57,7 +57,7 @@ from qgis.PyQt.QtGui import (
 
 # Angle wrapping and circle-intersection helpers moved to
 # core.correction_solver; re-exported under their old names.
-from .core.correction_solver import (  # noqa: F401 — re-exported API
+from .core.correction_solver import (  # noqa: F401 - re-exported API
     circles_intersect as _circles_intersect,
     wrap_deg as _wrap_deg,
     wrap_rad as _wrap_rad,
@@ -215,7 +215,7 @@ class ClickableImageLabel(QLabel):
             )
             painter.drawPixmap(self._img_rect.topLeft(), scaled)
 
-        # Reference points — small diamond markers
+        # Reference points - small diamond markers
         if self._ref_points and self._img_rect:
             ref_col = QColor(200, 180, 80)
             painter.setPen(QPen(ref_col, 1))
@@ -233,7 +233,7 @@ class ClickableImageLabel(QLabel):
                 painter.drawLine(int(rpx - r), int(rpy),
                                  int(rpx), int(rpy - r))
 
-        # Mapping point — red crosshair
+        # Mapping point - red crosshair
         if self._point and self._img_rect:
             px = self._img_rect.left() + self._point[0] * self._img_rect.width()
             py = self._img_rect.top() + self._point[1] * self._img_rect.height()
@@ -520,7 +520,7 @@ class CirclePlotWidget(QWidget):
             # Drop any leftover drag preview so painting and hit-testing both
             # use the freshly computed data again.  Without this the preview
             # from the last drag is drawn forever while _near_point tests
-            # against diverging _d positions — the markers become unclickable.
+            # against diverging _d positions - the markers become unclickable.
             self._d_drag_preview = None
             self._d_at_drag_start = None
         self.update()
@@ -576,7 +576,7 @@ class CirclePlotWidget(QWidget):
         * Radius change (delta_tz) is applied equally to both sides.
         * Angle change (delta_rz) rotates each geo-point around its own centre.
 
-        No ray-casting is performed — the result is an instantaneous
+        No ray-casting is performed - the result is an instantaneous
         approximation that is replaced by a full geo-reference recompute on
         mouse-release.
         """
@@ -799,7 +799,7 @@ class CirclePlotWidget(QWidget):
                                 float(self._HIT_RADIUS_PX),
                                 float(self._HIT_RADIUS_PX))
 
-        # Reference points — small diamond markers, one shade darker than the
+        # Reference points - small diamond markers, one shade darker than the
         # associated circle-centre colour; no ring, no drag interaction.
         ref_colors = [QColor(50, 90, 180), QColor(180, 95, 40)]
         for rps, col in zip((d.get('rp1', []), d.get('rp2', [])), ref_colors):
@@ -923,7 +923,7 @@ class _ProbeWorker(QThread):
 
             # Fallback: legacy incremental probe + brute-force yaw sweep
             self.status.emit(
-                "Analytic solve failed — falling back to step probe…"
+                "Analytic solve failed - falling back to step probe…"
             )
             new_tz = solver.probe_z(corr)
             corr['translation']['z'] = new_tz
@@ -1368,7 +1368,7 @@ class BambiCorrectionWizard(QDialog):
         self._stack.addWidget(self._page1)
         self._stack.addWidget(self._page2)
 
-        # Dialog-level shortcuts — active whenever the dialog has focus,
+        # Dialog-level shortcuts - active whenever the dialog has focus,
         # regardless of which child widget was last clicked.
         # Each key dispatches to the correct handler based on the current page.
         sc_r = QShortcut(QKeySequence("R"), self)
@@ -1499,7 +1499,7 @@ class BambiCorrectionWizard(QDialog):
         layout.addWidget(img_lbl, stretch=1)
 
         # --- point status ---
-        pt_lbl = QLabel("No point selected — click on the image above.")
+        pt_lbl = QLabel("No point selected - click on the image above.")
         pt_lbl.setStyleSheet("color: #aaa; font-style: italic;")
         layout.addWidget(pt_lbl)
 
@@ -1572,7 +1572,7 @@ class BambiCorrectionWizard(QDialog):
         layout.addWidget(info_lbl)
 
         # Z-offset probe
-        probe_grp = QGroupBox("Step 1 — Automatic Z-Offset & Yaw Solver")
+        probe_grp = QGroupBox("Step 1 - Automatic Z-Offset & Yaw Solver")
         pg_layout = QHBoxLayout(probe_grp)
 
         pg_layout.addWidget(QLabel("Max steps:"))
@@ -1624,7 +1624,7 @@ class BambiCorrectionWizard(QDialog):
         mid.addWidget(plot_grp)
 
         # Middle: manual fine-tuning form
-        self._ctrl_grp = QGroupBox("Step 2 — Manual Fine-Tuning")
+        self._ctrl_grp = QGroupBox("Step 2 - Manual Fine-Tuning")
         cf = QFormLayout(self._ctrl_grp)
         cf.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
 
@@ -1772,7 +1772,7 @@ class BambiCorrectionWizard(QDialog):
         self._loc_start = QSpinBox()
         self._loc_start.setRange(0, 999999)
         sg.addWidget(self._loc_start)
-        sg.addWidget(QLabel("—"))
+        sg.addWidget(QLabel("-"))
         self._loc_end = QSpinBox()
         self._loc_end.setRange(0, 999999)
         self._loc_end.setValue(999999)
@@ -1872,8 +1872,8 @@ class BambiCorrectionWizard(QDialog):
 
     def _goto(self, index: int) -> None:
         titles = [
-            "Step 1 of 2  —  Select Corresponding Ground Points",
-            "Step 2 of 2  —  Calibrate Correction & Light Field Preview",
+            "Step 1 of 2  -  Select Corresponding Ground Points",
+            "Step 2 of 2  -  Calibrate Correction & Light Field Preview",
         ]
         self._step_label.setText(titles[index])
         self._stack.setCurrentIndex(index)
@@ -2062,7 +2062,7 @@ class BambiCorrectionWizard(QDialog):
             )
         else:
             self._probe_status.setText(
-                "Done. (Could not verify circles — check DEM coverage)"
+                "Done. (Could not verify circles - check DEM coverage)"
             )
 
         self._probe_btn.setEnabled(True)
@@ -2082,7 +2082,7 @@ class BambiCorrectionWizard(QDialog):
         if circles is None:
             self._circle_plot.clear()
             self._compute_status.setText(
-                "Geo-referencing failed — a point may project off the DEM. "
+                "Geo-referencing failed - a point may project off the DEM. "
                 "Adjust the correction values and press ↺ Refresh Plot."
             )
             return
@@ -2332,7 +2332,7 @@ class BambiCorrectionWizard(QDialog):
                     int(((cy + half) - wy) / cam['ortho_size'] * sz),
                 )
 
-            # Primary mapping points — coloured X markers
+            # Primary mapping points - coloured X markers
             primary_colors = [QColor(255, 80, 80), QColor(80, 200, 255)]
             for i, (wx, wy) in enumerate(self._render_geo_world_points):
                 px_x, px_y = _world_to_px(wx, wy)
@@ -2341,7 +2341,7 @@ class BambiCorrectionWizard(QDialog):
                 painter.drawLine(px_x - arm, px_y - arm, px_x + arm, px_y + arm)
                 painter.drawLine(px_x + arm, px_y - arm, px_x - arm, px_y + arm)
 
-            # Additional reference points — diamond markers, matching circle-plot colours
+            # Additional reference points - diamond markers, matching circle-plot colours
             ref_colors = [QColor(50, 90, 180), QColor(180, 95, 40)]
             if self._render_geo_ref_world_points:
                 for side, col in zip((0, 1), ref_colors):
@@ -2450,7 +2450,7 @@ class BambiCorrectionWizard(QDialog):
     def _show_wizard_info(self) -> None:
         """Show an info popup describing the correction wizard."""
         dlg = QDialog(self)
-        dlg.setWindowTitle("Correction Wizard — How It Works")
+        dlg.setWindowTitle("Correction Wizard - How It Works")
         dlg.setMinimumWidth(520)
         lay = QVBoxLayout(dlg)
         lay.setSpacing(10)
@@ -2461,13 +2461,13 @@ class BambiCorrectionWizard(QDialog):
             "rotational offsets that align the camera poses with the Digital "
             "Elevation Model (DEM). These corrections compensate for systematic "
             "errors in the drone's GPS and IMU data.<br><br>"
-            "<b>Step 1 — Select Corresponding Ground Points</b><br>"
+            "<b>Step 1 - Select Corresponding Ground Points</b><br>"
             "Load one frame per camera side (thermal or RGB) and click on the "
-            "same clearly identifiable ground feature in both images — for example "
+            "same clearly identifiable ground feature in both images - for example "
             "a road marking, building corner, or any fixed object. Optionally add "
             "extra reference points to visually evaluate the match quality later. "
             "The DEM must finish loading before you can proceed.<br><br>"
-            "<b>Step 2 — Calibration</b><br>"
+            "<b>Step 2 - Calibration</b><br>"
             "The selected points are geo-referenced onto the DEM. Each camera's "
             "XY position becomes a circle centre; the horizontal distance to its "
             "ground point is the radius. When the correction is accurate, the two "
@@ -2483,7 +2483,7 @@ class BambiCorrectionWizard(QDialog):
             "dragging in the circle plot. Rotations can be entered in radians or "
             "degrees. Typically only the <b>z-translation</b> (altitude offset) "
             "and <b>z-rotation</b> (yaw) need adjustment.<br><br>"
-            "<b>Step 3 — Light-Field Preview &amp; Save</b><br>"
+            "<b>Step 3 - Light-Field Preview &amp; Save</b><br>"
             "A light-field integral image is rendered with the found correction. "
             "Toggle <i>Show geo-referenced points</i> to overlay the calibration "
             "reference points on the render. Use <i>Add neighbouring frames</i> "

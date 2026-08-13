@@ -3,8 +3,8 @@
 
 The FoV step long wrote only ``fov_{m}/fov_polygons.txt``, so ``fov.gpkg``
 existed solely where a 5.x project had been migrated. Everything that reads a
-footprint — the coverage map, the transect areas a population estimate divides
-by, the QGIS layers — now reads the store, so the step has to write it.
+footprint - the coverage map, the transect areas a population estimate divides
+by, the QGIS layers - now reads the store, so the step has to write it.
 
 One polygon per frame, its vertices ordered: ``seq`` is what makes the ring
 reconstructable, since a set of points has no edges.
@@ -23,7 +23,7 @@ def record_fov(target_folder: str, modality: str,
     """Replace this modality's footprints with *polygons*.
 
     Keyed by frame, so re-running the step for a subset of frames updates those
-    and leaves the rest — the same shape the text file had, where a frame's
+    and leaves the rest - the same shape the text file had, where a frame's
     line was rewritten wholesale.
     """
     conn = store.open_store(

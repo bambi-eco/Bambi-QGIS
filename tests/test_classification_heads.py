@@ -2,8 +2,8 @@
 """Classification heads, frame selection and quorum voting.
 
 The head tests build a real TorchScript module when torch is available, so the
-``torch.jit.load`` contract — the ``(embedding, probs)`` tuple and the
-``classes`` attribute — is exercised against the real thing rather than a
+``torch.jit.load`` contract - the ``(embedding, probs)`` tuple and the
+``classes`` attribute - is exercised against the real thing rather than a
 stand-in, without a 3 GB download. They skip where torch is absent; the voting
 and frame-selection tests are pure and always run.
 """
@@ -30,7 +30,7 @@ class _StubHead(torch.nn.Module):
         self.project = torch.nn.Linear(dim, 4)
         self.classify = torch.nn.Linear(4, len(classes))
         if name_them:
-            # A plain assignment would not survive scripting — TorchScript
+            # A plain assignment would not survive scripting - TorchScript
             # only serialises attributes it knows the type of, and an
             # attribute set on an already-scripted module is lost on save.
             # This is how the published heads carry their class list.
@@ -278,7 +278,7 @@ class TestQuorumVote:
         assert (result.votes, result.n) == (109, 150)
 
     def test_a_female_is_not_over_called(self):
-        """A2 D6: 24 male votes of 93 — comfortably female."""
+        """A2 D6: 24 male votes of 93 - comfortably female."""
         calls = [(1, "male")] * 24 + [(0, "female_juvenile")] * 69
         assert cl.quorum_vote(calls).label == "female_juvenile"
 

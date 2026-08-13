@@ -49,7 +49,7 @@ class BambiLabelMappingDialog(QDialog):
         self.models_dir = models_dir
         self.projection = projection
 
-        self.setWindowTitle(f"{task.capitalize()} — class mapping")
+        self.setWindowTitle(f"{task.capitalize()} - class mapping")
         self.setMinimumSize(560, 420)
 
         layout = QVBoxLayout(self)
@@ -57,7 +57,7 @@ class BambiLabelMappingDialog(QDialog):
         info = QLabel(
             "Connect the classes this model returns to the values used in "
             "this project.\n\n"
-            "The mapping follows the class <b>order</b>, not the names — a "
+            "The mapping follows the class <b>order</b>, not the names - a "
             "model returns positions, and the names are only there to read. "
             "Renaming one here never re-points the mapping."
         )
@@ -95,7 +95,7 @@ class BambiLabelMappingDialog(QDialog):
 
         add_btn = QPushButton("Add class")
         add_btn.setToolTip(
-            "Define a class by hand — for a model that is not downloaded yet, "
+            "Define a class by hand - for a model that is not downloaded yet, "
             "or one whose own class list is wrong."
         )
         add_btn.clicked.connect(lambda: self._add_row("", None))
@@ -178,7 +178,7 @@ class BambiLabelMappingDialog(QDialog):
         self.table.setItem(row, 1, QTableWidgetItem(name))
 
         combo = QComboBox()
-        combo.addItem("— not mapped —", None)
+        combo.addItem("- not mapped -", None)
         for label, identifier in self._values:
             combo.addItem(label, identifier)
         if value_id is not None:
@@ -215,7 +215,7 @@ class BambiLabelMappingDialog(QDialog):
                 self, "Class Mapping",
                 "The model is not available locally yet.\n\n"
                 "Either choose a custom model file, or run the classifier "
-                "once so the default is downloaded — or define the classes "
+                "once so the default is downloaded - or define the classes "
                 "by hand with 'Add class'.")
             return
 
@@ -244,7 +244,7 @@ class BambiLabelMappingDialog(QDialog):
         self.status.setText({
             "classes": f"{len(names)} class(es) read from the model.",
             "probe": (f"The model returns {len(names)} classes but does not "
-                      "name them — fill the names in if you want them "
+                      "name them - fill the names in if you want them "
                       "readable; the mapping works either way."),
         }.get(source, f"{len(names)} class(es) found."))
 
@@ -292,7 +292,7 @@ class BambiLabelMappingDialog(QDialog):
         """Which classes count as 'this frame is usable'.
 
         Taken from whichever class maps onto the project's first occlusion
-        value — that is the "nothing is wrong with this frame" end of the enum
+        value - that is the "nothing is wrong with this frame" end of the enum
         by construction, in both the 6.1 vocabulary and a project that kept an
         older one.
         """

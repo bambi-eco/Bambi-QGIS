@@ -3,7 +3,7 @@
 
 Two things carry their weight here: that a re-run embeds only what is missing
 (the vectors cost hours of GPU time), and that resetting one head does not take
-the embeddings — or the other heads — with it.
+the embeddings - or the other heads - with it.
 """
 import pytest
 
@@ -75,7 +75,7 @@ def test_a_new_run_supersedes_the_previous(root):
     second, _ = _run(root, projection="geo_2k", folder="embeddings_t/geo_2k")
 
     assert cs.active_embedding_run(root, "t")["run_id"] == second
-    # The old vectors are not discarded — switching projection back must not
+    # The old vectors are not discarded - switching projection back must not
     # cost another hour of GPU time.
     assert cs.embedded_ids(root, "t", first) == set()
 
@@ -90,7 +90,7 @@ def test_membership_is_scoped_to_its_run(root):
 
 
 # ---------------------------------------------------------------------------
-# Resuming — the reason membership is stored at all
+# Resuming - the reason membership is stored at all
 # ---------------------------------------------------------------------------
 
 def test_pending_reports_only_what_is_missing(root):

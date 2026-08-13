@@ -2,7 +2,7 @@
 """Carry labels from one camera's animals onto their matched partners.
 
 A stage classifies the camera it reads, so a flight can easily end up with the
-species decided on RGB and nothing on the thermal side — and then the sex head,
+species decided on RGB and nothing on the thermal side - and then the sex head,
 which picks its model per species, has nothing to go on there. This is the way
 across: for every pair A3 confirmed, copy what one side knows onto the other.
 

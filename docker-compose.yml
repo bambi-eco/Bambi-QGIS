@@ -6,14 +6,14 @@ services:
     working_dir: /workspace
     command: bash run_checks.sh
 
-  # Qt6 / QGIS 4 compatibility check — the same pyqt5_to_pyqt6.py dry run
+  # Qt6 / QGIS 4 compatibility check - the same pyqt5_to_pyqt6.py dry run
   # that plugins.qgis.org applies to every uploaded version, via the
   # official checker image (no local Dockerfile needed).
   qt6-check:
     image: ghcr.io/qgis/pyqgis4-checker:main-ubuntu
     pull_policy: always
     # The image defaults to its own non-root user, which cannot write into
-    # the root-owned reports/ dir the other services create — align with them.
+    # the root-owned reports/ dir the other services create - align with them.
     user: root
     volumes:
       - .:/workspace
@@ -38,7 +38,7 @@ services:
       - bambi-test-data:/data
     working_dir: /workspace
     # Pass these through from the host environment (if set) so pipeline
-    # outputs can be kept for inspection — see tests_integration/conftest.py.
+    # outputs can be kept for inspection - see tests_integration/conftest.py.
     # BAMBI_TEST_KEEP_OUTPUT=1 keeps them under reports/integration_output/.
     environment:
       - BAMBI_TEST_KEEP_OUTPUT

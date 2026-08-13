@@ -47,51 +47,51 @@ Key features:
 
 The Labelling Tool is a key-frame based annotation editor for reviewing pipeline results and creating or correcting MOT-style track labels directly on the extracted frames. Open it via the **Labelling Tool** toolbar button or the plugin menu.
 
-Point it at a processing **target folder** (the one containing `frames_t/` / `frames_w/`) — when opened from a configured plugin panel the folder, DEM, and correction paths are picked up automatically. Labelling is done per **modality** (thermal *or* RGB, never mixed); the selector at the top switches between the two and each modality keeps its own label set.
+Point it at a processing **target folder** (the one containing `frames_t/` / `frames_w/`) - when opened from a configured plugin panel the folder, DEM, and correction paths are picked up automatically. Labelling is done per **modality** (thermal *or* RGB, never mixed); the selector at the top switches between the two and each modality keeps its own label set.
 
 ### Reviewing existing results
 
 Detections and tracks from the pipeline are drawn as read-only overlays (toggleable via checkboxes). An existing pipeline track can be converted into an editable label track with **Import as label track**; the **Resample** value controls how many key frames are kept (`1` = every frame of the track becomes a key frame, `N` = only every N-th frame plus the first and last). **Import all as label tracks** converts every pipeline track at once, applying the same Resample setting to each.
 
-**Copy labels from _&lt;other modality&gt;_** imports the label tracks you already made on the other camera (RGB ↔ thermal) into the current one — see [Cross-modality copy](#cross-modality-copy) below.
+**Copy labels from _&lt;other modality&gt;_** imports the label tracks you already made on the other camera (RGB ↔ thermal) into the current one - see [Cross-modality copy](#cross-modality-copy) below.
 
 ### Key frames & interpolation
 
 Labels do not need to be drawn on every frame. A track stores boxes only on **key frames**; all frames in between are interpolated linearly and drawn with a dashed border. The typical workflow:
 
-1. Press **New Track (N)** and drag a bounding box around the animal — this creates the track with a key frame at the current frame
+1. Press **New Track (N)** and drag a bounding box around the animal - this creates the track with a key frame at the current frame
 2. Jump ahead with **Step >>** (stride set by the **Step** spinbox, e.g. 10 frames)
-3. Drag/resize the interpolated box to fit — any edit automatically turns the frame into a key frame
-4. Repeat; the timeline bar below the slider shows the track's range and its key frames (click it to jump). The key-frame list in the side panel is clickable too — each frame number is an anchor that jumps to that frame (stop frames red, current frame bold; long lists show a window around the current frame)
+3. Drag/resize the interpolated box to fit - any edit automatically turns the frame into a key frame
+4. Repeat; the timeline bar below the slider shows the track's range and its key frames (click it to jump). The key-frame list in the side panel is clickable too - each frame number is an anchor that jumps to that frame (stop frames red, current frame bold; long lists show a window around the current frame)
 
-Each track carries a **species** (free-text combo with common defaults), **sex**, and **age** class (*Track classes* section — the identity of the animal, constant along the track). The **occlusion** level (*clear* / *occluded* — the values the occlusion classifier reports, so hand annotations and predictions share one vocabulary; extend it in the [Project Schema](results-and-export.md#the-project-schema) if you need finer grades), in contrast, is stored **per key frame** (it sits in the *Key frames* section next to the stop-frame toggle): an animal can be fully visible on one key frame and occluded on the next. Interpolated frames inherit the occlusion of the previous key frame; changing occlusion on an interpolated frame promotes that frame to a key frame. The current value is also shown in the status line while scrubbing.
+Each track carries a **species** (free-text combo with common defaults), **sex**, and **age** class (*Track classes* section - the identity of the animal, constant along the track). The **occlusion** level (*clear* / *occluded* - the values the occlusion classifier reports, so hand annotations and predictions share one vocabulary; extend it in the [Project Schema](results-and-export.md#the-project-schema) if you need finer grades), in contrast, is stored **per key frame** (it sits in the *Key frames* section next to the stop-frame toggle): an animal can be fully visible on one key frame and occluded on the next. Interpolated frames inherit the occlusion of the previous key frame; changing occlusion on an interpolated frame promotes that frame to a key frame. The current value is also shown in the status line while scrubbing.
 
 Boxes can be moved/resized and classes changed at any time; **Set key frame (K)** freezes the current interpolated box (outside the track's range it copies the nearest key frame's box, extending the track), **Delete key frame** removes one (deleting the last key frame removes the track).
 
-To place a key frame fully manually — including on frames before/after the track's current range — select the track and press **Draw key frame (B)**, then drag the new box on the canvas. This extends or corrects the track without geo-propagation.
+To place a key frame fully manually - including on frames before/after the track's current range - select the track and press **Draw key frame (B)**, then drag the new box on the canvas. This extends or corrects the track without geo-propagation.
 
-When an animal temporarily disappears (e.g. under a tree) and reappears recognizably later, mark the last sighting as a **Stop frame (S)**: no boxes are interpolated between a stop frame and the next key frame — the track pauses and resumes there. Stop frames appear red in the timeline, the gap is left unshaded, and gap frames are excluded from all exports. To continue the track after the gap, place a key frame on the reappearance frame (**Draw key frame (B)**, or **K** to copy the nearest box, or geo-propagation).
+When an animal temporarily disappears (e.g. under a tree) and reappears recognizably later, mark the last sighting as a **Stop frame (S)**: no boxes are interpolated between a stop frame and the next key frame - the track pauses and resumes there. Stop frames appear red in the timeline, the gap is left unshaded, and gap frames are excluded from all exports. To continue the track after the gap, place a key frame on the reappearance frame (**Draw key frame (B)**, or **K** to copy the nearest box, or geo-propagation).
 
 ### Geo-referenced propagation
 
-Instead of manually re-drawing a box on a far-away frame, **Propagate box (geo)** ray-casts the current box onto the DEM (pixel → world) with the current frame's camera pose and back-projects it (world → pixel) into the frame at the configured **Frame offset**, creating a key frame there. The DEM mesh is loaded once on first use (may take a while). As with the geo-referenced FoV inspector, the result depends on calibration and correction accuracy — usually only small size adaptions are needed.
+Instead of manually re-drawing a box on a far-away frame, **Propagate box (geo)** ray-casts the current box onto the DEM (pixel → world) with the current frame's camera pose and back-projects it (world → pixel) into the frame at the configured **Frame offset**, creating a key frame there. The DEM mesh is loaded once on first use (may take a while). As with the geo-referenced FoV inspector, the result depends on calibration and correction accuracy - usually only small size adaptions are needed.
 
-Several tracks can be propagated in one step: select them in the track list (Ctrl / Shift click, the same selection used for merging and deleting) and the button changes to **Propagate boxes (geo) — _n_ tracks**, projecting each selected track's box on the current frame. Tracks are handled independently — one whose box has no DEM intersection, or that has no box on the current frame at all, is skipped without aborting the others, and a summary afterwards lists per track what was created and what was skipped.
+Several tracks can be propagated in one step: select them in the track list (Ctrl / Shift click, the same selection used for merging and deleting) and the button changes to **Propagate boxes (geo) - _n_ tracks**, projecting each selected track's box on the current frame. Tracks are handled independently - one whose box has no DEM intersection, or that has no box on the current frame at all, is skipped without aborting the others, and a summary afterwards lists per track what was created and what was skipped.
 
 ### Cross-modality copy
 
 Wildlife is often easier to spot in one modality than the other (e.g. warm animals in thermal, or distinctive shapes in RGB). Once a modality is labelled, **Copy labels from _&lt;other modality&gt;_** (in the *Overlays* section, its caption follows the current modality) brings those tracks over instead of re-labelling from scratch.
 
-Each key-frame box of every track in the other modality is projected onto this modality using the same geo-referenced propagation as above: it is ray-cast onto the DEM with the *source* camera and back-projected with *this* modality's camera. Because thermal and RGB frames are captured on the same clock but at different rates, the two are matched by **capture time** — for each source key frame the nearest-in-time frame of the current modality is used (source and target resolutions may differ).
+Each key-frame box of every track in the other modality is projected onto this modality using the same geo-referenced propagation as above: it is ray-cast onto the DEM with the *source* camera and back-projected with *this* modality's camera. Because thermal and RGB frames are captured on the same clock but at different rates, the two are matched by **capture time** - for each source key frame the nearest-in-time frame of the current modality is used (source and target resolutions may differ).
 
-The projected boxes are added as **new label tracks** (species/sex/age/occlusion and stop flags are carried over) rather than merged into existing ones, because — like single-frame propagation — they typically need small manual adaptions before export. A summary reports how many tracks and key frames were copied and how many were skipped (no DEM intersection, projected outside the target frame, or no time-matched frame). The other modality must already have been processed far enough to have `poses_<other>.json`, extracted frames, and `labels_<other>/labels.json`.
+The projected boxes are added as **new label tracks** (species/sex/age/occlusion and stop flags are carried over) rather than merged into existing ones, because - like single-frame propagation - they typically need small manual adaptions before export. A summary reports how many tracks and key frames were copied and how many were skipped (no DEM intersection, projected outside the target frame, or no time-matched frame). The other modality must already have been processed far enough to have `poses_<other>.json`, extracted frames, and `labels_<other>/labels.json`.
 
 ### Species, sex, age and custom fields
 
 Since 6.0 the categorical inputs are **chosen from the project's vocabulary**,
 not typed. Species, `sex`, `age` and `occlusion` come from the
 [Project Schema](results-and-export.md#the-project-schema), and the **…** button
-beside the species list — like the gear button — opens that editor without
+beside the species list - like the gear button - opens that editor without
 leaving the tool. Adding a species there is a single step and does not disturb
 anything already labelled.
 
@@ -99,7 +99,7 @@ This is what makes labels durable: species and enum values are referenced by
 identity, so renaming one never changes the meaning of work already done. In
 5.x a species typed into the box could renumber the others.
 
-Free-text fields are still available — define a `string` custom field for
+Free-text fields are still available - define a `string` custom field for
 notes or collar ids. Unlike 5.x, custom fields are **not** confined to
 `labels.json`: they travel through geo-referencing and tracking and reach the
 exports.
@@ -114,7 +114,7 @@ exports.
 | `labels_{t,w}/labels.json` | The same tracks in the 5.x format, still written                                                    |
 | `labels_{t,w}/labels.csv`  | Per-frame interpolated export: `frame,track_id,x1,y1,x2,y2,species,sex,age,occlusion,keyframe`      |
 
-**Add detections to project** turns the interpolated label boxes into detections the rest of the pipeline consumes. The detector's output is untouched — each producer owns its own rows — so the two can coexist and either can be re-run without disturbing the other.
+**Add detections to project** turns the interpolated label boxes into detections the rest of the pipeline consumes. The detector's output is untouched - each producer owns its own rows - so the two can coexist and either can be re-run without disturbing the other.
 
 Editing a label and exporting again **re-uses the detections it already produced**: a box you did not move keeps its identity, and only boxes that actually moved need geo-referencing again. Without that, one key-frame edit would invalidate the whole flight, which is why 5.x export was an all-or-nothing rewrite.
 
@@ -145,7 +145,7 @@ The **Configuration → Classification** tab holds everything the [classificatio
 
 ### Classifiers table
 
-One row per task — occlusion, species, sex — in the order they run.
+One row per task - occlusion, species, sex - in the order they run.
 
 | Column | What it decides |
 |--------|-----------------|
@@ -157,25 +157,25 @@ One row per task — occlusion, species, sex — in the order they run.
 
 Species shows **Default (not released)** and is disabled until a species classifier is published; supply a custom model, or leave the task off. The occlusion and sex classifiers are available now.
 
-**Download models** fetches every classifier set to *Default*, for the projection and input chosen above. Worth pressing first: with the files present, **Labels** can read each model's own class list and the mapping can be set up before anything is run. They are small — a few megabytes each. The DINOv3 model is *not* downloaded here; that happens on the first embedding run, and is much larger.
+**Download models** fetches every classifier set to *Default*, for the projection and input chosen above. Worth pressing first: with the files present, **Labels** can read each model's own class list and the mapping can be set up before anything is run. They are small - a few megabytes each. The DINOv3 model is *not* downloaded here; that happens on the first embedding run, and is much larger.
 
 ### Class mapping
 
 Connects the classes a model returns to the values used in this project.
 
-The mapping follows the class **order**, not the names. A model returns positions — "class 2 scored highest" — and the names are only there to read; renaming one here never re-points the mapping. That is also why a model does not have to name its classes at all.
+The mapping follows the class **order**, not the names. A model returns positions - "class 2 scored highest" - and the names are only there to read; renaming one here never re-points the mapping. That is also why a model does not have to name its classes at all.
 
 **Read classes from the model** takes the list off the model. Where a model carries no names, it is asked how many classes it returns instead, and the rows appear as `class 0`, `class 1`… with the labels left for you to fill in. Where the model is not available locally yet, **Add class** defines them by hand.
 
 With the project's own occlusion vocabulary (`clear` / `occluded`) the mapping fills itself in by name and needs no clicks. It exists for everything else: an older project whose occlusion values are `none` / `partially` / `fully`, or a third-party model that calls them something else entirely.
 
-For occlusion the mapping additionally decides **which class means "this frame is usable"** — taken from whichever class you map onto the project's first occlusion value. Frame selection depends on it, so it is recorded rather than guessed from the word.
+For occlusion the mapping additionally decides **which class means "this frame is usable"** - taken from whichever class you map onto the project's first occlusion value. Frame selection depends on it, so it is recorded rather than guessed from the word.
 
 ### Classifiers per species
 
 Sex and life stage are not one problem across animals. The published sex classifier reads antlers on red deer; nothing about it transfers to a wild boar, and applying it anyway would produce confident nonsense rather than nothing.
 
-So the choice is made per species. For **sex** the options are a model or **Off**, and Off means simply not sexed — the honest answer for a species nobody has a classifier for.
+So the choice is made per species. For **sex** the options are a model or **Off**, and Off means simply not sexed - the honest answer for a species nobody has a classifier for.
 
 **Life stage** has a third option, **Size-based**: not a model at all, but the box-area measurement described under [C6](pipeline.md#c6-age-classification). It sits in the same column because it answers the same question, and because which of the two decides a species is one decision rather than a model choice plus a switch elsewhere.
 

@@ -130,8 +130,8 @@ class TestAssignTracksWithinFieldOfView:
     that saw it.
 
     The density's denominator is the monitored area, so counting an animal
-    that fell outside every footprint — just because some centre line happened
-    to be nearest — would inflate the numerator over ground never surveyed.
+    that fell outside every footprint - just because some centre line happened
+    to be nearest - would inflate the numerator over ground never surveyed.
     """
 
     def _lines(self):
@@ -157,13 +157,13 @@ class TestAssignTracksWithinFieldOfView:
 
     def test_track_outside_every_footprint_is_not_counted(self):
         # 30 m north of transect 1's line: nearest to it, but its footprint
-        # only reaches 10 m — and transect 2's does not cover it either.
+        # only reaches 10 m - and transect 2's does not cover it either.
         out = assign_tracks([self._track(1, 50.0, 30.0)], self._lines(),
                             contains=self._contains())
         assert out[0]["transect_id"] is None
         assert out[0]["outside_fov"] is True
         assert out[0]["truncated"] is False
-        # No transect took it, so no distance to one — but the nearest centre
+        # No transect took it, so no distance to one - but the nearest centre
         # line is still reported, so the exclusion stays diagnosable.
         assert out[0]["distance_m"] is None
         assert out[0]["nearest_distance_m"] == pytest.approx(30.0)
@@ -209,7 +209,7 @@ class TestAssignTracksWithinFieldOfView:
         assert out[0]["outside_fov"] is True
 
     def test_predicate_keeps_core_free_of_a_geometry_backend(self):
-        # Any callable works — the QGIS loader passes a QgsGeometry-based one,
+        # Any callable works - the QGIS loader passes a QgsGeometry-based one,
         # because shapely is not guaranteed to exist in a QGIS install.
         calls = []
 
@@ -337,7 +337,7 @@ class TestZinbBoundaries:
         r = estimate_zinb(counts.tolist(), areas.tolist())
         assert r["zero_inflation_at_boundary"] is True
         assert r["params"]["zero_inflation_prob"] < 1e-6
-        # The density survives — only the CI is affected by the degeneracy
+        # The density survives - only the CI is affected by the degeneracy
         assert r["density_per_100ha"] is not None
         assert "no excess zeros" in r["error"]
 
@@ -352,7 +352,7 @@ class TestZinbBoundaries:
         assert r["dispersion_at_boundary"] is True
         assert r["density_per_100ha"] is not None
         assert "Poisson limit" in r["error"]
-        # A boundary parameter is held fixed, so the SE stays computable —
+        # A boundary parameter is held fixed, so the SE stays computable -
         # a Hessian taken across the bound would be meaningless.
         assert r["se"] is not None and r["se"] > 0
 
@@ -365,7 +365,7 @@ class TestZinbAgainstGlmmTMB:
     ``glmmTMB(count ~ ha, ziformula = ~1, family = nbinom2)`` produced.
     """
 
-    # lembach x Daim2 — the cell whose likelihood is multimodal: a single-start
+    # lembach x Daim2 - the cell whose likelihood is multimodal: a single-start
     # optimiser settles in the degenerate p_zero -> 0 mode and lands on 56.41.
     LEMBACH_COUNTS = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                       0, 0, 0, 0, 1, 1, 1, 1, 2, 3, 3, 3, 5, 5]
@@ -376,7 +376,7 @@ class TestZinbAgainstGlmmTMB:
         2.166071, 2.747946, 1.768878, 1.946804, 2.157280, 2.245080, 2.087712,
         1.820423, 1.907402, 2.200424, 2.181985, 2.221030]
 
-    # ststefan x Daim2 — a well-identified fit (no parameter on a bound)
+    # ststefan x Daim2 - a well-identified fit (no parameter on a bound)
     STSTEFAN_COUNTS = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                        0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 3,
                        4, 5]
@@ -393,7 +393,7 @@ class TestZinbAgainstGlmmTMB:
         # glmmTMB: dens_zinb = 57.313, se_zinb = 29.847
         assert r["density_per_100ha"] == pytest.approx(57.313, rel=1e-3)
         assert r["se"] == pytest.approx(29.847, rel=1e-2)
-        # The degenerate local optimum a single start finds sits at 56.41 —
+        # The degenerate local optimum a single start finds sits at 56.41 -
         # guard the multistart that gets us off it.
         assert r["density_per_100ha"] > 57.0
         assert r["error"] is None

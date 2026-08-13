@@ -16,9 +16,9 @@ Public API
 ``BoxProjectionWorker(QThread)``
     Run box projection in a background thread.  Signals:
 
-    ``progress(int)``   — 0‒100
-    ``finished(dict)``  — ``{frame_idx: {"green": [boxes], "blue": [boxes]}}``
-    ``error(str)``      — human-readable message on failure
+    ``progress(int)``   - 0‒100
+    ``finished(dict)``  - ``{frame_idx: {"green": [boxes], "blue": [boxes]}}``
+    ``error(str)``      - human-readable message on failure
 
 Box tuple format: ``(x1, y1, x2, y2, confidence, class_id)``
 World coords in the georef file have the DEM origin offset already applied;
@@ -36,7 +36,7 @@ from qgis.PyQt.QtCore import QThread, pyqtSignal
 # their old names for compatibility.
 from .core.camera_pose import build_camera
 from .core.camera_pose import world_to_pixel as _world_to_pixel  # noqa: F401
-from .core.corrections import (  # noqa: F401 — re-exported API
+from .core.corrections import (  # noqa: F401 - re-exported API
     correction_for_frame as _correction_for_frame,
     read_correction as _read_correction,
 )
@@ -151,7 +151,7 @@ class BoxProjectionWorker(QThread):
         Explicit path to ``correction.json``; falls back to
         ``target_folder/correction.json``.
     src_modality : str
-        ``"t"`` or ``"w"`` — the modality in which the existing boxes live.
+        ``"t"`` or ``"w"`` - the modality in which the existing boxes live.
     frames : list of dict
         Viewer frame dicts (keys: ``frame_idx``, ``boxes_green``,
         ``boxes_blue``).
@@ -188,10 +188,10 @@ class BoxProjectionWorker(QThread):
 
     def _project(self) -> dict:
         try:
-            from alfspy.core.rendering import Camera  # noqa: F401 — probe
+            from alfspy.core.rendering import Camera  # noqa: F401 - probe
         except ImportError as exc:
             raise RuntimeError(
-                "alfspy is not available — cannot project bounding boxes.\n"
+                "alfspy is not available - cannot project bounding boxes.\n"
                 f"({exc})"
             )
 

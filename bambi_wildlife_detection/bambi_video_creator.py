@@ -39,7 +39,7 @@ from .gui_utils import fit_to_screen
 from .core.tile_math import latlon_to_tile, tile_to_latlon
 # Track colours and all data loaders moved to core.video_export;
 # re-exported under their old names for compatibility.
-from .core.video_export import (  # noqa: F401 — re-exported API
+from .core.video_export import (  # noqa: F401 - re-exported API
     TRACK_COLORS as _TRACK_COLORS,
     id_to_color as _id_to_color,
     track_color_bgr as _track_color_bgr,
@@ -89,7 +89,7 @@ class _MapTileProvider:
         import requests
         cache_path = None
         if self.cache_dir:
-            # MD5 only fingerprints the tile URL for cache file names — not security
+            # MD5 only fingerprints the tile URL for cache file names - not security
             h = hashlib.md5(self.tile_url.encode(), usedforsecurity=False).hexdigest()[:8]
             cache_path = os.path.join(self.cache_dir, f"{h}_{zoom}_{x}_{y}.png")
             if os.path.exists(cache_path):

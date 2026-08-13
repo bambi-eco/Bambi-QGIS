@@ -280,7 +280,7 @@ def test_seeded_fields_are_protected(editor):
 
 
 def test_add_string_field(editor):
-    """Free text stays available — it is just not in the default setup."""
+    """Free text stays available - it is just not in the default setup."""
     editor.add_field("collar_id", "string", "track")
     assert any(f["name"] == "collar_id" for f in editor.fields("track"))
 

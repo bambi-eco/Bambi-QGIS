@@ -72,7 +72,7 @@ def _set_row(dialog, raw_class, species_name):
 # ---------------------------------------------------------------------------
 
 def test_the_table_lists_what_the_detector_reported(project_folder):
-    """Not what someone already mapped — otherwise it starts empty."""
+    """Not what someone already mapped - otherwise it starts empty."""
     dialog = BambiClassMappingDialog(project_folder)
     try:
         classes = [dialog.table.item(row, 0).text()

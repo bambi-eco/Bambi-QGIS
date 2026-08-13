@@ -14,7 +14,7 @@ RUN_TS=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 export COVERAGE_FILE="${COVERAGE_FILE:-$REPORTS_DIR/coverage/qgis/.coverage}"
 
 echo "============================================"
-echo " BAMBI Plugin — Real-QGIS Smoke Tests"
+echo " BAMBI Plugin - Real-QGIS Smoke Tests"
 echo " $RUN_TS"
 echo "============================================"
 

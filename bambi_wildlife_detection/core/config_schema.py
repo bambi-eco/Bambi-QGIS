@@ -28,7 +28,7 @@ Storage kinds (matching the pre-refactor QgsProject entry usage):
     ``writeEntryBool`` / ``readBoolEntry`` with a typed default.
 
 ``Correction/AdditionalCorrections`` (a JSON list) is intentionally not in
-the table — it is bound to a list widget, not a value widget — and the SAM3
+the table - it is bound to a list widget, not a value widget - and the SAM3
 API key is intentionally never saved.
 """
 
@@ -56,7 +56,7 @@ KINDS = frozenset({"str", "bool01", "int_str", "double", "int_double", "bool"})
 #   combo_index        QComboBox currentIndex(); load = bounds-checked setter
 #   json               a plain dock attribute holding a dict/list, serialised
 #                      to a ``str`` entry. For structured settings bound to a
-#                      table or dialog rather than to one value widget — the
+#                      table or dialog rather than to one value widget - the
 #                      classifier mapping is the first of these. Earlier cases
 #                      (``Correction/AdditionalCorrections``,
 #                      ``Input/ThermalVisCurve``) predate the role and are
@@ -98,7 +98,7 @@ CONFIG_ENTRIES: List[ConfigEntry] = [
     ConfigEntry("Input/ThermalVisHiEnable", "bool01", False, "eq1"),
     ConfigEntry("Input/ThermalVisHiValue", "double", 100.0),
     # The curve itself (Input/ThermalVisCurve, a JSON dict) is intentionally
-    # not in the table — it is bound to a dialog, not a value widget, and is
+    # not in the table - it is bound to a dialog, not a value widget, and is
     # saved/loaded separately like Correction/AdditionalCorrections.
     ConfigEntry("Input/ThermalVisMode", "int_double", 0),
     # ===== Extraction =====
@@ -238,7 +238,7 @@ CONFIG_KEYS = [entry.key for entry in CONFIG_ENTRIES]
 
 
 # Binding of each config key to a dock-widget attribute name and its get/set
-# role. These are ``BambiDockWidget`` attribute names (plain strings — no Qt
+# role. These are ``BambiDockWidget`` attribute names (plain strings - no Qt
 # import here); the dock resolves them with ``getattr`` and applies the role.
 # The key set must match ``CONFIG_KEYS`` exactly (enforced by check_schema and
 # a unit test), so save and load can never reference a key the other omits.
@@ -405,7 +405,7 @@ def save_config_entries(
             write_double(entry.key, float(value))
         elif entry.kind == "bool":
             write_bool(entry.key, bool(value))
-        else:  # pragma: no cover — guarded by the schema sanity test
+        else:  # pragma: no cover - guarded by the schema sanity test
             raise ValueError(f"Unknown kind {entry.kind!r} for {entry.key}")
 
 
@@ -442,7 +442,7 @@ def load_config_entries(
             value = read_double(entry.key, float(entry.default))
         elif entry.kind == "bool":
             value = read_bool(entry.key, entry.default)
-        else:  # pragma: no cover — guarded by the schema sanity test
+        else:  # pragma: no cover - guarded by the schema sanity test
             raise ValueError(f"Unknown kind {entry.kind!r} for {entry.key}")
         result.append((entry.key, value))
     return result

@@ -67,7 +67,7 @@ def availability_warnings(params):
     it. The loaders draw nothing when data is absent, so these are warnings.
 
     Overlay data comes from the store, so the warnings name the step to run
-    rather than a file to look for — a 5.x project has the files and still
+    rather than a file to look for - a 5.x project has the files and still
     cannot be drawn from them.
     """
     from . import store
@@ -102,10 +102,10 @@ def availability_warnings(params):
             if (params["overlay"] == "detections"
                     and not _has_stage(target, store.DETECTIONS, s_)):  # noqa: W503, W504
                 warns.append(f"{lbl} detections overlay: no detections "
-                             "stored — run 'Detect Animals'.")
+                             "stored - run 'Detect Animals'.")
             elif (params["overlay"] == "tracks"
                   and not pixel_tracks_available(target, s_)):  # noqa: W503, W504
-                warns.append(f"{lbl} tracks overlay: no tracks stored — run "
+                warns.append(f"{lbl} tracks overlay: no tracks stored - run "
                              "'Track Animals'.")
 
     # ---- Map panel ----------------------------------------------------
@@ -115,13 +115,13 @@ def availability_warnings(params):
             warns.append("Map flight path: "
                          f"flight_route_{cam}/camera_positions.geojson missing.")
         if params["map_fov"] and not _has_stage(target, store.FOV, cam):
-            warns.append("Map field of view: none stored — run 'Calculate "
+            warns.append("Map field of view: none stored - run 'Calculate "
                          "Field of View'.")
         if params["map_det"] and not _has_stage(target, store.GEOREFERENCED, cam):
-            warns.append("Map detections: none geo-referenced — run "
+            warns.append("Map detections: none geo-referenced - run "
                          "'Geo-Reference Detections'.")
         if params["map_trk"] and not _has_stage(target, store.TRACKS, cam):
-            warns.append("Map tracks: no tracks stored — run 'Track Animals'.")
+            warns.append("Map tracks: no tracks stored - run 'Track Animals'.")
         if params["map_perp"] and not (
                 exists(f"flight_route_{cam}", f"perpendicular_{cam}.json")
                 or exists(f"flight_route_{cam}", "perpendicular.json")):  # noqa: W503, W504
@@ -133,13 +133,13 @@ def availability_warnings(params):
         cam = params["info_camera"]
         lbl = labels.get(cam, cam)
         if params["info_dets"] and not _has_stage(target, store.DETECTIONS, cam):
-            warns.append(f"Info panel detections ({lbl}): none stored — run "
+            warns.append(f"Info panel detections ({lbl}): none stored - run "
                          "'Detect Animals'.")
         if params["info_tracks"] and not pixel_tracks_available(target, cam):
-            warns.append(f"Info panel tracks ({lbl}): no tracks stored — run "
+            warns.append(f"Info panel tracks ({lbl}): no tracks stored - run "
                          "'Track Animals'.")
         if params["info_area"] and not _has_stage(target, store.FOV, cam):
-            warns.append(f"Info panel monitored area ({lbl}): none stored — "
+            warns.append(f"Info panel monitored area ({lbl}): none stored - "
                          "run 'Calculate Field of View'.")
 
     return warns
@@ -203,8 +203,8 @@ def load_pixel_tracks(target, suffix, log_fn: Optional[Callable[[str], None]] = 
 
     A join: membership is recorded as (track_id, detection_id), so no pairing
     of any kind is needed. This used to try three reconstructions below the
-    store — a pixel CSV, a geo-coordinate match through georeferenced.txt, and
-    finally a row-index match — each of which could silently mis-assign a box
+    store - a pixel CSV, a geo-coordinate match through georeferenced.txt, and
+    finally a row-index match - each of which could silently mis-assign a box
     to the wrong animal when the files were re-sorted or a detection was
     dropped (§8.2).
     """

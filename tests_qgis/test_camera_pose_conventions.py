@@ -3,7 +3,7 @@
 
 Two things need proving here that the unit tier (which runs on fakes) cannot:
 
-* the camera actually points where the gimbal pointed — heading about world up,
+* the camera actually points where the gimbal pointed - heading about world up,
   applied after the tilt.  The older ``quaternion_from_eulers(e, 'zyx')``
   spelling applied the heading about the camera's own optical axis, which is
   exact at nadir and up to 128 degrees wrong at the horizon;

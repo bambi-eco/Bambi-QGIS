@@ -2,7 +2,7 @@
 # Run all three test tiers and print the COMBINED coverage.
 #
 # Each tier runs in its own container (they need mutually incompatible
-# environments — the unit suite is deliberately QGIS-free, the integration
+# environments - the unit suite is deliberately QGIS-free, the integration
 # image carries torch/alfspy, the smoke tests need real QGIS), then a small
 # container merges their coverage data into one figure.
 #

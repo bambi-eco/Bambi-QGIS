@@ -69,7 +69,7 @@ def filter_shots_for_tile(shots, tile_geo_bounds, log_fn=None, fov_default=50.0)
         sx, sy, sz = float(pos.x), float(pos.y), float(pos.z)
         altitude = abs(sz)
         if altitude < 1.0:
-            # No meaningful altitude — include unconditionally
+            # No meaningful altitude - include unconditionally
             relevant.append(shot)
             continue
         try:

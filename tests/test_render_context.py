@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Unit tests for core.render_context — backend-neutral alfspy contexts.
+"""Unit tests for core.render_context - backend-neutral alfspy contexts.
 
 The plugin must not care which rasteriser alfspy uses. These tests pin that:
 the torch factory is preferred when present (it also selects CUDA on its own),

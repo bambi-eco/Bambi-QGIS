@@ -6,7 +6,7 @@ identity model pays for itself:
 
 * geo-referencing keys its results on ``detection_id``, so a detection that
   cannot be placed on the DEM costs *itself* and is recorded in
-  ``georef_failures`` with a reason — rather than vanishing and taking the
+  ``georef_failures`` with a reason - rather than vanishing and taking the
   positional alignment of its frame with it;
 * tracking records membership as ``(track_id, detection_id)`` pairs taken
   straight from the tracker's own output, so ``tracks_pixel`` becomes a join.
@@ -15,7 +15,7 @@ That last point is what allows ``core/track_export.py`` to be deleted: it
 existed only to reconstruct this linkage by rounding geo coordinates to three
 decimals and hashing them, discarding whole frames when the counts disagreed.
 
-Every detection ends up either geo-referenced or explicitly failed —
+Every detection ends up either geo-referenced or explicitly failed -
 :func:`accounting` asserts exactly that, which the text format could not express.
 """
 
@@ -29,7 +29,7 @@ from . import store
 #: classifications ``BambiProcessor._classify_projection_miss`` already makes;
 #: they were log lines, and are now queryable rows.
 GEOREF_REASONS = (
-    "above_horizon",     # camera near-horizontal — these pixels are sky
+    "above_horizon",     # camera near-horizontal - these pixels are sky
     "beyond_mesh",       # the view reached ground the DEM does not cover
     "no_pose",           # no camera pose for that frame
     "projection_error",  # ray casting raised
@@ -148,7 +148,7 @@ def accounting(target_folder: str, modality: str) -> Dict[str, object]:
 
     Returns ``{"detections": n, "resolved": n, "failed": n, "unaccounted":
     [ids], "both": [ids]}``. ``unaccounted`` being non-empty means detections
-    went missing silently — the failure mode 6.0 exists to remove — and ``both``
+    went missing silently - the failure mode 6.0 exists to remove - and ``both``
     means a detection was recorded as resolved *and* failed.
     """
     det_path = store.stage_path(target_folder, store.DETECTIONS, modality)
@@ -197,7 +197,7 @@ def record_tracks(target_folder: str, modality: str,
     """Record one tracking run.
 
     *members* are ``{"track_id": legacy id, "detection_id": id,
-    "interpolated": 0|1}`` — the tracker's own output, with no re-derivation of
+    "interpolated": 0|1}`` - the tracker's own output, with no re-derivation of
     which detection belongs to which track.
 
     A new ``track_runs`` row is created and made active; earlier runs are kept
@@ -251,7 +251,7 @@ def superseded_track_ids(target_folder: str, modality: str) -> set:
     "Import as label track" copies a pipeline track into an editable label
     track; once that label track is materialised, both describe the same
     animal. Counting them together would double it, so the original is
-    superseded — but *only* that one. A label track drawn from scratch has no
+    superseded - but *only* that one. A label track drawn from scratch has no
     ``origin_track_id`` and supersedes nothing (§8.2).
     """
     path = store.stage_path(target_folder, store.LABELS, modality)
@@ -287,8 +287,8 @@ def analysis_runs(target_folder: str, modality: str,
                   include_manual: bool = True) -> List[int]:
     """Run ids the layers and analytics should read together.
 
-    Tracker runs are *alternatives* — builtin, boxmot and TRex describe the same
-    animals differently — so exactly one is active at a time. The labelling
+    Tracker runs are *alternatives* - builtin, boxmot and TRex describe the same
+    animals differently - so exactly one is active at a time. The labelling
     tool's run is *additive*: its tracks are usually animals the detector
     missed, so it is pooled alongside rather than chosen between. Tracker tracks
     that a label track superseded are excluded by
@@ -323,7 +323,7 @@ def active_run(target_folder: str, modality: str) -> Optional[dict]:
 
 def load_pixel_tracks(target_folder: str, modality: str,
                       run_id: Optional[int] = None) -> List[dict]:
-    """Pixel-space tracks — the join that replaces ``core/track_export.py``.
+    """Pixel-space tracks - the join that replaces ``core/track_export.py``.
 
     No coordinate rounding, no per-frame ordering assumption, and a detection
     that failed to geo-reference no longer costs its frame-mates their tracks.
@@ -353,7 +353,7 @@ def load_pixel_tracks(target_folder: str, modality: str,
             "FROM trk.track_members m "
             "JOIN trk.tracks t ON t.track_id = m.track_id "
             "JOIN detections d ON d.detection_id = m.detection_id "
-            f"WHERE t.run_id IN ({placeholders}) "  # nosec B608 — ints only
+            f"WHERE t.run_id IN ({placeholders}) "  # nosec B608 - ints only
             "ORDER BY d.frame, m.track_id", run_ids)]
         gpkg.detach(conn, "trk")
         return [row for row in rows if row["track_id"] not in superseded]
@@ -365,7 +365,7 @@ def track_species(target_folder: str, modality: str) -> Dict[int, int]:
     """``{track_id: species_id}`` for the tracks of the active run(s).
 
     The individual-level species as it stands on the track, whoever put it
-    there — a classifier, a hand annotation, or a label synced across from the
+    there - a classifier, a hand annotation, or a label synced across from the
     other camera. Rows still on the fallback species are left out, so a caller
     can treat a missing key as "nobody has identified this animal".
     """

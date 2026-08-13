@@ -318,7 +318,7 @@ def test_no_filter_and_every_species_are_not_the_same_thing(survey):
 
 
 def test_an_empty_species_list_selects_nothing(survey):
-    """Not "everything" — an empty tick list has to mean what it says."""
+    """Not "everything" - an empty tick list has to mean what it says."""
     rows, provenance = analytics_source.load_rows(survey, "t", species_ids=[])
     assert rows == []
     assert provenance["species_filter"] == []

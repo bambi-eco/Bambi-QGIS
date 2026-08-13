@@ -2,7 +2,7 @@
 """Write classification results where the rest of the plugin reads them.
 
 The classifiers record their answers in ``classification.gpkg`` with full
-provenance — the model, the per-frame probability, the vote margin. That file
+provenance - the model, the per-frame probability, the vote margin. That file
 is the authority, but nothing else in the plugin reads it. This module projects
 those answers onto the fields the 6.0 store already has, and from there the
 exporters, the QGIS layers, the survey analytics and the labelling tool all see
@@ -25,11 +25,11 @@ Three rules keep the write safe:
 
 * **A detection that already has a species keeps it.** Only rows still on the
   fallback ``animal`` are filled in, so a detector class mapping someone
-  configured is never silently overwritten — unless they ask for that.
+  configured is never silently overwritten - unless they ask for that.
 * **Manual tracks are never touched.** A hand annotation outranks a model.
 * **The projection is idempotent and re-runnable.** ``track_predictions``
   remains the source of truth, so if something else rewrites the detection
-  species later — re-applying a detector class mapping does exactly that —
+  species later - re-applying a detector class mapping does exactly that -
   the fix is to run this again, not to re-run the classifiers.
 """
 
@@ -49,8 +49,8 @@ FALLBACK = store.FALLBACK_SPECIES_ID
 def label_values(spec: dict, vocabulary: dict, task: str) -> Dict[str, int]:
     """``{model label: project value id}`` for one task.
 
-    Prefers the mapping the user configured — keyed on class index, which is
-    the only thing a model guarantees — and falls back to matching names, so a
+    Prefers the mapping the user configured - keyed on class index, which is
+    the only thing a model guarantees - and falls back to matching names, so a
     model that already speaks the project's language needs no configuration.
     """
     labels = list(spec.get("class_labels") or [])

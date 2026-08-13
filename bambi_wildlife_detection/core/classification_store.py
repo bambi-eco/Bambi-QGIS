@@ -4,9 +4,9 @@
 One file per modality, ``bambi_{m}/classification.gpkg``, holding three things:
 
 * **which detections have been embedded**, and by which run. That is the only
-  fact about an embedding that is not derivable — where its vector lives
+  fact about an embedding that is not derivable - where its vector lives
   follows from the frame it came from and its own id (see
-  :mod:`core.embedding_files`) — and it is what makes a re-run incremental
+  :mod:`core.embedding_files`) - and it is what makes a re-run incremental
   rather than another hour of GPU time;
 * **per-frame head output**, keeping the head's own class label verbatim so
   nothing is lost in mapping it onto the project vocabulary;
@@ -68,7 +68,7 @@ def start_embedding_run(target_folder: str, modality: str, backbone: str,
 
     Changing the projection or the backbone starts a *new* run rather than
     overwriting the old one, so switching between perspective and
-    orthorectified crops — or trying a different backbone — does not discard
+    orthorectified crops - or trying a different backbone - does not discard
     work that is expensive to reproduce. :func:`reuse_embedding_run` is what
     resumes one instead.
     """
@@ -117,7 +117,7 @@ def reuse_embedding_run(target_folder: str, modality: str, backbone: str,
                         thermal_anchored: bool = False) -> Optional[dict]:
     """An existing run these settings could continue, if there is one.
 
-    Matching on the settings that change the vectors — and only those — is what
+    Matching on the settings that change the vectors - and only those - is what
     lets a flight be embedded in several sessions: a run interrupted halfway
     resumes instead of starting again. ``folder`` and ``plugin_version`` are
     deliberately not compared; neither changes what a vector contains.
@@ -331,7 +331,7 @@ def _load_json(raw) -> dict:
 def clear_task(target_folder: str, modality: str, task: str) -> Dict[str, int]:
     """Remove everything *task* produced, leaving the embeddings alone.
 
-    Resetting one head must not throw away the vectors every other head reads —
+    Resetting one head must not throw away the vectors every other head reads -
     which is why the ``classification`` stage does not own the store file (see
     ``core.stages.STAGE_STORE_KIND``) and clears its rows instead.
     """

@@ -1,7 +1,7 @@
 # Real-QGIS smoke-test image.
 #
 # Runs a headless (offscreen) QGIS so the plugin's Qt widgets can be
-# instantiated for real — catching the renamed-attribute / dead-signal class
+# instantiated for real - catching the renamed-attribute / dead-signal class
 # of breakage that the QGIS-free unit suite cannot see. This is a separate
 # service from the unit and integration images and is not part of the normal
 # test loop (it pulls the multi-GB qgis/qgis base).
@@ -27,5 +27,5 @@ RUN pip3 install --no-cache-dir --break-system-packages pytest pytest-cov reques
 ENV QT_QPA_PLATFORM=offscreen
 ENV PYTHONPATH=/workspace
 
-# Code is mounted at runtime via docker-compose volume — no COPY needed.
+# Code is mounted at runtime via docker-compose volume - no COPY needed.
 CMD ["bash", "run_qgis_tests.sh"]

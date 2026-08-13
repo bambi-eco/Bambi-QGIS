@@ -7,14 +7,14 @@ Port of the R analysis used in Praschl et al. 2026 (``scripts/run_analysis.R``,
 and three estimators turn that table into a density:
 
 ``naive``
-    ``sum(count) / sum(ha) * 100`` — animals per 100 ha (= per km²).
+    ``sum(count) / sum(ha) * 100`` - animals per 100 ha (= per km²).
 ``bootstrap``
     Transects are resampled with replacement (``n_boot`` times); the naive
     density is recomputed on every resample and the mean, SE and percentile
     95 % CI of that distribution are reported.
 ``zinb``
     Zero-inflated negative binomial regression ``count ~ ha`` with a constant
-    zero-inflation term, NB2 parameterisation (``var = mu + mu²/theta``) —
+    zero-inflation term, NB2 parameterisation (``var = mu + mu²/theta``) -
     the ``glmmTMB(count ~ ha, ziformula = ~1, family = nbinom2)`` model of the
     R script, fitted here by maximum likelihood with scipy.  The density is
     ``sum(fitted) / sum(ha) * 100`` with the fitted values on the response
@@ -23,10 +23,10 @@ and three estimators turn that table into a density:
 
 The two inputs the plugin has to build first are:
 
-* **counts** — tracks are assigned to the transect whose centre line (the
+* **counts** - tracks are assigned to the transect whose centre line (the
   flight path between its start and end frame) is nearest in *perpendicular
   distance*, optionally truncated at a maximum distance.
-* **areas** — the union of the per-frame field-of-view footprints of the
+* **areas** - the union of the per-frame field-of-view footprints of the
   frames inside the transect's frame range.
 
 Like every ``core`` module this file must stay importable without QGIS;
@@ -36,7 +36,7 @@ shapely and scipy are imported lazily inside the functions that need them.
 import math
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
-#: Densities are reported per 100 ha, which is exactly 1 km² — the unit the R
+#: Densities are reported per 100 ha, which is exactly 1 km² - the unit the R
 #: script predicts on ("posteriores predicten auf 1km2").
 HA_PER_KM2 = 100.0
 
@@ -51,7 +51,7 @@ def transect_centerline(images: List[dict], first_frame: int, last_frame: int,
     """Flight path of one transect as a world-CRS polyline.
 
     The poses file stores camera positions mesh-locally (world CRS minus the
-    DEM origin), so the origin offset is added back here — the tracks'
+    DEM origin), so the origin offset is added back here - the tracks'
     perpendicular positions live in the world CRS.
     """
     line: List[Tuple[float, float]] = []
@@ -72,7 +72,7 @@ def point_to_polyline_distance(px: float, py: float,
     """Shortest distance from a point to a polyline, and the foot point.
 
     The projection onto each segment is clamped to the segment, so the foot
-    never leaves the transect — a track beyond the transect's end measures to
+    never leaves the transect - a track beyond the transect's end measures to
     its end point rather than to the infinite line through it.
     """
     if not line:
@@ -108,14 +108,14 @@ def assign_tracks(tracks: List[dict],
     """Assign every track to a transect it was actually monitored by.
 
     A track only counts towards a transect whose **monitored area contains
-    it** — the same merged field-of-view footprint that forms the density's
+    it** - the same merged field-of-view footprint that forms the density's
     denominator. Without that constraint an animal seen well outside a
     transect's footprint would still be counted into it (whichever centre line
     happened to be nearest), inflating the numerator over ground that was
     never surveyed. Where several transects' footprints overlap the point, the
     one whose centre line is nearest in perpendicular distance wins.
 
-    :param tracks: entries of ``perpendicular_tracks_{m}.json`` — each needs a
+    :param tracks: entries of ``perpendicular_tracks_{m}.json`` - each needs a
         ``detection_center`` ``[x, y, z]`` (world CRS) and ``last_frame``.
     :param centerlines: ``transect_id -> polyline`` (world CRS)
     :param truncation: maximum perpendicular distance in metres; tracks farther
@@ -124,7 +124,7 @@ def assign_tracks(tracks: List[dict],
         monitored area covers the point. Passing the test as a predicate keeps
         this module free of a geometry backend: the pipeline builds it from
         shapely (:func:`shapely_area_predicate`) while the QGIS layer loader
-        builds it from ``QgsGeometry``, which — unlike shapely — every QGIS
+        builds it from ``QgsGeometry``, which - unlike shapely - every QGIS
         install is guaranteed to have. ``None`` skips the containment test.
     :return: one dict per track. ``transect_id`` is ``None`` when the track was
         not counted, and ``outside_fov`` / ``truncated`` say why.
@@ -161,7 +161,7 @@ def assign_tracks(tracks: List[dict],
         truncated = bool(best_id is not None and truncating and best_dist > truncation)
 
         # A track outside every footprint has no assigned transect and hence no
-        # ``distance_m`` — keep the distance to the nearest centre line anyway,
+        # ``distance_m`` - keep the distance to the nearest centre line anyway,
         # so "how far off was it?" stays answerable when diagnosing exclusions.
         nearest = min(distances.values()) if distances else None
 
@@ -186,7 +186,7 @@ def shapely_area_predicate(areas: Dict[int, object],
 
     *areas* maps a transect id to its monitored area (as returned by
     :func:`merged_fov_area`), or to ``None`` when the FoV step never covered
-    that transect — such a transect can then contain nothing, which is right:
+    that transect - such a transect can then contain nothing, which is right:
     it monitored no ground.
     """
     from shapely.geometry import Point
@@ -210,7 +210,7 @@ def merged_fov_area(fov_polygons: Dict[int, list], frames: Sequence[int]):
     *fov_polygons* maps a frame index to its ground footprint as a list of
     ``(x, y, z)`` world coordinates (``fov_{m}/fov_polygons.txt``, read by
     :func:`core.pipeline_outputs.load_fov_polygons_3d`).  Frames without a
-    footprint — e.g. because the FoV step sampled every N-th frame — are
+    footprint - e.g. because the FoV step sampled every N-th frame - are
     skipped; the geometry is a shapely (Multi)Polygon or ``None`` when the
     transect has no usable footprint at all.
 
@@ -251,7 +251,7 @@ def geometry_to_rings(geometry) -> List[List[List[float]]]:
 
     Holes are dropped: the FoV union of a transect can contain gaps where the
     footprint sampling was too coarse, and those must not be counted as
-    monitored area — but they are already excluded from ``merged_fov_area``'s
+    monitored area - but they are already excluded from ``merged_fov_area``'s
     area, so the rings are for display only.
     """
     if geometry is None or geometry.is_empty:
@@ -329,7 +329,7 @@ def estimate_bootstrap(counts: Sequence[float], areas_ha: Sequence[float],
 #: negative binomial is numerically a Poisson (no overdispersion left to
 #: estimate), and at ``|gamma| = 20`` the zero-inflation probability is 0 or 1
 #: to within 2e-9. The likelihood is flat beyond them, so a fit that lands on
-#: one means that parameter is *unidentified* — see :func:`_boundary_params`.
+#: one means that parameter is *unidentified* - see :func:`_boundary_params`.
 LOG_THETA_BOUND = 20.0
 GAMMA_BOUND = 20.0
 
@@ -448,7 +448,7 @@ def estimate_zinb(counts: Sequence[float],
 
     try:
         from scipy.optimize import minimize
-    except ImportError as exc:  # pragma: no cover — scipy is a hard dependency
+    except ImportError as exc:  # pragma: no cover - scipy is a hard dependency
         return {"method": "zinb", "density_per_100ha": None,
                 "error": f"scipy not available: {exc}"}
 
@@ -461,7 +461,7 @@ def estimate_zinb(counts: Sequence[float],
                 "error": "need at least 4 transects with a positive area"}
     if np.allclose(x, x[0]):
         return {"method": "zinb", "density_per_100ha": None,
-                "error": "all transects have the same area — 'ha' has no variance"}
+                "error": "all transects have the same area - 'ha' has no variance"}
 
     def nll(params):
         return _zinb_nll(params, y, x)
@@ -469,7 +469,7 @@ def estimate_zinb(counts: Sequence[float],
     # The ZINB likelihood is multimodal: a single start regularly settles in
     # the local optimum where the zero-inflation collapses (p_zero -> 0) while
     # a better fit with a real zero-inflation component exists. Every start of
-    # the grid is optimised and the best likelihood wins — this is what makes
+    # the grid is optimised and the best likelihood wins - this is what makes
     # the estimates reproduce glmmTMB's.
     best = None
     for start in _zinb_starts(y, x):
@@ -544,22 +544,22 @@ def _boundary_params(log_theta: float, gamma: float):
     Two of the four ZINB parameters have an MLE that can legitimately run to
     infinity, and the likelihood is flat once it gets there:
 
-    * ``log(theta) -> +inf`` — the counts carry no overdispersion beyond what
+    * ``log(theta) -> +inf`` - the counts carry no overdispersion beyond what
       the zero-inflation already explains, so the conditional model is a
       Poisson and the NB dispersion is unidentified.
-    * ``|gamma| -> inf`` — there are no excess zeros (``p_zero -> 0``, the fit
+    * ``|gamma| -> inf`` - there are no excess zeros (``p_zero -> 0``, the fit
       reducing to a plain negative binomial) or nothing but zeros.
 
     A parameter that has run into its bound carries no curvature, so including
     it in the observed information yields a singular (or step-size dependent,
     hence meaningless) matrix. It is therefore held fixed for the delta method
-    — sound because the fitted values do not depend on it there: the mean is
+    - sound because the fitted values do not depend on it there: the mean is
     free of ``theta`` altogether, and ``d fitted / d gamma = -fitted * p_zero``
     vanishes as ``p_zero -> 0``.
 
     R/glmmTMB stops its optimiser at some large-but-finite value instead and
     propagates that point's curvature, so its CI for such a fit is an artefact
-    of where it happened to stop. The density itself is unaffected — that is
+    of where it happened to stop. The density itself is unaffected - that is
     why it still reproduces to within 0.02 % on the reference data.
     """
     fixed = []
@@ -568,12 +568,12 @@ def _boundary_params(log_theta: float, gamma: float):
         fixed.append(2)
         warnings.append(
             "the negative-binomial dispersion is unidentified (the counts "
-            "reach the Poisson limit) — it was held fixed, so the confidence "
+            "reach the Poisson limit) - it was held fixed, so the confidence "
             "interval understates the true uncertainty")
     if abs(gamma) >= GAMMA_BOUND - 1e-6:
         fixed.append(3)
         warnings.append(
-            "zero-inflation collapsed to the boundary — the counts show no "
+            "zero-inflation collapsed to the boundary - the counts show no "
             "excess zeros, so the fit reduces to a plain negative binomial")
     return fixed, warnings
 
@@ -586,8 +586,8 @@ def _delta_method_se(nll, params, grad, total_ha: float, density: float,
     their value (their row/column is dropped from the observed information);
     :func:`_boundary_params` supplies the ones sitting on a bound, where the
     likelihood is flat and a numeric Hessian would be meaningless. Dropping a
-    parameter is only safe when the fitted values do not depend on it — i.e.
-    its column in *grad* is zero — which is asserted here rather than assumed.
+    parameter is only safe when the fitted values do not depend on it - i.e.
+    its column in *grad* is zero - which is asserted here rather than assumed.
 
     R combines the per-transect SEs as ``sqrt(sum(se_fit²)) / sum(ha) * 100``,
     which is reproduced here.
@@ -600,9 +600,9 @@ def _delta_method_se(nll, params, grad, total_ha: float, density: float,
     for i in fixed:
         if np.any(np.abs(grad[:, i]) > 1e-8):
             return None, None, ("a boundary parameter still moves the fitted "
-                                "values — no standard errors")
+                                "values - no standard errors")
     if not free:
-        return None, None, "no free parameters left — no standard errors"
+        return None, None, "no free parameters left - no standard errors"
 
     # Profile out the fixed parameters: differentiate only in the free ones.
     free_params = np.asarray(params, dtype=np.float64)[free]
@@ -614,9 +614,9 @@ def _delta_method_se(nll, params, grad, total_ha: float, density: float,
 
     hess = _numeric_hessian(profile_nll, free_params)
     if not np.all(np.isfinite(hess)):
-        return None, None, "information matrix is not finite — no standard errors"
+        return None, None, "information matrix is not finite - no standard errors"
 
-    singular_msg = "information matrix is singular — no standard errors"
+    singular_msg = "information matrix is singular - no standard errors"
     try:
         cov = np.linalg.inv(hess)
     except np.linalg.LinAlgError:

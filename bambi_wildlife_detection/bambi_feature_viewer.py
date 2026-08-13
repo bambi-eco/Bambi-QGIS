@@ -51,9 +51,9 @@ class FeatureViewerDialog(QDialog):
     Frame dict keys
     ---------------
     ``frame_idx``       : int or None
-    ``image_path_t``    : str — path to thermal frame (empty if not extracted)
-    ``image_path_w``    : str — path to RGB frame (empty if not extracted)
-    ``boxes_modality``  : str — "t" or "w", pixel space of the boxes
+    ``image_path_t``    : str - path to thermal frame (empty if not extracted)
+    ``image_path_w``    : str - path to RGB frame (empty if not extracted)
+    ``boxes_modality``  : str - "t" or "w", pixel space of the boxes
     ``boxes_green``     : list of box tuples (highlighted detection)
     ``boxes_blue``      : list of box tuples (other detections)
     ``boxes_green_proj``: list of box tuples projected to the other modality (optional)
@@ -192,8 +192,8 @@ class FeatureViewerDialog(QDialog):
         """Show a single detection frame.
 
         :param title: String shown in the title label.
-        :param green_boxes: List of (x1,y1,x2,y2[,conf,cls]) tuples — highlighted.
-        :param blue_boxes:  List of (x1,y1,x2,y2[,conf,cls]) tuples — background.
+        :param green_boxes: List of (x1,y1,x2,y2[,conf,cls]) tuples - highlighted.
+        :param blue_boxes:  List of (x1,y1,x2,y2[,conf,cls]) tuples - background.
         :param image_path_t: Absolute path to the thermal frame image (may be empty).
         :param image_path_w: Absolute path to the RGB frame image (may be empty).
         :param boxes_modality: ``"t"`` if boxes are in thermal pixel space,
@@ -233,9 +233,9 @@ class FeatureViewerDialog(QDialog):
         :param title: String shown in the title label.
         :param frames: List of dicts, each with keys:
                        ``frame_idx``    (int)
-                       ``image_path_t`` (str) — thermal frame path
-                       ``image_path_w`` (str) — RGB frame path
-                       ``boxes_modality`` (str) — "t" or "w"
+                       ``image_path_t`` (str) - thermal frame path
+                       ``image_path_w`` (str) - RGB frame path
+                       ``boxes_modality`` (str) - "t" or "w"
                        ``boxes_green``  (list of box tuples)
                        ``boxes_blue``   (list of box tuples)
         :param start_idx: Index into *frames* to display first.
@@ -479,7 +479,7 @@ class FeatureViewerDialog(QDialog):
 
         # Info text from first green box.
         # FoV frames (identified by per-frame target_folder) only show the
-        # frame index and detection count — confidence/class are not meaningful.
+        # frame index and detection count - confidence/class are not meaningful.
         is_fov_frame = "target_folder" in data
         info_parts = []
         if frame_idx is not None:
@@ -517,11 +517,11 @@ class FeatureViewerDialog(QDialog):
         painter.setFont(font)
 
         if projected:
-            color_primary = QColor(220, 40, 40)  # red — highlighted
-            color_secondary = QColor(255, 160, 0)  # orange — others
+            color_primary = QColor(220, 40, 40)  # red - highlighted
+            color_secondary = QColor(255, 160, 0)  # orange - others
         else:
-            color_primary = QColor(0, 220, 0)  # green — highlighted
-            color_secondary = QColor(80, 140, 255)  # blue — others
+            color_primary = QColor(0, 220, 0)  # green - highlighted
+            color_secondary = QColor(80, 140, 255)  # blue - others
 
         # Draw secondary first so primary is always on top
         for boxes, color, lw in [

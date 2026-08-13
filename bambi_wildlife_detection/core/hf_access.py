@@ -12,12 +12,12 @@ Two boundaries are deliberate here:
 
 * **The token is passed in, never read from QSettings by this module.** A token
   is a user credential, so it lives in QSettings rather than in the project file
-  a user shares — but ``QSettings`` is a GUI-layer concern and is not part of the
+  a user shares - but ``QSettings`` is a GUI-layer concern and is not part of the
   headless test stub, so the dock widget reads it and hands the value to
   :func:`resolve_token`.
 * **The models root is passed in.** It comes from
   ``QgsApplication.qgisSettingsDirPath()``, and ``qgis.core`` may not be imported
-  from ``core`` even lazily (see ``core/__init__``), so the caller resolves it —
+  from ``core`` even lazily (see ``core/__init__``), so the caller resolves it -
   ``BambiProcessor._get_default_model_dir()`` already does exactly this for the
   detection weights.
 
@@ -58,7 +58,7 @@ TASKS = ("occlusion", "species", "sex", "life_stage")
 PER_SPECIES_TASKS = ("sex", "life_stage")
 
 #: Default head repository per task. ``species`` and ``life_stage`` are not
-#: released yet — the code paths are complete, so they start working the day
+#: released yet - the code paths are complete, so they start working the day
 #: the repos appear, and until then a custom model is the only option.
 DEFAULT_HEAD_REPOS: Dict[str, Optional[str]] = {
     "occlusion": "cpraschl/bambi-occlusion-classifiers",
@@ -91,7 +91,7 @@ def resolve_token(stored: str = "") -> Tuple[str, str]:
     """Return ``(token, source)``, preferring the most explicit setting.
 
     The order is what a user would expect: what they typed into the plugin
-    wins, then the environment, then whatever ``hf auth login`` left behind —
+    wins, then the environment, then whatever ``hf auth login`` left behind -
     so someone already logged in on the command line has nothing to configure.
 
     *stored* is the value the GUI read out of QSettings; this module never
@@ -137,7 +137,7 @@ def describe_token_source(source: str) -> str:
 #: Outcomes of :func:`check_repo_access`.
 ACCESS_GRANTED = "granted"
 ACCESS_GATED = "gated"
-ACCESS_NO_TOKEN = "no_token"  # nosec B105 — a status name, not a credential
+ACCESS_NO_TOKEN = "no_token"  # nosec B105 - a status name, not a credential
 ACCESS_MISSING = "not_found"
 ACCESS_UNAVAILABLE = "unavailable"   # huggingface_hub not installed
 ACCESS_ERROR = "error"               # offline, proxy, anything else
@@ -145,7 +145,7 @@ ACCESS_ERROR = "error"               # offline, proxy, anything else
 
 def check_repo_access(
     repo_id: str = DEFAULT_BACKBONE,
-    # An empty token means "none supplied" — a state this function exists to
+    # An empty token means "none supplied" - a state this function exists to
     # report, not a hardcoded credential.
     token: str = "",  # nosec B107
 ) -> Dict[str, str]:
@@ -192,11 +192,11 @@ def check_repo_access(
         return result
     except RepositoryNotFoundError:
         # A private or gated repo can also present as 404 to an unauthorised
-        # caller, so this is not necessarily a typo — say both.
+        # caller, so this is not necessarily a typo - say both.
         result["status"] = ACCESS_MISSING
         result["message"] = (
-            f"{repo_id} was not found. Check the spelling, or — if it is "
-            "private or gated — that your token has access to it.")
+            f"{repo_id} was not found. Check the spelling, or - if it is "
+            "private or gated - that your token has access to it.")
         return result
     except Exception as exc:
         result["message"] = (
@@ -230,7 +230,7 @@ def backbone_cache_dir(models_dir: str) -> str:
 
 
 def head_filename(task: str, modality: str) -> str:
-    """The head's file name, e.g. ``sex_rgb.pt`` — the repos' own convention."""
+    """The head's file name, e.g. ``sex_rgb.pt`` - the repos' own convention."""
     return f"{task}_{modality}.pt"
 
 

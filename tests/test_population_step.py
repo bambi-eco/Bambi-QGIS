@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """End-to-end test of BambiProcessor.run_population_estimation.
 
-Builds a synthetic flight on disk — poses, transect definitions, FoV
-footprints and track perpendicular distances — and checks that the step wires
+Builds a synthetic flight on disk - poses, transect definitions, FoV
+footprints and track perpendicular distances - and checks that the step wires
 them together into the per-transect count/area table and the estimate files.
 """
 import csv
@@ -133,7 +133,7 @@ class TestRunPopulationEstimation:
         assert by_name["North"]["n_frames_with_fov"] == 20
 
     def test_track_outside_every_footprint_is_not_counted(self, processor, flight):
-        """The density's denominator is the monitored area — so must its numerator.
+        """The density's denominator is the monitored area - so must its numerator.
 
         Counting an animal that fell outside every field of view (merely
         because some transect's centre line was nearest) would spread it over
@@ -148,7 +148,7 @@ class TestRunPopulationEstimation:
         assert far["transect_id"] == ""
         assert far["outside_fov"] == "1"
         assert far["truncated"] == "0"
-        # No transect took it, so there is no distance *to its transect* — but
+        # No transect took it, so there is no distance *to its transect* - but
         # the distance to the nearest centre line is kept, so the exclusion can
         # be diagnosed instead of just disappearing.
         assert far["distance_m"] == ""

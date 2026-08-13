@@ -3,7 +3,7 @@
 BAMBI Transect Splitting Tool
 =============================
 
-Non-modal dialog for splitting a processed flight into transects — named,
+Non-modal dialog for splitting a processed flight into transects - named,
 contiguous frame ranges of the extracted frames.
 
 Features
@@ -501,7 +501,7 @@ class TransectToolDialog(QDialog):
         name_row = QHBoxLayout()
         name_row.addWidget(QLabel("Name:"))
         self.name_edit = QLineEdit()
-        self.name_edit.setPlaceholderText("optional — default: Transect {id}")
+        self.name_edit.setPlaceholderText("optional - default: Transect {id}")
         self.name_edit.textEdited.connect(self._on_name_edited)
         name_row.addWidget(self.name_edit, 1)
         eg.addLayout(name_row)
@@ -938,7 +938,7 @@ class TransectToolDialog(QDialog):
             QMessageBox.information(
                 self, "BAMBI Transect Tool",
                 f"The flight path after frame {transect.start_frame} is only "
-                f"{remaining:.1f} m long — the end was set to the last frame "
+                f"{remaining:.1f} m long - the end was set to the last frame "
                 f"({frame}).")
         transect.end_frame = frame
         self._mark_dirty()

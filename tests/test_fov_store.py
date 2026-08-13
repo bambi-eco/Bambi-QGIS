@@ -2,7 +2,7 @@
 """Field-of-view footprints in the store (§11).
 
 The FoV step wrote only ``fov_polygons.txt`` until now, so ``fov.gpkg`` existed
-solely where a 5.x project had been migrated — while the coverage map, the
+solely where a 5.x project had been migrated - while the coverage map, the
 transect areas a population estimate divides by, and the QGIS layers all read
 the store. The step writes it now, and this is that contract.
 """

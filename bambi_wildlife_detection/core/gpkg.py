@@ -19,12 +19,12 @@ That only needs a small, well-specified amount of boilerplate:
 
 That last one is not optional in practice. The specification requires it only
 for files containing feature tables, but GDAL's GPKG driver (verified against
-3.4.1, the version in the QGIS test image) refuses to open a file without it —
+3.4.1, the version in the QGIS test image) refuses to open a file without it -
 ``ogr.Open()`` returns ``None`` and every layer is invalid. Creating it empty
 costs nothing and is what makes the aspatial layout work at all; see
 ``tests_qgis/test_store_layers.py``, which is the spike that established this.
 
-No GeoPackage geometry is ever encoded — QGIS map layers keep being built in
+No GeoPackage geometry is ever encoded - QGIS map layers keep being built in
 code from the tables, as they were from the text files before.
 
 References: OGC GeoPackage 1.3.0, clauses 1.1.1.1 (core tables) and 2.4
@@ -84,7 +84,7 @@ _WGS84_WKT = (
     'AUTHORITY["EPSG","4326"]]'
 )
 
-# Required by GDAL even with no geometry anywhere in the file — without it the
+# Required by GDAL even with no geometry anywhere in the file - without it the
 # GPKG driver declines to open the database at all. Always stays empty here.
 _GEOMETRY_COLUMNS_TABLE = """
 CREATE TABLE IF NOT EXISTS gpkg_geometry_columns (
@@ -139,7 +139,7 @@ def connect(path: str, create: bool = True) -> sqlite3.Connection:
     Journal mode is left at SQLite's default (``DELETE``) rather than WAL. WAL
     would allow a reader to run alongside the writer, but the plugin never lets
     QGIS hold a stage file open (EXCHANGE_FORMAT_PLAN.md §11), so there is no
-    concurrency to buy — and WAL costs two things that matter here: it needs
+    concurrency to buy - and WAL costs two things that matter here: it needs
     shared memory, so it fails outright on network shares where survey projects
     plausibly live, and it leaves ``-wal``/``-shm`` sidecars that a user copying
     "the .gpkg" would silently leave behind.
@@ -191,7 +191,7 @@ def register_table(conn: sqlite3.Connection, table: str,
     Without a ``gpkg_contents`` row the table exists but is invisible to the
     GeoPackage driver, which is the whole reason for using this container.
 
-    *table* is a schema-controlled identifier, never user input — it is
+    *table* is a schema-controlled identifier, never user input - it is
     validated against the database's own table list rather than interpolated
     blindly.
     """

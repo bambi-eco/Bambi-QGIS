@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """The DINOv3 backbone wrapper, against fake torch/transformers.
 
-Neither library is installed in the unit tier — and both are heavy enough that
-requiring them would make this suite unrunnable on a laptop — so the contract
+Neither library is installed in the unit tier - and both are heavy enough that
+requiring them would make this suite unrunnable on a laptop - so the contract
 is exercised through stand-ins. What is being tested is our plumbing: that the
 CLS vector is taken from the right place, that inference runs under
 ``no_grad``, and that the cache is redirected without touching the environment

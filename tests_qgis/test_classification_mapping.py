@@ -2,7 +2,7 @@
 """The classifier mapping table and its two dialogs, in a real QGIS.
 
 What matters here is that the mapping survives a project round trip and stays
-keyed on class *index* — a model returns positions, so a mapping keyed on
+keyed on class *index* - a model returns positions, so a mapping keyed on
 names would silently re-point itself the moment a label was edited.
 """
 import os
@@ -55,7 +55,7 @@ def test_both_demographic_tasks_are_configured_per_species(dock):
 
 def test_life_stage_defaults_to_the_size_estimate(dock):
     """No life-stage head is published and size needs none, so the size
-    estimate *is* the default — offering a dead "Default" and starting on
+    estimate *is* the default - offering a dead "Default" and starting on
     "Off" only left the per-species dialog's Size-based looking orphaned."""
     combo = dock.classification_models_table.cellWidget(
         dock._task_row("life_stage"), 1)
@@ -94,7 +94,7 @@ def test_matched_is_the_default_input(dock):
 
 def test_every_task_has_its_own_input_combo(dock):
     """The classifiers are separate models, and one may read a camera another
-    cannot use — so the choice sits on each step rather than once."""
+    cannot use - so the choice sits on each step rather than once."""
     combos = [dock._classification_input_combo(t) for t in hf_access.TASKS]
     assert len({id(c) for c in combos}) == len(hf_access.TASKS)
 
@@ -154,7 +154,7 @@ def test_the_download_button_exists(dock):
 
 
 def test_it_downloads_every_task_set_to_default(dock, monkeypatch, tmp_path):
-    """So the class mapping can be set up before anything is run — asking a
+    """So the class mapping can be set up before anything is run - asking a
     user to run a classifier once before they can configure it is backwards."""
     calls = []
     monkeypatch.setattr(

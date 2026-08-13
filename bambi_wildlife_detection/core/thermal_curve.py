@@ -4,7 +4,7 @@
 A :class:`ThermalCurve` maps per-pixel temperatures (°C) to normalized
 display intensities in ``[0, 1]``. The mapping is defined by
 
-* a temperature *domain* ``[domain_lo, domain_hi]`` — temperatures are
+* a temperature *domain* ``[domain_lo, domain_hi]`` - temperatures are
   normalized into this window first (values outside are clamped), and
 * a list of *control points* in normalized ``(x, y)`` coordinates through
   which a monotone cubic curve (PCHIP, Fritsch–Carlson) is interpolated,
@@ -17,7 +17,7 @@ value at ``x = 0`` and temperatures above to the value at ``x = 1``.
 Because a flight rarely has well-known temperature bounds up front, the
 module also provides :func:`scan_temperatures`, which parses a collection
 of radiometric images and accumulates the exact global minimum/maximum, a
-fixed-bin histogram and (approximate) percentiles — the backend of the
+fixed-bin histogram and (approximate) percentiles - the backend of the
 "Auto Detect" button in the UI.
 
 This module is pure numpy (no Qt/QGIS imports) so it is unit-testable in

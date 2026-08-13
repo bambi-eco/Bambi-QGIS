@@ -13,7 +13,7 @@ RUN_TS=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 export COVERAGE_FILE="${COVERAGE_FILE:-$REPORTS_DIR/coverage/integration/.coverage}"
 
 echo "============================================"
-echo " BAMBI Plugin — Integration Tests"
+echo " BAMBI Plugin - Integration Tests"
 echo " $RUN_TS"
 echo "============================================"
 

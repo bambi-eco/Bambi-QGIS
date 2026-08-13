@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """The QGIS layer readers preferring the store (EXCHANGE_FORMAT_PLAN.md §11).
 
-The plugin never hands a stage file to QGIS as a layer source — layers are
+The plugin never hands a stage file to QGIS as a layer source - layers are
 built in memory from rows. These readers are where those rows come from, and
 they read the store and nothing else: a legacy file path is taken only to
 locate the project beside it (§11).
@@ -122,7 +122,7 @@ def test_geo_tracks_use_the_active_run(populated):
 
 
 def test_geo_tracks_without_any_run_are_empty(populated):
-    """No active tracker run and no manual run means nothing to show — not a
+    """No active tracker run and no manual run means nothing to show - not a
     fall back to a file describing runs the store deliberately excluded."""
     conn = store.open_store(
         store.stage_path(populated, store.TRACKS, "t"), store.TRACKS, "t")

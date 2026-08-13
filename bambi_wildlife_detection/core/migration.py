@@ -3,7 +3,7 @@
 
 Implements EXCHANGE_FORMAT_PLAN.md §9. Reads the legacy text/JSON outputs and
 writes the equivalent rows into ``project.gpkg`` and the per-stage files. The
-legacy files are never modified — migration is additive, so a failed or
+legacy files are never modified - migration is additive, so a failed or
 half-finished run can simply be deleted and retried.
 
 Two things happen here for the last time, and nowhere else in the codebase:
@@ -16,8 +16,8 @@ Two things happen here for the last time, and nowhere else in the codebase:
   it alphabetically on every export; migration reproduces that once, freezes it
   into the ``species`` table and never derives it again (§1.3).
 
-The ambiguity of legacy ``class_id 0`` — "animal" to the detector, "unknown" to
-the labelling tool — is resolved by which side of ``DETECTIONS_MARKER`` a row
+The ambiguity of legacy ``class_id 0`` - "animal" to the detector, "unknown" to
+the labelling tool - is resolved by which side of ``DETECTIONS_MARKER`` a row
 sits on, the only place that distinction survives. It is recorded as ordinary
 ``class_mapping`` rows so the resolution stays data-driven afterwards.
 """
@@ -58,7 +58,7 @@ class MigrationReport:
     def warn(self, message: str) -> None:
         self.warnings.append(message)
 
-    def __repr__(self) -> str:  # pragma: no cover — debugging aid
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"MigrationReport(counts={self.counts}, warnings={self.warnings})"
 
 
@@ -89,7 +89,7 @@ def is_migrated(target_folder: str) -> bool:
 def existing_stores(target_folder: str) -> List[str]:
     """Names of the 6.0 store files already present, if any.
 
-    Used to refuse a migration that would duplicate live data — the store may
+    Used to refuse a migration that would duplicate live data - the store may
     have been written by the pipeline itself rather than by an earlier
     migration.
     """
@@ -223,7 +223,7 @@ def read_legacy_tracks(path: str) -> List[dict]:
 
 
 def read_legacy_pixel_tracks(path: str) -> List[dict]:
-    """Parse ``tracks_pixel.csv`` — the preferred linkage source (§9)."""
+    """Parse ``tracks_pixel.csv`` - the preferred linkage source (§9)."""
     rows: List[dict] = []
     if not os.path.isfile(path):
         return rows
@@ -427,7 +427,7 @@ def migrate_detections(target_folder: str, modality: str, project,
     if label_rows:
         manual_source = _ensure_source(project, "manual")
         # Below the marker, class 0 is the labelling tool's "unknown", not the
-        # detector's "animal" — the one place that distinction survives (§1.3).
+        # detector's "animal" - the one place that distinction survives (§1.3).
         _seed_class_mapping(project, manual_source,
                             [r["class_id"] for r in label_rows],
                             zero_species=-1)
@@ -482,7 +482,7 @@ def migrate_georeferenced(target_folder: str, modality: str,
 
     det_path = store.stage_path(target_folder, store.DETECTIONS, modality)
     if not os.path.isfile(det_path):
-        report.warn(f"[{modality}] georeferenced.txt without detections.txt — "
+        report.warn(f"[{modality}] georeferenced.txt without detections.txt - "
                     "skipped")
         return {}
 
@@ -513,7 +513,7 @@ def migrate_georeferenced(target_folder: str, modality: str,
                     # the alignment is unrecoverable. Note it rather than guess.
                     report.warn(
                         f"[{modality}] frame {frame}: {len(rows)} geo rows vs "
-                        f"{len(detection_ids)} detections — left unlinked")
+                        f"{len(detection_ids)} detections - left unlinked")
                     report.add("georef_unlinked", len(rows))
                     continue
                 for detection_id, row in zip(detection_ids, rows):
@@ -583,7 +583,7 @@ def migrate_tracks(target_folder: str, modality: str,
                 key = (row["frame"], _key(*[row[k] for k in box_keys]))
                 detection_id = index.get(key)
                 if detection_id is None:
-                    # One detection loses its membership — not, as in 5.x, the
+                    # One detection loses its membership - not, as in 5.x, the
                     # whole frame (§9).
                     unmatched += 1
                     continue
@@ -780,7 +780,7 @@ def migrate_project(target_folder: str, log_fn: LogFn = None) -> MigrationReport
     """Migrate every legacy output in *target_folder* into the 6.0 store.
 
     Additive and repeatable: the legacy files are only read. Existing 6.0
-    stores are *not* rebuilt — delete them first to re-run a migration.
+    stores are *not* rebuilt - delete them first to re-run a migration.
     """
     report = MigrationReport()
 
@@ -790,7 +790,7 @@ def migrate_project(target_folder: str, log_fn: LogFn = None) -> MigrationReport
 
     modalities = legacy_modalities(target_folder)
     if not modalities:
-        report.warn("No 5.x outputs found — nothing to migrate.")
+        report.warn("No 5.x outputs found - nothing to migrate.")
         return report
 
     # Migration inserts; it does not reconcile. Running it over a folder that

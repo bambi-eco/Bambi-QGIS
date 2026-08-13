@@ -38,7 +38,7 @@ fi
 
 echo
 echo "============================================"
-echo " BAMBI Plugin — Combined Coverage"
+echo " BAMBI Plugin - Combined Coverage"
 echo "============================================"
 
 rm -f "$COVERAGE_FILE"

@@ -112,7 +112,7 @@ def test_next_species_id_is_above_every_existing_one(project):
 def test_deleted_species_ids_are_not_reissued(project):
     """Adding a species after deleting one must not reuse the freed id.
 
-    Only :func:`store.reserve_species_id` guarantees this — ``next_species_id``
+    Only :func:`store.reserve_species_id` guarantees this - ``next_species_id``
     is a non-reserving peek, and a bare ``MAX(species_id) + 1`` would hand the
     id of a deleted top-most species straight back.
     """
@@ -226,7 +226,7 @@ def test_enum_typed_field_requires_an_enum(project):
 
 
 def test_string_fields_remain_available(project):
-    """Free text stays a supported type — it is just not in the default setup."""
+    """Free text stays a supported type - it is just not in the default setup."""
     project.execute(
         "INSERT INTO field_schema (name, type, scope) "
         "VALUES ('collar_id', 'string', 'track')")
@@ -330,7 +330,7 @@ def test_an_existing_three_value_occlusion_enum_is_left_alone(tmp_path):
     """A project created before the two-value seed keeps its own vocabulary.
 
     Enum value ids are append-only, so 0/1/2 in an old project mean
-    none/partially/fully and must go on meaning that — re-seeding must not
+    none/partially/fully and must go on meaning that - re-seeding must not
     relabel them into clear/occluded and silently reinterpret every stored
     occlusion value. The classifier's label mapping is what bridges the two.
     """

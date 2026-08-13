@@ -43,7 +43,7 @@ Optional capabilities (GPU inference, BoxMOT trackers, camera calibration via Sf
    from the drone poses and the DEM and is independent of any animal;
    Processing depends on the detections, so the two can be run separately
 5. Use the **→ Add … to QGIS** buttons after each step to load the results as styled layers, grouped under the flight's name
-6. Export the results — COCO, YOLO, MOT, GeoJSON, Camtrap DP or a Darwin Core Archive for GBIF — from the **Export** box on the Processing tab
+6. Export the results - COCO, YOLO, MOT, GeoJSON, Camtrap DP or a Darwin Core Archive for GBIF - from the **Export** box on the Processing tab
 
 Upgrading from 5.x? Open your existing project and use **Migrate 5.x…** beside the target folder; the existing files are only read, never modified. See [Results, Flights and Export](docs/results-and-export.md).
 
@@ -110,9 +110,9 @@ pytest tests
 
 ### Integration tests
 
-`tests_integration/` runs the real pipeline — thermal/RGB frame extraction,
+`tests_integration/` runs the real pipeline - thermal/RGB frame extraction,
 DEM ray-casting geo-reference, per-frame GeoTIFF export, orthomosaic, and
-ALFS rendering — against **flight 6 of the public BAMBI raw dataset**
+ALFS rendering - against **flight 6 of the public BAMBI raw dataset**
 ([Zenodo](https://zenodo.org/record/19155449), DJI M30T, red deer, Austria)
 with the matching DEM fetched through the plugin's Austrian BEV downloader.
 Detection inference is skipped; synthetic detections exercise the
@@ -125,14 +125,14 @@ docker compose run --rm integration
 The first run downloads ~12 GB (flight ZIP + DEM tiles) into the
 `bambi-test-data` Docker volume; subsequent runs reuse the cache and only
 re-execute the pipeline. The image installs the BAMBI Detection Framework
-and ALFS-PY from GitHub (CPU-only torch) and renders through Xvfb/Mesa —
+and ALFS-PY from GitHub (CPU-only torch) and renders through Xvfb/Mesa -
 no GPU or QGIS required. To reclaim the cache: `docker volume rm
 bambi-qgis_bambi-test-data`.
 
 By default the pipeline outputs (extracted frames, geo-referenced GeoTIFFs,
 orthomosaic, ALFS renders) live in an ephemeral tmp dir and vanish with the
 container. To keep them for manual/visual inspection, set
-`BAMBI_TEST_KEEP_OUTPUT=1` — they are written under
+`BAMBI_TEST_KEEP_OUTPUT=1` - they are written under
 `reports/integration_output/pipeline_out/` on the host (the repo is
 bind-mounted at `/workspace`):
 

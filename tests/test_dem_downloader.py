@@ -313,7 +313,7 @@ class TestBEVDownloader:
 
 
 # ---------------------------------------------------------------------------
-# DEMProcessor — the rasterio-free fallback paths
+# DEMProcessor - the rasterio-free fallback paths
 # ---------------------------------------------------------------------------
 
 class TestDEMProcessorWithoutRasterio:

@@ -4,7 +4,7 @@
 Implements EXCHANGE_FORMAT_PLAN.md §7. Three jobs:
 
 * **record** what each stage produced, when, and from which inputs;
-* **invalidate** every transitive dependent when a stage is re-run or reset —
+* **invalidate** every transitive dependent when a stage is re-run or reset -
   replacing the hand-maintained cleanup in ``LabelStore.replace_detections``,
   which knew about ``tracks_{m}`` and ``tracks_pixel_{m}`` and nothing else
   (§1.3);
@@ -26,7 +26,7 @@ from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from . import store
 
-#: Frame extraction, the root of the graph. Not a store stage — its output is
+#: Frame extraction, the root of the graph. Not a store stage - its output is
 #: the ``frames_{m}`` folder and ``poses_{m}.json``.
 FRAMES = "frames"
 
@@ -46,12 +46,12 @@ STAGE_DEPENDENCIES: Dict[str, Tuple[str, ...]] = {
     "sam3_segmentation": (FRAMES,),
     "sam3_georeference": ("sam3_segmentation",),
     # Classification. Everything here is keyed on track ids, so re-running
-    # tracking invalidates all of it — which is exactly what the cascade does.
+    # tracking invalidates all of it - which is exactly what the cascade does.
     "track_matching": ("tracking",),
     "embeddings": ("tracking",),
     "classification": ("embeddings",),
     # Life stage is read from box area, not from features, so it needs no
-    # embeddings — only tracks and the geo-referencing that makes the area
+    # embeddings - only tracks and the geo-referencing that makes the area
     # metric.
     "life_stage": ("tracking", "georeference"),
     "perpendicular": ("georeference", "flight_route"),
@@ -103,7 +103,7 @@ STAGE_LEGACY_FOLDERS: Dict[str, Tuple[str, ...]] = {
 
 #: Current (non-legacy) output folders per stage. The embedding vectors are
 #: files beside the frames rather than rows in the GeoPackage, so a reset has
-#: to remove them too — they are the expensive part, and leaving them behind
+#: to remove them too - they are the expensive part, and leaving them behind
 #: would make a "reset" look like it had done nothing.
 STAGE_OUTPUT_FOLDERS: Dict[str, Tuple[str, ...]] = {
     "embeddings": ("embeddings",),
@@ -245,7 +245,7 @@ def states(target_folder: str, modality: str = "") -> Dict[str, dict]:
 
 
 # ---------------------------------------------------------------------------
-# Reconciliation — the files win
+# Reconciliation - the files win
 # ---------------------------------------------------------------------------
 
 def stage_outputs(target_folder: str, stage: str,
@@ -309,7 +309,7 @@ class StageLockedError(RuntimeError):
     """A stage file could not be removed because something holds it open.
 
     On Windows a layer loaded in the QGIS Browser locks the file. The plugin
-    itself never file-backs a layer (§11), so this means the user opened it —
+    itself never file-backs a layer (§11), so this means the user opened it -
     which is worth saying plainly rather than surfacing a raw ``PermissionError``.
     """
 
@@ -361,7 +361,7 @@ def completed_stages(target_folder: str, modality: str) -> List[str]:
 
 
 def stale_stages(target_folder: str, modality: str) -> List[str]:
-    """Stages recorded as stale — output present but out of date."""
+    """Stages recorded as stale - output present but out of date."""
     return sorted(stage for stage, row in states(target_folder, modality).items()
                   if row["state"] == STALE)
 

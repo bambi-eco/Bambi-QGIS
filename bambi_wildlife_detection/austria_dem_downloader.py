@@ -95,7 +95,7 @@ def detect_geotiff_epsg(path) -> Optional[str]:
     """Identify a GeoTIFF's horizontal EPSG code via GDAL's OSR.
 
     Fallback for files whose CRS rasterio cannot represent and reports as
-    ``None`` — e.g. Dutch AHN tiles tagged with the compound
+    ``None`` - e.g. Dutch AHN tiles tagged with the compound
     "Amersfoort / RD New + NAP height" CRS. OSR still identifies the
     projected component. Returns e.g. ``"EPSG:28992"`` or None.
     """
@@ -758,7 +758,7 @@ class GLTFMeshGenerator:
                 # Determine the source EPSG first, then look up its PROJ4 string.
                 src_epsg = None
 
-                # Method 0: Use caller-provided override — highest priority, bypasses file metadata
+                # Method 0: Use caller-provided override - highest priority, bypasses file metadata
                 if source_crs_override:
                     try:
                         src_epsg = int(source_crs_override.upper().replace("EPSG:", "").strip())
@@ -784,7 +784,7 @@ class GLTFMeshGenerator:
                         pass
 
                 # Method 2: Parse EPSG from the CRS string if it is in "EPSG:XXXXX" form
-                # (str(src.crs) can return WKT in newer rasterio — only accept EPSG strings)
+                # (str(src.crs) can return WKT in newer rasterio - only accept EPSG strings)
                 if src_epsg is None and crs and crs.upper().startswith("EPSG:"):
                     try:
                         src_epsg = int(crs.upper().replace("EPSG:", "").strip())
@@ -888,7 +888,7 @@ class GLTFMeshGenerator:
                             )
                             self._log(
                                 "Proceeding with WGS84 geographic coordinates. "
-                                "Mesh vertices will be in degree units — georeferencing may fail. "
+                                "Mesh vertices will be in degree units - georeferencing may fail. "
                                 "Consider reprojecting the DEM GeoTIFF manually before use."
                             )
 
@@ -896,7 +896,7 @@ class GLTFMeshGenerator:
                 # conflicts (QGIS bundles an older proj.db that pyproj may find first).
                 src_proj4 = get_proj4_for_crs(f"EPSG:{src_epsg}")
                 if src_proj4 == f"EPSG:{src_epsg}":
-                    # Not in dict — auto-generate for UTM zones
+                    # Not in dict - auto-generate for UTM zones
                     if 32601 <= src_epsg <= 32660:
                         zone = src_epsg - 32600
                         src_proj4 = f"+proj=utm +zone={zone} +datum=WGS84 +units=m +no_defs"
@@ -1332,7 +1332,7 @@ class GeoTIFFConversionWorker(QObject):
 
             # rasterio reports crs=None for some valid files (e.g. Dutch AHN
             # tiles with a compound "RD New + NAP height" CRS). GDAL's OSR can
-            # still identify the horizontal EPSG code — without this fallback
+            # still identify the horizontal EPSG code - without this fallback
             # the mesh would be built from unreprojected coordinates and
             # silently labeled with the target CRS.
             if source_crs_string is None:

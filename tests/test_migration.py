@@ -208,7 +208,7 @@ def test_class_zero_above_the_marker_is_animal(legacy):
 
 
 def test_class_zero_below_the_marker_is_unknown(legacy):
-    """The labelling tool's 0 means 'not yet determined' — a different class."""
+    """The labelling tool's 0 means 'not yet determined' - a different class."""
     migration.migrate_project(legacy)
     conn = store.open_store(
         store.stage_path(legacy, store.DETECTIONS, "t"), store.DETECTIONS, "t")
@@ -230,7 +230,7 @@ def test_raw_class_is_kept_alongside_the_resolved_species(legacy):
 
 
 def test_the_zero_decision_is_stored_as_mapping_rows(legacy):
-    """Not a hardcoded branch — it stays visible and editable afterwards."""
+    """Not a hardcoded branch - it stays visible and editable afterwards."""
     migration.migrate_project(legacy)
     project = store.open_store(store.project_path(legacy), store.PROJECT)
     rows = _rows(project,
@@ -302,7 +302,7 @@ def test_count_mismatch_is_reported_not_guessed(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Tracks — the linkage recovered one final time
+# Tracks - the linkage recovered one final time
 # ---------------------------------------------------------------------------
 
 def test_tracks_are_linked_through_pixel_boxes(legacy):
@@ -427,7 +427,7 @@ def test_occlusion_becomes_a_keyframe_enum_value(legacy):
     """A 5.x occlusion level survives into a store seeded clear/occluded.
 
     6.1 seeds the two values the occlusion classifier reports, so a 5.x
-    ``partially`` is not in the vocabulary — it is *appended* rather than
+    ``partially`` is not in the vocabulary - it is *appended* rather than
     dropped, which is what keeps the migration lossless. Resolved by label
     rather than by id, because the id it gets depends on what else the flight
     happened to contain.
@@ -564,7 +564,7 @@ def test_migration_refuses_when_a_store_already_exists(legacy):
     """Migration inserts; it never reconciles, so a second run would duplicate.
 
     The store may also have been written by the pipeline itself rather than by
-    an earlier migration — that is the dangerous case, because the duplicate
+    an earlier migration - that is the dangerous case, because the duplicate
     rows would sit alongside live ones.
     """
     first = migration.migrate_project(legacy)

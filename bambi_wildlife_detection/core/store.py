@@ -7,19 +7,19 @@ project-level file holding the vocabulary shared by all of them::
 
     <target_folder>/
         project.gpkg              # species, enums, custom fields, stage state
-        bambi_t/                  # thermal — one file per stage
+        bambi_t/                  # thermal - one file per stage
             detections.gpkg
             georeferenced.gpkg
             tracks.gpkg
             fov.gpkg
             labels.gpkg
             segmentation.gpkg
-        bambi_w/                  # RGB — same set
+        bambi_w/                  # RGB - same set
 
 The vocabulary lives in ``project.gpkg`` rather than in the detections stage
 because it must outlive any single stage: ``rm bambi_t/detections.gpkg`` is a
 supported reset (§7), and it must not take the project's species list with it.
-It is also modality-independent — thermal and RGB share one species list, which
+It is also modality-independent - thermal and RGB share one species list, which
 is what the cross-modality label copy assumes.
 
 Nothing in this module knows about QGIS, and ``sqlite3`` is stdlib, so the whole
@@ -77,7 +77,7 @@ BASE_SPECIES = (
 FALLBACK_SPECIES_ID = 0
 
 #: ``species_id`` of the "this is not an animal" base class. Excluded from every
-#: survey analytic (§8.2) — a labelled false positive biases a density estimate.
+#: survey analytic (§8.2) - a labelled false positive biases a density estimate.
 NOT_AN_ANIMAL_SPECIES_ID = -2
 
 #: Concrete species seeded from the 5.x taxonomy at their existing indices, so
@@ -91,7 +91,7 @@ SEEDED_SPECIES = (
 #: Scientific names for the seeded taxonomy, as ``(scientific_name, rank)``.
 #: These are *editable defaults*, not assertions: "fox" and "hare" assume the
 #: Central-European species the plugin is used for, and "bird" is a class
-#: rather than a species. GBIF taxon keys are deliberately **not** seeded —
+#: rather than a species. GBIF taxon keys are deliberately **not** seeded -
 #: an invented identifier would publish confidently wrong data, so they are
 #: left for the user to fill in from gbif.org.
 SEEDED_TAXONOMY = {
@@ -107,7 +107,7 @@ SEEDED_TAXONOMY = {
 
 #: Enums seeded from the 5.x hardcoded taxonomies, with the fields that use
 #: them: ``(enum_name, values, field_name, field_scope)``. These are ordinary
-#: rows — they are the worked examples a user copies when defining their own.
+#: rows - they are the worked examples a user copies when defining their own.
 #: ``occlusion`` is deliberately two-valued and named after what the occlusion
 #: classifier reports, so the project vocabulary *is* the model's vocabulary
 #: rather than something every prediction has to be translated into. A project
@@ -115,7 +115,7 @@ SEEDED_TAXONOMY = {
 #: editor and points the classifier's label mapping at them.
 #:
 #: Seeding is ``INSERT OR IGNORE`` on ``(enum_id, value_id)``, so a project
-#: created before this change keeps its own three values untouched — the ids
+#: created before this change keeps its own three values untouched - the ids
 #: are append-only (§4.1) and could not be renumbered even deliberately.
 SEEDED_ENUMS = (
     ("sex", ("unknown", "female", "male"), "sex", "track"),
@@ -143,7 +143,7 @@ CREATE TABLE species (
     name            TEXT UNIQUE NOT NULL,
     protected       INTEGER NOT NULL DEFAULT 0,
     -- Taxonomy, for publishing (§8.1). `name` is the label the user works with
-    -- and is a *vernacular* name — Darwin Core needs the scientific one, and a
+    -- and is a *vernacular* name - Darwin Core needs the scientific one, and a
     -- GBIF taxon key lets the backbone resolve it exactly instead of matching
     -- a string. Both optional: a project that never publishes needs neither.
     scientific_name TEXT,
@@ -549,7 +549,7 @@ def open_store(path: str, kind: str, modality: str = "",
     """Open (or create) the store of *kind* at *path*.
 
     Refuses files written by a newer schema version, and files whose recorded
-    kind does not match — opening ``tracks.gpkg`` as a detections store is a
+    kind does not match - opening ``tracks.gpkg`` as a detections store is a
     programming error worth catching immediately, not a silent empty result.
     """
     if kind not in _DDL:
@@ -639,7 +639,7 @@ def _check_compatible(conn: sqlite3.Connection, path: str, kind: str) -> None:
 
 
 def _payload_tables(conn: sqlite3.Connection) -> List[str]:
-    """Payload tables of the connection — everything but GeoPackage internals."""
+    """Payload tables of the connection - everything but GeoPackage internals."""
     rows = conn.execute(
         "SELECT name FROM sqlite_master WHERE type = 'table' "
         "AND name NOT LIKE 'gpkg_%' AND name NOT LIKE 'sqlite_%' "
@@ -722,7 +722,7 @@ def reserve_species_id(conn: sqlite3.Connection) -> int:
     """Take the next species id, recording it so it is never handed out twice.
 
     A plain ``MAX(species_id) + 1`` would reissue the id of a deleted species
-    whenever it happened to be the highest — and a stale reference to it would
+    whenever it happened to be the highest - and a stale reference to it would
     then silently mean a different animal. The high-water mark is what makes
     the ids append-only in the sense §4.1 claims.
     """
@@ -777,8 +777,8 @@ def resolve_species(conn: sqlite3.Connection, source_id: int,
                     source_class: Optional[str]) -> int:
     """Map a producer's raw class onto a species id.
 
-    Anything unmapped — including a species-agnostic detector, which simply has
-    no mapping rows — resolves to :data:`FALLBACK_SPECIES_ID` (``animal``).
+    Anything unmapped - including a species-agnostic detector, which simply has
+    no mapping rows - resolves to :data:`FALLBACK_SPECIES_ID` (``animal``).
     """
     if source_class is None:
         return FALLBACK_SPECIES_ID

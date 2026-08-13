@@ -5,20 +5,20 @@ Moved verbatim from ``bambi_labelling_tool.py`` (which re-exports every
 name here for backwards compatibility); see that module's docstring for
 the labelling workflow. Contains:
 
-* the class taxonomies and track colour palette (as RGB tuples — the GUI
+* the class taxonomies and track colour palette (as RGB tuples - the GUI
   wraps them in ``QColor``),
-* :class:`CustomField` — user-defined extra attributes (per track or per
+* :class:`CustomField` - user-defined extra attributes (per track or per
   key frame) that only round-trip through ``labels.json``,
-* :class:`LabelTrack` / :class:`LabelStore` — key-frame storage,
+* :class:`LabelTrack` / :class:`LabelStore` - key-frame storage,
   interpolation, stop frames, JSON/CSV persistence and the
   ``detections.txt`` export,
-* :func:`merge_tracks` / :func:`split_track` — track surgery, plus
+* :func:`merge_tracks` / :func:`split_track` - track surgery, plus
   :func:`track_world_positions`, :func:`find_overlapping_tracks` and
   :func:`group_track_ids` for proposing merges from ground positions,
 * read-only loaders for pipeline outputs (detections, pixel tracks),
-* :class:`_FrameMatcher` — re-exported from :mod:`core.frame_matching`, which
+* :class:`_FrameMatcher` - re-exported from :mod:`core.frame_matching`, which
   owns cross-modality frame matching by capture time since 6.1,
-* :class:`_GeoPropagator` — DEM-based box propagation between frames and
+* :class:`_GeoPropagator` - DEM-based box propagation between frames and
   modalities (lazy alfspy/trimesh/bambi imports).
 """
 
@@ -39,7 +39,7 @@ SPECIES_CLASSES = [
 SEX_CLASSES = ["unknown", "female", "male"]
 AGE_CLASSES = ["unknown", "adult", "juvenile"]
 #: Fallback occlusion vocabulary, used only when a project has no 6.0 store to
-#: read one from — the tool refills the combo from ``project.gpkg`` whenever
+#: read one from - the tool refills the combo from ``project.gpkg`` whenever
 #: one exists. Matches ``store.SEEDED_ENUMS`` so a hand annotation and a
 #: classifier prediction speak the same language; the first entry is the
 #: "nothing is wrong with this frame" default.
@@ -66,8 +66,8 @@ def track_color_rgb(track_id: int) -> Tuple[int, int, int]:
 #: ISO-8601 strings so they survive a JSON round trip unchanged.
 FIELD_TYPES = ("int", "float", "string", "bool", "datetime")
 
-#: ``track``  — one value per label track (like species / sex / age)
-#: ``keyframe`` — one value per key frame (like occlusion), inherited by the
+#: ``track``  - one value per label track (like species / sex / age)
+#: ``keyframe`` - one value per key frame (like occlusion), inherited by the
 #: interpolated frames that follow it.
 FIELD_SCOPES = ("track", "keyframe")
 
@@ -116,7 +116,7 @@ class CustomField:
         return (self.name, self.type, self.scope) == \
             (other.name, other.type, other.scope)
 
-    def __repr__(self) -> str:  # pragma: no cover — debugging aid
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"CustomField({self.name!r}, {self.type!r}, {self.scope!r})"
 
     @property
@@ -126,7 +126,7 @@ class CustomField:
     def coerce(self, value: Any) -> Any:
         """Return *value* as this field's type.
 
-        Raises ``ValueError`` when the value cannot be converted — callers
+        Raises ``ValueError`` when the value cannot be converted - callers
         (schema changes, JSON loading) drop such values instead of failing.
         """
         if value is None:
@@ -152,7 +152,7 @@ class CustomField:
                     return False
                 raise ValueError(f"'{value}' is not a boolean.")
             return bool(value)
-        # datetime — kept as an ISO-8601 string ('' means unset)
+        # datetime - kept as an ISO-8601 string ('' means unset)
         if hasattr(value, "isoformat"):
             return value.isoformat()
         text = str(value).strip()
@@ -248,7 +248,7 @@ def read_custom_fields(path: str) -> List["CustomField"]:
                 f"{FIELD_SCHEMA_VERSION}).")
         if "custom_fields" not in data:
             raise ValueError(
-                "The file contains no 'custom_fields' — expected a schema "
+                "The file contains no 'custom_fields' - expected a schema "
                 "export or a flight's labels.json.")
         entries = data["custom_fields"]
     else:
@@ -297,7 +297,7 @@ class LabelTrack:
 
     Key frames map ``frame -> {"x1","y1","x2","y2","occlusion"[,"stop"]
     [,"attributes"]}``; boxes on frames between two key frames are linearly
-    interpolated — except after a key frame flagged ``stop`` (the animal
+    interpolated - except after a key frame flagged ``stop`` (the animal
     disappeared): frames between a stop frame and the next key frame have no
     box.
 
@@ -525,7 +525,7 @@ def merge_tracks(tracks: List["LabelTrack"],
     The resulting track keeps the **lowest** track id and that track's
     classes; ``unknown`` classes and missing custom attributes are filled in
     from the other tracks (lowest id first).  Key frames are merged by frame
-    number — when two tracks carry a key frame on the same frame the one from
+    number - when two tracks carry a key frame on the same frame the one from
     the lower track id wins.
 
     With *mark_gaps* the last key frame before a jump to another source track
@@ -576,7 +576,7 @@ def split_track(track: "LabelTrack", frame: int,
 
     The head keeps the original id and runs from the track's first key frame
     to *frame*, the tail gets *new_track_id* and runs from *frame* to the
-    last key frame — both carry a key frame **on** the split frame (an
+    last key frame - both carry a key frame **on** the split frame (an
     interpolated box there is frozen into one).  Classes and custom
     attributes are copied to both.
 
@@ -587,7 +587,7 @@ def split_track(track: "LabelTrack", frame: int,
     res = track.box_at(frame)
     if res is None:
         raise ValueError(
-            f"The track has no bounding box on frame {frame} — it can only "
+            f"The track has no bounding box on frame {frame} - it can only "
             "be split where it is visible.")
     fs = track.frames()
     if frame <= fs[0] or frame >= fs[-1]:
@@ -675,8 +675,8 @@ def find_overlapping_tracks(
     dropped, which keeps unrelated animals crossing the same spot much later
     out of the list.
 
-    Returns ``(track_a, track_b, distance, frame_gap)`` tuples — ``track_a <
-    track_b`` — sorted by distance, i.e. best candidates first.  They are
+    Returns ``(track_a, track_b, distance, frame_gap)`` tuples - ``track_a <
+    track_b`` - sorted by distance, i.e. best candidates first.  They are
     *candidates*: the caller is expected to have them confirmed before
     merging anything.
     """
@@ -702,7 +702,7 @@ def group_track_ids(pairs: Iterable[Tuple[int, int]]) -> List[List[int]]:
     """Collect accepted merge pairs into connected groups.
 
     ``(1, 2)`` and ``(2, 5)`` describe one animal seen three times, so they
-    become the single group ``[1, 2, 5]`` — merging pair by pair would
+    become the single group ``[1, 2, 5]`` - merging pair by pair would
     otherwise fail once the first merge removed track 2.
     """
     parent: Dict[int, int] = {}
@@ -734,7 +734,7 @@ class LabelStore:
         self.modality = modality
         self.tracks: Dict[int, LabelTrack] = {}
         self.custom_fields: List[CustomField] = []
-        #: True once a ``custom_fields`` key was seen in ``labels.json`` —
+        #: True once a ``custom_fields`` key was seen in ``labels.json`` -
         #: lets the GUI tell "no schema configured yet" (seed it from the
         #: user's defaults) from "schema deliberately empty".
         self.schema_defined = False
@@ -963,7 +963,7 @@ class LabelStore:
         """Replace ``detections.txt`` with the label boxes alone.
 
         Unlike :meth:`export_to_detections` the detector output is
-        discarded — afterwards the file contains only the labelled boxes.
+        discarded - afterwards the file contains only the labelled boxes.
         The tracking outputs derived from the previous detections
         (``tracks_{m}/`` and ``tracks_pixel_{m}/``) are removed as well
         because they no longer match; re-running geo-referencing and
@@ -1135,7 +1135,7 @@ def _load_pixel_tracks(target_folder: str,
 # same correspondence, and two copies of "which RGB frame is this thermal one"
 # would be two things to keep in step. Re-exported under the historic private
 # names so the labelling tool and its tests keep working unchanged.
-from .frame_matching import (  # noqa: E402,F401 — re-exported API
+from .frame_matching import (  # noqa: E402,F401 - re-exported API
     FrameMatcher as _FrameMatcher,
     pose_epochs as _pose_epochs,
 )
@@ -1178,8 +1178,8 @@ def keyframe_window(frames: List[int], current: int,
     """The key frames to list for a track, elided around *current*.
 
     Long tracks have more key frames than fit the side panel, so only a window
-    of them is listed.  The first and last are always kept — they bound the
-    track, which is what the user needs to navigate it — and the remaining
+    of them is listed.  The first and last are always kept - they bound the
+    track, which is what the user needs to navigate it - and the remaining
     slots follow *current*.  ``None`` marks a gap where key frames were left
     out, to be rendered as an ellipsis.
     """
@@ -1208,7 +1208,7 @@ def load_valid_mask(target_folder: str, modality: str):
     folder as ``mask_T.png`` (thermal) / ``mask_W.png`` (RGB); its white
     pixels mark the valid image area that survived the undistortion.
     Returns ``None`` when no mask file exists (older flights) or it cannot
-    be read — the caller then treats the whole frame as valid.
+    be read - the caller then treats the whole frame as valid.
     """
     letter = "T" if modality.lower().startswith("t") else "W"
     for name in (f"mask_{letter}.png", f"mask_{letter.lower()}.png"):
@@ -1251,7 +1251,7 @@ class _GeoPropagator:
     step: the resulting local world points are projected with the target
     frame's camera (``_world_to_pixel`` from :mod:`bambi_box_projector`).
     Both cameras are built exactly like in ``BambiProcessor.run_georeference``
-    (1× rotation correction), so no DEM origin offset is needed — everything
+    (1× rotation correction), so no DEM origin offset is needed - everything
     stays in the mesh-local coordinate space of the poses file.
     """
 
@@ -1332,7 +1332,7 @@ class _GeoPropagator:
         outside the poses range).
 
         Raises ``RuntimeError`` if the source box itself cannot be ray-cast
-        onto the DEM — that failure applies to the whole series.
+        onto the DEM - that failure applies to the whole series.
         """
         frames = propagation_frames(src_frame, dst_frame, step)
         world = self._box_to_world(
@@ -1379,7 +1379,7 @@ class _GeoPropagator:
             from bambi.util.projection_util import label_to_world_coordinates
         except ImportError as exc:
             raise RuntimeError(
-                "alfspy / bambi packages are not available — cannot "
+                "alfspy / bambi packages are not available - cannot "
                 f"geo-reference bounding boxes.\n({exc})"
             )
 

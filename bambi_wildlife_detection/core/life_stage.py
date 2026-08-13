@@ -2,8 +2,8 @@
 """Life stage from body size, per flight.
 
 Implements §3.3 (Eq. 4) of *When One Modality Is Not Enough*. Appearance
-cannot separate a juvenile from an adult female at survey resolution — that is
-exactly why the sex classifier's second class is ``female_juvenile`` — so life
+cannot separate a juvenile from an adult female at survey resolution - that is
+exactly why the sex classifier's second class is ``female_juvenile`` - so life
 stage is read from size instead.
 
 An individual is called a juvenile only when **both** hold:
@@ -14,7 +14,7 @@ An individual is called a juvenile only when **both** hold:
   interquartile range.
 
 The second condition is what stops the rule firing on the merely smallest adult
-of a herd — in a group of similar animals someone is always smallest, and that
+of a herd - in a group of similar animals someone is always smallest, and that
 is not evidence of anything.
 
 **Comparison is strictly within one flight.** Box tightness varies between
@@ -22,7 +22,7 @@ recordings, and the paper's own data shows why: the ``B`` juvenile's box lands
 inside ``A2``'s female range despite being the smallest animal in its own
 flight. There is deliberately no global threshold to configure.
 
-Pure arithmetic — no torch, no models, no embeddings. The size cue works on any
+Pure arithmetic - no torch, no models, no embeddings. The size cue works on any
 flight that has been tracked.
 """
 
@@ -65,9 +65,9 @@ class Assessment(NamedTuple):
     frames: int
     #: Whether the z-score alone put this individual below the flight. Kept
     #: apart from ``label`` so a near miss can be reported: the gap condition
-    #: is deliberately hard to clear on a small flight — the candidate sits in
+    #: is deliberately hard to clear on a small flight - the candidate sits in
     #: the lower half and so inflates the very interquartile range it is
-    #: tested against — and a user seeing "no juvenile" deserves to know the
+    #: tested against - and a user seeing "no juvenile" deserves to know the
     #: difference between "nothing was small" and "something was small but the
     #: cohort was too thin to confirm it".
     low_outlier: bool = False
@@ -124,7 +124,7 @@ def assess(areas: Dict[int, dict], config: Config = Config(),
            adults: Sequence[int] = ()) -> List[Assessment]:
     """Classify every individual of one flight by size.
 
-    *adults* names tracks already known to be adult — a male called by the sex
+    *adults* names tracks already known to be adult - a male called by the sex
     classifier is an adult whatever its box says, because the cue that marked
     him is antlers.
 
@@ -148,7 +148,7 @@ def assess(areas: Dict[int, dict], config: Config = Config(),
     for position, (track_id, entry) in enumerate(ordered):
         area = entry["area"]
         # A zero MAD means every individual is the same size, so nothing is an
-        # outlier — not that everything is infinitely far from the median.
+        # outlier - not that everything is infinitely far from the median.
         z = (MAD_SCALE * (area - centre) / deviation) if deviation else 0.0
 
         # The gap upwards: how far this individual sits below the next-smallest
@@ -183,19 +183,19 @@ def explain(assessments: Sequence[Assessment], config: Config = Config(),
                               for item in near)
             return (f"Life stage: no juvenile called among "
                     f"{len(assessments)} individual(s), though {names} sits "
-                    "well below the flight median — its size gap to the next "
+                    "well below the flight median - its size gap to the next "
                     "animal is not wide enough to separate it from the herd. "
                     "On a small flight the outlier inflates the very spread "
                     "it is measured against, so this is the cautious answer "
                     f"rather than a confident one (areas from the {source} "
                     "boxes).")
         return (f"Life stage: no juvenile found among {len(assessments)} "
-                f"individual(s) — the smallest sits on a smooth size "
+                f"individual(s) - the smallest sits on a smooth size "
                 "continuum with the rest.")
     named = ", ".join(f"track {item.track_id} (z={item.z:.1f})"
                       for item in juveniles)
     return (f"Life stage: {len(juveniles)} juvenile(s) of "
-            f"{len(assessments)} individual(s) — {named}; areas measured on "
+            f"{len(assessments)} individual(s) - {named}; areas measured on "
             f"the {source} boxes.")
 
 

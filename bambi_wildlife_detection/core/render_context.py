@@ -9,8 +9,8 @@ alfspy ships in two implementations that install under the same package name:
   alias so ModernGL-era callers keep working.
 
 The plugin therefore never names a backend.  It asks for a context here, and
-this module prefers the torch factory when it exists — which also picks up CUDA
-automatically — and falls back to the ModernGL one otherwise.  Swapping the
+this module prefers the torch factory when it exists - which also picks up CUDA
+automatically - and falls back to the ModernGL one otherwise.  Swapping the
 installed alfspy needs no change anywhere else in the plugin, and nothing
 outside alfspy imports ``moderngl``.
 
@@ -57,7 +57,7 @@ def make_render_context(device: Optional[str] = None):
 def require_render_stack() -> None:
     """Raise a helpful ImportError when the rendering dependencies are missing.
 
-    Checks only what the plugin itself needs — alfspy plus the array/geometry
+    Checks only what the plugin itself needs - alfspy plus the array/geometry
     libraries it hands data to.  The rasteriser's own dependency (ModernGL or
     PyTorch) is alfspy's business and is reported through it.
     """

@@ -5,8 +5,8 @@ Every exporter reads the same rows and then writes them in its own shape, so
 the three decisions that would otherwise be made seven times live here:
 
 * **Class-id remapping.** Internal ``species_id`` values are sparse by
-  construction — base classes are ``≤ 0`` and user species accumulate gaps as
-  species are deleted — and no external format tolerates that. Exporters emit
+  construction - base classes are ``≤ 0`` and user species accumulate gaps as
+  species are deleted - and no external format tolerates that. Exporters emit
   contiguous, non-negative ids and ship the mapping alongside.
 * **Enum resolution.** Attributes are stored as ``value_id``; no consumer
   should be handed an integer whose meaning lives in a table it does not have.
@@ -38,7 +38,7 @@ def load_vocabulary(target_folder: str) -> dict:
     path = store.project_path(target_folder)
     if not os.path.isfile(path):
         raise ExportError(
-            "This project has no 6.0 store yet — run the pipeline or use "
+            "This project has no 6.0 store yet - run the pipeline or use "
             "'Migrate 5.x…' before exporting.")
 
     conn = store.open_store(path, store.PROJECT)
@@ -119,7 +119,7 @@ def load_detections(target_folder: str, modality: str,
     """Every detection, with its geo box and track id where they exist.
 
     A detection that failed to geo-reference simply has ``None`` for its world
-    coordinates — it is not dropped, because an exporter that only needs pixel
+    coordinates - it is not dropped, because an exporter that only needs pixel
     boxes should still see it.
     """
     det_path = store.stage_path(target_folder, store.DETECTIONS, modality)
@@ -146,7 +146,7 @@ def load_detections(target_folder: str, modality: str,
         joins += (" LEFT JOIN trk.track_members m "
                   "ON m.detection_id = d.detection_id"
                   " LEFT JOIN trk.tracks t ON t.track_id = m.track_id"
-                  f" AND t.run_id IN ({placeholders})")  # nosec B608 — ints
+                  f" AND t.run_id IN ({placeholders})")  # nosec B608 - ints
 
     conn = store.open_store(det_path, store.DETECTIONS, modality)
     try:
@@ -156,7 +156,7 @@ def load_detections(target_folder: str, modality: str,
             gpkg.attach(conn, trk_path, "trk")
 
         sql = (f"SELECT {', '.join(columns)} FROM detections d{joins} "
-               "ORDER BY d.frame, d.detection_id")  # nosec B608 — fixed names
+               "ORDER BY d.frame, d.detection_id")  # nosec B608 - fixed names
         rows = [dict(row) for row in conn.execute(sql, run_ids)]
 
         if include_geo and os.path.isfile(geo_path):
@@ -213,7 +213,7 @@ def frame_size(target_folder: str, modality: str,
         return None
     try:
         import cv2
-    except ImportError:  # pragma: no cover — depends on the environment
+    except ImportError:  # pragma: no cover - depends on the environment
         return None
 
     for name in sorted(os.listdir(folder)):
@@ -257,7 +257,7 @@ def copy_frames(target_folder: str, modality: str, imagefiles,
     """Copy the named extracted frames into *destination*.
 
     Formats that reference images are only usable when the images travel with
-    them, but the frames are the heaviest thing a project owns — so this is
+    them, but the frames are the heaviest thing a project owns - so this is
     always a caller's choice, never implied. Returns what happened, because a
     label with no image is ignored in silence by every consumer.
     """
@@ -279,14 +279,14 @@ def copy_frames(target_folder: str, modality: str, imagefiles,
 
 
 def describe_copy(result: dict) -> List[str]:
-    """Log lines for a :func:`copy_frames` result — one, or two if any failed."""
+    """Log lines for a :func:`copy_frames` result - one, or two if any failed."""
     lines = [f"copied {result['copied']} image(s) into "
              f"{result['destination']}"]
     missing = result["missing"]
     if missing:
         shown = ", ".join(missing[:3])
         more = f" (+{len(missing) - 3} more)" if len(missing) > 3 else ""
-        lines.append(f"warning — {len(missing)} frame(s) had no image in "
+        lines.append(f"warning - {len(missing)} frame(s) had no image in "
                      f"{result['source']}: {shown}{more}. Consumers ignore an "
                      "annotation whose image is absent.")
     return lines
@@ -304,11 +304,11 @@ def no_tracks_hint(target_folder: str, modality: str) -> str:
     if not track_store.analysis_runs(target_folder, modality):
         legacy = os.path.join(target_folder, f"tracks_{modality}", "tracks.csv")
         if os.path.isfile(legacy):
-            return (" — no tracking run is recorded in the store, although "
+            return (" - no tracking run is recorded in the store, although "
                     f"{legacy} exists. It was written by a tracker that read "
                     "the legacy text files. Re-run 'Geo-reference detections' "
                     "and then tracking.")
-        return (" — no tracking run is recorded for this modality. Run "
+        return (" - no tracking run is recorded for this modality. Run "
                 "tracking first.")
-    return (" — a tracking run exists but none of these detections belong to "
+    return (" - a tracking run exists but none of these detections belong to "
             "it. Re-run tracking if the detections changed since.")

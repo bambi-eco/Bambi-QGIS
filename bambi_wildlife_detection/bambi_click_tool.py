@@ -11,22 +11,22 @@ Layer custom properties used
 ----------------------------
 ``bambi_layer_type``       : "detection" | "track_final" | "track_path"
 ``bambi_target_folder``    : absolute path to the plugin output root folder
-``bambi_detection_camera`` : "T" (thermal) | "W" (RGB) — modality used for detection
+``bambi_detection_camera`` : "T" (thermal) | "W" (RGB) - modality used for detection
 ``bambi_dem_path``         : absolute path to the DEM GLTF/GLB file
 ``bambi_correction_path``  : absolute path to correction.json (may be empty)
 
 Data read (relative to *target_folder*, ``{m}`` = ``t`` thermal / ``w`` RGB,
 selected from the layer's ``bambi_detection_camera`` property)
 ---------------------------------------------
-``bambi_{m}/detections.gpkg``  — pixel-space detections and their species
-``bambi_{m}/tracks.gpkg``      — which detections belong to which track
+``bambi_{m}/detections.gpkg``  - pixel-space detections and their species
+``bambi_{m}/tracks.gpkg``      - which detections belong to which track
 
 Both through :mod:`core.inspection`. The clicked box is found by the
 ``detection_id`` the layer was built from; the 5.x text files carry no such id,
 so they were matched back on confidence and class to four decimal places and
 are no longer read at all.
 
-``poses_t.json`` / ``poses_w.json`` — frame → image file mapping
+``poses_t.json`` / ``poses_w.json`` - frame → image file mapping
     structure: ``{"images": [{"imagefile": "...", ...}, ...]}``
     images stored under ``frames_t/`` or ``frames_w/`` respectively
 """
@@ -57,9 +57,9 @@ class BambiClickTool(QgsMapToolIdentify):
     Parameters
     ----------
     mode : str
-        ``"detection_track"`` — identifies detection and track layers (default).
-        ``"fov"``             — identifies FoV polygon layers (simple viewer, no geo-referencing).
-        ``"fov_georef"``      — identifies FoV polygon layers and projects the click position
+        ``"detection_track"`` - identifies detection and track layers (default).
+        ``"fov"``             - identifies FoV polygon layers (simple viewer, no geo-referencing).
+        ``"fov_georef"``      - identifies FoV polygon layers and projects the click position
                                 into each frame's image space using DEM elevation data.
     """
 
@@ -141,7 +141,7 @@ class BambiClickTool(QgsMapToolIdentify):
                 self._handle_fov_click(fov_results, click_xy=click_xy)
             return
 
-        # Detection/track mode: honour the layer hierarchy — whichever BAMBI
+        # Detection/track mode: honour the layer hierarchy - whichever BAMBI
         # layer sits higher in the layer tree wins.  Build an ordered list of
         # layer IDs from the tree (top → bottom) and pick the result whose
         # layer has the smallest index.
@@ -222,7 +222,7 @@ class BambiClickTool(QgsMapToolIdentify):
 
         image_path_t, image_path_w = self._resolve_image_paths(target_folder, frame_idx)
         title = (
-            f"Detection — Frame {frame_idx}"
+            f"Detection - Frame {frame_idx}"
             f"   |   conf: {det_conf:.3f}"
             f"   |   cls: {det_class}"
         )
@@ -243,7 +243,7 @@ class BambiClickTool(QgsMapToolIdentify):
         Each overlapping FoV becomes one entry in the frame list so the user can
         cycle through all of them using the viewer's prev/next buttons.
 
-        *click_xy* — (map_x, map_y) geographic coordinate of the click.  When
+        *click_xy* - (map_x, map_y) geographic coordinate of the click.  When
         provided it is projected into each FoV's image space (thermal and RGB)
         and stored as ``click_point_t`` / ``click_point_w`` in the frame dict
         so the viewer can draw a crosshair at the clicked location.
@@ -280,7 +280,7 @@ class BambiClickTool(QgsMapToolIdentify):
                 target_folder, boxes_modality)
             same_frame = [d for d in all_dets if d["frame"] == frame_idx]
 
-            # All detections on this frame are shown in green — there is no
+            # All detections on this frame are shown in green - there is no
             # "clicked" detection to single out.
             green_boxes = [
                 (d["x1"], d["y1"], d["x2"], d["y2"], d["confidence"], d["class_id"])
@@ -302,7 +302,7 @@ class BambiClickTool(QgsMapToolIdentify):
             }
 
             # Project the clicked map position into this frame's image space.
-            # Failures are non-fatal — the frame is still shown, just without
+            # Failures are non-fatal - the frame is still shown, just without
             # the crosshair.
             if click_xy is not None:
                 try:
@@ -337,7 +337,7 @@ class BambiClickTool(QgsMapToolIdentify):
 
         n_det = sum(len(f["boxes_green"]) for f in frames)
         title = (
-            f"FoV — {len(frames)} field(s) of view"
+            f"FoV - {len(frames)} field(s) of view"
             f"   |   {n_det} detection(s)"
         )
         viewer = FeatureViewerDialog.get_instance(self.iface.mainWindow())

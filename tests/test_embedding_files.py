@@ -14,7 +14,7 @@ from bambi_wildlife_detection.core import embedding_files as ef
 
 
 # ---------------------------------------------------------------------------
-# Naming — one function, used in both directions
+# Naming - one function, used in both directions
 # ---------------------------------------------------------------------------
 
 class TestNaming:
@@ -142,7 +142,7 @@ class TestReadVectors:
         assert np.array_equal(vectors[12], _vector(12))
 
     def test_opens_each_frame_once(self, folder, monkeypatch):
-        """One np.load per frame, not per detection — that is why the vectors
+        """One np.load per frame, not per detection - that is why the vectors
         are grouped by frame in the first place."""
         self._populate(folder)
         opened = []

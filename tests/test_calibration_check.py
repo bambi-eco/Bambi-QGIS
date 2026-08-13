@@ -42,7 +42,7 @@ def test_matching_calibration_is_ok():
 
 
 def test_small_offset_is_tolerated():
-    # 5 % off — real calibrations never land exactly on the centre.
+    # 5 % off - real calibrations never land exactly on the centre.
     severity, _ = cc.check_calibration_resolution(
         _calib(608.0, 486.0), 1280, 1024)
     assert severity == "ok"

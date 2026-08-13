@@ -2,7 +2,7 @@
 """The species filter on the Survey Analytics tab (§8.2).
 
 The filtering itself is covered headlessly in ``tests/test_analytics_source.py``;
-what needs a real QGIS is the wiring — that the list comes from the active
+what needs a real QGIS is the wiring - that the list comes from the active
 flight's own vocabulary, that "All species" means no filter rather than a list
 of today's ids, and that the choice reaches every analytic that counts animals.
 

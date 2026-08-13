@@ -134,7 +134,7 @@ class TestExtractCrop:
     def test_an_interior_crop_keeps_the_image_content(self):
         image = _image()
         crop = cl.extract_crop(image, Window(0, 0, 100, 80), 100)
-        # Left edge dark, right edge bright — the gradient survived.
+        # Left edge dark, right edge bright - the gradient survived.
         assert crop[50, 0, 0] < crop[50, -1, 0]
 
     def test_out_of_bounds_regions_are_filled_not_clipped(self):

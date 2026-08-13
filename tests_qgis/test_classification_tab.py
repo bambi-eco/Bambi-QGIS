@@ -3,7 +3,7 @@
 
 Two things are worth pinning here that the unit suite cannot reach: that the
 tab actually builds, and that the Hugging Face token goes to the QGIS settings
-rather than into the project file — a project gets shared, and a credential
+rather than into the project file - a project gets shared, and a credential
 must not travel with it.
 """
 import json
@@ -130,8 +130,8 @@ def test_perspective_is_the_default_projection(dock):
     """The camera's own frames, not the orthorectified ones.
 
     Orthorectification smears animals that are already small and low in
-    contrast — the paper measures RGB detection dropping from 0.809 to 0.724
-    mAP@50 — and the geo variants additionally need a GeoTIFF export that a
+    contrast - the paper measures RGB detection dropping from 0.809 to 0.724
+    mAP@50 - and the geo variants additionally need a GeoTIFF export that a
     flight may not have. Perspective is the option that always works.
     """
     assert dock.classification_projection_combo.currentIndex() == 0
@@ -171,7 +171,7 @@ def test_model_mapping_round_trips_through_the_json_role(dock):
     dock.load_config_from_project()
 
     # Loading refreshes the editing table, which normalises every task into
-    # the mapping — so the check is that nothing was *lost*, not that the dict
+    # the mapping - so the check is that nothing was *lost*, not that the dict
     # is byte-identical.
     restored = dock._classification_models["sex"]
     assert restored["modality"] == "matched"
@@ -273,7 +273,7 @@ def test_matching_step_and_layer_buttons_exist(dock):
 
 def test_matching_is_configured_beside_tracking(dock):
     """It decides which two tracks are one animal, so it belongs with the
-    tracks — the classifiers are one consumer of the answer, not its owner."""
+    tracks - the classifiers are one consumer of the answer, not its owner."""
     from qgis.PyQt.QtWidgets import QGroupBox
 
     def _group_of(widget):
@@ -291,7 +291,7 @@ def test_matching_is_configured_beside_tracking(dock):
 
 def test_matching_needs_both_modalities(dock, tmp_path, monkeypatch):
     """It is the one step that is inherently about the pair, so there is no
-    camera combo — and it must say so rather than half-run."""
+    camera combo - and it must say so rather than half-run."""
     warned = {}
 
     def _warn(_parent, title, text):

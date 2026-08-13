@@ -4,18 +4,18 @@
 Consolidates the stand-ins that individual test modules would otherwise
 duplicate:
 
-* :class:`SignalRecorder` — replaces a stubbed ``pyqtSignal`` on a worker
+* :class:`SignalRecorder` - replaces a stubbed ``pyqtSignal`` on a worker
   instance so emissions can be asserted.
-* :func:`make_module` — build an injectable fake module (with ``__spec__``
+* :func:`make_module` - build an injectable fake module (with ``__spec__``
   set, so ``importlib.util.find_spec`` works on it).
-* :class:`FakeResponse` / :class:`FakeSession` — ``requests`` stand-ins for
+* :class:`FakeResponse` / :class:`FakeSession` - ``requests`` stand-ins for
   download code.
-* :func:`install_fake_render_stack` — fake ``pyrr`` + ``alfspy`` modules
+* :func:`install_fake_render_stack` - fake ``pyrr`` + ``alfspy`` modules
   with an identity-matrix camera, for testing world→pixel projection code
   with hand-computable expectations.
-* :class:`FakeRasterioDataset` / :func:`install_fake_rasterio` — a minimal
+* :class:`FakeRasterioDataset` / :func:`install_fake_rasterio` - a minimal
   in-memory ``rasterio`` for code paths that only read one band + metadata.
-* :func:`parse_glb` — parse and structurally validate a GLB container.
+* :func:`parse_glb` - parse and structurally validate a GLB container.
 """
 import importlib.machinery
 import json

@@ -5,7 +5,7 @@ Sex and life stage are not one problem across animals. The published sex
 classifier reads antlers on red deer; nothing about it transfers to a wild
 boar, and a model applied to a species it was never fitted for would return
 confident nonsense rather than nothing. So the choice is made per species, and
-a species with no classifier is simply left uncalled — for life stage the
+a species with no classifier is simply left uncalled - for life stage the
 box-area estimate then fills the gap, if it is switched on.
 
 That is also why the sex table has exactly one entry switched on: red deer is
@@ -29,7 +29,7 @@ _SOURCES = (("Off", "off"), ("Default", "default"), ("Custom…", "custom"))
 #: "Default" slot because that is what it is: no life-stage head has been
 #: published, size needs none, and it is what runs unless you say otherwise.
 #: It sits in the same column as the models because it answers the same
-#: question — "what decides this?" is one decision, not a model choice plus a
+#: question - "what decides this?" is one decision, not a model choice plus a
 #: separate switch somewhere else.
 SIZE_SOURCE = ("Default (size-based)", "size")
 
@@ -116,8 +116,8 @@ class BambiClassificationModelDialog(QDialog):
             )
         return (
             "Choose which classifier decides sex for each species.\n\n"
-            "Sex is read from a species-specific cue — antlers, for red "
-            "deer — so a model fitted on one species says nothing useful "
+            "Sex is read from a species-specific cue - antlers, for red "
+            "deer - so a model fitted on one species says nothing useful "
             "about another. A species left <b>Off</b> is simply not sexed, "
             "which is the honest answer rather than a guess."
         )
@@ -155,7 +155,7 @@ class BambiClassificationModelDialog(QDialog):
                 if fitted and published:
                     source = "default"
                 elif self.task == "life_stage":
-                    # No life-stage model exists, and size needs none — so it
+                    # No life-stage model exists, and size needs none - so it
                     # is the useful default rather than "off".
                     source = "size"
                 else:

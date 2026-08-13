@@ -64,7 +64,7 @@ _CLASSIFICATION_TASKS = ("occlusion", "species", "sex", "life_stage")
 _CLASSIFICATION_INPUTS = (("Thermal", "thermal"), ("RGB", "rgb"),
                           ("Matched", "matched"))
 # The model options per task live with the per-species dialog that shares
-# them — see ``bambi_classification_model_dialog.sources_for``.
+# them - see ``bambi_classification_model_dialog.sources_for``.
 
 
 def _camera_name(modality: str) -> str:
@@ -80,7 +80,7 @@ def _cap_vertical_growth(widget):
     its group box grow whenever a config tab page is taller than its contents
     (every page is stretched to the tallest one in the tab widget). The group
     box cannot pass that surplus to the capped widget, so it lands on the only
-    other child that may grow — the word-wrapped info label — which then
+    other child that may grow - the word-wrapped info label - which then
     centres one line of text in a few hundred pixels.
     """
     policy = widget.sizePolicy()
@@ -324,7 +324,7 @@ class FrameRangeDialog(QDialog):
         layout.addWidget(buttons)
 
     def selected_range(self):
-        """Return ``(start, end)`` — clamped and always start <= end."""
+        """Return ``(start, end)`` - clamped and always start <= end."""
         if self._all_radio.isChecked():
             return self._min_idx, self._max_idx
         start = self._start_spin.value()
@@ -363,7 +363,7 @@ class BambiDockWidget(QDockWidget):
         self._fov_click_tool = None
         self._fov_georef_click_tool = None
 
-        # Toolbar QAction references — set via set_inspector_actions()
+        # Toolbar QAction references - set via set_inspector_actions()
         self._inspector_action = None
         self._fov_inspector_action = None
         self._fov_georef_inspector_action = None
@@ -504,7 +504,7 @@ class BambiDockWidget(QDockWidget):
         self.embedded_srt_check.setVisible(True)  # video mode is on by default
         self.embedded_srt_check.setToolTip(
             "Checked: SRT timing data is embedded in the video file (newer DJI drones).\n"
-            "The SRT stream is extracted automatically — no separate .srt files needed.\n"
+            "The SRT stream is extracted automatically - no separate .srt files needed.\n"
             "Unchecked: SRT files are provided as separate files alongside the video."
         )
         self.embedded_srt_check.stateChanged.connect(self._on_embedded_srt_changed)
@@ -811,7 +811,7 @@ class BambiDockWidget(QDockWidget):
             "analytic reads them from there.\n\n"
             "The 5.x text files are written alongside so external scripts of "
             "your own keep working. Nothing in the plugin reads them, so "
-            "turning this off costs you nothing but disk writes — and it is "
+            "turning this off costs you nothing but disk writes - and it is "
             "how you check whether your own scripts still depend on them.\n\n"
             "They will be removed in a future release."
         )
@@ -1069,7 +1069,7 @@ class BambiDockWidget(QDockWidget):
         config_sub_tabs.addTab(project_tab, "Project")
 
         # Species are a property of the survey rather than of whichever tool is
-        # open, and they are edited here and only here — that is what keeps
+        # open, and they are edited here and only here - that is what keeps
         # class ids stable.
         vocabulary_group = QGroupBox("Project Schema")
         vocabulary_layout = QVBoxLayout(vocabulary_group)
@@ -1238,7 +1238,7 @@ class BambiDockWidget(QDockWidget):
 
         extraction_tab_layout.addWidget(tz_group)
 
-        # Thermal visualisation (photo mode only — hidden in video mode)
+        # Thermal visualisation (photo mode only - hidden in video mode)
         self.thermal_vis_group = QGroupBox("Thermal Visualisation")
         self.thermal_vis_group.setVisible(not self.video_mode_check.isChecked())
         thermal_vis_group = self.thermal_vis_group
@@ -1896,16 +1896,16 @@ class BambiDockWidget(QDockWidget):
 
         # --- Cross-modal matching ---
         # Beside tracking rather than classification: it is a statement about
-        # the tracks themselves — which two of them are one animal — and the
+        # the tracks themselves - which two of them are one animal - and the
         # classifiers are only one of the things that read the answer.
         match_group = QGroupBox("Cross-Modal Track Matching")
         match_layout = QFormLayout(match_group)
 
         match_info = QLabel(
             "Decides which thermal track and which RGB track are the same "
-            "animal. Useful on its own — an animal both cameras saw is a "
+            "animal. Useful on its own - an animal both cameras saw is a "
             "confirmed animal, which is what keeps a census free of tracks "
-            "that fired on shadow — and required by the <i>matched</i> "
+            "that fired on shadow - and required by the <i>matched</i> "
             "classifiers and by syncing labels between the cameras."
         )
         match_info.setWordWrap(True)
@@ -1932,7 +1932,7 @@ class BambiDockWidget(QDockWidget):
             "Largest median inter-centre distance still counted as the same "
             "animal, in thermal pixels.\n\n"
             "The default of 28 px is the value published for 1024×1024 "
-            "inference — raise it if your frames are larger, and check the "
+            "inference - raise it if your frames are larger, and check the "
             "run log, which reports how far the closest rejected candidate "
             "was."
         )
@@ -1970,7 +1970,7 @@ class BambiDockWidget(QDockWidget):
             "Size RGB crops from the thermal box")
         self.match_thermal_anchored_check.setChecked(True)
         self.match_thermal_anchored_check.setToolTip(
-            "For a matched pair, take the crop size from the thermal box — "
+            "For a matched pair, take the crop size from the thermal box - "
             "the looser of the two, so it more reliably encloses the whole "
             "animal, antlers included.\n\n"
             "Affects only the crop the classifier sees. The stored detections "
@@ -2069,16 +2069,16 @@ class BambiDockWidget(QDockWidget):
             "Orthorectified 2k (GeoTIFF)",
         ])
         self.classification_projection_combo.setToolTip(
-            "Which imagery the crops come from — and, with it, which variant "
+            "Which imagery the crops come from - and, with it, which variant "
             "of each classifier is used, so a head always sees the kind of "
             "image it was trained on.\n\n"
             "Perspective crops the extracted frames. The orthorectified "
             "options crop the per-frame GeoTIFFs, so 'Export Frames as "
-            "GeoTIFF' and geo-referencing both have to have run first — the "
+            "GeoTIFF' and geo-referencing both have to have run first - the "
             "boxes reach the rasters through their world coordinates.\n\n"
             "1k and 2k refer to the source width the two variants were fitted "
             "at; pick the one nearer your export. Perspective is the better "
-            "view for RGB — orthorectification smears animals that are "
+            "view for RGB - orthorectification smears animals that are "
             "already small and low in contrast."
         )
         source_layout.addRow("Projection:", self.classification_projection_combo)
@@ -2123,7 +2123,7 @@ class BambiDockWidget(QDockWidget):
             "chosen projection and input.\n\n"
             "Worth doing before anything else: with the files present, "
             "'Labels' can read each model's classes and the mapping can be "
-            "set up without running the classifiers first. These are small — "
+            "set up without running the classifiers first. These are small - "
             "a few megabytes each. The DINOv3 model itself is not downloaded "
             "here; that happens on the first embedding run."
         )
@@ -2145,7 +2145,7 @@ class BambiDockWidget(QDockWidget):
 
         crop_info = QLabel(
             "The classifiers never see a whole frame. Each animal is cut out "
-            "of its frame as a small square image — a <i>crop</i> — and it is "
+            "of its frame as a small square image - a <i>crop</i> - and it is "
             "that picture, and only that picture, which decides what the "
             "animal is called.\n\n"
             "So these settings decide what the classifier gets to look at: "
@@ -2187,7 +2187,7 @@ class BambiDockWidget(QDockWidget):
         self.classification_letterbox_check.setChecked(True)
         self.classification_letterbox_check.setToolTip(
             "A deer seen from above is elongated, and stretching it to a "
-            "square changes its proportions — which is part of what the sex "
+            "square changes its proportions - which is part of what the sex "
             "classifier reads. Turn this off only to reproduce a model "
             "trained on stretched crops."
         )
@@ -2216,7 +2216,7 @@ class BambiDockWidget(QDockWidget):
             "Which frames species and sex may vote over.\n\n"
             "'Visible frames only' uses the occlusion classifier when it has "
             "run, otherwise occlusion values already annotated by hand, and "
-            "otherwise every frame — the run log always says which.\n\n"
+            "otherwise every frame - the run log always says which.\n\n"
             "Occlusion classification is optional: species and sex work "
             "either way."
         )
@@ -2230,7 +2230,7 @@ class BambiDockWidget(QDockWidget):
         self.classification_quorum_spin.setToolTip(
             "Share of voting frames a class must exceed to be called.\n\n"
             "0.50 is a simple majority. Raising it makes the classifier "
-            "abstain more often — an abstention leaves the animal in the "
+            "abstain more often - an abstention leaves the animal in the "
             "census with the attribute unknown, it never discards it."
         )
         vote_layout.addRow("Quorum:", self.classification_quorum_spin)
@@ -2263,7 +2263,7 @@ class BambiDockWidget(QDockWidget):
         self.classification_overwrite_check.setChecked(False)
         self.classification_overwrite_check.setToolTip(
             "By default an animal the detector itself identified keeps that "
-            "identification, and only unidentified ones are filled in — so a "
+            "identification, and only unidentified ones are filled in - so a "
             "class mapping you configured is not quietly undone.\n\n"
             "Turn this on to let the classifier's answer win everywhere."
         )
@@ -2277,7 +2277,7 @@ class BambiDockWidget(QDockWidget):
 
         life_info = QLabel(
             "A juvenile cannot be told from an adult female by appearance at "
-            "survey resolution — which is why the sex classifier's second "
+            "survey resolution - which is why the sex classifier's second "
             "class is <i>female/juvenile</i>. Size settles it: a juvenile "
             "sits far below its cohort with a clear gap to the next animal.\n\n"
             "Sizes are only ever compared <b>within one flight</b>, because "
@@ -2311,7 +2311,7 @@ class BambiDockWidget(QDockWidget):
             "How wide the gap to the next-smallest animal must be, as a "
             "multiple of the flight's interquartile range.\n\n"
             "This is what stops the rule firing on the merely smallest adult "
-            "of a herd — someone is always smallest, and that is not evidence "
+            "of a herd - someone is always smallest, and that is not evidence "
             "of anything."
         )
         life_layout.addRow("Size gap over (× IQR):", self.life_stage_iqr_spin)
@@ -2336,7 +2336,7 @@ class BambiDockWidget(QDockWidget):
             ["Auto", "CPU", "CUDA (GPU)"])
         self.classification_device_combo.setToolTip(
             "Auto uses the GPU when a CUDA build of PyTorch is installed.\n"
-            "The backbone is large — on CPU expect minutes per hundred crops."
+            "The backbone is large - on CPU expect minutes per hundred crops."
         )
         compute_layout.addRow("Device:", self.classification_device_combo)
 
@@ -2361,7 +2361,7 @@ class BambiDockWidget(QDockWidget):
         model_dir_label = QLabel(
             "Models and the backbone cache are stored in the shared "
             "<code>bambi_deps/models/</code> folder, alongside the detection "
-            "weights — downloaded once, not once per flight."
+            "weights - downloaded once, not once per flight."
         )
         model_dir_label.setWordWrap(True)
         model_dir_label.setTextFormat(Qt.TextFormat.RichText)
@@ -2973,7 +2973,7 @@ class BambiDockWidget(QDockWidget):
         proc_steps_layout.addLayout(track_perp_add_row)
 
         # ----- A3: Match RGB <-> Thermal tracks -----
-        # A statement about the tracks — which two of them are one animal —
+        # A statement about the tracks - which two of them are one animal -
         # so it belongs with tracking. Classification is one consumer of the
         # answer, not what the step is for.
         match_row = QHBoxLayout()
@@ -2997,7 +2997,7 @@ class BambiDockWidget(QDockWidget):
         self.add_matches_btn.clicked.connect(self.add_matches_to_qgis)
         self.add_matches_btn.setToolTip(
             "Draw a line between each matched pair's geo-referenced positions, "
-            "attributed with the shared frame count and median distance — the "
+            "attributed with the shared frame count and median distance - the "
             "quickest way to see whether the gate is set sensibly."
         )
         self.add_matches_status = QLabel("⚪")
@@ -3141,7 +3141,7 @@ class BambiDockWidget(QDockWidget):
             "Embed every tracked animal's crop with DINOv3, once, so the "
             "classifiers can reuse the vectors.\n\n"
             "This is the expensive step. The vectors are written beside the "
-            "frames, and a re-run only embeds what is missing — an "
+            "frames, and a re-run only embeds what is missing - an "
             "interrupted run resumes rather than starting again."
         )
         self.embeddings_camera_combo = QComboBox()
@@ -3152,7 +3152,7 @@ class BambiDockWidget(QDockWidget):
         self.embeddings_camera_combo.setToolTip(
             "Which camera's crops to embed. The same three choices as the "
             "classifiers below, so whatever they are set to can be embedded "
-            "in one run — 'Matched' does both cameras."
+            "in one run - 'Matched' does both cameras."
         )
         self.embeddings_status = QLabel("⚪ Not started")
         embeddings_row.addWidget(self.embeddings_btn)
@@ -3177,7 +3177,7 @@ class BambiDockWidget(QDockWidget):
             "Label each frame of each animal clear or occluded.\n\n"
             "A quality filter rather than a verdict about the animal: it "
             "decides which frames the species and sex votes may use. Optional "
-            "— those run either way."
+            "- those run either way."
         )
         self.classify_occlusion_status = QLabel("⚪ Not started")
         classify_row.addWidget(self.classify_occlusion_btn)
@@ -3208,7 +3208,7 @@ class BambiDockWidget(QDockWidget):
         self.classify_sex_btn.setToolTip(
             "Decide each animal's sex, by a vote across exactly the frames "
             "species used.\n\n"
-            "The model is chosen by species — the cue is species-specific — so "
+            "The model is chosen by species - the cue is species-specific - so "
             "species has to have run first."
         )
         self.classify_sex_status = QLabel("⚪ Not started")
@@ -3224,7 +3224,7 @@ class BambiDockWidget(QDockWidget):
         self.life_stage_btn.setToolTip(
             "Decide whether each animal is a juvenile or an adult.\n\n"
             "Uses a classifier where one is configured for the species, and "
-            "otherwise body size within this flight — a juvenile cannot be "
+            "otherwise body size within this flight - a juvenile cannot be "
             "told from an adult female by appearance at survey resolution, so "
             "size is what separates them. The size estimate needs no models."
         )
@@ -3237,7 +3237,7 @@ class BambiDockWidget(QDockWidget):
         # ----- Sync labels across the match -----
         # Not a numbered step: it runs on demand, on results the steps above
         # already produced. It is also the way out of a run where the two
-        # cameras were classified by different stages — sync the species over
+        # cameras were classified by different stages - sync the species over
         # and the demographic heads on this side have a model to pick.
         sync_row = QHBoxLayout()
         self.sync_labels_btn = QPushButton("   → Sync Labels Across the Match")
@@ -3273,7 +3273,7 @@ class BambiDockWidget(QDockWidget):
         extra_steps_layout = QVBoxLayout(extra_steps_group)
 
         extra_info = QLabel(
-            "Independent of the steps above — it neither needs them, nor "
+            "Independent of the steps above - it neither needs them, nor "
             "feeds into them."
         )
         extra_info.setWordWrap(True)
@@ -3381,7 +3381,7 @@ class BambiDockWidget(QDockWidget):
         self.export_false_positives_check.setToolTip(
             "Survey formats keep them as a record of what was looked at and "
             "rejected; training formats drop them. Darwin Core always excludes "
-            "them — a rejected detection is not an occurrence of anything."
+            "them - a rejected detection is not an occurrence of anything."
         )
         export_layout.addWidget(self.export_false_positives_check)
 
@@ -3390,7 +3390,7 @@ class BambiDockWidget(QDockWidget):
         self.export_images_check.setToolTip(
             "Copy the frames the export refers to alongside it. YOLO and MOT "
             "are folder layouts that do not resolve without their images, and "
-            "a Camtrap DP package is only self-contained with its media — but "
+            "a Camtrap DP package is only self-contained with its media - but "
             "the frames are usually the heaviest part of a project, so turn "
             "this off when the annotations are all you need. Only frames "
             "carrying a detection are copied. Formats that reference no image "
@@ -3407,7 +3407,7 @@ class BambiDockWidget(QDockWidget):
         animal_layout.addStretch()
 
         # ---------------------------------------------------------------------
-        # Shared run panel — below the tabs, so progress and the log are visible
+        # Shared run panel - below the tabs, so progress and the log are visible
         # whichever tab a step was started from.
         # ---------------------------------------------------------------------
         run_panel = QWidget()
@@ -3752,7 +3752,7 @@ class BambiDockWidget(QDockWidget):
 
         # Study area: the region the density is extrapolated to. It is NOT the
         # monitored area (the searched strips, i.e. the density's denominator)
-        # — setting it to that just returns the animals already counted.
+        # - setting it to that just returns the animals already counted.
         pop_area_row = QHBoxLayout()
         pop_area_row.addWidget(QLabel("Study area (ha):"))
         self.pop_study_area_spin = QDoubleSpinBox()
@@ -3762,7 +3762,7 @@ class BambiDockWidget(QDockWidget):
         self.pop_study_area_spin.setSpecialValueText("off (density only)")
         self.pop_study_area_spin.setToolTip(
             "Size of the region the density is extrapolated to an abundance for.\n"
-            "This is not the monitored area (the searched strips) — extrapolating\n"
+            "This is not the monitored area (the searched strips) - extrapolating\n"
             "to that would just return the animals already counted.\n"
             "0 = report densities only.")
         pop_area_row.addWidget(self.pop_study_area_spin)
@@ -4003,7 +4003,7 @@ class BambiDockWidget(QDockWidget):
         rgb_video_paths = [p.strip() for p in self.rgb_video_paths_edit.text().split(",") if p.strip()]
 
         # Thermal visualisation: the lo/hi spin boxes apply in the threshold
-        # mode, the curve in the curve mode — the other one is sent as None.
+        # mode, the curve in the curve mode - the other one is sent as None.
         threshold_mode = self.thermal_vis_mode_combo.currentIndex() == 0
         curve_mode = self.thermal_vis_mode_combo.currentIndex() == 1
 
@@ -4428,7 +4428,7 @@ class BambiDockWidget(QDockWidget):
         layout = QVBoxLayout(box)
 
         description = (
-            "Analyse one or more BAMBI target folders together — each project "
+            "Analyse one or more BAMBI target folders together - each project "
             "is processed on its own and the results are combined. Leave the "
             "list empty and keep 'Add current project' ticked to analyse only "
             "the active project (same as before)."
@@ -4462,8 +4462,8 @@ class BambiDockWidget(QDockWidget):
             add_btn.clicked.connect(lambda: self._add_project_folder(prefix))
         add_flight_btn = QPushButton("+ Add Flight…")
         add_flight_btn.setToolTip(
-            "Add another flight from this QGIS project. Its target folder — "
-            "and its DEM — come from the flight itself, so there are no paths "
+            "Add another flight from this QGIS project. Its target folder - "
+            "and its DEM - come from the flight itself, so there are no paths "
             "to find.")
         add_flight_btn.clicked.connect(
             lambda: self._add_project_from_flight(prefix, with_dem))
@@ -4503,7 +4503,7 @@ class BambiDockWidget(QDockWidget):
                 return
         label = target
         if dem:
-            label = f"{target}    —    DEM: {os.path.basename(dem)}"
+            label = f"{target}    -    DEM: {os.path.basename(dem)}"
         item = QListWidgetItem(label)
         item.setData(self._project_item_role(), {"target": target, "dem": dem})
         item.setToolTip(f"Target: {target}" + (f"\nDEM: {dem}" if dem else ""))
@@ -4535,7 +4535,7 @@ class BambiDockWidget(QDockWidget):
                 "this project.")
             return
 
-        labels = [f"{entry['name']}  —  {entry['target_folder']}"
+        labels = [f"{entry['name']}  -  {entry['target_folder']}"
                   for entry in entries]
         choice, ok = QInputDialog.getItem(
             self, "Add Flight", "Flight:", labels, 0, False)
@@ -4637,7 +4637,7 @@ class BambiDockWidget(QDockWidget):
         The projects explicitly listed, followed by the active project (with an
         empty DEM, so the worker reuses the configured DEM) when 'Add current
         project' is ticked. Blank targets and duplicates (by normalised target
-        path) are dropped; existence is not checked here — the run handlers
+        path) are dropped; existence is not checked here - the run handlers
         report missing folders/files to the user.
         """
         entries: List[Dict[str, str]] = []
@@ -4676,7 +4676,7 @@ class BambiDockWidget(QDockWidget):
         body = "\n\n".join(blocks)
         QMessageBox.warning(
             self, "Missing Prerequisites",
-            "The analysis was aborted — required files are missing in the "
+            "The analysis was aborted - required files are missing in the "
             "following project(s):\n\n" + body)
 
     def validate_inputs(self, required_fields: list) -> bool:
@@ -4840,7 +4840,7 @@ class BambiDockWidget(QDockWidget):
     def _resolve_embedded_srts(self, video_paths: List[str]) -> List[str]:
         """Extract embedded SRT streams via ffmpeg (core.flight_files).
 
-        Uses a temp directory as a persistent cache — if a .srt file for a
+        Uses a temp directory as a persistent cache - if a .srt file for a
         video already exists there it is reused without re-running ffmpeg.
         """
         from .core.flight_files import extract_embedded_srts
@@ -4895,7 +4895,7 @@ class BambiDockWidget(QDockWidget):
             self.tz_auto_result_label.setText(f"Detected offset: UTC{sign}{offset:g}h")
         else:
             self.tz_auto_result_label.setText(
-                "(could not detect — check SRT/photo dir & AirData)")
+                "(could not detect - check SRT/photo dir & AirData)")
 
     def _get_timezone_offset(self) -> float:
         """Return the timezone offset in hours, auto-detected or manual."""
@@ -5037,7 +5037,7 @@ class BambiDockWidget(QDockWidget):
         "The steps are split across two tabs, following what they depend on. "
         "<b>Pre-Processing</b> derives from the drone poses and the DEM and is "
         "independent of any animal; <b>Processing</b> depends on the "
-        "detections. Only frame extraction is a prerequisite for both — "
+        "detections. Only frame extraction is a prerequisite for both - "
         "re-running detection marks the Processing steps out of date and "
         "leaves the ALFS and orthomosaic alone.<br><br>"
     )
@@ -5048,27 +5048,27 @@ class BambiDockWidget(QDockWidget):
         msg.setWindowTitle("Pre-Processing")
         msg.setIcon(QMessageBox.Icon.Information)
         body = (
-            "<b>P1 — Extract Frames</b><br>"
+            "<b>P1 - Extract Frames</b><br>"
             "Decodes and undistorts frames for the selected camera (thermal or RGB); "
             "matches GPS positions from the AirData log via SRT timestamps (video) or "
             "EXIF timestamps (photo). Run once per camera you need.<br><br>"
-            "<b>P2 — Generate Flight Route</b><br>"
+            "<b>P2 - Generate Flight Route</b><br>"
             "Creates a GPS flight-path line layer and per-frame camera-position points "
             "from the extracted pose data.<br><br>"
-            "<b>P3 — Calculate Field of View</b><br>"
+            "<b>P3 - Calculate Field of View</b><br>"
             "Computes per-frame camera footprint polygons on the ground using the DEM.<br><br>"
-            "<b>P4 — Generate ALFS</b><br>"
+            "<b>P4 - Generate ALFS</b><br>"
             "Projects all frames onto the DEM surface and blends them into a "
             "georeferenced GeoTIFF mosaic.<br><br>"
-            "<b>P5 — Export Frames as GeoTIFF</b><br>"
+            "<b>P5 - Export Frames as GeoTIFF</b><br>"
             "Exports individual frames as separate georeferenced GeoTIFFs.<br><br>"
-            "<b>P6 — Generate Orthomosaic</b><br>"
+            "<b>P6 - Generate Orthomosaic</b><br>"
             "Merges the exported frame GeoTIFFs (P5) into a single true "
             "orthomosaic, using all frames or a selected range and a configurable "
             "overlap merge mode.<br><br>"
 
             "<b>Several flights in one project</b><br>"
-            "Each flight needs its own target folder — the result files are per "
+            "Each flight needs its own target folder - the result files are per "
             "folder, so two flights sharing one would overwrite each other. Add "
             "them with the <b>+</b> button beside the flight selector on the "
             "Input tab; each keeps its own configuration and its own QGIS layer "
@@ -5083,7 +5083,7 @@ class BambiDockWidget(QDockWidget):
         msg.setWindowTitle("Processing")
         msg.setIcon(QMessageBox.Icon.Information)
         body = (
-            "<b>A1 — Detect Animals</b><br>"
+            "<b>A1 - Detect Animals</b><br>"
             "Runs YOLO-based detection on every extracted frame. The thermal model is "
             "downloaded automatically on first use.<br><br>"
             "<b>→ Geo-Reference Detections</b><br>"
@@ -5092,19 +5092,19 @@ class BambiDockWidget(QDockWidget):
             "with the reason rather than dropped.<br><br>"
             "<b>→ Calculate Perpendicular</b><br>"
             "Measures the perpendicular distance from each geo-referenced detection "
-            "to the flight route line — useful for transect-based surveys.<br><br>"
-            "<b>A2 — Track Animals Or Import</b><br>"
+            "to the flight route line - useful for transect-based surveys.<br><br>"
+            "<b>A2 - Track Animals Or Import</b><br>"
             "Links detections across frames into continuous tracks using the selected "
             "tracking backend. With a TRex tracklet folder configured this imports "
             "those instead, and runs no tracker.<br><br>"
-            "<b>A3 — Match RGB ↔ Thermal Tracks</b><br>"
+            "<b>A3 - Match RGB ↔ Thermal Tracks</b><br>"
             "Works out which thermal track and which RGB track are the same "
             "animal, by comparing where their boxes sit once the two views are "
             "registered onto each other. Needs both cameras tracked. An animal "
             "both cameras saw is a confirmed animal; a track only one saw is "
             "either an animal the other sensor cannot make out, or noise. The "
             "classifiers and the label sync both read the answer.<br><br>"
-            "<b>S1 — Run SAM3 Segmentation</b><br>"
+            "<b>S1 - Run SAM3 Segmentation</b><br>"
             "Segments detected objects using Roboflow SAM3.<br><br>"
             "<b>→ Geo-Reference Segmentation</b><br>"
             "Projects the masks onto the DEM to world coordinates.<br><br>"
@@ -5482,7 +5482,7 @@ class BambiDockWidget(QDockWidget):
             source_crs_override = None
 
         # Read file CRS for display in confirmation dialog.
-        # Avoid to_epsg() — it uses the PROJ database which may be QGIS's outdated version.
+        # Avoid to_epsg() - it uses the PROJ database which may be QGIS's outdated version.
         file_crs_label = "Unknown"
         try:
             import rasterio
@@ -6235,7 +6235,7 @@ class BambiDockWidget(QDockWidget):
         answer = QMessageBox.question(
             self, "Migrate to the 6.0 format",
             "Import this project's existing outputs into the new store?\n\n"
-            "The current files are only read — nothing is modified or deleted, "
+            "The current files are only read - nothing is modified or deleted, "
             "so the project keeps working exactly as it does now.",
             QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Ok)
@@ -6246,7 +6246,7 @@ class BambiDockWidget(QDockWidget):
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             report = migration.migrate_project(folder, log_fn=self.log)
-        except Exception as exc:  # noqa: BLE001 — surfaced to the user below
+        except Exception as exc:  # noqa: BLE001 - surfaced to the user below
             QApplication.restoreOverrideCursor()
             self.log(f"Migration failed: {exc}")
             QMessageBox.critical(
@@ -6298,7 +6298,7 @@ class BambiDockWidget(QDockWidget):
         """Read the flight list from the QGIS project.
 
         A project written before 6.0 has none, so the target folder it stored
-        becomes the first flight — that keeps a single-flight project working
+        becomes the first flight - that keeps a single-flight project working
         exactly as before, with the list simply describing what was already
         true.
         """
@@ -6406,7 +6406,7 @@ class BambiDockWidget(QDockWidget):
             QMessageBox.information(
                 self, "Flight",
                 "A step is running. Wait for it to finish before switching "
-                "flights — otherwise the log and status would describe a "
+                "flights - otherwise the log and status would describe a "
                 "flight you are no longer looking at.")
             self._refresh_flight_combo()
             return
@@ -6496,7 +6496,7 @@ class BambiDockWidget(QDockWidget):
                         "and settings come back as they were.")
         else:
             settings = ("It has no stored configuration, so the settings stay "
-                        "as they are — check the inputs before running "
+                        "as they are - check the inputs before running "
                         "anything.")
 
         box = QMessageBox(self)
@@ -6542,18 +6542,18 @@ class BambiDockWidget(QDockWidget):
         """Copy the current configuration into the new flight, or start clean?
 
         Returns True to copy, False for defaults, or None when cancelled. The
-        recordings are cleared either way — the choice is only about the
+        recordings are cleared either way - the choice is only about the
         processing settings (§10.2).
         """
         box = QMessageBox(self)
         box.setWindowTitle("New flight")
         box.setIcon(QMessageBox.Icon.Question)
         box.setText(
-            "A new flight starts with <b>no input files</b> — the videos, "
+            "A new flight starts with <b>no input files</b> - the videos, "
             "photos, flight log, calibrations, DEM and correction are cleared, "
             "so the previous flight's recordings are not processed again into "
             "the new folder.<br><br>"
-            "What should happen to the <b>processing settings</b> — detection "
+            "What should happen to the <b>processing settings</b> - detection "
             "confidence, tracker, extraction, ALFS and the rest?"
         )
         copy_btn = box.addButton("Ok (copy configurations)",
@@ -6651,7 +6651,7 @@ class BambiDockWidget(QDockWidget):
             self._refresh_flight_combo()
             if active < 0:
                 # Nothing left to describe, so the form must stop pointing at
-                # the folder that was just removed — otherwise the next save
+                # the folder that was just removed - otherwise the next save
                 # would write straight back into it.
                 self.target_folder_edit.setText("")
             else:
@@ -6702,7 +6702,7 @@ class BambiDockWidget(QDockWidget):
         """Fill the list from the active flight's own vocabulary.
 
         Species live in each flight's ``project.gpkg``, so the list is rebuilt
-        per flight rather than carried across — a species id from one flight
+        per flight rather than carried across - a species id from one flight
         means nothing in another.
         """
         from .core import analytics_source
@@ -6715,7 +6715,7 @@ class BambiDockWidget(QDockWidget):
         if folder and os.path.isdir(folder):
             try:
                 options = analytics_source.species_options(folder)
-            except Exception:  # noqa: BLE001 — an empty list is the answer
+            except Exception:  # noqa: BLE001 - an empty list is the answer
                 options = []
 
         for entry in options:
@@ -6765,7 +6765,7 @@ class BambiDockWidget(QDockWidget):
             return
         if self.analytics_species_list.count() == 0:
             self.analytics_species_status.setText(
-                "No species found — set a target folder whose project has "
+                "No species found - set a target folder whose project has "
                 "been through the pipeline.")
             return
         chosen = self._analytics_species_selection()
@@ -6829,7 +6829,7 @@ class BambiDockWidget(QDockWidget):
 
     @staticmethod
     def _analytics_species_of(path: str, stem: str, ext: str, name: str) -> str:
-        """The species a result belongs to — from the file, not the filename.
+        """The species a result belongs to - from the file, not the filename.
 
         The name is a slug ("roe-deer"), so the readable name is read back out
         of the result itself; the slug is only the fallback.
@@ -6891,7 +6891,7 @@ class BambiDockWidget(QDockWidget):
 
         if is_folder:
             output = QFileDialog.getExistingDirectory(
-                self, f"Export {label} — choose a folder", folder)
+                self, f"Export {label} - choose a folder", folder)
         else:
             suggested = os.path.join(
                 folder, exporters.DEFAULT_FILENAME.get(key, "export.json"))
@@ -6915,7 +6915,7 @@ class BambiDockWidget(QDockWidget):
             self.log(f"Export failed: {exc}")
             QMessageBox.warning(self, "Export", str(exc))
             return
-        except Exception as exc:  # noqa: BLE001 — surfaced to the user below
+        except Exception as exc:  # noqa: BLE001 - surfaced to the user below
             QApplication.restoreOverrideCursor()
             self.log(f"Export failed: {exc}")
             QMessageBox.critical(
@@ -7001,7 +7001,7 @@ class BambiDockWidget(QDockWidget):
         if not folder or not os.path.isdir(folder):
             QMessageBox.warning(
                 self, "Class Mapping",
-                "Select a target folder first — the mapping belongs to a "
+                "Select a target folder first - the mapping belongs to a "
                 "project.")
             return False
 
@@ -7033,7 +7033,7 @@ class BambiDockWidget(QDockWidget):
         if not folder or not os.path.isdir(folder):
             QMessageBox.warning(
                 self, "Project Schema",
-                "Select a target folder first — the schema belongs to a "
+                "Select a target folder first - the schema belongs to a "
                 "project.")
             return False
 
@@ -7288,7 +7288,7 @@ class BambiDockWidget(QDockWidget):
     def toggle_alfs_fixed_size(self, state):
         """Swap between the ground-resolution and fixed-pixel-size inputs.
 
-        The two are alternatives, so only the active one stays editable —
+        The two are alternatives, so only the active one stays editable -
         a greyed-out m/px field is what tells the user it no longer applies.
         """
         fixed = bool(state)
@@ -7437,7 +7437,7 @@ class BambiDockWidget(QDockWidget):
                 )
                 return
 
-        # Validate common inputs (airdata optional in photo mode — EXIF fallback)
+        # Validate common inputs (airdata optional in photo mode - EXIF fallback)
         required = ["target_folder"]
         if config["input_mode"] != "photo":
             required.append("airdata_path")
@@ -7483,7 +7483,7 @@ class BambiDockWidget(QDockWidget):
                 )
                 return
 
-        # Validate common inputs (airdata optional in photo mode — EXIF fallback)
+        # Validate common inputs (airdata optional in photo mode - EXIF fallback)
         required = ["target_folder"]
         if config["input_mode"] != "photo":
             required.append("airdata_path")
@@ -7493,7 +7493,7 @@ class BambiDockWidget(QDockWidget):
         self.start_worker("extract_rgb_frames")
 
     # ------------------------------------------------------------------
-    # Classification — Hugging Face access
+    # Classification - Hugging Face access
     # ------------------------------------------------------------------
 
     def _load_hf_token(self):
@@ -7502,7 +7502,7 @@ class BambiDockWidget(QDockWidget):
         The token is a user credential, so it is kept per user rather than per
         project: a project file gets shared, and a token must not travel with
         it. Nothing is shown when the token comes from the environment or from
-        ``hf auth login`` — the field stays empty and those are picked up at
+        ``hf auth login`` - the field stays empty and those are picked up at
         run time, which is why it is a placeholder rather than a default.
         """
         stored = QgsSettings().value(_HF_TOKEN_SETTING, "", type=str)
@@ -7571,7 +7571,7 @@ class BambiDockWidget(QDockWidget):
             if task in hf_access.PER_SPECIES_TASKS:
                 species = QPushButton("Species…")
                 species.setToolTip(
-                    "Choose a classifier per species — the cue is "
+                    "Choose a classifier per species - the cue is "
                     "species-specific, so one model does not transfer")
                 species.clicked.connect(
                     lambda _c=False, t=task:
@@ -7609,7 +7609,7 @@ class BambiDockWidget(QDockWidget):
             combo.setToolTip(
                 "Which camera's features this classifier reads.\n\n"
                 "'Matched' reads both fused, which is where the two sensors "
-                "complement each other most — it needs the tracks matched "
+                "complement each other most - it needs the tracks matched "
                 "(A3) and both cameras embedded (C1)."
             )
             combo.currentIndexChanged.connect(
@@ -7702,12 +7702,12 @@ class BambiDockWidget(QDockWidget):
 
         if not wanted:
             self.download_models_status.setText(
-                "Nothing to download — no classifier is set to Default.")
+                "Nothing to download - no classifier is set to Default.")
             QMessageBox.information(
                 self, "Download Models",
                 "None of the classifiers is set to Default.\n\n"
                 "Set one to Default in the table above, or choose a custom "
-                "model file — those are used from where they are and need no "
+                "model file - those are used from where they are and need no "
                 "download."
             )
             return
@@ -7736,7 +7736,7 @@ class BambiDockWidget(QDockWidget):
                         repo, task, projection_name, modality, destination,
                         token, self.log)
                     downloaded += 1
-                except Exception as exc:      # noqa: BLE001 — reported below
+                except Exception as exc:      # noqa: BLE001 - reported below
                     failures.append(f"{task}: {exc}")
                     self.log(f"Could not download the {task} classifier: {exc}")
         finally:
@@ -7753,7 +7753,7 @@ class BambiDockWidget(QDockWidget):
             return
 
         self.download_models_status.setText(
-            f"🟢 Downloaded {downloaded} model(s) — 'Labels' can now read "
+            f"🟢 Downloaded {downloaded} model(s) - 'Labels' can now read "
             "their classes.")
         self.log(f"Downloaded {downloaded} classification model(s) into "
                  f"{models_dir}")
@@ -7767,7 +7767,7 @@ class BambiDockWidget(QDockWidget):
         row = self._task_row(task)
         table = self.classification_models_table
         table.item(row, 2).setText(path)
-        # Choosing a file means using it — otherwise the path sits there
+        # Choosing a file means using it - otherwise the path sits there
         # looking configured while the default is what actually runs.
         source = table.cellWidget(row, 1)
         source.setCurrentIndex(max(0, source.findData("custom")))
@@ -7850,7 +7850,7 @@ class BambiDockWidget(QDockWidget):
 
         A gated repository is the most likely thing to go wrong in the whole
         classification feature, and finding out three steps into a long run is
-        the worst time to learn it — so it is answerable up front.
+        the worst time to learn it - so it is answerable up front.
         """
         from .core import hf_access
 
@@ -7862,7 +7862,7 @@ class BambiDockWidget(QDockWidget):
         self.hf_check_access_btn.setEnabled(False)
         try:
             # Blocking, but it is a single metadata request and the user asked
-            # for it — a worker thread here would cost more than it saves.
+            # for it - a worker thread here would cost more than it saves.
             result = hf_access.check_repo_access(repo, token)
         finally:
             self.hf_check_access_btn.setEnabled(True)
@@ -7884,7 +7884,7 @@ class BambiDockWidget(QDockWidget):
             self.hf_access_status.setText(f"{icon} {result['message']}")
 
         self.log(f"Hugging Face access check for {repo}: "
-                 f"{result['status']} — {result['message']}")
+                 f"{result['status']} - {result['message']}")
 
     def _confirm_ultralytics_license(self) -> bool:
         """Show the Ultralytics license notice before running detection.
@@ -8150,7 +8150,7 @@ class BambiDockWidget(QDockWidget):
         config = self.get_config()
         target_folder = config["target_folder"]
 
-        # Both modalities are required — this is the one step that is
+        # Both modalities are required - this is the one step that is
         # inherently about the pair, so there is no camera combo to choose.
         missing = [name for name, modality in (("Thermal", "t"), ("RGB", "w"))
                    if not os.path.isfile(
@@ -8180,7 +8180,7 @@ class BambiDockWidget(QDockWidget):
         """Compute DINOv3 embeddings for the selected cameras (step C1).
 
         'Matched' embeds both, so every camera it covers is checked before any
-        of them is started — half an embedding run is the worst outcome here.
+        of them is started - half an embedding run is the worst outcome here.
         """
         from .core import classification, geo_crops, hf_access, store
         from .core import track_store
@@ -8287,13 +8287,13 @@ class BambiDockWidget(QDockWidget):
                     f"No {_camera_name(suffix)} embeddings have been "
                     "computed.\n\n"
                     "This step is set to classify that camera's animals, so "
-                    "run 'Compute DINOv3 Embeddings' for it first — the "
+                    "run 'Compute DINOv3 Embeddings' for it first - the "
                     "classifiers read those vectors rather than the images."
                 )
                 return
 
         # Sex and age pick their model by species, so the species has to be
-        # known on each camera they are about — classified there, hand
+        # known on each camera they are about - classified there, hand
         # annotated, or synced across from the other camera.
         if task in hf_access.PER_SPECIES_TASKS:
             unknown = [suffix for suffix in targets
@@ -8306,7 +8306,7 @@ class BambiDockWidget(QDockWidget):
                     "yet.\n\n"
                     f"The {hf_access.TASK_LABELS.get(task, task).lower()} "
                     "classifier is chosen per species, so run Species "
-                    "Classification on that camera first — or sync the labels "
+                    "Classification on that camera first - or sync the labels "
                     "across from the other one."
                 )
                 return
@@ -8809,7 +8809,7 @@ class BambiDockWidget(QDockWidget):
                 self,
                 "Camera Positions Not Available",
                 f"{camera_name} frame extraction has not been completed.\n"
-                f"Only the flight route line (from AirData) will be generated — "
+                f"Only the flight route line (from AirData) will be generated - "
                 f"camera positions, frame/distance markers and image labels "
                 f"will not be available.\n\n"
                 f"Run Step 1 (Extract Frames) for {camera_name} and re-run this "
@@ -9197,7 +9197,7 @@ class BambiDockWidget(QDockWidget):
                     "(run 'Calculate Track Perpendicular')")
             if not os.path.exists(os.path.join(folder, f"poses_{suffix}.json")):
                 missing.append(
-                    f"{camera_label} camera poses (poses_{suffix}.json — "
+                    f"{camera_label} camera poses (poses_{suffix}.json - "
                     "run frame extraction)")
             # The active project uses the DEM configured on the Processing tab;
             # every added project must supply its own dem.json.
@@ -9205,7 +9205,7 @@ class BambiDockWidget(QDockWidget):
             is_current = current_key is not None and folder_key == current_key
             if not is_current:
                 if not dem:
-                    missing.append("DEM metadata (dem.json) — add it for this project")
+                    missing.append("DEM metadata (dem.json) - add it for this project")
                 elif not os.path.isfile(dem):
                     missing.append(f"DEM metadata not found: {dem}")
             if missing:
@@ -9256,7 +9256,7 @@ class BambiDockWidget(QDockWidget):
             if density is None:
                 est_rows += (
                     f"<tr><td>{label}</td><td colspan='3' style='color:#c33'>"
-                    f"failed — {est.get('error', 'unknown error')}</td></tr>")
+                    f"failed - {est.get('error', 'unknown error')}</td></tr>")
                 continue
             ci = est.get("ci95")
             ci_txt = f"{ci[0]:.2f} – {ci[1]:.2f}" if ci else "–"
@@ -9351,7 +9351,7 @@ class BambiDockWidget(QDockWidget):
           <tr><th align='left'>Method</th>
               <th align='right'>Density (/100 ha)</th>
               <th align='right'>95% CI</th>
-              <th align='right'>{'Abundance' if study_ha > 0 else '—'}</th></tr>
+              <th align='right'>{'Abundance' if study_ha > 0 else '-'}</th></tr>
           {est_rows}
         </table>
         {projects_section}
@@ -9411,12 +9411,12 @@ class BambiDockWidget(QDockWidget):
             else:
                 routes = self._transect_routes_from_poses(config, suffix)
                 if routes:
-                    self.log("transect_routes.geojson not found — the sub-flight "
+                    self.log("transect_routes.geojson not found - the sub-flight "
                              "routes were rebuilt from the poses and the transect "
                              "definitions.")
 
             # The tracks assigned to each transect. Absent when no perpendicular
-            # distances exist — that stage is simply skipped. The footprints are
+            # distances exist - that stage is simply skipped. The footprints are
             # passed along because a track only counts inside the area that saw it.
             tracks_by_id = self._transect_tracks(config, suffix, areas)
 
@@ -9468,7 +9468,7 @@ class BambiDockWidget(QDockWidget):
                 if fov_layer is not None:
                     transect_group.addLayer(fov_layer)
                 else:
-                    self.log(f"Note: '{name}' has no field-of-view footprint — "
+                    self.log(f"Note: '{name}' has no field-of-view footprint - "
                              "its group holds no area layer.")
 
                 transect_group.setExpanded(False)
@@ -9480,7 +9480,7 @@ class BambiDockWidget(QDockWidget):
             self.log(f"Added {n_added} transect group(s) under "
                      f"'BAMBI Transect Areas ({camera_label})'")
             if not routes:
-                self.log("Warning: no sub-flight routes could be built — check "
+                self.log("Warning: no sub-flight routes could be built - check "
                          f"that poses_{suffix}.json and transects_{suffix}/"
                          "transects.json exist. Only the field-of-view areas "
                          "were added.")
@@ -9498,7 +9498,7 @@ class BambiDockWidget(QDockWidget):
                          area_features: list) -> dict:
         """The tracks assigned to each transect: ``{transect_id: [track, …]}``.
 
-        Prefers ``population_tracks.csv`` — that is the very assignment the
+        Prefers ``population_tracks.csv`` - that is the very assignment the
         density numbers were computed from, so the map cannot disagree with
         them. Without it (no estimation run yet) the assignment is recomputed
         from the track perpendicular distances with the same
@@ -9518,7 +9518,7 @@ class BambiDockWidget(QDockWidget):
                 with open(tracks_csv, 'r', encoding='utf-8', newline='') as f:
                     for row in _csv.DictReader(f):
                         # Blank transect_id: unassigned or beyond the truncation
-                        # distance — it was not counted, so it is not shown.
+                        # distance - it was not counted, so it is not shown.
                         if not row.get("transect_id"):
                             continue
                         by_id[int(row["transect_id"])].append({
@@ -9533,7 +9533,7 @@ class BambiDockWidget(QDockWidget):
                 return dict(by_id)
             except (ValueError, KeyError, OSError) as e:
                 self.log(f"Could not read {os.path.basename(tracks_csv)} "
-                         f"({e}) — recomputing the track assignment.")
+                         f"({e}) - recomputing the track assignment.")
                 by_id = defaultdict(list)
 
         return self._assign_tracks_to_transects(config, suffix, area_features)
@@ -9556,7 +9556,7 @@ class BambiDockWidget(QDockWidget):
             if not geom.isGeosValid():
                 geom = geom.makeValid()
             # A transect's area can arrive as several rings (a footprint broken
-            # up by gaps in the frame sampling) — all of them count.
+            # up by gaps in the frame sampling) - all of them count.
             geoms[transect_id] = (geom if transect_id not in geoms
                                   else geoms[transect_id].combine(geom))
 
@@ -9584,7 +9584,7 @@ class BambiDockWidget(QDockWidget):
             f"perpendicular_tracks_{suffix}.json")
         poses_path = os.path.join(target_folder, f"poses_{suffix}.json")
         if not os.path.isfile(perp_file) or not os.path.isfile(poses_path):
-            self.log("No track perpendicular distances found — the transect "
+            self.log("No track perpendicular distances found - the transect "
                      "groups are added without their tracks.")
             return {}
 
@@ -9637,7 +9637,7 @@ class BambiDockWidget(QDockWidget):
                 "in_frame_range": int(
                     frame is not None and lo <= frame <= hi),
             })
-        self.log("No population_tracks.csv found — the track assignment was "
+        self.log("No population_tracks.csv found - the track assignment was "
                  "recomputed from the perpendicular distances.")
         return dict(by_id)
 
@@ -9718,7 +9718,7 @@ class BambiDockWidget(QDockWidget):
     def _transect_routes_from_poses(self, config: dict, suffix: str) -> list:
         """Rebuild the transects' sub-flight routes from poses + definitions.
 
-        Same shape as ``transect_routes.geojson`` — used when that file is
+        Same shape as ``transect_routes.geojson`` - used when that file is
         missing because the estimation was last run before it existed. The
         route of a transect is nothing but the camera positions of its frame
         range, so it needs no output of the estimation step.
@@ -10474,7 +10474,7 @@ class BambiDockWidget(QDockWidget):
                 self.update_status("add_layers", "🔴 No valid tracks")
                 return
 
-            # Ask for a frame range — a track is kept when its final frame
+            # Ask for a frame range - a track is kept when its final frame
             # falls inside the range (its earlier history is not considered)
             final_frames = {
                 key: max(d['frame'] for d in detections)
@@ -10550,7 +10550,7 @@ class BambiDockWidget(QDockWidget):
                     track_name = f"Track {file_basename}_{track_id}"
                 track_group = main_group.addGroup(track_name)
 
-                # Create path layer (polyline) — only when there are 2+ detections
+                # Create path layer (polyline) - only when there are 2+ detections
                 path_layer = None
                 if len(detections_sorted) >= 2:
                     path_layer = QgsVectorLayer(
@@ -12185,7 +12185,7 @@ class BambiDockWidget(QDockWidget):
     def _style_image_labels_layer(self, layer: QgsVectorLayer):
         """Apply styling and labeling to the image labels layer."""
         try:
-            # Invisible marker — label text only
+            # Invisible marker - label text only
             symbol = QgsMarkerSymbol.createSimple({
                 'name': 'circle',
                 'color': '0,0,0,0',
@@ -12505,11 +12505,11 @@ class BambiDockWidget(QDockWidget):
             save_config_entries(values, *write)
             try:
                 flights_core.save_config(target_folder, stored)
-            except Exception as exc:  # noqa: BLE001 — never lose a save
+            except Exception as exc:  # noqa: BLE001 - never lose a save
                 self.log(f"Warning: could not save configuration to the "
                          f"store: {exc}")
         else:
-            # No folder yet, so there is nowhere to put it — the QGIS project
+            # No folder yet, so there is nowhere to put it - the QGIS project
             # carries it until one is chosen.
             save_config_entries(
                 values,
@@ -12634,7 +12634,7 @@ class BambiDockWidget(QDockWidget):
         self._update_thermal_vis_curve_label()
 
         # The classifier mapping is bound through the schema's ``json`` role,
-        # so the attribute is already loaded — the table it is edited in has to
+        # so the attribute is already loaded - the table it is edited in has to
         # be brought back into step with it.
         self._apply_classification_models_to_table()
 
@@ -12665,7 +12665,7 @@ class BambiDockWidget(QDockWidget):
         """Add a single layer to the active flight's group.
 
         ``QgsProject.addMapLayer(layer)`` puts it at the root of the layer
-        tree, outside the flight it belongs to — so the layer has to be added
+        tree, outside the flight it belongs to - so the layer has to be added
         without a tree node first and then placed by hand. Use this for the
         products that are one layer and get no subgroup of their own
         (orthomosaic, ALFS, density, coverage, merged FoV).
@@ -12682,7 +12682,7 @@ class BambiDockWidget(QDockWidget):
         """Remove a layer group and every layer in it from the project.
 
         Re-adding a group would otherwise duplicate it, and its layers hold
-        their GeoPackages open — which on Windows blocks rewriting them.
+        their GeoPackages open - which on Windows blocks rewriting them.
         """
         root = self._flight_group(create=False)
         group = root.findGroup(group_name)
@@ -12749,7 +12749,7 @@ class BambiDockWidget(QDockWidget):
             gpkg_path = os.path.join(gpkg_folder, f"{safe_name}.gpkg")
 
             # If file already exists, release any QGIS layers holding it open
-            # before deleting — on Windows, open file handles cause WinError 32.
+            # before deleting - on Windows, open file handles cause WinError 32.
             exists = os.path.exists(gpkg_path)
             if exists:
                 norm_path = os.path.normcase(os.path.abspath(gpkg_path))

@@ -103,7 +103,7 @@ The steps live on two tabs, split by what they depend on:
 
 | Tab | Steps | Depends on |
 |---|---|---|
-| **Pre-Processing** | P1 Extract Frames, P2 Generate Flight Route, P3 Calculate Field of View, P4 Generate ALFS, P5 Export Frames as GeoTIFF, P6 Generate Orthomosaic | the drone poses and the DEM — **no animals involved** |
+| **Pre-Processing** | P1 Extract Frames, P2 Generate Flight Route, P3 Calculate Field of View, P4 Generate ALFS, P5 Export Frames as GeoTIFF, P6 Generate Orthomosaic | the drone poses and the DEM - **no animals involved** |
 | **Processing** | Three sections: *Detection and Tracking* (A1 Detect Animals with geo-referencing and perpendicular distances, A2 Track Animals Or Import), *Classification* (C1–C7), and *Segmentation* (S1 SAM3 with its geo-referencing) | the detections |
 
 The numbering is prefixed so a bare number cannot mean two different steps.
@@ -166,7 +166,7 @@ detections_t/    # or detections_w/ depending on camera selection
 └── detections.txt    # Bounding box detections (frame, x1, y1, x2, y2, confidence, class)
 ```
 
-Manual annotations created with the [Labelling Tool](tools.md#labelling-tool) can be added alongside the detector's output (via its **Add detections to project** button) — or can replace it entirely (via **Replace detections in project**, after confirmation) — so they flow through geo-referencing and tracking like regular detections.
+Manual annotations created with the [Labelling Tool](tools.md#labelling-tool) can be added alongside the detector's output (via its **Add detections to project** button) - or can replace it entirely (via **Replace detections in project**, after confirmation) - so they flow through geo-referencing and tracking like regular detections.
 
 Since 6.0 the two never interfere: each producer owns its own rows, so
 re-running the detector leaves manual labels untouched and vice versa. Editing
@@ -187,8 +187,8 @@ Use **→ Add Detections to QGIS** to load per-frame detection layers.
 
 ![Detection Results](../images/detection_results.png)
 
-Detections whose ray never reaches the DEM — sky above the horizon, ground
-beyond the DEM edge, a frame with no pose — are recorded with the reason rather
+Detections whose ray never reaches the DEM - sky above the horizon, ground
+beyond the DEM edge, a frame with no pose - are recorded with the reason rather
 than dropped, so every detection is accounted for afterwards.
 
 #### → Calculate Perpendicular
@@ -333,7 +333,7 @@ Works out **what** each tracked animal is: whether a frame shows it clearly, wha
 
 > **Tracks you annotated in the labelling tool are never changed by these steps.** A hand annotation outranks a model: the classifiers fill in what is missing and leave your own work alone.
 
-The reason this is worth doing in two sensors rather than one is that they fail in opposite conditions. In colour a deer under canopy blends into the ground; in thermal it is an unmistakable bright blob but the fur colour is gone, and antlers only show while they are still growing and warm. Which sensor carries the sex cue therefore changes with the season — which is why the *matched* option, reading both at once, is the default.
+The reason this is worth doing in two sensors rather than one is that they fail in opposite conditions. In colour a deer under canopy blends into the ground; in thermal it is an unmistakable bright blob but the fur colour is gone, and antlers only show while they are still growing and warm. Which sensor carries the sex cue therefore changes with the season - which is why the *matched* option, reading both at once, is the default.
 
 > **Requires a Hugging Face token.** The DINOv3 model these classifiers read is *gated*: request access at [huggingface.co/facebook/dinov3-vith16plus-pretrain-lvd1689m](https://huggingface.co/facebook/dinov3-vith16plus-pretrain-lvd1689m), then paste a read token into **Configuration → Classification** and press **Check access**. See [Installation](installation.md#classification).
 
@@ -341,11 +341,11 @@ The reason this is worth doing in two sensors rather than one is that they fail 
 
 Decides which thermal track and which RGB track are the same animal, by registering the two views onto each other and comparing where the boxes sit. Needs both cameras tracked; there is no camera selector, because the step is inherently about the pair.
 
-Confirmation is what keeps a census honest. An animal both cameras saw is a real animal; a track only one camera saw is either an animal the other sensor cannot make out, or noise. In the paper's four test flights, of 34 tracks without a partner only *one* was a real animal — admitting them all would have added six individuals that did not exist.
+Confirmation is what keeps a census honest. An animal both cameras saw is a real animal; a track only one camera saw is either an animal the other sensor cannot make out, or noise. In the paper's four test flights, of 34 tracks without a partner only *one* was a real animal - admitting them all would have added six individuals that did not exist.
 
 The run log reports how many pairs were confirmed out of how many raw tracks. If nothing matches, it names which gate rejected everything and how far the closest candidate was, so you can tell "there were no animals" from "the gate is wrong for this resolution".
 
-**→ Add Matched Pairs to QGIS** draws a line between each pair's positions, attributed with the shared frame count and median distance — the quickest way to see whether the gate is set sensibly.
+**→ Add Matched Pairs to QGIS** draws a line between each pair's positions, attributed with the shared frame count and median distance - the quickest way to see whether the gate is set sensibly.
 
 **Outputs:**
 ```
@@ -354,7 +354,7 @@ matches.gpkg    # beside project.gpkg: a match belongs to neither camera
 
 #### C2. Compute DINOv3 Embeddings
 
-Describes every tracked animal's crop as a feature vector, once, so all three classifiers can reuse it. This is the expensive step — the model is large, and on CPU it takes minutes per hundred crops.
+Describes every tracked animal's crop as a feature vector, once, so all three classifiers can reuse it. This is the expensive step - the model is large, and on CPU it takes minutes per hundred crops.
 
 Vectors are written beside the frames, one file per frame, so they are reusable outside the plugin. A re-run only embeds what is missing: an interrupted run resumes rather than starting again, and changing the crop settings starts a new set without discarding the old one.
 
@@ -370,31 +370,31 @@ bambi_t/classification.gpkg   # which detections are embedded, and by which run
 
 One step each, run in that order, because each depends on the one before:
 
-1. **Occlusion**, per frame, labels a crop *clear* or *occluded*. It is a quality filter, not a verdict about the animal, so it produces no per-animal answer — and it is **optional**.
+1. **Occlusion**, per frame, labels a crop *clear* or *occluded*. It is a quality filter, not a verdict about the animal, so it produces no per-animal answer - and it is **optional**.
 2. **Species** votes across the frames that are worth trusting, and its majority fixes what the animal is.
 3. **Sex** reuses *exactly those frames*, and picks its model from the species just assigned.
 
-Voting is what makes a noisy per-frame call safe. An antler only resolves from some angles, so many frames of a true male look female; the majority still recovers him. The margin behind every call is kept — "male, 106 of 115 frames" is what lets you judge a borderline animal — and you can re-vote at a different quorum without re-running anything.
+Voting is what makes a noisy per-frame call safe. An antler only resolves from some angles, so many frames of a true male look female; the majority still recovers him. The margin behind every call is kept - "male, 106 of 115 frames" is what lets you judge a borderline animal - and you can re-vote at a different quorum without re-running anything.
 
 An animal the classifier cannot call is **left unknown, never discarded**: it keeps its place in the census with the attribute blank.
 
-**Frames used** decides what may vote. *Visible frames only* uses the occlusion classifier when it ran, otherwise occlusion values you annotated by hand, and otherwise every frame — the run log always says which of the three it used.
+**Frames used** decides what may vote. *Visible frames only* uses the occlusion classifier when it ran, otherwise occlusion values you annotated by hand, and otherwise every frame - the run log always says which of the three it used.
 
 **C7. Apply Classifications to Tracks and Detections** copies the answers onto the animals themselves, which is what makes them visible to the exports, the map layers, the survey analytics and the labelling tool. It runs automatically unless switched off, and is safe to repeat.
 
 #### C6. Age Classification
 
-Flags juveniles by body size — the **fallback** where no classifier called the animal.
+Flags juveniles by body size - the **fallback** where no classifier called the animal.
 
-Life stage comes from whatever you chose for that species. Under the life-stage classifier's **Species…** button each species is set to **Size-based**, a model, or **Off** — one decision in one place, rather than a model choice plus a switch somewhere else. Size-based is the default, because no life-stage model has been published yet; a species set to a model is called by it in C3 and left alone here, and one set to Off is not called at all.
+Life stage comes from whatever you chose for that species. Under the life-stage classifier's **Species…** button each species is set to **Size-based**, a model, or **Off** - one decision in one place, rather than a model choice plus a switch somewhere else. Size-based is the default, because no life-stage model has been published yet; a species set to a model is called by it in C3 and left alone here, and one set to Off is not called at all.
 
-Needs no models — only tracks, and geo-referencing if the metric areas are to be used.
+Needs no models - only tracks, and geo-referencing if the metric areas are to be used.
 
 A juvenile cannot be told from an adult female by appearance at survey resolution, which is exactly why the sex classifier's second class is *female/juvenile*. Size settles it: a juvenile sits far below its cohort **and** has a clear gap to the next animal up. Both conditions are required, because in any herd someone is smallest and that alone is not evidence.
 
-Sizes are only ever compared **within one flight** — how tightly boxes fit varies between recordings, enough that the paper's own juvenile from one flight lands inside another flight's adult range. There is deliberately no absolute threshold.
+Sizes are only ever compared **within one flight** - how tightly boxes fit varies between recordings, enough that the paper's own juvenile from one flight lands inside another flight's adult range. There is deliberately no absolute threshold.
 
-Areas come from the **geo-referenced** boxes where geo-referencing has run, which makes them metric; otherwise from the camera-frame boxes, which still work because the comparison never leaves the flight. Which was used is recorded with every verdict, so metric and pixel figures are never mixed. Animals a classifier already called still count towards the cohort statistics — excluding them would shift everyone else's score — they simply do not take a verdict from it.
+Areas come from the **geo-referenced** boxes where geo-referencing has run, which makes them metric; otherwise from the camera-frame boxes, which still work because the comparison never leaves the flight. Which was used is recorded with every verdict, so metric and pixel figures are never mixed. Animals a classifier already called still count towards the cohort statistics - excluding them would shift everyone else's score - they simply do not take a verdict from it.
 
 On a flight with only a handful of animals the test declines to call one, because the candidate sits in the lower half of the distribution and so widens the very spread it is measured against. The log says so rather than reporting a bare "no juvenile found": a cautious answer and an empty one look identical otherwise.
 
@@ -433,9 +433,9 @@ segmentation_t/    # or segmentation_w/ depending on camera selection
 
 The **Survey Analytics** tab (next to *Processing*) turns geo-referenced detections, tracks, or exported frames into population-level products. The point-based tools (density heatmap, distance sampling) let you pick the **source**: *Detections* uses every geo-referenced bounding box, while *Tracks* uses one representative point per track (so an animal followed across many frames is counted once); their camera (thermal/RGB) follows the existing Detection / Tracking camera selectors. The coverage map instead combines the exported frame GeoTIFFs and has its own camera selector. Results are written to a new `analytics_t/` or `analytics_w/` folder, and the run log for these steps appears below the tabs.
 
-Each result records **what it counted** — the tracking run used, whether manual
+Each result records **what it counted** - the tracking run used, whether manual
 tracks were included, the species filter, and how many detections labelled
-`not-an-animal` were excluded — so a figure can be traced back to the rows
+`not-an-animal` were excluded - so a figure can be traced back to the rows
 behind it. Two rules apply throughout: one tracker run contributes (built-in,
 BoxMOT and TRex describe the same animals, so pooling two would double-count),
 and manual tracks are *added* to it, since labels are usually animals the
@@ -443,14 +443,14 @@ detector missed. A label created with *Import as label track* replaces the
 tracker track it came from instead of adding to it. See
 [Results, Flights and Export](results-and-export.md#what-the-analytics-counted).
 
-**Analysing several flights together.** *Distance sampling* and *Population estimation* each carry a **Projects** selector: add one or more BAMBI projects and/or keep **Add current project** ticked, and the analysis runs on every project and combines the results into a single estimate (distance sampling pools the perpendicular distances and sums the flight-route effort *L*; population estimation pools all the transects into one count/area sample set). Leaving the list empty with only *Add current project* ticked reproduces the single-project behaviour. Before running, each project is checked for its required files — if anything is missing the run is aborted and a message names what is missing in which project(s). The combined result is written to the **active project's** `analytics_*` folder, while each pooled project keeps its own per-transect CSV/GeoJSON in its own folder.
+**Analysing several flights together.** *Distance sampling* and *Population estimation* each carry a **Projects** selector: add one or more BAMBI projects and/or keep **Add current project** ticked, and the analysis runs on every project and combines the results into a single estimate (distance sampling pools the perpendicular distances and sums the flight-route effort *L*; population estimation pools all the transects into one count/area sample set). Leaving the list empty with only *Add current project* ticked reproduces the single-project behaviour. Before running, each project is checked for its required files - if anything is missing the run is aborted and a message names what is missing in which project(s). The combined result is written to the **active project's** `analytics_*` folder, while each pooled project keeps its own per-transect CSV/GeoJSON in its own folder.
 
 **+ Add Flight…** is the shortcut for flights this QGIS project already holds:
 the target folder and the DEM are taken from the flight itself, so there is
 nothing to look up. Pointing at unrelated target folders still works exactly as
 before.
 
-For distance sampling an added project is just a target folder. For population estimation the transects must be georeferenced with the right DEM origin, so its **+ Add Project…** button opens a small dialog with **two pickers** — the project's target folder and its **`dem.json`** (DEM metadata JSON). The active project reuses the DEM configured for the active flight; every *added* project supplies its own `dem.json`, and the results dialog shows each project's DEM-origin source (`config` for the active project, `provided` for added ones).
+For distance sampling an added project is just a target folder. For population estimation the transects must be georeferenced with the right DEM origin, so its **+ Add Project…** button opens a small dialog with **two pickers** - the project's target folder and its **`dem.json`** (DEM metadata JSON). The active project reuses the DEM configured for the active flight; every *added* project supplies its own `dem.json`, and the results dialog shows each project's DEM-origin source (`config` for the active project, `provided` for added ones).
 
 ### Density heatmap
 
@@ -460,12 +460,12 @@ Generates a **kernel-density estimate raster** of animal locations. Points are b
 |---------|-------------|
 | **Source** | Detections (every box) or Tracks (one point per track) |
 | **Cell (m)** | Output raster cell size in metres (default 5 m) |
-| **Bandwidth (m)** | Gaussian smoothing radius in metres (default 25 m) — larger values give smoother, broader hotspots |
+| **Bandwidth (m)** | Gaussian smoothing radius in metres (default 25 m) - larger values give smoother, broader hotspots |
 
 **Outputs:**
 ```
 analytics_t/    # or analytics_w/
-├── density_detections.tif    # or density_tracks.tif — float32 GeoTIFF (points/hectare)
+├── density_detections.tif    # or density_tracks.tif - float32 GeoTIFF (points/hectare)
 └── density_detections.json   # stats: peak/mean density, point count, parameters
 ```
 
@@ -479,7 +479,7 @@ The tool fits both a **half-normal** and a **hazard-rate** detection function by
 
 | Setting | Description |
 |---------|-------------|
-| **Source** | Detections or Tracks (tracks — one observation per animal — are usually preferred) |
+| **Source** | Detections or Tracks (tracks - one observation per animal - are usually preferred) |
 | **Truncation (m)** | Discard observations beyond this perpendicular distance. `0` = automatic (95th percentile) |
 
 On completion a results dialog summarises n, transect length, truncation, the selected model, ESW, detection probability, density and abundance with CIs, plus the model-comparison (AIC) table.
@@ -494,17 +494,17 @@ The JSON also stores the fitted detection-function curve and the distance histog
 
 ### Coverage map
 
-Combines the exported per-frame GeoTIFFs on the same grid as the **Orthomosaic**, but instead of merging image content it counts, per output pixel, how many frames contain valid (non-nodata) data at that position. The result is a single-band raster where `1` means the ground was imaged once, `N` means it was seen in `N` overlapping frames, and nodata (`0`) means it was never covered — a map of survey effort/overlap. Run **Export Frames as GeoTIFF** for the chosen camera first.
+Combines the exported per-frame GeoTIFFs on the same grid as the **Orthomosaic**, but instead of merging image content it counts, per output pixel, how many frames contain valid (non-nodata) data at that position. The result is a single-band raster where `1` means the ground was imaged once, `N` means it was seen in `N` overlapping frames, and nodata (`0`) means it was never covered - a map of survey effort/overlap. Run **Export Frames as GeoTIFF** for the chosen camera first.
 
 | Setting | Description |
 |---------|-------------|
-| **Camera** | Thermal or RGB — which exported frame GeoTIFFs to combine |
+| **Camera** | Thermal or RGB - which exported frame GeoTIFFs to combine |
 | **Cell (m)** | Output raster cell size in metres. `0` = native resolution of the exported GeoTIFFs (larger output) |
 
 **Outputs:**
 ```
 analytics_t/    # or analytics_w/
-├── coverage_map.tif    # uint16 GeoTIFF — overlapping frame count per pixel
+├── coverage_map.tif    # uint16 GeoTIFF - overlapping frame count per pixel
 └── coverage_map.json   # stats: frame count, max/mean overlap, covered & multi-covered area (ha)
 ```
 
@@ -556,7 +556,7 @@ Use **→ Add Coverage Map to QGIS** to load the raster with a graduated colour 
 Each stage writes to a camera-specific subfolder (`_t` for thermal, `_w` for RGB), so thermal and RGB results coexist without overwriting each other.
 
 Since 6.0 the results themselves live in GeoPackages, with the text files below
-written alongside for compatibility — see
+written alongside for compatibility - see
 [Results, Flights and Export](results-and-export.md):
 
 ```

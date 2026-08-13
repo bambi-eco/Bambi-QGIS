@@ -26,7 +26,7 @@ The two selected points for matching are geo-referenced onto the DEM and visuali
 
 Click **Auto-Solve Z-Offset + Yaw** to let the wizard compute the correction automatically:
 
-1. **Analytic solve**: perfect overlap requires the common ground point to lie on the intersection of both circles, reached with the *same* yaw delta from both cameras. Using the flat-terrain relation `r(Δtz) = r + (r/h)·Δtz` (with `h` the camera height above the ground point), the wizard finds the z-translations where both circle-intersection branches yield equal yaw deltas — a fast 1-D root search that needs no ray-casting
+1. **Analytic solve**: perfect overlap requires the common ground point to lie on the intersection of both circles, reached with the *same* yaw delta from both cameras. Using the flat-terrain relation `r(Δtz) = r + (r/h)·Δtz` (with `h` the camera height above the ground point), the wizard finds the z-translations where both circle-intersection branches yield equal yaw deltas - a fast 1-D root search that needs no ray-casting
 2. **Gauss-Newton refinement**: the analytic solution is refined with true DEM ray-casts (numeric Jacobian, backtracking line search) until the two geo-referenced points coincide within 2 cm, absorbing terrain relief
 
 If the analytic solver cannot set up the geometry (e.g. a ray misses the DEM), the wizard falls back to the legacy ±1 m z-step probe followed by a 360-candidate yaw sweep; **Max steps** limits that fallback probe.

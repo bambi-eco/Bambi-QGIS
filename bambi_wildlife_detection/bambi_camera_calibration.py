@@ -24,7 +24,7 @@ from typing import List, Optional, Tuple
 
 try:
     import cv2
-    import numpy as np  # noqa: F401 — used in type annotations
+    import numpy as np  # noqa: F401 - used in type annotations
     _HAS_CV2 = True
 except ImportError:
     _HAS_CV2 = False
@@ -47,7 +47,7 @@ from qgis.PyQt.QtGui import (
 
 # Constants and image/intrinsics helpers moved to core.camera_calibration;
 # re-exported under their old names.
-from .core.camera_calibration import (  # noqa: F401 — re-exported API
+from .core.camera_calibration import (  # noqa: F401 - re-exported API
     _DEFAULT_SFM_FRAMES,
     _IMAGE_EXTS,
     _MIN_SFM_IMAGES,
@@ -469,10 +469,10 @@ class CameraCalibrationWizard(QDialog):
         mode_grp = QGroupBox("Calibration Mode")
         mode_lay = QVBoxLayout(mode_grp)
         self._rb_single = QRadioButton(
-            "Single Camera — SfM intrinsic calibration"
+            "Single Camera - SfM intrinsic calibration"
         )
         self._rb_stereo = QRadioButton(
-            "Stereo (RGB + Thermal) — manual point correspondences + optimisation"
+            "Stereo (RGB + Thermal) - manual point correspondences + optimisation"
         )
         self._rb_single.setChecked(True)
         self._rb_single.toggled.connect(self._on_mode_toggled)
@@ -586,7 +586,7 @@ class CameraCalibrationWizard(QDialog):
         self._single_video_widget = QWidget()
         video_lay = QVBoxLayout(self._single_video_widget)
         video_lay.setContentsMargins(0, 0, 0, 0)
-        video_lay.addWidget(QLabel("Video file(s) — frames are extracted evenly:"))
+        video_lay.addWidget(QLabel("Video file(s) - frames are extracted evenly:"))
         self._single_video_list = QListWidget()
         self._single_video_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._single_video_list.setMaximumHeight(110)
@@ -633,7 +633,7 @@ class CameraCalibrationWizard(QDialog):
         outer_lay.addWidget(sep_s)
 
         fov_note_s = QLabel(
-            "Diagonal FoV from specs (optional) — provides pycolmap with a focal-length "
+            "Diagonal FoV from specs (optional) - provides pycolmap with a focal-length "
             "prior so SfM starts from a realistic estimate. DJI reports diagonal FoV."
         )
         fov_note_s.setWordWrap(True)
@@ -781,7 +781,7 @@ class CameraCalibrationWizard(QDialog):
         outer_lay.addWidget(sep)
 
         outer_lay.addWidget(QLabel(
-            "Initial calibration (optional — estimated from image size if not provided):"
+            "Initial calibration (optional - estimated from image size if not provided):"
         ))
 
         rgb_calib_row = QHBoxLayout()
@@ -817,7 +817,7 @@ class CameraCalibrationWizard(QDialog):
         outer_lay.addWidget(sep2)
 
         fov_note = QLabel(
-            "Diagonal FoV from specs (optional) — used as initial focal-length "
+            "Diagonal FoV from specs (optional) - used as initial focal-length "
             "estimate when no calibration file is loaded. DJI reports diagonal FoV; "
             "it is converted to per-axis focal length automatically."
         )
@@ -922,7 +922,7 @@ class CameraCalibrationWizard(QDialog):
         rgb_lay = QVBoxLayout(rgb_widget)
         rgb_lay.setContentsMargins(0, 0, 0, 0)
         rgb_hdr = QLabel(
-            "RGB / Wide" + (" — undistorted" if self._rgb_calib_data else "")
+            "RGB / Wide" + (" - undistorted" if self._rgb_calib_data else "")
         )
         rgb_hdr.setStyleSheet("color: #88ff88;" if self._rgb_calib_data else "")
         rgb_lay.addWidget(rgb_hdr)
@@ -935,7 +935,7 @@ class CameraCalibrationWizard(QDialog):
         th_lay = QVBoxLayout(th_widget)
         th_lay.setContentsMargins(0, 0, 0, 0)
         th_hdr = QLabel(
-            "Thermal" + (" — undistorted" if self._th_calib_data else "")
+            "Thermal" + (" - undistorted" if self._th_calib_data else "")
         )
         th_hdr.setStyleSheet("color: #88ff88;" if self._th_calib_data else "")
         th_lay.addWidget(th_hdr)
@@ -1036,7 +1036,7 @@ class CameraCalibrationWizard(QDialog):
         self._result_metrics_lbl.setWordWrap(True)
         lay.addWidget(self._result_metrics_lbl)
 
-        # Visual preview — single: distorted vs undistorted; stereo: edge overlay
+        # Visual preview - single: distorted vs undistorted; stereo: edge overlay
         self._result_preview_grp = QGroupBox("Visual Preview")
         preview_lay = QVBoxLayout(self._result_preview_grp)
         preview_lay.setSpacing(4)
@@ -1073,7 +1073,7 @@ class CameraCalibrationWizard(QDialog):
         stereo_preview_lay = QVBoxLayout(self._preview_stereo_widget)
         stereo_preview_lay.setContentsMargins(0, 0, 0, 0)
         lbl_overlay_title = QLabel(
-            "Edge overlay — RGB Canny edges (green) on undistorted thermal"
+            "Edge overlay - RGB Canny edges (green) on undistorted thermal"
         )
         lbl_overlay_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._preview_overlay_lbl = QLabel()
@@ -1108,7 +1108,7 @@ class CameraCalibrationWizard(QDialog):
         self._result_text.setFontFamily("Courier New")
         lay.addWidget(self._result_text, 1)
 
-        # Save row(s) — single mode uses one path, stereo uses two
+        # Save row(s) - single mode uses one path, stereo uses two
         save_grp = QGroupBox("Save Calibration")
         save_grp_lay = QVBoxLayout(save_grp)
 
@@ -1205,15 +1205,15 @@ class CameraCalibrationWizard(QDialog):
         idx = self._pages.currentIndex()
         if self._mode == "single":
             labels = [
-                "Step 1 / 2  —  Setup",
-                "Step 2 / 2  —  SfM Calibration",
-                "Step 2 / 2  —  Results",
+                "Step 1 / 2  -  Setup",
+                "Step 2 / 2  -  SfM Calibration",
+                "Step 2 / 2  -  Results",
             ]
         else:
             labels = [
-                "Step 1 / 3  —  Setup",
-                "Step 2 / 3  —  Point Annotation & Calibration",
-                "Step 3 / 3  —  Results",
+                "Step 1 / 3  -  Setup",
+                "Step 2 / 3  -  Point Annotation & Calibration",
+                "Step 3 / 3  -  Results",
             ]
         self._step_lbl.setText(labels[min(idx, len(labels) - 1)])
 
@@ -1234,7 +1234,7 @@ class CameraCalibrationWizard(QDialog):
     def _show_input_files_info(self) -> None:
         """Show an info popup explaining calibration data collection."""
         dlg = QDialog(self)
-        dlg.setWindowTitle("Input Files — Calibration Guide")
+        dlg.setWindowTitle("Input Files - Calibration Guide")
         dlg.setMinimumWidth(520)
         lay = QVBoxLayout(dlg)
         lay.setSpacing(10)
@@ -1286,7 +1286,7 @@ class CameraCalibrationWizard(QDialog):
         if self._rb_single.isChecked():
             title = "Single Camera Calibration"
             text = (
-                "<b>Single Camera — Structure from Motion (SfM)</b><br><br>"
+                "<b>Single Camera - Structure from Motion (SfM)</b><br><br>"
                 "Estimates intrinsic camera parameters (focal length, principal point, "
                 "and distortion coefficients) from a set of overlapping images or video "
                 "frames of a static scene using pycolmap's incremental SfM pipeline.<br><br>"
@@ -1302,7 +1302,7 @@ class CameraCalibrationWizard(QDialog):
         else:
             title = "Stereo Calibration (RGB + Thermal)"
             text = (
-                "<b>Stereo — Manual Point Correspondences + Nelder-Mead Optimisation"
+                "<b>Stereo - Manual Point Correspondences + Nelder-Mead Optimisation"
                 "</b><br><br>"
                 "Calibrates a paired RGB and thermal camera system. You manually place "
                 "corresponding point pairs on the same ground features in both images. "
@@ -1317,7 +1317,7 @@ class CameraCalibrationWizard(QDialog):
                 "<b>Algorithm:</b> Initial homography (RANSAC) followed by Nelder-Mead "
                 "optimisation over thermal fx/fy/cx/cy and 5 distortion coefficients, "
                 "minimising reprojection error into RGB space.<br><br>"
-                "<b>Output:</b> Two separate calibration JSON files — one for the "
+                "<b>Output:</b> Two separate calibration JSON files - one for the "
                 "thermal camera and one for the RGB camera."
             )
         msg = QMessageBox(self)
@@ -1382,7 +1382,7 @@ class CameraCalibrationWizard(QDialog):
         self._rgb_video_list.clear()
         self._th_video_list.clear()
 
-    # ---- Single camera — photo mode ----------------------------------------
+    # ---- Single camera - photo mode ----------------------------------------
 
     def _single_add_photos(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
@@ -1401,7 +1401,7 @@ class CameraCalibrationWizard(QDialog):
             if row < len(self._single_paths):
                 self._single_paths.pop(row)
 
-    # ---- Single camera — video mode ----------------------------------------
+    # ---- Single camera - video mode ----------------------------------------
 
     def _on_sfm_central_only_toggled(self, checked: bool) -> None:
         self._sfm_frames_lbl.setEnabled(not checked)
@@ -1424,7 +1424,7 @@ class CameraCalibrationWizard(QDialog):
             if row < len(self._single_video_paths):
                 self._single_video_paths.pop(row)
 
-    # ---- Stereo — photo mode -----------------------------------------------
+    # ---- Stereo - photo mode -----------------------------------------------
 
     def _stereo_add_photos(self, side: str) -> None:
         lst = self._rgb_photo_list if side == "rgb" else self._th_photo_list
@@ -1448,7 +1448,7 @@ class CameraCalibrationWizard(QDialog):
             if row < len(paths_ref):
                 paths_ref.pop(row)
 
-    # ---- Stereo — video mode -----------------------------------------------
+    # ---- Stereo - video mode -----------------------------------------------
 
     def _stereo_add_videos(self, side: str) -> None:
         label = "RGB" if side == "rgb" else "Thermal"
@@ -1475,7 +1475,7 @@ class CameraCalibrationWizard(QDialog):
     def _load_initial_calib(self, side: str) -> None:
         """Load a per-camera initial calibration JSON.
 
-        Accepts flat format (``{mtx, dist, …}`` — output of this tool) or the
+        Accepts flat format (``{mtx, dist, …}`` - output of this tool) or the
         legacy merged format (``{Wide: {…}, Thermal: {…}}``), extracting the
         relevant camera section automatically.
         """
@@ -1787,7 +1787,7 @@ class CameraCalibrationWizard(QDialog):
             if ans != QMessageBox.StandardButton.Yes:
                 return
 
-        # Warn if filenames differ (informational only — load by position)
+        # Warn if filenames differ (informational only - load by position)
         mismatches = []
         for i in range(min(n_file, n_annot)):
             fp = file_pairs[i]
@@ -1846,7 +1846,7 @@ class CameraCalibrationWizard(QDialog):
         n_th = len(pa["th_pts"])
         n_complete = min(n_rgb, n_th)
 
-        # When counts are equal both panels are open — the user may start the
+        # When counts are equal both panels are open - the user may start the
         # next pair from either side.  Once one side is ahead the lagging side
         # is the only one that accepts clicks until the pair is complete.
         self._rgb_img_lbl.set_accepting(n_rgb <= n_th)
@@ -1950,7 +1950,7 @@ class CameraCalibrationWizard(QDialog):
                 self._run_calib_btn.setEnabled(True)
                 return
 
-            # Build initial calibration — loaded file > FoV spec > image-size heuristic
+            # Build initial calibration - loaded file > FoV spec > image-size heuristic
             if self._rgb_calib_data:
                 rgb_init = self._rgb_calib_data
             else:
@@ -2118,7 +2118,7 @@ class CameraCalibrationWizard(QDialog):
             txt = (
                 _fmt_cam("Thermal (optimised)", th) +  # noqa: W503, W504
                 "\n" +  # noqa: W503, W504
-                _fmt_cam("Wide / RGB (reference — unchanged)", wi) +  # noqa: W503, W504
+                _fmt_cam("Wide / RGB (reference - unchanged)", wi) +  # noqa: W503, W504
                 "\nJSON preview:\n" +  # noqa: W503, W504
                 json.dumps({"Thermal": th, "Wide": wi}, indent=2)
             )
@@ -2255,10 +2255,10 @@ class CameraCalibrationWizard(QDialog):
 
             subtitle = (
                 f"SIFT keypoints aggregated across {len(self._single_paths)} image(s) "
-                f"— {total_kp:,} total detections"
+                f"- {total_kp:,} total detections"
             )
 
-        else:  # stereo — use annotation correspondence points
+        else:  # stereo - use annotation correspondence points
             # Determine image dimensions from the first RGB image
             img_w = img_h = 0
             if self._rgb_paths:
@@ -2286,7 +2286,7 @@ class CameraCalibrationWizard(QDialog):
             n_pairs = len(self._pairs_annot)
             subtitle = (
                 f"RGB correspondence points across {n_pairs} image pair(s) "
-                f"— {total_pts} total points"
+                f"- {total_pts} total points"
             )
 
         self._heatmap_grp.setVisible(True)
@@ -2358,7 +2358,7 @@ class CameraCalibrationWizard(QDialog):
         label.setPixmap(pm.scaled(w, h, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
 
     # ------------------------------------------------------------------
-    # Write helpers — each saves one file and notifies on success/error
+    # Write helpers - each saves one file and notifies on success/error
     # ------------------------------------------------------------------
 
     def _do_write_single(self, path: str) -> bool:

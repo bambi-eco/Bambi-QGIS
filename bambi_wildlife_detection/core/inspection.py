@@ -175,7 +175,7 @@ def fill_interpolated_boxes(frames: List[dict]) -> None:
         )
 
         if j_before is None and j_after is None:
-            continue  # no reference boxes anywhere — leave empty
+            continue  # no reference boxes anywhere - leave empty
 
         if j_before is not None and j_after is not None:
             b1 = frames[j_before]["boxes_green"][0]
@@ -187,7 +187,7 @@ def fill_interpolated_boxes(frames: List[dict]) -> None:
             )
             alpha = (fi - fi1) / (fi2 - fi1) if fi2 != fi1 else 0.5
         else:
-            # Only one side available — copy the nearest box unchanged
+            # Only one side available - copy the nearest box unchanged
             src = frames[j_before if j_before is not None else j_after]
             b1 = b2 = src["boxes_green"][0]
             alpha = 0.0
@@ -267,7 +267,7 @@ def project_map_point(
     Replicates the exact camera construction and projection maths of
     :class:`~.bambi_box_projector.BoxProjectionWorker` so the result is
     pixel-identical to transferring a geo-referenced bounding box between
-    modalities — with a single point instead of eight box corners.
+    modalities - with a single point instead of eight box corners.
 
     *sample_elevation(xy, origin, dem_json_path)* is an optional fallback
     used when the mesh ray-cast fails (the click tool injects a
@@ -281,7 +281,7 @@ def project_map_point(
     from .corrections import correction_for_frame, read_correction
 
     try:
-        from pyrr import Vector3, Quaternion  # noqa: F401 — availability probe
+        from pyrr import Vector3, Quaternion  # noqa: F401 - availability probe
         from alfspy.core.rendering import Camera  # noqa: F401
     except ImportError:
         return None
@@ -372,7 +372,7 @@ def project_map_point(
 
         # ---- Image dimensions (same approach as BoxProjectionWorker) -
         # Read from the first frame in the poses file, not from the
-        # specific image_path — matches BoxProjectionWorker exactly.
+        # specific image_path - matches BoxProjectionWorker exactly.
         frames_dir = os.path.join(target_folder, f"frames_{modality}")
         img_width, img_height = 640, 512  # fallback
         if images:

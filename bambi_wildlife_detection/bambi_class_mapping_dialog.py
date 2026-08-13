@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Detector class mapping — raw model classes onto the project's species.
+"""Detector class mapping - raw model classes onto the project's species.
 
 A detector reports whatever classes its weights were trained on: `0`, `1`, `2`,
 or names of its own. The project has its own species list, and the two are not
-the same thing — which is why detections store the **raw class** alongside the
+the same thing - which is why detections store the **raw class** alongside the
 resolved species (EXCHANGE_FORMAT_PLAN.md §3.1).
 
 This dialog is where the two are connected. It belongs with the model, not with
@@ -43,7 +43,7 @@ class BambiClassMappingDialog(QDialog):
             "Map the classes your detector reports onto this project's "
             "species. Anything left unmapped counts as 'animal', so a "
             "single-class detector needs nothing here.\n\n"
-            "Changing a mapping re-reads the detections already stored — the "
+            "Changing a mapping re-reads the detections already stored - the "
             "detector does not have to run again."
         )
         info.setWordWrap(True)
@@ -122,7 +122,7 @@ class BambiClassMappingDialog(QDialog):
         for source in self.editor.sources():
             label = source["kind"]
             if source["model"]:
-                label += f" — {source['model']}"
+                label += f" - {source['model']}"
             self.source_combo.addItem(label, source["source_id"])
         self.source_combo.blockSignals(False)
         self._reload()

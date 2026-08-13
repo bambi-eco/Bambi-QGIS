@@ -2,7 +2,7 @@
 """Point selection for the survey analytics (EXCHANGE_FORMAT_PLAN.md §8.2).
 
 Density, coverage, distance sampling and population estimation all start from
-the same question — *which animals count?* — and 5.x answered it implicitly by
+the same question - *which animals count?* - and 5.x answered it implicitly by
 reading whatever files happened to be there. That is unauditable: a result gave
 no indication of what went into it.
 
@@ -10,12 +10,12 @@ This module makes the answer explicit and records it. Three rules apply to
 every analytic:
 
 * **``not-an-animal`` never counts.** A labelled false positive in a density
-  estimate biases it upward. ``unknown`` and ``animal`` *do* count — the
+  estimate biases it upward. ``unknown`` and ``animal`` *do* count - the
   distinction is determinacy, not presence.
 * **One tracker run, plus the manual run.** Builtin, boxmot and TRex are
   alternative descriptions of the same animals, so pooling two double-counts.
-  The labelling tool's run is additive — its tracks are usually animals the
-  detector missed — except where a label was imported from a tracker track, in
+  The labelling tool's run is additive - its tracks are usually animals the
+  detector missed - except where a label was imported from a tracker track, in
   which case the original is superseded.
 * **The filter travels with the result.** Every analytic records the runs,
   species and exclusions it used, so a number can be traced back to the rows
@@ -62,7 +62,7 @@ def load_rows(target_folder: str, modality: str,
     """Geo-referenced detections that count, plus the filter that produced them.
 
     Returns ``(rows, provenance)``. *provenance* is a plain dict meant to be
-    written into the result document — it is what makes a number auditable.
+    written into the result document - it is what makes a number auditable.
     """
     det_path = store.stage_path(target_folder, store.DETECTIONS, modality)
     if not os.path.isfile(det_path):
@@ -122,7 +122,7 @@ def load_points(target_folder: str, modality: str, source: str = DETECTIONS,
     """World-coordinate points for an analytic, plus its provenance.
 
     ``source='detections'`` gives one point per detection; ``source='tracks'``
-    gives one per track — the centroid of its detections — so an animal
+    gives one per track - the centroid of its detections - so an animal
     followed across two hundred frames counts once.
     """
     rows, provenance = load_rows(
@@ -192,7 +192,7 @@ def resolve_species_names(target_folder: str,
     """Translate species *names* into this project's ids.
 
     Returns ``(ids, missing)``. Ids are assigned per project (§3.1), so
-    project A's species 12 is unrelated to project B's — anything pooling
+    project A's species 12 is unrelated to project B's - anything pooling
     several projects must match on the name and translate, never carry an id
     across. ``missing`` names are reported rather than silently dropped.
     """
@@ -213,8 +213,8 @@ def resolve_species_names(target_folder: str,
 def compare_vocabularies(target_folders: Sequence[str]) -> dict:
     """Report how the species vocabularies of several projects differ.
 
-    Pooling projects whose taxonomies disagree is legitimate — one survey may
-    simply not have seen wild boar — but it has to be visible, because a
+    Pooling projects whose taxonomies disagree is legitimate - one survey may
+    simply not have seen wild boar - but it has to be visible, because a
     species missing from one project looks identical to a species that was
     present and never detected.
     """

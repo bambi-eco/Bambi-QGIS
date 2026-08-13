@@ -10,7 +10,7 @@ def fit_to_screen(widget, width: int, height: int):
 
     Dialogs whose preferred size was chosen on a large monitor otherwise open
     taller than a laptop screen, with their buttons below the desktop edge.
-    Widgets that must survive the cap need their content in a QScrollArea —
+    Widgets that must survive the cap need their content in a QScrollArea -
     resize() cannot shrink a window below its layout's minimum height.
     """
     screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()

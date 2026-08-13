@@ -60,7 +60,7 @@ from qgis.core import (  # noqa: E402
 )
 
 
-from .core.flight_plan_io import (  # noqa: E402,F401 — re-exported API
+from .core.flight_plan_io import (  # noqa: E402,F401 - re-exported API
     _DEFAULTS,
     _FlightPlanWorker,
     _SETTINGS_PREFIX,
@@ -373,7 +373,7 @@ class FlightPlannerDialog(QDialog):
         fr = QHBoxLayout()
         fr.setContentsMargins(0, 0, 0, 0)
         file_edit = QLineEdit()
-        file_edit.setPlaceholderText("— or select a file (.shp / .kml / .geojson) —")
+        file_edit.setPlaceholderText("- or select a file (.shp / .kml / .geojson) -")
         browse_btn = QPushButton("Browse…")
         browse_btn.clicked.connect(lambda: self._browse_geo_file(file_edit))
         fr.addWidget(QLabel("File:"))
@@ -444,7 +444,7 @@ class FlightPlannerDialog(QDialog):
         if os.path.exists(uri_path):
             return uri_path
 
-        # Memory or unsupported provider — export to temp GeoJSON
+        # Memory or unsupported provider - export to temp GeoJSON
         fd, tmp = tempfile.mkstemp(suffix=".geojson")
         os.close(fd)
         options = QgsVectorFileWriter.SaveVectorOptions()

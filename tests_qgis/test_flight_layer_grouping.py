@@ -4,7 +4,7 @@
 Layers are grouped per flight so it is obvious which outputs belong together,
 and so renaming or removing a flight takes its layers with it. A layer added
 with ``QgsProject.addMapLayer(layer)`` lands at the root of the layer tree
-instead — outside the flight — which is easy to write and invisible until
+instead - outside the flight - which is easy to write and invisible until
 someone looks at the tree with two flights loaded.
 
 Run via the QGIS image only::
