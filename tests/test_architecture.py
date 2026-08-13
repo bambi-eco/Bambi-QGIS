@@ -94,3 +94,39 @@ def test_core_module_importable_under_stub(module_name):
     # at import time.
     module = importlib.import_module(f"bambi_wildlife_detection.core.{module_name}")
     assert module is not None
+
+
+PLUGIN_DIR = CORE_DIR.parent
+
+
+def test_plugin_never_imports_moderngl():
+    """The rasteriser is alfspy's dependency, not the plugin's.
+
+    Naming ModernGL here would tie the plugin to one alfspy backend and break
+    the moment it is swapped for the PyTorch build. Contexts come from
+    ``core.render_context`` instead — see ``tests/test_render_context.py``.
+    """
+    offenders = []
+    for path in PLUGIN_DIR.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for name, _node in _imported_names(ast.walk(tree)):
+            if name == "moderngl" or name.startswith("moderngl."):
+                offenders.append(str(path.relative_to(PLUGIN_DIR)))
+    assert not offenders, (
+        f"{sorted(set(offenders))} import moderngl directly; use "
+        "core.render_context.make_render_context() instead."
+    )
+
+
+def test_plugin_does_not_call_the_backend_specific_factory():
+    """``make_mgl_context`` exists only on the ModernGL build of alfspy."""
+    offenders = [
+        str(path.relative_to(PLUGIN_DIR))
+        for path in PLUGIN_DIR.rglob("*.py")
+        if path.name != "render_context.py"
+        and "make_mgl_context" in path.read_text(encoding="utf-8")
+    ]
+    assert not offenders, (
+        f"{sorted(offenders)} call make_mgl_context(); use "
+        "core.render_context.make_render_context() instead."
+    )

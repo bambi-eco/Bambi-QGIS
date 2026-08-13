@@ -20,7 +20,7 @@ import datetime
 
 from qgis.PyQt.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QGroupBox, QTextEdit, QScrollArea, QWidget, QFrame,
+    QGroupBox, QTextEdit, QScrollArea, QWidget, QFrame, QCheckBox,
 )
 from qgis.PyQt.QtCore import Qt, QTimer
 from qgis.PyQt.QtGui import QFont
@@ -28,7 +28,11 @@ from qgis.PyQt.QtGui import QFont
 
 from .core.hf_access import DEFAULT_BACKBONE as _DEFAULT_BACKBONE
 from .core.dependency_ops import (  # noqa: F401 — re-exported API
+    ALFS_BACKENDS,
     ALFS_PY_TAG,
+    ALFS_TORCH_TAG,
+    BAMBI_DETECTION_TAG,
+    alfs_backend_spec,
     _DJI_SDK_URL,
     _VERSION_RANGES,
     _find_python,
@@ -94,6 +98,26 @@ class DependencyManagerDialog(QDialog):
         vbox.setSpacing(10)
 
         # ---- Required dependencies ----
+        # The backend checkbox starts from what is actually installed rather
+        # than a stored preference, so it can never disagree with reality.
+        self._torch_backend_check = QCheckBox(
+            'Use the PyTorch backend (experimental) — renders on the GPU when '
+            'CUDA is available and needs no OpenGL driver, but is slower on CPU'
+        )
+        self._torch_backend_check.setChecked(
+            _get_version_status('AlfsTorch', self._plugins_dir)[1] != 'not_found'
+        )
+        self._torch_backend_check.setToolTip(
+            'Off: install alfs_py, which rasterises through ModernGL.\n'
+            'On: install alfs_pytorch, which rasterises through PyTorch.\n\n'
+            'Both provide the same "alfspy" package and cannot be installed '
+            'side by side, so switching removes the other one. Their results '
+            'agree to well under one 8-bit level.'
+        )
+        # ``toggled`` rather than ``stateChanged``: stable across Qt5 and Qt6,
+        # where the latter is deprecated in favour of ``checkStateChanged``.
+        self._torch_backend_check.toggled.connect(self._on_backend_toggled)
+
         vbox.addWidget(self._build_group('Required Dependencies', [
             dict(
                 key='alfs_py',
@@ -101,6 +125,7 @@ class DependencyManagerDialog(QDialog):
                 desc='Airborne light-field sampling framework for the actual geo-referencing processing.',
                 callback=self._install_alfs_py,
                 dist_name='AlfsPy',
+                extra_widget=self._torch_backend_check,
             ),
             dict(
                 key='bambi_detection',
@@ -222,6 +247,12 @@ class DependencyManagerDialog(QDialog):
         scroll.setWidget(content)
         root.addWidget(scroll, 1)
 
+        # _make_row registered the row against AlfsPy; if the torch backend is
+        # the one installed, re-point it so the status reflects reality.
+        if self._torch_backend_check.isChecked():
+            self._dist_names['alfs_py'] = ALFS_BACKENDS['torch']['dist']
+            self._refresh_single_status('alfs_py')
+
         # ---- Restart notice ----
         restart_label = QLabel(
             '<b>After pressing any install button, we recommend to restart QGIS '
@@ -257,12 +288,14 @@ class DependencyManagerDialog(QDialog):
         return group
 
     def _make_row(self, key, label, desc, callback,
-                  dist_name=None, dist_names=None, btn_label='Install'):
+                  dist_name=None, dist_names=None, btn_label='Install',
+                  extra_widget=None):
         """Build one dependency row.
 
         Pass ``dist_name`` (str) for a single package, or ``dist_names``
         (list of ``(display_label, dist_name)`` pairs) to show stacked
-        per-package statuses (e.g. torch + torchvision).
+        per-package statuses (e.g. torch + torchvision).  ``extra_widget`` is
+        appended under the description (e.g. the backend selector).
         """
         row = QHBoxLayout()
         row.setSpacing(8)
@@ -283,6 +316,9 @@ class DependencyManagerDialog(QDialog):
         text_col.setSpacing(2)
         text_col.addWidget(name_lbl)
         text_col.addWidget(desc_lbl)
+        if extra_widget is not None:
+            extra_widget.setStyleSheet('color:#555;')
+            text_col.addWidget(extra_widget)
 
         if dist_names:
             # ---- multi-package stacked status ----
@@ -472,20 +508,63 @@ class DependencyManagerDialog(QDialog):
     # ------------------------------------------------------------------
 
     def _install_bambi_detection(self):
-        self._log_line('─── BAMBI Detection Framework ───')
+        self._log_line(f'─── BAMBI Detection Framework {BAMBI_DETECTION_TAG} ───')
         self._install_github_pkg(
             'bambi_detection', 'bambi_detection',
-            'https://github.com/bambi-eco/bambi_detection/archive/refs/heads/main.zip',
-            'git+https://github.com/bambi-eco/bambi_detection.git',
+            'https://github.com/bambi-eco/bambi_detection/archive/refs/tags/'
+            f'{BAMBI_DETECTION_TAG}.zip',
+            'git+https://github.com/bambi-eco/bambi_detection.git@'
+            f'{BAMBI_DETECTION_TAG}',
+        )
+
+    def _selected_alfs_spec(self):
+        """The alfspy release the backend checkbox currently selects."""
+        return alfs_backend_spec(self._torch_backend_check.isChecked())
+
+    def _refresh_single_status(self, key):
+        """Re-read the installed version for a single-package row."""
+        lbl = self._status_labels.get(key)
+        dist_name = self._dist_names.get(key)
+        if lbl is None or isinstance(lbl, list) or not dist_name:
+            return
+        ver, status = _get_version_status(dist_name, self._plugins_dir)
+        self._apply_status_label(lbl, dist_name, ver, status)
+
+    def _on_backend_toggled(self):
+        """Point the status label at the selected backend's distribution."""
+        spec = self._selected_alfs_spec()
+        self._dist_names['alfs_py'] = spec['dist']
+        self._refresh_single_status('alfs_py')
+        self._log_line(
+            f"Backend set to {spec['label']} — press Install to switch to "
+            f"{spec['repo']} {spec['tag']}."
         )
 
     def _install_alfs_py(self):
-        self._log_line(f'─── ALFS-PY Framework {ALFS_PY_TAG} ───')
-        self._install_github_pkg(
-            'alfs_py', 'alfs_py',
-            f'https://github.com/bambi-eco/alfs_py/archive/refs/tags/{ALFS_PY_TAG}.zip',
-            f'git+https://github.com/bambi-eco/alfs_py.git@{ALFS_PY_TAG}',
-        )
+        spec = self._selected_alfs_spec()
+        self._log_line(f"─── ALFS Framework ({spec['label']}) "
+                       f"{spec['repo']} {spec['tag']} ───")
+
+        def _do(log_fn):
+            # Both backends install a package called ``alfspy``; leaving the
+            # other distribution in place would give two dists owning the same
+            # import path, and pip would not clean it up on its own.
+            log_fn(f"Removing {spec['other_dist']} if present "
+                   "(both provide the 'alfspy' package) …")
+            _run_pip(['uninstall', '-y', spec['other_dist']], log_fn)
+
+            git_ver = _git_available()
+            if git_ver:
+                log_fn(f'{git_ver} detected')
+                log_fn(f"Source: {spec['git_url']}")
+                _run_pip(['install', '--force-reinstall', spec['git_url']], log_fn)
+            else:
+                log_fn('git not found on PATH – using ZIP download fallback')
+                log_fn(f"Source: {spec['zip_url']}")
+                _install_github_zip(spec['zip_url'], 'alfs_py',
+                                    self._plugins_dir, log_fn)
+
+        self._start_worker('alfs_py', _do)
 
     def _install_pycolmap(self):
         self._log_line('─── pycolmap 4.0.3 ───')

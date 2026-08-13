@@ -197,7 +197,7 @@ class TestGeoreference:
 
 
 # ---------------------------------------------------------------------------
-# GeoTIFF export, orthomosaic, ALFS (headless OpenGL rendering)
+# GeoTIFF export, orthomosaic, ALFS (headless rendering via alfspy)
 # ---------------------------------------------------------------------------
 
 class TestGeotiffExport:

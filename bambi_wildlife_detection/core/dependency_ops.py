@@ -37,20 +37,63 @@ _BUNDLED_PIN_PACKAGES = ('numpy', 'scipy')
 # Cache for _detect_bundled_versions: None = not probed yet, dict = result.
 _bundled_versions_cache = None
 
-#: alfs_py release the dependency manager installs.  Pinned to a tag rather than
+#: GitHub releases the dependency manager installs.  Pinned to tags rather than
 #: ``main`` so an install is reproducible and cannot silently pick up a breaking
-#: change to the pose→camera convention.  Kept in step with the lower bound of
-#: ``_VERSION_RANGES['AlfsPy']`` below, which is what flags an out-of-date
-#: install (``tests/test_alfspy_pin.py``).
+#: change to the pose→camera convention.  Each is kept in step with the lower
+#: bound of its ``_VERSION_RANGES`` entry below, which is what flags an
+#: out-of-date install (``tests/test_alfspy_pin.py``).
 ALFS_PY_TAG = 'v2.1.0'
+ALFS_TORCH_TAG = 'v1.1.0'
+BAMBI_DETECTION_TAG = 'v0.6.0'
+
+#: The two interchangeable alfspy backends.  Both install a package called
+#: ``alfspy`` and so cannot coexist — selecting one uninstalls the other.
+#: ``alfs_py`` rasterises through ModernGL, ``alfs_pytorch`` through PyTorch
+#: tensors (and picks up CUDA on its own).  They agree to well under one 8-bit
+#: level on rendered output and to ~1e-11 m on geo-referencing.
+ALFS_BACKENDS = {
+    'moderngl': {
+        'dist': 'AlfsPy',
+        'repo': 'alfs_py',
+        'tag': ALFS_PY_TAG,
+        'label': 'ModernGL',
+    },
+    'torch': {
+        'dist': 'AlfsTorch',
+        'repo': 'alfs_pytorch',
+        'tag': ALFS_TORCH_TAG,
+        'label': 'PyTorch',
+    },
+}
+
+
+def alfs_backend_spec(use_torch: bool) -> dict:
+    """Describe the alfspy release to install for the selected backend.
+
+    :param use_torch: ``True`` for the PyTorch backend, ``False`` for ModernGL
+    :return: dict with ``dist``, ``other_dist``, ``tag``, ``label``,
+        ``zip_url`` and ``git_url``
+    """
+    key = 'torch' if use_torch else 'moderngl'
+    other = 'moderngl' if use_torch else 'torch'
+    spec = dict(ALFS_BACKENDS[key])
+    spec['other_dist'] = ALFS_BACKENDS[other]['dist']
+    repo, tag = spec['repo'], spec['tag']
+    spec['zip_url'] = (
+        f'https://github.com/bambi-eco/{repo}/archive/refs/tags/{tag}.zip')
+    spec['git_url'] = f'git+https://github.com/bambi-eco/{repo}.git@{tag}'
+    return spec
 
 # Tested version ranges per pip distribution name (or special key for non-pip packages).
 # None means no bound (any version is accepted).
 _VERSION_RANGES = {
-    'bambi-detection': ("0.5.0", "0.5.0"),
-    # 2.1.0 is the first release whose drone-pose rotation applies the gimbal
-    # heading about world up; anything older mis-points every oblique frame.
+    # 0.6.0 is the first release that works against either alfspy backend and
+    # uses quaternion_from_drone_pose for pose rotations.
+    'bambi-detection': ("0.6.0", None),
+    # 2.1.0 / 1.1.0 are the first releases whose drone-pose rotation applies the
+    # gimbal heading about world up; anything older mis-points every oblique frame.
     'AlfsPy': ("2.1.0", None),
+    'AlfsTorch': ("1.1.0", None),
     'pycolmap': ('4.0.3', '4.0.3'),
     'boxmot': ('17.0.0', '18.0.0'),
     'georef-tracker': ("0.1.0", "0.1.0"),

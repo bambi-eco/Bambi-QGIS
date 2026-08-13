@@ -1046,9 +1046,10 @@ class _LightFieldRenderWorker(QThread):
         import numpy as _np
         from pyrr import Quaternion, Vector3
         from alfspy.render.render import (
-            read_gltf, process_render_data, make_mgl_context,
+            read_gltf, process_render_data,
             make_camera, make_shot_loader, release_all,
         )
+        from .core.render_context import make_render_context
         from alfspy.render.data import BaseSettings, CameraPositioningMode
         from alfspy.core.rendering.renderer import Renderer
         from alfspy.core.rendering import CtxShot, Resolution, TextureData
@@ -1083,7 +1084,7 @@ class _LightFieldRenderWorker(QThread):
 
         self.progress.emit(25)
 
-        ctx = make_mgl_context()
+        ctx = make_render_context()
 
         # Load undistortion mask if available
         mask = None

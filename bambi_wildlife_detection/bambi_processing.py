@@ -7279,18 +7279,10 @@ class BambiProcessor:
         if log_fn:
             log_fn(f"Initializing alfs generation for {camera_name} frames...")
 
-        # Check for required dependencies
-        try:
-            from moderngl import Context as MglContext  # noqa: F401
-            from pyrr import Quaternion, Vector3  # noqa: F401
-            from trimesh import Trimesh  # noqa: F401
-        except ImportError as e:
-            raise ImportError(
-                f"Required dependency not found: {e}\n\n"
-                "Please install the following packages:\n"
-                "  pip install moderngl pyrr trimesh\n\n"
-                "Note: ALFS generation requires OpenGL support."
-            )
+        # Check for required dependencies.  The rasteriser alfspy uses
+        # (ModernGL or PyTorch) is alfspy's own concern — see core/render_context.
+        from .core.render_context import require_render_stack
+        require_render_stack()
 
         # Check for alfspy (specialized rendering library)
         try:
@@ -7301,9 +7293,10 @@ class BambiProcessor:
             from alfspy.core.util.geo import get_aabb  # noqa: F401
             from alfspy.core.util.pyrrs import quaternion_from_eulers  # noqa: F401
             from alfspy.render.render import (  # noqa: F401
-                make_mgl_context, read_gltf, process_render_data,
+                read_gltf, process_render_data,
                 make_shot_loader, release_all
             )
+            from .core.render_context import make_render_context  # noqa: F401
             HAS_ALFSPY = True
         except ImportError:
             HAS_ALFSPY = False
@@ -7517,8 +7510,9 @@ class BambiProcessor:
         from alfspy.core.util.geo import get_aabb
         from alfspy.core.util.pyrrs import quaternion_from_eulers
         from alfspy.render.render import (
-            make_mgl_context, read_gltf, process_render_data
+            read_gltf, process_render_data
         )
+        from .core.render_context import make_render_context
         from .core import render_size
 
         if log_fn:
@@ -7528,7 +7522,7 @@ class BambiProcessor:
         mesh_data, texture_data = process_render_data(mesh_data, texture_data)
         mesh_aabb = get_aabb(mesh_data.vertices)
 
-        ctx = make_mgl_context()
+        ctx = make_render_context()
 
         mask = None
         if mask_path and os.path.exists(mask_path):
@@ -7797,9 +7791,10 @@ class BambiProcessor:
         from alfspy.core.util.geo import get_aabb
         from alfspy.core.util.pyrrs import quaternion_from_eulers
         from alfspy.render.render import (
-            make_mgl_context, read_gltf, process_render_data,
+            read_gltf, process_render_data,
             release_all
         )
+        from .core.render_context import make_render_context
 
         if log_fn:
             log_fn("Loading DEM mesh...")
@@ -7810,7 +7805,7 @@ class BambiProcessor:
         mesh_aabb = get_aabb(mesh_data.vertices)
 
         # 2. Setup Context & Mask
-        ctx = make_mgl_context()
+        ctx = make_render_context()
         mask = None
         if mask_path and os.path.exists(mask_path):
             if log_fn:
@@ -8696,7 +8691,8 @@ class BambiProcessor:
             from alfspy.core.rendering.renderer import Renderer
             from alfspy.core.util.geo import get_aabb
             from alfspy.core.util.pyrrs import quaternion_from_eulers
-            from alfspy.render.render import read_gltf, process_render_data, make_mgl_context, release_all
+            from alfspy.render.render import read_gltf, process_render_data, release_all
+            from .core.render_context import make_render_context
             from trimesh import Trimesh
         except ImportError as exc:
             raise ImportError(
@@ -8838,7 +8834,7 @@ class BambiProcessor:
                 log_fn(f"Mesh bounds: X[{mesh_aabb.p_min.x:.1f}, {mesh_aabb.p_max.x:.1f}] "
                        f"Y[{mesh_aabb.p_min.y:.1f}, {mesh_aabb.p_max.y:.1f}]")
 
-            ctx = make_mgl_context()
+            ctx = make_render_context()
 
             # Set up mask texture for rendering
             mask_texture = None
