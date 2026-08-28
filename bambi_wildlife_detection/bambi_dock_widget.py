@@ -2163,11 +2163,13 @@ class BambiDockWidget(QDockWidget):
         self.classification_padding_spin.setRange(0.0, 2.0)
         self.classification_padding_spin.setDecimals(2)
         self.classification_padding_spin.setSingleStep(0.05)
-        self.classification_padding_spin.setValue(0.10)
+        self.classification_padding_spin.setValue(0.25)
         self.classification_padding_spin.setToolTip(
             "Fraction of the box added on every side before cropping.\n\n"
-            "Some context helps the classifier; too much and the animal is a "
-            "speck in a field of grass."
+            "0.25 is what the published classifiers were trained with: a "
+            "square crop at 1.5x the longer box side, centred on the animal. "
+            "Their accuracy depends on it, so change this only for a custom "
+            "model trained differently."
         )
         crop_layout.addRow("Padding:", self.classification_padding_spin)
 

@@ -28,7 +28,11 @@ class CropConfig(NamedTuple):
 
     #: Fraction of the box added on every side. Some context helps the
     #: backbone; too much and the animal is a speck in a field of grass.
-    padding: float = 0.10
+    #: 0.25 on each side of the longer edge is the published heads' training
+    #: convention - a square crop at 1.5x the longer box side, centred on the
+    #: animal - and their feature space is locked to it: a different crop
+    #: silently degrades accuracy rather than failing.
+    padding: float = 0.25
     #: Side length of the crop handed to the backbone.
     size: int = 224
     #: Keep the aspect ratio and pad to square, rather than stretching. A deer

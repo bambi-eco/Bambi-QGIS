@@ -46,6 +46,19 @@ TRACK_FIELDS = {"sex": "sex", "life_stage": "age"}
 FALLBACK = store.FALLBACK_SPECIES_ID
 
 
+def normalise_label(label: str) -> str:
+    """The form two labels are compared in when matching by name.
+
+    A head's classes are identifiers - ``red_deer`` - and the project's are
+    names - ``red deer``. Those are the same word to anyone reading them, so
+    they match here: case, underscores, hyphens and runs of whitespace are all
+    folded. Only used to *find* a match; the labels themselves are never
+    rewritten.
+    """
+    text = str(label or "").replace("_", " ").replace("-", " ")
+    return " ".join(text.split()).lower()
+
+
 def label_values(spec: dict, vocabulary: dict, task: str) -> Dict[str, int]:
     """``{model label: project value id}`` for one task.
 
@@ -64,24 +77,62 @@ def label_values(spec: dict, vocabulary: dict, task: str) -> Dict[str, int]:
 
     known = _vocabulary_values(vocabulary, task)
     for label in labels:
-        if label not in resolved and label.lower() in known:
-            resolved[label] = known[label.lower()]
+        if label not in resolved and normalise_label(label) in known:
+            resolved[label] = known[normalise_label(label)]
     # A head whose classes were never listed can still be resolved by name.
     for label, value in known.items():
         resolved.setdefault(label, value)
     return resolved
 
 
-def _vocabulary_values(vocabulary: dict, task: str) -> Dict[str, int]:
-    """Project values a task can map onto, keyed by lower-case label."""
+def label_names(spec: dict, vocabulary: dict, task: str) -> Dict[str, str]:
+    """``{model label: project value name}`` for one task.
+
+    The heads speak class labels and the store speaks ids, but the per-species
+    model choice is keyed on the project's species *names* - so a species vote
+    of ``red_deer`` has to become ``red deer`` before it can pick the red deer
+    sex model. Same resolution as :func:`label_values`, one step further.
+    """
+    names = _vocabulary_names(vocabulary, task)
+    return {label: names[value]
+            for label, value in label_values(spec, vocabulary, task).items()
+            if value in names}
+
+
+def resolve(values: Dict[str, object], label: str):
+    """Look *label* up in a :func:`label_values` / :func:`label_names` table.
+
+    An exact hit wins - that is the configured, index-keyed mapping. Failing
+    that the normalised name is tried, which is how a stored ``red_deer`` finds
+    the project's ``red deer`` when nobody ever read the classes off the model.
+    """
+    value = values.get(label)
+    if value is None:
+        value = values.get(normalise_label(label))
+    return value
+
+
+def _vocabulary_rows(vocabulary: dict, task: str):
+    """``(name, id)`` pairs of the project values a task can map onto."""
     if not vocabulary:
-        return {}
+        return []
     if task == "species":
-        return {row["name"].lower(): row["species_id"]
-                for row in vocabulary.get("species", [])}
+        return [(row["name"], row["species_id"])
+                for row in vocabulary.get("species", [])]
     enum_name = {"life_stage": "age"}.get(task, task)
-    return {row["label"].lower(): row["value_id"]
-            for row in vocabulary.get("enums", {}).get(enum_name, [])}
+    return [(row["label"], row["value_id"])
+            for row in vocabulary.get("enums", {}).get(enum_name, [])]
+
+
+def _vocabulary_values(vocabulary: dict, task: str) -> Dict[str, int]:
+    """Project values a task can map onto, keyed by normalised label."""
+    return {normalise_label(name): value
+            for name, value in _vocabulary_rows(vocabulary, task)}
+
+
+def _vocabulary_names(vocabulary: dict, task: str) -> Dict[int, str]:
+    """Project value names, keyed by id."""
+    return {value: name for name, value in _vocabulary_rows(vocabulary, task)}
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +159,7 @@ def apply_occlusion(target_folder: str, modality: str,
 
     wanted = {}
     for row in predictions:
-        value = values.get(row["label"])
+        value = resolve(values, row["label"])
         if value is not None:
             wanted[int(row["detection_id"])] = int(value)
     if not wanted:
@@ -170,7 +221,7 @@ def apply_track_species(target_folder: str, modality: str,
 
     wanted = {}
     for row in predictions:
-        value = values.get(row["label"])
+        value = resolve(values, row["label"])
         if value is not None:
             wanted[int(row["track_id"])] = int(value)
     if not wanted:
@@ -260,7 +311,7 @@ def apply_track_attribute(target_folder: str, modality: str, field: str,
 
     wanted = {}
     for row in predictions:
-        value = values.get(row["label"])
+        value = resolve(values, row["label"])
         if value is not None:
             wanted[int(row["track_id"])] = int(value)
     if not wanted:

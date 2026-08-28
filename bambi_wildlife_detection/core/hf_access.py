@@ -57,13 +57,17 @@ TASKS = ("occlusion", "species", "sex", "life_stage")
 #: rather than guessed at.
 PER_SPECIES_TASKS = ("sex", "life_stage")
 
-#: Default head repository per task. ``species`` and ``life_stage`` are not
-#: released yet - the code paths are complete, so they start working the day
-#: the repos appear, and until then a custom model is the only option.
+#: Default head repository per task. ``life_stage`` has no published head -
+#: the size estimate is its default - and the code path is complete, so it
+#: starts working the day a repo appears; until then a custom model is the
+#: only option. The species heads call ``red_deer`` / ``roe_deer`` /
+#: ``wild_boar``; anything else in a survey is forced into one of the three,
+#: which is why the class mapping is worth a look on a project with other
+#: animals in it.
 DEFAULT_HEAD_REPOS: Dict[str, Optional[str]] = {
     "occlusion": "cpraschl/bambi-occlusion-classifiers",
+    "species": "cpraschl/bambi-species-classification",
     "sex": "cpraschl/bambi-red-deer-sex-classifiers",
-    "species": None,
     "life_stage": None,
 }
 

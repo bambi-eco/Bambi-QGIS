@@ -50,11 +50,11 @@ def test_alfspy_bound_covers_the_oblique_heading_fix():
     assert packaging.Version(min_ver) >= packaging.Version("2.1.0")
 
 
-def test_bambi_detection_bound_covers_the_backend_neutral_release():
-    """0.6.0 is the first release that works against either alfspy backend."""
+def test_bambi_detection_bound_covers_the_engine_release():
+    """1.0.0 is the engine-first release the plugin's steps are built on."""
     packaging = pytest.importorskip("packaging.version")
     min_ver, _max_ver = _VERSION_RANGES["bambi-detection"]
-    assert packaging.Version(min_ver) >= packaging.Version("0.6.0")
+    assert packaging.Version(min_ver) >= packaging.Version("1.0.0")
 
 
 def test_bambi_detection_urls_use_the_pinned_tag():

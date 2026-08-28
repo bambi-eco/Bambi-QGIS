@@ -64,19 +64,8 @@ def test_life_stage_defaults_to_the_size_estimate(dock):
     assert combo.findData("default") == -1
 
 
-def test_species_cannot_be_set_to_a_default_that_does_not_exist(dock):
-    """No species model is published yet, so offering 'Default' would only
-    fail later."""
-    row = dock._task_row("species")
-    combo = dock.classification_models_table.cellWidget(row, 1)
-    index = combo.findData("default")
-    assert not combo.model().item(index).isEnabled()
-    assert "not released" in combo.itemText(index)
-    assert combo.currentData() == "off"
-
-
 def test_released_tasks_default_to_their_published_model(dock):
-    for task in ("occlusion", "sex"):
+    for task in ("occlusion", "species", "sex"):
         combo = dock.classification_models_table.cellWidget(
             dock._task_row(task), 1)
         assert combo.currentData() == "default"
@@ -169,8 +158,10 @@ def test_it_downloads_every_task_set_to_default(dock, monkeypatch, tmp_path):
 
     dock.download_classification_models()
 
-    # Occlusion and sex have published models; species does not yet.
-    assert sorted(task for task, _p, _m in calls) == ["occlusion", "sex"]
+    # Every task with a published model - life stage has none, its default
+    # being the size estimate.
+    assert sorted(task for task, _p, _m in calls) == [
+        "occlusion", "sex", "species"]
     assert all(projection == "non_geo" for _t, projection, _m in calls)
 
 
@@ -204,7 +195,7 @@ def test_a_custom_model_is_not_downloaded(dock, monkeypatch, tmp_path):
         "_download_head",
         staticmethod(lambda *a, **k: calls.append(a[1])))
 
-    for task in ("occlusion", "sex"):
+    for task in ("occlusion", "species", "sex"):
         combo = dock.classification_models_table.cellWidget(
             dock._task_row(task), 1)
         combo.setCurrentIndex(combo.findData("custom"))
@@ -229,7 +220,7 @@ def test_already_present_models_are_not_fetched_again(dock, monkeypatch,
         "_download_head",
         staticmethod(lambda *a, **k: calls.append(a[1])))
 
-    for task in ("occlusion", "sex"):
+    for task in ("occlusion", "species", "sex"):
         path = hf_access.head_local_path(
             str(tmp_path), task, "non_geo", "matched")
         os.makedirs(os.path.dirname(path), exist_ok=True)

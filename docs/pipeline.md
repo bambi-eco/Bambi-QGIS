@@ -371,7 +371,7 @@ bambi_t/classification.gpkg   # which detections are embedded, and by which run
 One step each, run in that order, because each depends on the one before:
 
 1. **Occlusion**, per frame, labels a crop *clear* or *occluded*. It is a quality filter, not a verdict about the animal, so it produces no per-animal answer - and it is **optional**.
-2. **Species** votes across the frames that are worth trusting, and its majority fixes what the animal is.
+2. **Species** votes across the frames that are worth trusting, and its majority fixes what the animal is. The published model knows red deer, roe deer and wild boar - anything else is forced into one of the three, so on a survey with other animals check the class mapping or leave the task off.
 3. **Sex** reuses *exactly those frames*, and picks its model from the species just assigned.
 
 Voting is what makes a noisy per-frame call safe. An antler only resolves from some angles, so many frames of a true male look female; the majority still recovers him. The margin behind every call is kept - "male, 106 of 115 frames" is what lets you judge a borderline animal - and you can re-vote at a different quorum without re-running anything.

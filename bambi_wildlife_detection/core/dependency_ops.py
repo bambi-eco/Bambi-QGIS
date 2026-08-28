@@ -44,7 +44,7 @@ _bundled_versions_cache = None
 #: out-of-date install (``tests/test_alfspy_pin.py``).
 ALFS_PY_TAG = 'v2.1.0'
 ALFS_TORCH_TAG = 'v1.1.1'
-BAMBI_DETECTION_TAG = 'v0.6.0'
+BAMBI_DETECTION_TAG = 'v1.0.0'
 
 #: The two interchangeable alfspy backends.  Both install a package called
 #: ``alfspy`` and so cannot coexist - selecting one uninstalls the other.
@@ -87,9 +87,10 @@ def alfs_backend_spec(use_torch: bool) -> dict:
 # Tested version ranges per pip distribution name (or special key for non-pip packages).
 # None means no bound (any version is accepted).
 _VERSION_RANGES = {
-    # 0.6.0 is the first release that works against either alfspy backend and
-    # uses quaternion_from_drone_pose for pose rotations.
-    'bambi-detection': ("0.6.0", None),
+    # 1.0.0 is the engine-first release: bambi.geo / tracking / survey / render /
+    # io are the array-in, array-out functions the plugin's steps are built on
+    # (see tests/test_engine_contract.py); 0.6.0 introduced backend neutrality.
+    'bambi-detection': ("1.0.0", None),
     # 2.1.0 / 1.1.0 are the first releases whose drone-pose rotation applies the
     # gimbal heading about world up; anything older mis-points every oblique frame.
     # The torch floor tracks the pinned tag, which is ahead of that at 1.1.1.

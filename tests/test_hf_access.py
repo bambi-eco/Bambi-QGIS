@@ -230,14 +230,21 @@ class TestModelLayout:
     def test_feature_dim_follows_a_custom_backbone(self):
         assert hf_access.feature_dim("matched", backbone_dim=768) == 1536
 
-    def test_species_has_no_default_model_yet(self):
-        assert not hf_access.has_default_head("species")
-        assert hf_access.default_head_repo("species") is None
+    def test_life_stage_has_no_default_model(self):
+        # Its default is the size estimate, which needs no head.
+        assert not hf_access.has_default_head("life_stage")
+        assert hf_access.default_head_repo("life_stage") is None
 
     def test_released_tasks_have_defaults(self):
-        for task in ("occlusion", "sex"):
+        for task in ("occlusion", "species", "sex"):
             assert hf_access.has_default_head(task)
             assert "cpraschl/" in hf_access.default_head_repo(task)
+
+    def test_species_uses_the_published_classification_repo(self):
+        assert (hf_access.default_head_repo("species")
+                == "cpraschl/bambi-species-classification")
+        assert (hf_access.head_repo_path("species", "geo_2k", "matched")
+                == "geo_2k/species_matched.pt")
 
     def test_missing_heads_reports_only_what_is_absent(self, tmp_path):
         present = hf_access.head_local_path(

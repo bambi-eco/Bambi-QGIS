@@ -28,10 +28,10 @@ RUN pip install --no-cache-dir \
     torch==2.5.1 torchvision==0.20.1 \
     --index-url https://download.pytorch.org/whl/cpu
 
-# The two BAMBI framework packages, same sources as the plugin's
-# Dependency Manager uses.
-RUN pip install --no-cache-dir "git+https://github.com/bambi-eco/alfs_py.git" && \
-    pip install --no-cache-dir "git+https://github.com/bambi-eco/bambi_detection.git"
+# The two BAMBI framework packages, the same tags the plugin's Dependency
+# Manager installs (core/dependency_ops.py: ALFS_PY_TAG, BAMBI_DETECTION_TAG).
+RUN pip install --no-cache-dir "git+https://github.com/bambi-eco/alfs_py.git@v2.1.0" && \
+    pip install --no-cache-dir "git+https://github.com/bambi-eco/bambi_detection.git@v1.0.0"
 
 RUN pip install --no-cache-dir pytest pytest-cov requests scipy
 

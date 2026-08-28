@@ -319,6 +319,30 @@ def test_only_the_species_with_a_model_is_sexed(flight):
     assert sexed == {1, 2}
 
 
+def test_the_published_species_labels_pick_the_per_species_model(flight):
+    """The published species head says ``red_deer``, and the sex model is
+    chosen under the project's ``red deer``. The two have to meet, or the
+    default configuration would classify species and then sex nobody."""
+    heads = os.path.join(flight, "heads")
+    _write_head(os.path.join(heads, "spe.pt"), ("roe_deer", "red_deer"), 1)
+    _run(flight)
+
+    species = {row["track_id"]: row["label"] for row in
+               classification_store.track_predictions(flight, "t", "species")}
+    # What the head said is what is recorded - the translation is only for
+    # choosing the next model, and the mapping stays keyed on the head.
+    assert species == {1: "red_deer", 2: "red_deer", 3: "roe_deer"}
+
+    sexed = {row["track_id"] for row in
+             classification_store.track_predictions(flight, "t", "sex")}
+    assert sexed == {1, 2}
+
+    from bambi_wildlife_detection.core import label_store
+    red_deer = label_store.vocabulary(flight)["species_by_name"]["red deer"]
+    assert _track_species(flight)[1] == red_deer
+    assert _track_species(flight)[2] == red_deer
+
+
 def test_sex_needs_the_species_call_first(flight):
     """Without species there is no key to choose a sex model with."""
     models = _models(flight)
@@ -390,11 +414,51 @@ def test_a_custom_model_without_a_path_is_reported(flight):
         BambiProcessor().run_classification(_config(flight, models))
 
 
-def test_species_has_no_default_model_to_fall_back_on(flight):
+def test_life_stage_has_no_default_model_to_fall_back_on(flight):
+    """No life-stage head is published: a species set to "Default" there is
+    a configuration error to report, not a download to attempt."""
     models = _models(flight)
-    models["species"]["model"] = "default"
-    with pytest.raises(ValueError, match="no default species classifier"):
+    models["life_stage"] = {"modality": "thermal", "model": "default",
+                            "species": {"red deer": {"model": "default"}}}
+    with pytest.raises(ValueError, match="no default life_stage classifier"):
         BambiProcessor().run_classification(_config(flight, models))
+
+
+def test_the_default_species_model_comes_from_the_published_repo(
+        flight, tmp_path, monkeypatch):
+    """Species set to Default fetches the head from the species repository,
+    under the projection and input the run is configured for."""
+    models_dir = str(tmp_path / "models")
+    monkeypatch.setattr(BambiProcessor, "_get_default_model_dir",
+                        staticmethod(lambda: models_dir))
+    fetched = []
+
+    def fake_download(repo, task, projection, modality_in, destination,
+                      token, log_fn=None):
+        fetched.append((repo, task, projection, modality_in))
+        os.makedirs(os.path.dirname(destination), exist_ok=True)
+        _write_head(destination, ("roe_deer", "red_deer", "wild_boar"), 1)
+        return destination
+
+    monkeypatch.setattr(BambiProcessor, "_download_head",
+                        staticmethod(fake_download))
+
+    models = _models(flight)
+    models["species"] = {"modality": "thermal", "model": "default"}
+    _run(flight, models)
+
+    assert fetched == [("cpraschl/bambi-species-classification", "species",
+                        "non_geo", "thermal")]
+    assert os.path.isfile(os.path.join(
+        models_dir, "classification", "species", "non_geo",
+        "species_thermal.pt"))
+    species = {row["track_id"]: row["label"] for row in
+               classification_store.track_predictions(flight, "t", "species")}
+    assert species == {1: "red_deer", 2: "red_deer", 3: "roe_deer"}
+    # ...and the published labels still choose the red deer sex model.
+    sexed = {row["track_id"] for row in
+             classification_store.track_predictions(flight, "t", "sex")}
+    assert sexed == {1, 2}
 
 
 def test_rerunning_replaces_rather_than_appends(flight):

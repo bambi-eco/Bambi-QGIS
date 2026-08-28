@@ -2064,7 +2064,7 @@ class BambiProcessor:
                     "so there is nothing to crop from the GeoTIFFs.")
 
         crop_config = classification.CropConfig(
-            padding=float(config.get("classification_crop_padding", 0.10)),
+            padding=float(config.get("classification_crop_padding", 0.25)),
             size=int(config.get("classification_crop_size", 224)),
             letterbox=bool(config.get("classification_letterbox", True)))
 
@@ -2435,8 +2435,9 @@ class BambiProcessor:
         # pick their model from the species that vote assigned.
         # Sex and life stage choose their model by species, so a run that does
         # not include species reads the call it made earlier.
+        species_names = self._species_names_of_labels(config, target_folder)
         species_of_track: Dict[int, str] = {
-            row["track_id"]: row["label"] for row in
+            row["track_id"]: species_names(row["label"]) for row in
             classification_store.track_predictions(
                 target_folder, suffix, "species")}
         # A track this modality's classifier never called may still be
@@ -2474,6 +2475,28 @@ class BambiProcessor:
                       row_count=len(by_track), log_fn=log_fn)
         if progress_fn:
             progress_fn(100)
+
+    @staticmethod
+    def _species_names_of_labels(config: Dict[str, Any], target_folder: str):
+        """A function turning a species head's label into the project's name.
+
+        The head says ``red_deer``; the per-species model choice and the
+        size-based selection are keyed on the project's ``red deer``. The
+        translation goes through the same mapping the results are applied
+        with, so what picks the sex model is exactly what lands on the track.
+        A label the mapping cannot place is returned as it is - it then simply
+        matches no per-species entry, which is the honest outcome.
+        """
+        from .core import apply_results, label_store
+
+        spec = (config.get("classification_models") or {}).get(
+            "species") or {}
+        names = apply_results.label_names(
+            spec, label_store.vocabulary(target_folder), "species")
+
+        def name_of(label: str) -> str:
+            return apply_results.resolve(names, label) or label
+        return name_of
 
     @staticmethod
     def _named_track_species(target_folder: str,
@@ -2597,8 +2620,9 @@ class BambiProcessor:
         # Only the species set to Size-based take a verdict from the
         # measurement; the rest still count towards the cohort statistics,
         # because removing them would shift everyone else's score.
+        species_names = self._species_names_of_labels(config, target_folder)
         species_of_track = {
-            int(row["track_id"]): row["label"] for row in
+            int(row["track_id"]): species_names(row["label"]) for row in
             classification_store.track_predictions(
                 target_folder, suffix, "species")}
         for track_id, name in self._named_track_species(
@@ -2763,6 +2787,7 @@ class BambiProcessor:
         modality_in = spec.get("modality", "matched")
         frame_rows, track_rows = [], []
         resolved_species = dict(species_of_track)
+        species_names = self._species_names_of_labels(config, target_folder)
 
         # Sex is chosen per species, so its heads are opened lazily and cached
         # - a flight with three species uses three different classifiers.
@@ -2825,7 +2850,9 @@ class BambiProcessor:
                 # its place in the census with the attribute left unknown.
                 continue
             if task == "species":
-                resolved_species[track_id] = vote.label
+                # In the project's words, because that is what the
+                # per-species model choice of the next task is keyed on.
+                resolved_species[track_id] = species_names(vote.label)
             track_rows.append({
                 "track_id": track_id, "label": vote.label,
                 "votes": vote.votes, "n": vote.n, "fraction": vote.fraction,
@@ -8879,7 +8906,13 @@ class BambiProcessor:
                     correction_data = self.get_correction_for_frame(frame_idx, config)
                     cor_t = correction_data["translation"]
                     cor_r = correction_data["rotation"]
-                    # Projection camera: 2× correction matches CtxShot's effective rotation.
+                    cor_translation_v = Vector3(
+                        [cor_t.get('x', 0), cor_t.get('y', 0), cor_t.get('z', 0)], dtype='f4'
+                    )
+                    cor_rotation_v = Vector3(
+                        [cor_r.get('x', 0), cor_r.get('y', 0), cor_r.get('z', 0)], dtype='f4'
+                    )
+                    # Projection camera: 2x correction matches CtxShot's effective rotation.
                     # alfspy CtxShot doubles correction_transform.rotation in its shader;
                     # multiplying by 2 here keeps geographic bounds consistent with the
                     # rendered content and with TRexConnector (which uses the full correction

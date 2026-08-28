@@ -155,7 +155,7 @@ One row per task - occlusion, species, sex - in the order they run.
 | **Labels** | Opens the class mapping, below. |
 | **Species…** | Sex and life stage: which classifier to use per species. |
 
-Species shows **Default (not released)** and is disabled until a species classifier is published; supply a custom model, or leave the task off. The occlusion and sex classifiers are available now.
+All three have a published default: [occlusion](https://huggingface.co/cpraschl/bambi-occlusion-classifiers), [species](https://huggingface.co/cpraschl/bambi-species-classification) and [red deer sex](https://huggingface.co/cpraschl/bambi-red-deer-sex-classifiers). The species classifier knows **red deer, roe deer and wild boar** - anything else in a survey is forced into one of the three, so on a project with other animals check the class mapping, or leave the task off and label the species by hand. Its classes are named `red_deer`, `roe_deer` and `wild_boar`, which the mapping matches onto the project's `red deer`, `roe deer` and `wild boar` without any clicks.
 
 **Download models** fetches every classifier set to *Default*, for the projection and input chosen above. Worth pressing first: with the files present, **Labels** can read each model's own class list and the mapping can be set up before anything is run. They are small - a few megabytes each. The DINOv3 model is *not* downloaded here; that happens on the first embedding run, and is much larger.
 

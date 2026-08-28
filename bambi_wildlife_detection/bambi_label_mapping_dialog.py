@@ -25,7 +25,7 @@ from qgis.PyQt.QtWidgets import (
     QTableWidgetItem, QVBoxLayout,
 )
 
-from .core import classification, hf_access
+from .core import apply_results, classification, hf_access
 from .core import label_store
 
 #: Which project vocabulary each task maps onto.
@@ -186,11 +186,15 @@ class BambiLabelMappingDialog(QDialog):
             if found >= 0:
                 combo.setCurrentIndex(found)
         elif name:
-            # Default to an exact name match, so a model that speaks the
-            # project's language needs no clicks at all.
-            found = combo.findText(name, Qt.MatchFlag.MatchFixedString)
-            if found >= 0:
-                combo.setCurrentIndex(found)
+            # Default to a name match, so a model that speaks the project's
+            # language needs no clicks at all. "red_deer" and "red deer" are
+            # the same word - compared the way the results are applied, so
+            # what this shows is what the run will do.
+            wanted = apply_results.normalise_label(name)
+            for position, (label, _identifier) in enumerate(self._values, 1):
+                if apply_results.normalise_label(label) == wanted:
+                    combo.setCurrentIndex(position)
+                    break
         self.table.setCellWidget(row, 2, combo)
 
     def _remove_selected(self):

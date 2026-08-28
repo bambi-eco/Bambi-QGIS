@@ -42,7 +42,7 @@ The published heads confirm the shape:
 |---|---|---|---|
 | `cpraschl/bambi-occlusion-classifiers` | `{non_geo,geo_1k,geo_2k}/occlusion_{rgb,thermal,matched}.pt` | `(N, 1280)` or `(N, 2560)` | `(emb (N,256), probs (N,2))`, `m.classes = ["clear","occluded"]` |
 | `cpraschl/bambi-red-deer-sex-classifiers` | `{non_geo,geo_1k,geo_2k}/sex_{rgb,thermal,matched}.pt` | same | `m.classes = ["female_juvenile","male"]` |
-| species | *not released yet* | same | mapped onto project species |
+| `cpraschl/bambi-species-classification` | `{non_geo,geo_1k,geo_2k,alfs_1k,alfs_2k}/species_{rgb,thermal,matched}.pt` | same | `m.classes = ["red_deer","roe_deer","wild_boar"]`, mapped onto project species |
 
 They are TorchScript `.pt` heads - `torch.jit.load`, call under `torch.no_grad()`,
 BatchNorm already folded so no `.eval()` needed. They consume **features, not
@@ -124,9 +124,19 @@ only depends on tracking + geo-referencing.
     head's own class labels (read off `m.classes`) onto the project vocabulary,
     so a third-party model with different classes is a configuration change
     rather than a code change.
-  - Species ships with **Default disabled and a note** ("not released yet -
-    supply a custom model"). The whole code path exists; only the default weights
-    are missing, so it starts working the day the repo goes up.
+  - Species defaults to the published `cpraschl/bambi-species-classification`
+    heads (released 2026-08; three classes, `red_deer` / `roe_deer` /
+    `wild_boar`). Their labels are identifiers where the project's are names,
+    so name matching folds `_`/`-`/case, and the species vote is translated
+    into the project's name before the per-species sex/life-stage choice reads
+    it. The repo also ships `alfs_1k`/`alfs_2k` heads for synthetic-aperture
+    crops; the plugin does not produce those crops, so they are not offered.
+  - **Crop convention:** the species model card pins it - a square at **1.5x
+    the longer box side**, centred on the animal, resized to 224, ImageNet
+    normalisation - and warns that a different crop silently degrades accuracy.
+    That is `padding = 0.25` with letterbox on, which is now the default (was
+    0.10). Embedding runs are keyed on the padding, so a project embedded at
+    0.10 re-embeds into a new run rather than mixing.
 
 - **Cross-modal matching** (feeds C1)
   - Min shared frames (8), **distance gate in pixels (default 28, editable)**,

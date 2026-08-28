@@ -334,3 +334,50 @@ class TestLabelValues:
         values = apply_results.label_values(
             {"class_labels": ["Red Deer"]}, vocabulary, "species")
         assert values["Red Deer"] == _species_id(flight, "red deer")
+
+    def test_the_published_species_labels_match_the_seeded_species(
+            self, flight):
+        """The species heads say ``red_deer``; the project says ``red deer``.
+        Same word, so no mapping should be needed."""
+        vocabulary = _vocabulary(flight)
+        values = apply_results.label_values(
+            {"class_labels": ["red_deer", "roe_deer", "wild_boar"]},
+            vocabulary, "species")
+        assert values["red_deer"] == _species_id(flight, "red deer")
+        assert values["roe_deer"] == _species_id(flight, "roe deer")
+        assert values["wild_boar"] == _species_id(flight, "wild boar")
+
+    def test_a_stored_label_resolves_without_the_classes_being_read(
+            self, flight):
+        """Nobody pressed 'Read classes', so the spec lists nothing - the
+        label the head recorded still has to find its species."""
+        vocabulary = _vocabulary(flight)
+        values = apply_results.label_values({}, vocabulary, "species")
+        assert (apply_results.resolve(values, "red_deer")
+                == _species_id(flight, "red deer"))
+        assert (apply_results.resolve(values, "Wild-Boar")
+                == _species_id(flight, "wild boar"))
+        assert apply_results.resolve(values, "moose") is None
+
+    def test_label_names_speak_the_project_language(self, flight):
+        vocabulary = _vocabulary(flight)
+        names = apply_results.label_names(
+            {"class_labels": ["red_deer", "roe_deer"]}, vocabulary, "species")
+        assert names["red_deer"] == "red deer"
+        assert names["roe_deer"] == "roe deer"
+
+    def test_label_names_follow_the_configured_mapping(self, flight):
+        """Keyed on index, like the values: a label mapped elsewhere by hand
+        names *that* species, whatever it is called."""
+        vocabulary = _vocabulary(flight)
+        names = apply_results.label_names(
+            {"class_labels": ["red_deer"],
+             "labels": {"0": _species_id(flight, "roe deer")}},
+            vocabulary, "species")
+        assert names["red_deer"] == "roe deer"
+
+    def test_normalise_label_folds_separators_and_case(self):
+        assert apply_results.normalise_label("Red_Deer") == "red deer"
+        assert apply_results.normalise_label("wild-boar") == "wild boar"
+        assert apply_results.normalise_label("  roe   deer ") == "roe deer"
+        assert apply_results.normalise_label(None) == ""
