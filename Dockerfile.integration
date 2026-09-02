@@ -30,13 +30,21 @@ RUN pip install --no-cache-dir \
 
 # The two BAMBI framework packages, the same tags the plugin's Dependency
 # Manager installs (core/dependency_ops.py: ALFS_PY_TAG, BAMBI_DETECTION_TAG).
-RUN pip install --no-cache-dir "git+https://github.com/bambi-eco/alfs_py.git@v2.1.0" && \
+# alfspy 3.0 ships no render engine and no ray caster by default - both
+# are extras - so the engine this image renders with has to be named
+# here, the same way the Dependency Manager names the selected one.
+RUN pip install --no-cache-dir "AlfsPy[moderngl,embree] @ git+https://github.com/bambi-eco/alfs_py.git@v3.0.0" && \
     pip install --no-cache-dir "git+https://github.com/bambi-eco/bambi_detection.git@v1.0.0"
 
 RUN pip install --no-cache-dir pytest pytest-cov requests scipy
 
 # moderngl renders through Xvfb (started by run_integration_tests.sh).
 ENV DISPLAY=:99
+# Which engine and ray caster alfspy uses. These match the plugin's own
+# defaults, and are set explicitly so the image renders the same way
+# whether or not the code under test exports them itself.
+ENV ALFS_ENGINE=moderngl
+ENV ALFS_RAYCASTER=embree
 # Cache location for the test flight + DEM (docker volume in compose).
 ENV BAMBI_TEST_DATA_DIR=/data
 

@@ -5234,6 +5234,21 @@ class BambiProcessor:
             return "beyond_mesh", best_range
         return ("above_horizon", None) if saw_up else ("other", None)
 
+    @staticmethod
+    def _apply_render_selection(config, log_fn=None):
+        """Export the project's alfspy engine and ray caster.
+
+        alfspy reads ``$ALFS_ENGINE`` and ``$ALFS_RAYCASTER`` on every
+        ``make_context`` / ``create_raycaster`` call rather than once at
+        import, so this only has to run before the first render of a step -
+        not before alfspy is imported. Every step that renders or casts rays
+        calls it, because a step run on its own must not inherit whatever the
+        previous one happened to leave in the environment.
+        """
+        from .core import alfs_runtime
+
+        return alfs_runtime.apply_selection(config, log_fn=log_fn)
+
     def run_georeference(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Geo-reference detections using DEM.
 
@@ -5241,6 +5256,7 @@ class BambiProcessor:
         :param progress_fn: Progress callback function
         :param log_fn: Logging callback function
         """
+        self._apply_render_selection(config, log_fn)
         import numpy as np
 
         from pyrr import Vector3, Quaternion
@@ -5566,6 +5582,7 @@ class BambiProcessor:
         all downstream steps (Add Tracks to QGIS, perpendicular distance, etc.) work
         without modification.
         """
+        self._apply_render_selection(config, log_fn)
         import glob as _glob
         import cv2
         import numpy as np
@@ -6022,6 +6039,7 @@ class BambiProcessor:
         :param progress_fn: Progress callback function
         :param log_fn: Logging callback function
         """
+        self._apply_render_selection(config, log_fn)
         import numpy as np
         import cv2
 
@@ -7057,6 +7075,7 @@ class BambiProcessor:
         :param log_fn: Logging callback function
         :param start_progress: Starting progress value (for integration with tracking)
         """
+        self._apply_render_selection(config, log_fn)
         import numpy as np
 
         from pyrr import Vector3, Quaternion
@@ -7299,6 +7318,7 @@ class BambiProcessor:
         :param progress_fn: Progress callback function
         :param log_fn: Logging callback function
         """
+        self._apply_render_selection(config, log_fn)
         camera = config.get("alfs_camera", "T")
         camera_suffix = "t" if camera == "T" else "w"
         camera_name = "Thermal" if camera == "T" else "RGB"
@@ -8707,6 +8727,7 @@ class BambiProcessor:
         :param progress_fn: Progress callback function
         :param log_fn: Logging callback function
         """
+        self._apply_render_selection(config, log_fn)
         import numpy as np
         import cv2
 

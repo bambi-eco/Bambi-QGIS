@@ -837,7 +837,8 @@ class _DemLoadWorker(QThread):
     ``error(message)`` on failure.
     """
 
-    finished = pyqtSignal(object, object, object)   # tri_mesh, mesh_data, texture_data
+    # tri_mesh, mesh_data, texture_data, ray_caster
+    finished = pyqtSignal(object, object, object, object)
     error = pyqtSignal(str)
 
     def __init__(self, dem_path: str):
@@ -849,17 +850,18 @@ class _DemLoadWorker(QThread):
             from alfspy.render.render import read_gltf
             from trimesh import Trimesh
 
+            from .core.render_context import make_ray_caster
+
             mesh_data, texture_data = read_gltf(self._dem_path)
             tri_mesh = Trimesh(
                 vertices=mesh_data.vertices, faces=mesh_data.indices
             )
-            # Pre-build the ray-casting BVH so the first pixel_to_world_coord
-            # call on the main thread returns immediately instead of blocking.
-            try:
-                _ = tri_mesh.triangles_tree
-            except Exception:  # nosec B110
-                pass
-            self.finished.emit(tri_mesh, mesh_data, texture_data)
+            # Build the ray caster - and with it the acceleration structure -
+            # here rather than on the main thread. Handing a bare mesh to
+            # pixel_to_world_coord rebuilds that structure on every call,
+            # which the solver loop makes thousands of.
+            ray_caster = make_ray_caster(tri_mesh)
+            self.finished.emit(tri_mesh, mesh_data, texture_data, ray_caster)
         except Exception as exc:
             self.error.emit(str(exc))
 
@@ -877,7 +879,7 @@ class _ProbeWorker(QThread):
 
     Constructor parameters
     ----------------------
-    tri_mesh    : Trimesh   – pre-built mesh (BVH must already be constructed)
+    ray_caster  : object    – alfspy ray caster over the DEM, built once
     side_params : list[dict]
         Two dicts, one per side, each containing:
           'point'      : (norm_x, norm_y) in [0, 1]
@@ -893,9 +895,10 @@ class _ProbeWorker(QThread):
     finished = pyqtSignal(dict)  # resulting correction dict
     error = pyqtSignal(str)
 
-    def __init__(self, tri_mesh, side_params, correction, max_steps, parent=None):
+    def __init__(self, ray_caster, side_params, correction, max_steps,
+                 parent=None):
         super().__init__(parent)
-        self._tri_mesh = tri_mesh
+        self._ray_caster = ray_caster
         self._sides = side_params
         self._correction = correction
         self._max_steps = max_steps
@@ -974,7 +977,7 @@ class _ProbeWorker(QThread):
         px, py = pt[0] * img_w, pt[1] * img_h
         results = pixel_to_world_coord(
             [px], [py], img_w, img_h,
-            self._tri_mesh, camera, include_misses=False,
+            self._ray_caster, camera, include_misses=False,
         )
         if results is None or len(results) == 0 or results[0] is None:
             return None
@@ -1209,6 +1212,7 @@ class BambiCorrectionWizard(QDialog):
 
         # Loaded once; released on close
         self._tri_mesh = None
+        self._ray_caster = None
         self._raw_mesh_data = None
         self._raw_texture_data = None
         self._dem_worker: Optional[_DemLoadWorker] = None
@@ -1807,8 +1811,10 @@ class BambiCorrectionWizard(QDialog):
         self._dem_worker.error.connect(self._on_dem_error)
         self._dem_worker.start()
 
-    def _on_dem_loaded(self, tri_mesh, raw_mesh_data, raw_texture_data) -> None:
+    def _on_dem_loaded(self, tri_mesh, raw_mesh_data, raw_texture_data,
+                       ray_caster) -> None:
         self._tri_mesh = tri_mesh
+        self._ray_caster = ray_caster
         self._raw_mesh_data = raw_mesh_data
         self._raw_texture_data = raw_texture_data
         self._dem_loading_widget.hide()
@@ -1959,7 +1965,7 @@ class BambiCorrectionWizard(QDialog):
         px, py = pt[0] * img_w, pt[1] * img_h
         results = pixel_to_world_coord(
             [px], [py], img_w, img_h,
-            self._tri_mesh, cam, include_misses=False,
+            self._ray_caster, cam, include_misses=False,
         )
         if results is None or len(results) == 0 or results[0] is None:
             return None
@@ -2036,7 +2042,7 @@ class BambiCorrectionWizard(QDialog):
         ]
 
         self._probe_worker = _ProbeWorker(
-            self._tri_mesh, side_params, correction, max_steps
+            self._ray_caster, side_params, correction, max_steps
         )
         self._probe_worker.status.connect(self._probe_status.setText)
         self._probe_worker.finished.connect(self._on_probe_done)
@@ -2512,6 +2518,7 @@ class BambiCorrectionWizard(QDialog):
                 worker.quit()
                 worker.wait(3000)
         self._tri_mesh = None
+        self._ray_caster = None
         self._raw_mesh_data = None
         self._raw_texture_data = None
         super().closeEvent(event)

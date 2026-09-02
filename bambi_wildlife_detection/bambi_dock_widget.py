@@ -43,8 +43,10 @@ from .core.hf_access import DEFAULT_BACKBONE as HF_DEFAULT_BACKBONE
 # legacy text file happens to be on disk.
 from .core import store as _store_kinds
 
-# Plugin scope for project settings storage
-PLUGIN_SCOPE = "BambiWildlifeDetection"
+# Plugin scope for project settings storage. Defined in gui_utils so the
+# dependency manager can write its own entries under the same scope without
+# importing the dock.
+from .gui_utils import PLUGIN_SCOPE, read_alfs_selection  # noqa: E402
 
 # The Hugging Face token lives in the QGIS settings rather than in the project
 # configuration: it is a user credential, and a project file gets shared.
@@ -3985,6 +3987,11 @@ class BambiDockWidget(QDockWidget):
 
     def get_config(self) -> Dict[str, Any]:
         """Get the current configuration from UI elements."""
+        # The render engine and ray caster have no widget on this tab: they
+        # are chosen in the Dependency Manager, next to the install that makes
+        # each choice possible, and live in the QGIS project.
+        _alfs_engine, _alfs_raycaster = read_alfs_selection()
+
         # Parse CRS from text input
         crs_text = self.target_crs_edit.text().strip().upper()
         epsg = self._parse_epsg_from_text(crs_text)
@@ -4153,6 +4160,13 @@ class BambiDockWidget(QDockWidget):
             "interpolate": self.interpolate_check.isChecked(),
 
             # ALFS
+            # Which alfspy engine and ray caster to render with. Chosen in the
+            # Dependency Manager, because the choice is only meaningful
+            # alongside the extras that make it work, and stored in the QGIS
+            # project rather than the flight folder - it describes this
+            # machine's install, not the flight.
+            "alfs_engine": _alfs_engine,
+            "alfs_raycaster": _alfs_raycaster,
             "alfs_ground_resolution": self.alfs_resolution_spin.value(),
             "alfs_fixed_render_size": (
                 self.alfs_fixed_size_check.isChecked()

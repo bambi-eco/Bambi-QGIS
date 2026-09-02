@@ -42,47 +42,65 @@ _bundled_versions_cache = None
 #: change to the pose→camera convention.  Each is kept in step with the lower
 #: bound of its ``_VERSION_RANGES`` entry below, which is what flags an
 #: out-of-date install (``tests/test_alfspy_pin.py``).
-ALFS_PY_TAG = 'v2.1.0'
-ALFS_TORCH_TAG = 'v1.1.1'
+ALFS_PY_TAG = 'v3.0.0'
 BAMBI_DETECTION_TAG = 'v1.0.0'
+#: Geo-Referenced-Tracking tags its releases without the ``v`` prefix the other
+#: two repositories use.  0.1.0 is the release the plugin's tracking step was
+#: written against; 1.0.0 exists but has not been run through the plugin, hence
+#: the closed ``_VERSION_RANGES`` entry that flags it as untested.
+GEOREF_TRACKER_TAG = '0.1.0'
 
-#: The two interchangeable alfspy backends.  Both install a package called
-#: ``alfspy`` and so cannot coexist - selecting one uninstalls the other.
-#: ``alfs_py`` rasterises through ModernGL, ``alfs_pytorch`` through PyTorch
-#: tensors (and picks up CUDA on its own).  They agree to well under one 8-bit
-#: level on rendered output and to ~1e-11 m on geo-referencing.
-ALFS_BACKENDS = {
-    'moderngl': {
-        'dist': 'AlfsPy',
-        'repo': 'alfs_py',
-        'tag': ALFS_PY_TAG,
-        'label': 'ModernGL',
-    },
-    'torch': {
-        'dist': 'AlfsTorch',
-        'repo': 'alfs_pytorch',
-        'tag': ALFS_TORCH_TAG,
-        'label': 'PyTorch',
-    },
-}
+#: The distribution alfspy 3.0 ships as, and the one it replaces.  Until 3.0
+#: the PyTorch rasteriser lived in a separate repository (``alfs_pytorch``,
+#: distribution ``AlfsTorch``) that installed a package called ``alfspy`` too;
+#: 3.0 merged both into this one behind a selectable engine.  A machine that
+#: installed the fork still has that distribution owning the same import path,
+#: and pip will not clean it up on its own - so every install removes it.
+ALFS_DIST = 'AlfsPy'
+ALFS_REPO = 'alfs_py'
+ALFS_LEGACY_DIST = 'AlfsTorch'
 
 
-def alfs_backend_spec(use_torch: bool) -> dict:
-    """Describe the alfspy release to install for the selected backend.
+def alfs_install_spec(engine=None, raycaster=None) -> dict:
+    """Describe the alfspy install for a chosen engine and ray caster.
 
-    :param use_torch: ``True`` for the PyTorch backend, ``False`` for ModernGL
-    :return: dict with ``dist``, ``other_dist``, ``tag``, ``label``,
-        ``zip_url`` and ``git_url``
+    The engine and the ray caster are pip *extras* of one release rather than
+    separate packages, so the choice changes the requirement string and nothing
+    else.  Both are also read at run time from the environment (see
+    ``core.alfs_runtime``), which is why the same two names appear in both
+    places: what you install is what you then render with.
+
+    :param engine: ``moderngl``, ``torch`` or ``vulkan``; ``None`` for the default
+    :param raycaster: ``embree`` or ``warp``; ``None`` for the default
+    :return: dict with ``dist``, ``legacy_dist``, ``tag``, ``engine``,
+        ``raycaster``, ``extras``, ``label``, ``zip_url`` and ``git_url``
     """
-    key = 'torch' if use_torch else 'moderngl'
-    other = 'moderngl' if use_torch else 'torch'
-    spec = dict(ALFS_BACKENDS[key])
-    spec['other_dist'] = ALFS_BACKENDS[other]['dist']
-    repo, tag = spec['repo'], spec['tag']
-    spec['zip_url'] = (
-        f'https://github.com/bambi-eco/{repo}/archive/refs/tags/{tag}.zip')
-    spec['git_url'] = f'git+https://github.com/bambi-eco/{repo}.git@{tag}'
-    return spec
+    from . import alfs_runtime
+
+    extras = alfs_runtime.extras_for(engine, raycaster)
+    suffix = '[' + ','.join(extras) + ']'
+    tag = ALFS_PY_TAG
+    zip_url = ('https://github.com/bambi-eco/'
+               f'{ALFS_REPO}/archive/refs/tags/{tag}.zip')
+    # PEP 508 direct reference: the only spelling that carries extras through a
+    # VCS install.  ``pip install git+...#egg=AlfsPy[torch]`` is the older form
+    # and is deprecated.
+    git_url = (f'{ALFS_DIST}{suffix} @ git+https://github.com/bambi-eco/'
+               f'{ALFS_REPO}.git@{tag}')
+    return {
+        'dist': ALFS_DIST,
+        'legacy_dist': ALFS_LEGACY_DIST,
+        'tag': tag,
+        'engine': extras[0],
+        'raycaster': extras[1],
+        'extras': extras,
+        'extras_suffix': suffix,
+        'label': (f'{alfs_runtime.label_of(extras[0])} + '
+                  f'{alfs_runtime.label_of(extras[1], alfs_runtime.RAYCASTERS)}'),
+        'zip_url': zip_url,
+        'git_url': git_url,
+    }
+
 
 # Tested version ranges per pip distribution name (or special key for non-pip packages).
 # None means no bound (any version is accepted).
@@ -91,13 +109,18 @@ _VERSION_RANGES = {
     # io are the array-in, array-out functions the plugin's steps are built on
     # (see tests/test_engine_contract.py); 0.6.0 introduced backend neutrality.
     'bambi-detection': ("1.0.0", None),
-    # 2.1.0 / 1.1.0 are the first releases whose drone-pose rotation applies the
-    # gimbal heading about world up; anything older mis-points every oblique frame.
-    # The torch floor tracks the pinned tag, which is ahead of that at 1.1.1.
-    'AlfsPy': ("2.1.0", None),
-    'AlfsTorch': ("1.1.1", None),
+    # 3.0.0 is the release that merged the PyTorch fork back in: one package
+    # with selectable engines and ray casters, ``make_context`` in place of the
+    # per-backend factories, and an integral result that reports coverage
+    # separately from alpha.  2.1.0 was the floor before that - the first
+    # release whose drone-pose rotation applies the gimbal heading about world
+    # up - and anything older still mis-points every oblique frame.
+    'AlfsPy': ("3.0.0", None),
     'pycolmap': ('4.0.3', '4.0.3'),
     'boxmot': ('17.0.0', '18.0.0'),
+    # Closed on both ends: 0.1.0 is what ``GEOREF_TRACKER_TAG`` installs and the
+    # only release the tracking step has been run against.  1.0.0 exists and is
+    # deliberately not accepted until it has been tested here.
     'georef-tracker': ("0.1.0", "0.1.0"),
     'torch': ("2.5.1", "2.11.0"),
     'torchvision': ("0.20.1", "0.26.0"),
@@ -418,8 +441,12 @@ def _run_pip(args, log_fn):
         _repair_user_site_shadows(log_fn)
 
 
-def _install_github_zip(zip_url, pkg_key, plugins_dir, log_fn):
-    """Download a GitHub archive ZIP, extract it, and pip-install the result."""
+def _install_github_zip(zip_url, pkg_key, plugins_dir, log_fn, extras=''):
+    """Download a GitHub archive ZIP, extract it, and pip-install the result.
+
+    *extras* is an optional ``"[a,b]"`` suffix appended to the extracted path,
+    which is how a local install carries pip extras (``pip install "src[torch]"``).
+    """
     import requests as _requests
     zip_path = os.path.join(plugins_dir, f'{pkg_key}_src.zip')
 
@@ -464,4 +491,4 @@ def _install_github_zip(zip_url, pkg_key, plugins_dir, log_fn):
         else plugins_dir
     )
     log_fn(f'Source directory: {pkg_path}')
-    _run_pip(['install', '--force-reinstall', pkg_path], log_fn)
+    _run_pip(['install', '--force-reinstall', pkg_path + extras], log_fn)

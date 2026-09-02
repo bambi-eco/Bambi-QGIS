@@ -20,20 +20,24 @@ import datetime
 
 from qgis.PyQt.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QGroupBox, QTextEdit, QScrollArea, QWidget, QFrame, QCheckBox,
+    QGroupBox, QTextEdit, QScrollArea, QWidget, QFrame, QComboBox,
     QSizePolicy,
 )
 from qgis.PyQt.QtCore import Qt, QTimer
 from qgis.PyQt.QtGui import QFont
 
 
+from .core import alfs_runtime
 from .core.hf_access import DEFAULT_BACKBONE as _DEFAULT_BACKBONE
+from .gui_utils import read_alfs_selection, write_alfs_selection
 from .core.dependency_ops import (  # noqa: F401 - re-exported API
-    ALFS_BACKENDS,
+    ALFS_DIST,
+    ALFS_LEGACY_DIST,
     ALFS_PY_TAG,
-    ALFS_TORCH_TAG,
+    ALFS_REPO,
     BAMBI_DETECTION_TAG,
-    alfs_backend_spec,
+    GEOREF_TRACKER_TAG,
+    alfs_install_spec,
     _DJI_SDK_URL,
     _VERSION_RANGES,
     _find_python,
@@ -99,58 +103,48 @@ class DependencyManagerDialog(QDialog):
         vbox.setSpacing(10)
 
         # ---- Required dependencies ----
-        # The backend checkbox starts from what is actually installed rather
-        # than a stored preference, so it can never disagree with reality.
-        # The box carries no text of its own: a QCheckBox cannot wrap its label
-        # and would pin the whole dialog to that label's width.  The caption is
-        # a word-wrapping QLabel beside it, clickable so it still toggles.
-        self._torch_backend_check = QCheckBox()
-        self._torch_backend_check.setChecked(
-            _get_version_status('AlfsTorch', self._plugins_dir)[1] != 'not_found'
-        )
-        tooltip = (
-            'Off: install alfs_py, which rasterises through ModernGL.\n'
-            'On: install alfs_pytorch, which rasterises through PyTorch.\n\n'
-            'Both provide the same "alfspy" package and cannot be installed '
-            'side by side, so switching removes the other one. Their results '
-            'agree to well under one 8-bit level.'
-        )
-        self._torch_backend_check.setToolTip(tooltip)
-        # ``toggled`` rather than ``stateChanged``: stable across Qt5 and Qt6,
-        # where the latter is deprecated in favour of ``checkStateChanged``.
-        self._torch_backend_check.toggled.connect(self._on_backend_toggled)
+        # alfspy 3.0 rasterises through one of three engines and casts rays
+        # through one of two casters, all pip extras of the same release. The
+        # dropdowns start from what the project asked for rather than from
+        # what is installed: unlike the old two-repository split there is no
+        # installed distribution to read the answer off, and the same choice
+        # has to be exported to $ALFS_ENGINE / $ALFS_RAYCASTER at render time.
+        engine, raycaster = read_alfs_selection()
+        self._engine_combo = self._make_alfs_combo(
+            alfs_runtime.ENGINES, engine,
+            'Which rasteriser alfspy renders with. Installed as a pip extra '
+            'and exported as $ALFS_ENGINE when a step renders, so the '
+            'selection has to be installed to work.')
+        self._raycaster_combo = self._make_alfs_combo(
+            alfs_runtime.RAYCASTERS, raycaster,
+            'Which ray caster alfspy intersects the terrain with. Installed '
+            'as a pip extra and exported as $ALFS_RAYCASTER.')
 
-        backend_caption = QLabel('Use the PyTorch backend (experimental)')
-        backend_hint = QLabel(
-            'Renders on the GPU when CUDA is available and needs no OpenGL '
-            'driver. Switching removes the other implementation.'
-        )
-        backend_hint.setStyleSheet('color:#777;')
-        for backend_lbl in (backend_caption, backend_hint):
-            backend_lbl.setWordWrap(True)
-            backend_lbl.setToolTip(tooltip)
-            # Ignored lets the label shrink below its text width, so the wrap
-            # follows the dialog instead of the label widening the dialog.
-            backend_lbl.setSizePolicy(QSizePolicy.Policy.Ignored,
+        selector_box = QWidget()
+        selector_layout = QVBoxLayout(selector_box)
+        selector_layout.setContentsMargins(0, 2, 0, 0)
+        selector_layout.setSpacing(2)
+        for caption, combo in (('Engine:', self._engine_combo),
+                               ('Ray caster:', self._raycaster_combo)):
+            line = QHBoxLayout()
+            line.setContentsMargins(0, 0, 0, 0)
+            line.setSpacing(6)
+            caption_lbl = QLabel(caption)
+            caption_lbl.setFixedWidth(70)
+            line.addWidget(caption_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
+            line.addWidget(combo, 0)
+            line.addStretch(1)
+            selector_layout.addLayout(line)
+
+        self._alfs_hint = QLabel('')
+        self._alfs_hint.setWordWrap(True)
+        self._alfs_hint.setStyleSheet('color:#777;')
+        # Ignored lets the hint shrink below its text width, so it re-wraps
+        # with the dialog instead of widening it.
+        self._alfs_hint.setSizePolicy(QSizePolicy.Policy.Ignored,
                                       QSizePolicy.Policy.Minimum)
-            backend_lbl.setMinimumWidth(0)
-            backend_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
-            backend_lbl.mousePressEvent = (
-                lambda _event: self._torch_backend_check.toggle())
-
-        caption_col = QVBoxLayout()
-        caption_col.setContentsMargins(0, 0, 0, 0)
-        caption_col.setSpacing(1)
-        caption_col.addWidget(backend_caption)
-        caption_col.addWidget(backend_hint)
-
-        backend_box = QWidget()
-        backend_layout = QHBoxLayout(backend_box)
-        backend_layout.setContentsMargins(0, 2, 0, 0)
-        backend_layout.setSpacing(4)
-        backend_layout.addWidget(self._torch_backend_check, 0,
-                                 Qt.AlignmentFlag.AlignTop)
-        backend_layout.addLayout(caption_col, 1)
+        self._alfs_hint.setMinimumWidth(0)
+        selector_layout.addWidget(self._alfs_hint)
 
         vbox.addWidget(self._build_group('Required Dependencies', [
             dict(
@@ -158,8 +152,8 @@ class DependencyManagerDialog(QDialog):
                 label='ALFS-PY Framework',
                 desc='Airborne light-field sampling framework for the actual geo-referencing processing.',
                 callback=self._install_alfs_py,
-                dist_name='AlfsPy',
-                extra_widget=backend_box,
+                dist_name=ALFS_DIST,
+                extra_widget=selector_box,
             ),
             dict(
                 key='bambi_detection',
@@ -192,7 +186,7 @@ class DependencyManagerDialog(QDialog):
             ),
             dict(
                 key='geo_ref_tracking',
-                label='Geo-Referenced Tracking',
+                label=f'Geo-Referenced Tracking  (v{GEOREF_TRACKER_TAG})',
                 desc='Geo-referenced tracker extensions – BoxMOT must be installed first.',
                 callback=self._install_geo_ref_tracking,
                 dist_name='georef-tracker',
@@ -281,11 +275,10 @@ class DependencyManagerDialog(QDialog):
         scroll.setWidget(content)
         root.addWidget(scroll, 1)
 
-        # _make_row registered the row against AlfsPy; if the torch backend is
-        # the one installed, re-point it so the status reflects reality.
-        if self._torch_backend_check.isChecked():
-            self._dist_names['alfs_py'] = ALFS_BACKENDS['torch']['dist']
-            self._refresh_single_status('alfs_py')
+        # The hint under the dropdowns describes the current pair, and warns
+        # when the superseded fork is still installed over the same import
+        # path.
+        self._refresh_alfs_hint()
 
         # ---- Restart notice ----
         restart_label = QLabel(
@@ -524,6 +517,11 @@ class DependencyManagerDialog(QDialog):
                 if lbl is not None:
                     lbl.setText('<span style="color:red;">✖ error</span>')
 
+        if btn_key == 'alfs_py':
+            # An install removes the superseded fork, so the warning about it
+            # has to go with it rather than waiting for the dialog to reopen.
+            self._refresh_alfs_hint()
+
     # ------------------------------------------------------------------
     # GitHub package helper
     # ------------------------------------------------------------------
@@ -555,41 +553,67 @@ class DependencyManagerDialog(QDialog):
             f'{BAMBI_DETECTION_TAG}',
         )
 
+    def _make_alfs_combo(self, options, selected, tooltip):
+        """A dropdown over ``alfs_runtime`` options, on *selected*."""
+        combo = QComboBox()
+        for option in options:
+            combo.addItem(option.label, option.name)
+        combo.setCurrentIndex(max(0, combo.findData(selected)))
+        combo.setToolTip(tooltip)
+        combo.currentIndexChanged.connect(self._on_alfs_selection_changed)
+        return combo
+
     def _selected_alfs_spec(self):
-        """The alfspy release the backend checkbox currently selects."""
-        return alfs_backend_spec(self._torch_backend_check.isChecked())
+        """The alfspy install the two dropdowns currently describe."""
+        return alfs_install_spec(self._engine_combo.currentData(),
+                                 self._raycaster_combo.currentData())
 
-    def _refresh_single_status(self, key):
-        """Re-read the installed version for a single-package row."""
-        lbl = self._status_labels.get(key)
-        dist_name = self._dist_names.get(key)
-        if lbl is None or isinstance(lbl, list) or not dist_name:
-            return
-        ver, status = _get_version_status(dist_name, self._plugins_dir)
-        self._apply_status_label(lbl, dist_name, ver, status)
-
-    def _on_backend_toggled(self):
-        """Point the status label at the selected backend's distribution."""
+    def _on_alfs_selection_changed(self):
+        """Persist the choice and say what it will take to make it real."""
         spec = self._selected_alfs_spec()
-        self._dist_names['alfs_py'] = spec['dist']
-        self._refresh_single_status('alfs_py')
+        write_alfs_selection(spec['engine'], spec['raycaster'])
+        self._refresh_alfs_hint()
         self._log_line(
-            f"Backend set to {spec['label']} - press Install to switch to "
-            f"{spec['repo']} {spec['tag']}."
+            f"Rendering set to {spec['label']} - saved to the project. Press "
+            f"Install to add what it needs "
+            f"({spec['dist']}{spec['extras_suffix']})."
         )
+
+    def _refresh_alfs_hint(self):
+        """Describe the selected pair, and flag a leftover AlfsTorch install."""
+        engine = self._engine_combo.currentData()
+        raycaster = self._raycaster_combo.currentData()
+        parts = [
+            next(o.hint for o in alfs_runtime.ENGINES if o.name == engine),
+            next(o.hint for o in alfs_runtime.RAYCASTERS
+                 if o.name == raycaster),
+        ]
+        legacy = _get_version_status(ALFS_LEGACY_DIST, self._plugins_dir)[1]
+        if legacy != 'not_found':
+            # It owns the same ``alfspy`` import path, so whatever it provides
+            # is what gets imported - the selection would be ignored.
+            parts.append(
+                f'<b>{ALFS_LEGACY_DIST} is still installed.</b> It provides '
+                'the same "alfspy" package as this one, so it has to go '
+                'before the engine choice means anything - pressing Install '
+                'removes it.')
+        self._alfs_hint.setTextFormat(Qt.TextFormat.RichText)
+        self._alfs_hint.setText('<br>'.join(parts))
 
     def _install_alfs_py(self):
         spec = self._selected_alfs_spec()
-        self._log_line(f"─── ALFS Framework ({spec['label']}) "
-                       f"{spec['repo']} {spec['tag']} ───")
+        self._log_line(f"─── ALFS Framework {ALFS_REPO} "
+                       f"{spec['tag']} ({spec['label']}) ───")
 
         def _do(log_fn):
-            # Both backends install a package called ``alfspy``; leaving the
-            # other distribution in place would give two dists owning the same
-            # import path, and pip would not clean it up on its own.
-            log_fn(f"Removing {spec['other_dist']} if present "
-                   "(both provide the 'alfspy' package) …")
-            _run_pip(['uninstall', '-y', spec['other_dist']], log_fn)
+            # Before 3.0 the PyTorch rasteriser was a separate distribution
+            # that installed a package called ``alfspy`` too. Leaving it in
+            # place would give two dists owning one import path, which pip
+            # does not clean up on its own and which would quietly shadow the
+            # engine selection.
+            log_fn(f"Removing {spec['legacy_dist']} if present "
+                   "(the superseded fork provides the 'alfspy' package) …")
+            _run_pip(['uninstall', '-y', spec['legacy_dist']], log_fn)
 
             git_ver = _git_available()
             if git_ver:
@@ -598,9 +622,10 @@ class DependencyManagerDialog(QDialog):
                 _run_pip(['install', '--force-reinstall', spec['git_url']], log_fn)
             else:
                 log_fn('git not found on PATH – using ZIP download fallback')
-                log_fn(f"Source: {spec['zip_url']}")
+                log_fn(f"Source: {spec['zip_url']}{spec['extras_suffix']}")
                 _install_github_zip(spec['zip_url'], 'alfs_py',
-                                    self._plugins_dir, log_fn)
+                                    self._plugins_dir, log_fn,
+                                    extras=spec['extras_suffix'])
 
         self._start_worker('alfs_py', _do)
 
@@ -619,11 +644,13 @@ class DependencyManagerDialog(QDialog):
         self._start_worker('boxmot', _do)
 
     def _install_geo_ref_tracking(self):
-        self._log_line('─── Geo-Referenced Tracking ───')
+        self._log_line(f'─── Geo-Referenced Tracking {GEOREF_TRACKER_TAG} ───')
         self._install_github_pkg(
             'geo_referenced_tracking', 'geo_ref_tracking',
-            'https://github.com/bambi-eco/Geo-Referenced-Tracking/archive/refs/heads/main.zip',
-            'git+https://github.com/bambi-eco/Geo-Referenced-Tracking.git',
+            'https://github.com/bambi-eco/Geo-Referenced-Tracking/archive/'
+            f'refs/tags/{GEOREF_TRACKER_TAG}.zip',
+            'git+https://github.com/bambi-eco/Geo-Referenced-Tracking.git@'
+            f'{GEOREF_TRACKER_TAG}',
         )
 
     def _install_fiona(self):

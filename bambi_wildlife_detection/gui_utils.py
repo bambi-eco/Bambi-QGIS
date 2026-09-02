@@ -27,3 +27,53 @@ def fit_to_screen(widget, width: int, height: int):
     frame = widget.frameGeometry()
     frame.moveCenter(avail.center())
     widget.move(max(avail.left(), frame.left()), max(avail.top(), frame.top()))
+
+
+#: Scope the plugin's settings live under in a QGIS project file.
+PLUGIN_SCOPE = "BambiWildlifeDetection"
+
+#: Project entries holding the alfspy engine and ray-caster choice.  They sit
+#: in the QGIS project rather than in a flight's ``project.gpkg``: the choice
+#: describes how *this machine* renders, not what a flight contains, and a
+#: flight folder is shared between people whose installs differ.
+_ALFS_ENGINE_ENTRY = "Processing/AlfsEngine"
+_ALFS_RAYCASTER_ENTRY = "Processing/AlfsRaycaster"
+
+
+def read_alfs_selection():
+    """The project's ``(engine, raycaster)``, falling back to the defaults.
+
+    Reads through :mod:`core.alfs_runtime`, so a value written by a newer
+    plugin - or edited by hand into something unknown - loads as the default
+    rather than reaching alfspy and failing there.
+    """
+    from .core import alfs_runtime
+
+    try:
+        from qgis.core import QgsProject
+        project = QgsProject.instance()
+        engine, _ok = project.readEntry(PLUGIN_SCOPE, _ALFS_ENGINE_ENTRY, "")
+        raycaster, _ok = project.readEntry(
+            PLUGIN_SCOPE, _ALFS_RAYCASTER_ENTRY, "")
+    except Exception:
+        engine = raycaster = ""
+    return (alfs_runtime.resolve_engine(engine),
+            alfs_runtime.resolve_raycaster(raycaster))
+
+
+def write_alfs_selection(engine, raycaster):
+    """Store ``(engine, raycaster)`` in the QGIS project.
+
+    Written as soon as the dropdown changes rather than on the next save: the
+    dependency manager is a separate window, and a selection that had to be
+    confirmed somewhere else before it counted would be a trap.
+    """
+    from .core import alfs_runtime
+    from qgis.core import QgsProject
+
+    project = QgsProject.instance()
+    project.writeEntry(PLUGIN_SCOPE, _ALFS_ENGINE_ENTRY,
+                       alfs_runtime.resolve_engine(engine))
+    project.writeEntry(PLUGIN_SCOPE, _ALFS_RAYCASTER_ENTRY,
+                       alfs_runtime.resolve_raycaster(raycaster))
+    project.setDirty(True)

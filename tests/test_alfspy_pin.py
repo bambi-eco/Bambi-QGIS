@@ -13,7 +13,7 @@ import re
 import pytest
 
 from bambi_wildlife_detection.core.dependency_ops import (
-    ALFS_PY_TAG, BAMBI_DETECTION_TAG, _VERSION_RANGES)
+    ALFS_PY_TAG, BAMBI_DETECTION_TAG, GEOREF_TRACKER_TAG, _VERSION_RANGES)
 
 PLUGIN_DIR = pathlib.Path(__file__).resolve().parent.parent / "bambi_wildlife_detection"
 
@@ -79,3 +79,33 @@ def test_alfspy_urls_come_from_the_backend_spec():
     assert "_selected_alfs_spec()" in body
     assert "alfs_py/archive/refs/heads/main" not in source
     assert "alfs_pytorch/archive/refs/heads/main" not in source
+
+
+# ---------------------------------------------------------------------------
+# Geo-Referenced Tracking
+#
+# Kept apart from ``PINS``: the repository tags without the ``v`` prefix, and
+# its range is closed at the top because only the pinned release has been run
+# through the plugin.
+# ---------------------------------------------------------------------------
+
+
+def test_georef_tracker_tag_is_a_bare_version_tag():
+    """The repository's tags are ``0.1.0``/``1.0.0``, not ``v0.1.0``."""
+    assert re.fullmatch(r"\d+\.\d+\.\d+", GEOREF_TRACKER_TAG), GEOREF_TRACKER_TAG
+
+
+def test_georef_tracker_pin_is_the_only_accepted_version():
+    """What we install must be exactly what the status row calls ok."""
+    min_ver, max_ver = _VERSION_RANGES["georef-tracker"]
+    assert min_ver == max_ver == GEOREF_TRACKER_TAG
+
+
+def test_georef_tracker_urls_use_the_pinned_tag():
+    """Installing from ``main`` would silently pull the untested 1.0.0."""
+    source = (PLUGIN_DIR / "bambi_dependency_manager.py").read_text(encoding="utf-8")
+    start = source.index("def _install_geo_ref_tracking")
+    body = source[start:start + 600]
+    assert "refs/tags/" in body
+    assert "Geo-Referenced-Tracking.git@" in body
+    assert "Geo-Referenced-Tracking/archive/refs/heads/main" not in source

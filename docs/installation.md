@@ -50,12 +50,40 @@ Each dependency group shows the currently installed version (green ✔, orange �
 
 | Group | Packages |
 |-------|----------|
-| **Required Dependencies** | BAMBI Detection Framework, ALFS-PY Framework |
+| **Required Dependencies** | BAMBI Detection Framework, ALFS-PY Framework (with the render **Engine** and **Ray caster** dropdowns) |
 | **Calibration (optional)** | pycolmap |
 | **Extended Tracking (optional)** | BoxMOT, Geo-Referenced Tracking |
 | **Flight Route Generation (optional)** | Fiona, simplekml |
 | **DJI Thermal SDK** | Download & extract to the correct plugin subfolder |
 | **GPU Support – CUDA** | torch + torchvision (CUDA 12.1 builds) |
+
+### Render engine and ray caster
+
+ALFS-PY renders through one of three interchangeable engines and casts
+rays through one of two casters. Both are chosen in the **ALFS-PY
+Framework** row and installed by its Install button, because each is an
+optional extra of the same release rather than a separate package.
+
+| Engine | What it needs |
+|--------|---------------|
+| **ModernGL** | A working OpenGL driver. The default, and what a desktop QGIS normally has. |
+| **PyTorch** | No GL driver; renders on the GPU when CUDA is available. A large download. |
+| **Vulkan** | No GL driver and no virtual display - the headless choice. Needs Python 3.11 or newer. |
+
+| Ray caster | When to pick it |
+|------------|-----------------|
+| **Embree (CPU)** | The default, and enough for the handful of rays a frame's labels need. |
+| **Warp (GPU)** | Above roughly 10,000 rays per call. Below that its launch overhead only ties Embree. |
+
+The selection is saved in the **QGIS project**, not in the flight
+folder: it describes what this machine has installed, and a flight
+folder is shared between people whose installs differ. Every step that
+renders exports it as `$ALFS_ENGINE` and `$ALFS_RAYCASTER` before it
+starts, so nothing depends on what happens to be set in your shell.
+
+Selecting an engine does not install it. If a render then fails, the
+message names the engines that do work on the machine - press Install
+to add the selected one, or pick one of those instead.
 
 > **Note**: After any installation you must restart QGIS to activate the newly installed packages. QGIS loads its Python environment only at startup and will not detect new packages dynamically.
 
@@ -69,8 +97,15 @@ The plugin requires the **BAMBI Detection Framework** and the **ALFS-PY** framew
 
 ```bash
 pip install git+https://github.com/bambi-eco/bambi_detection.git
-pip install git+https://github.com/bambi-eco/alfs_py.git
+pip install "AlfsPy[moderngl,embree] @ git+https://github.com/bambi-eco/alfs_py.git"
 ```
+
+ALFS-PY ships no renderer of its own: the render engine and the ray
+caster are optional extras, and installing it without one leaves it
+unable to render anything. Pick the pair you want - `moderngl`, `torch`
+or `vulkan`, and `embree` or `warp` - and select the same pair in the
+Dependency Manager, which is what the plugin exports as `$ALFS_ENGINE`
+and `$ALFS_RAYCASTER` when a step renders.
 
 ### Optional: Extended tracking capabilities
 
@@ -89,7 +124,7 @@ Or install from source: [https://github.com/mikel-brostrom/boxmot](https://githu
 **Geo-Referenced Tracking** provides tracking algorithms that operate natively in geo-referenced coordinates (recommended for wildlife surveys; builds upon BoxMOT so both dependencies are required):
 
 ```bash
-pip install git+https://github.com/bambi-eco/Geo-Referenced-Tracking.git
+pip install git+https://github.com/bambi-eco/Geo-Referenced-Tracking.git@0.1.0
 ```
 
 ### Optional: Single camera calibration
@@ -182,7 +217,7 @@ set "PATH=C:\Users\<username>\AppData\Local\Programs\Git\cmd\;%PATH%"
 Alternatively, download the repositories and install from local paths:
 
 ```shell
-pip install <path>/alfs_py
+pip install "<path>/alfs_py[moderngl,embree]"
 pip install <path>/bambi_detection
 ```
 
