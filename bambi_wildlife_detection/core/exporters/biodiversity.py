@@ -32,26 +32,8 @@ from . import common
 BASIS_OF_RECORD = "MachineObservation"
 
 
-def _to_wgs84(points, epsg: int):
-    """Project ``[(x, y), …]`` from *epsg* to lon/lat.
-
-    Raises :class:`common.ExportError` rather than guessing - publishing
-    coordinates in the wrong reference system is worse than not publishing.
-    """
-    if not epsg:
-        raise common.ExportError(
-            "This format publishes latitude/longitude, so the project CRS must "
-            "be known. Set the target CRS before exporting.")
-    try:
-        from pyproj import Transformer
-    except ImportError as exc:  # pragma: no cover - environment dependent
-        raise common.ExportError(
-            "pyproj is required to convert the project CRS to "
-            "latitude/longitude. Install it from the Dependencies tab.") from exc
-
-    transformer = Transformer.from_crs(
-        f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
-    return [transformer.transform(x, y) for x, y in points]
+#: Shared with the GeoJSON exporters - every publishing format speaks WGS84.
+_to_wgs84 = common.to_wgs84
 
 
 def _scientific_name(taxonomy: dict) -> str:
@@ -72,15 +54,32 @@ def _gbif_taxon_id(taxonomy: dict) -> str:
 
 
 def _timestamp(frames: Dict[int, dict], frame: int) -> str:
-    """ISO-8601 capture time of *frame*, or ``""`` when unknown."""
-    epoch = frames.get(frame, {}).get("epoch")
-    if not epoch:
+    """ISO-8601 capture time of *frame*, or ``""`` when unknown.
+
+    The poses store the SRT capture time as an ISO-8601 string with its
+    timezone offset (``2023-09-20T10:00:00+02:00``); older files and the
+    tests carry epoch seconds instead. Both are accepted. The result is
+    written at second precision in the ``YYYY-MM-DDThh:mm:ss±hh:mm`` form
+    Camtrap DP and Darwin Core expect - previously the ISO string was fed to
+    ``float()`` and every media row silently lost its timestamp.
+    """
+    value = frames.get(frame, {}).get("epoch")
+    if value in (None, ""):
         return ""
     try:
-        return datetime.fromtimestamp(
-            float(epoch), tz=timezone.utc).isoformat()
+        if isinstance(value, (int, float)):
+            moment = datetime.fromtimestamp(float(value), tz=timezone.utc)
+        else:
+            text = str(value).strip()
+            try:
+                moment = datetime.fromisoformat(text)
+            except ValueError:
+                moment = datetime.fromtimestamp(float(text), tz=timezone.utc)
     except (ValueError, OSError, OverflowError):
         return ""
+    # A naive timestamp is written as such rather than given a zone it
+    # never had; the drone's SRT clock normally carries one.
+    return moment.replace(microsecond=0).isoformat()
 
 
 def _track_summary(rows: List[dict], vocabulary: dict) -> List[dict]:

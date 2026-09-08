@@ -12,6 +12,7 @@ about=A comprehensive QGIS plugin for detecting, tracking, and geo-referencing w
     - Animal detection using YOLO models (auto-downloaded from HuggingFace)
     - Multi-object tracking with built-in, BoxMOT, or geo-referenced backends; import of pre-computed TRex tracklets
     - Demographic classification of tracked animals: cross-modal RGB/thermal track matching, DINOv3 features, occlusion/species/sex classifiers aggregated per animal by vote, and a size-based juvenile flag (requires a Hugging Face token for the gated DINOv3 model)
+    - Text-prompted SAM3 segmentation of the frames, through the Roboflow API or locally with the gated Hugging Face model
     - Geo-referencing of detections, tracks, and SAM3 segmentations onto a DEM (real-world UTM coordinates)
     - Flight route visualization and perpendicular distance sampling for transect-based surveys
     - Survey analytics: kernel-density heatmaps, line-transect distance-sampling density/abundance estimation (from detections or tracks), and transect-based population estimation (naive, bootstrap, zero-inflated negative binomial)
@@ -46,108 +47,16 @@ changelog=Version 6.1.0
     - Occlusion is optional. It selects which frames carry usable evidence, but species and sex run either way: over the frames the occlusion classifier called clear, or over occlusion values you annotated by hand, or over every frame. The run log always says which of the three it used, so voting over occluded frames is never silent.
     - Results are written onto the animals themselves - species, sex, life stage and per-frame occlusion - which is what makes them visible to the exports, the map layers, the survey analytics and the labelling tool. Optional, repeatable, and it never changes a track you annotated by hand or a species the detector itself identified.
     - Both perspective and orthorectified crops are supported, with the classifier variant following the imagery so a model always sees the kind of image it was trained on.
-    - Dependency Manager: a Classification group installing transformers and huggingface-hub.
-    - Export: a GeoJSON exporter for the SAM3 segmentation masks, writing their outlines as polygons in the project CRS. Masks that were never geo-referenced are skipped and reported rather than written in pixel coordinates.
+    - Dependency Manager: a Classification group installing transformers and huggingface-hub. The same packages serve local SAM3 segmentation, which needs transformers 5.0 or newer.
+    - Export: a GeoJSON exporter for the SAM3 segmentation masks, writing their outlines as polygons in WGS84 longitude/latitude, as GeoJSON requires. Masks that were never geo-referenced are skipped and reported rather than written in pixel coordinates.
+    - S1 Run SAM3 Segmentation can run on your own machine. "Run SAM3 locally" in the SAM3 Segmentation tab loads Meta's facebook/sam3 through transformers instead of sending every frame to Roboflow, so no Roboflow key is needed. The model is gated on Hugging Face exactly like DINOv3: request access once, and the token from the Classification tab downloads it into the shared model cache on the first run. A "Check access" button answers before the frames are loaded, the model field accepts a fine-tuned repository or a pinned revision, and the device follows the Classification tab. The masks are written in the same structure as the Roboflow results, so geo-referencing and the exports do not care which backend produced them.
     Changed:
     - The GeoJSON export is now named "GeoJSON (animals)" alongside the new "GeoJSON (segmentations)". The old name described how the file was made rather than what is in it, which is no help when choosing between two of them.
     - New projects seed the occlusion vocabulary as clear/occluded, matching what the occlusion classifier reports, so predictions and hand annotations share one vocabulary. Projects created earlier keep the values they have - enum ids are append-only and are never renumbered - and a classifier is pointed at them through its class mapping. Migrating a 5.x flight appends whatever levels it carries rather than dropping them.
     - The Processing tab is grouped into Detection and Tracking, Classification, and Segmentation. They are not one sequence: classification works on animals the first section found, and segmentation neither needs that section nor feeds into it. Steps are prefixed A, C and S accordingly, so SAM3 segmentation is now S1.
     Fixed:
-    - Nothing outstanding from 6.0.0.
-
-    Version 6.0.0
-    This release replaces the text files used between processing steps with a relational store, so that results carry their own meaning instead of being reconstructed from row order. Existing projects are migrated on opening. The 5.x text files are still written alongside for external scripts and can be switched off under Output Configuration, but nothing in the plugin reads them any more; they will be removed in a future release.
-    Added:
-    - Exchange format: detections, geo-referencing, tracks, field of view, labels and segmentations are stored in GeoPackages under bambi_t/ and bambi_w/, with a project.gpkg holding the project's species, enums, custom fields and step status. Every detection has an id that the later steps refer to, so nothing is matched back by coordinates.
-    - "Migrate 5.x..." on the Input tab imports an existing project's outputs into the new format. The existing files are only read, never modified.
-    - Project Schema editor (Detection tab, and the labelling tool's gear button): species, reusable enums and custom fields for the whole project. Species and enum values are referenced by id, so renaming one is free and cannot change the meaning of data already recorded.
-    - Three base classes in every project: animal (what the detector reports), unknown (not yet determined) and not-an-animal (a labelled false positive, excluded from every survey analytic).
-    - Custom fields now travel through the whole pipeline instead of staying in labels.json, and reach the exports.
-    - Detector class mapping (Detection tab): map the classes a model reports onto the project's species. The table lists what the detector actually reported and how often; unmapped classes count as animal, so a single-class model needs nothing. Applying a change re-reads the detections already stored instead of requiring the detector to run again.
-    - Export (Processing tab): COCO, YOLO, MOT, TRex tracklets, GeoJSON, Camtrap DP and Darwin Core Archive for GBIF publishing. Species can carry a scientific name and a GBIF taxon key for the two publishing formats.
-    - Export: an "Include images" option copies the frames the export refers to alongside it (COCO into images/, YOLO into images/ beside labels/, MOT into img1/, Camtrap DP into media/ with filePath following). On by default, since those formats are incomplete without them; turn it off to avoid duplicating the heaviest part of a project. GeoJSON and TRex reference no image and ignore it.
-    - Multi-flight projects: a flight selector on the Input tab, each flight with its own target folder, configuration and QGIS layer group. Flights can be added, renamed and removed; removing asks for confirmation, takes the flight out of the project and removes its layer group, but never deletes anything on disk. A folder that has already been processed can be added back as an existing flight: the plugin lists what it found and loads the configuration stored with it, without recomputing or overwriting anything. Survey analytics can add another flight of the project directly, without hunting for its folder and DEM.
-    - Survey analytics: a Species box selects which species the density heatmap, distance sampling and population estimation count, or all of them as before. "All species" means no filter, so a species added later stays included. The coverage map counts frames and is unaffected. "Separate result per species" runs those analytics once per species and writes one result each, named after the species; a species with nothing to count is skipped, and one too thin to fit is reported rather than failing the run.
-    - "Reset Step..." deletes one step's outputs and marks everything that depended on it as out of date.
-    - Geo-referencing records why a detection could not be placed on the DEM, rather than dropping it silently.
-    - Nothing in the plugin reads the 5.x text files any more; they are written for external scripts only. Every step, layer, overlay and analytic reads the store, so turning "Write legacy text outputs" off no longer changes what the plugin can do. Open a 5.x project once with "Migrate 5.x..." to bring it across.
-    Changed:
-    - The Processing tab is split into Pre-Processing (P1-P6: frames, flight route, field of view, ALFS, GeoTIFF, orthomosaic) and Processing (A1-A3: detection, tracking, segmentation). The two only look sequential; everything in Pre-Processing is independent of any animal. Steps are renumbered so a bare number no longer means two things.
-    - Configuration is stored with the flight's outputs instead of in the QGIS project, so a target folder describes the settings that produced it. Older projects are converted when first opened.
-    - Labelling tool: species, sex, age and occlusion are chosen from the project's vocabulary instead of typed, which is what previously made class ids unstable. Labelled tracks are written as real tracks, so they reach the analytics and exports without re-running tracking.
-    - Survey analytics record what they counted - which tracking run, which species, how many false positives were excluded - alongside the result.
-    - Manual and detector tracks are counted together, since labels are usually animals the detector missed; a label imported from a tracker track replaces that track rather than adding to it.
-    - A configured TRex tracklet folder now replaces tracking entirely instead of running a tracker as well.
-    Fixed:
-    - Adding a species no longer renumbers the others, which previously changed the meaning of detections already exported.
-    - A detection that cannot be geo-referenced no longer costs the other detections in its frame their tracks.
-    - Several steps refused to run when "Write legacy text outputs" was off: they checked for the text file before reading the store, so the pipeline could not proceed on its own output.
-    - The Field of View step now records its footprints in the store. They existed only as text, so the coverage map, the transect areas a population estimate divides by, and the FoV layers had nothing to read unless the project had been migrated from 5.x.
-    - The video creator, the map inspectors and the cross-modality box projector no longer reconstruct track membership by matching coordinates, row positions or confidence values. Those reconstructions could attach a box to the wrong animal whenever a file was re-sorted or a detection was dropped.
-    - Orthomosaic, ALFS, density heatmap, coverage map and merged field of view were added to the top of the QGIS layer tree instead of the active flight's group, so with several flights loaded it was not visible which flight they belonged to - and removing a flight left them behind.
-    - Re-running a step now marks the perpendicular distances, population estimates and exported media that depended on it as out of date; previously only the tracking folders were cleaned up.
-    - YOLO export: the images are exported alongside the labels. The data.yaml used to point at an "images_<modality>" folder that was never created, so the dataset could not be trained on. Labels and images are now written as the sibling folders YOLO expects, and frames without an image on disk are reported instead of silently ignored.
-    - Tracking now refuses to fall back to georeferenced.txt when the project has a store, and the BoxMOT backends record their run in it. Both cases previously produced a tracks file while the store stayed empty, so MOT, GeoJSON, TRex and the survey analytics reported every detection as untracked even though tracking had reported success.
-    - Track exports that come back empty now say why, instead of only reporting zero rows.
-
-    Version 5.2.1
-    Changed:
-    - Dependency Manager: installs pin numpy/scipy to the versions QGIS ships so a dependency cannot shadow them and break QGIS. Some dependency chains cap these packages below the bundled version (ultralytics requires numpy<=2.1.1 while QGIS 3.34 ships 2.2.6), which made the pinned install abort with "ResolutionImpossible". Such installs now automatically retry without the pin and afterwards remove the user-site numpy/scipy copy that shadows the QGIS build.
-    - Fixing Problems with flight along the Equator (our original detection logic to identify GPS coordinates during initialization phase)
-
-    Version 5.2.0:
-    Added:
-    - Thermal tone-curve mapping: both the Thermal Image Viewer and the photo-extraction thermal visualisation now offer a "Curve (custom mapping)" mode as a fine-granular alternative to the lower/upper thresholds - a curve with draggable control points maps a fixed temperature range to display intensity (with a live temperature histogram). The range can be entered manually or determined via "Auto Detect", which scans the flight's thermal images for the actual minimum/maximum temperature. The curve is stored in the QGIS project.
-    - Labelling tool: new "Replace detections in project" button that replaces the existing detections/tracks instead of appending to them.
-    - Labelling tool: new "Import all as label tracks" button to import every pipeline track at once instead of one by one.
-    - Labelling tool: now supports to merge/split tracks
-    - Labelling tool: the geo-referenced propagation now works on several tracks at once - select multiple tracks in the track list (Ctrl/Shift click) and the boxes of every selected track on the current frame are propagated in one step (the DEM is loaded once). Tracks without a box on the current frame, or whose box cannot be projected, are skipped instead of aborting the run and are listed in a summary afterwards.
-    - Processing tool: Now also supports the "no images" flag of the pose extractors for debugging purposes.
-    Changed:
-    - Generate Flight Route is now also usable without frame extraction, based only on the AirData file (camera positions are skipped).
-    - Add Tracks to QGIS now allows filtering tracks between a start and an end frame.
-    - Detection models can now be configured separately for RGB and thermal recordings (previously a single model was used for both).
-    - Distance sampling and transect-based population estimation can now pool the outputs of multiple projects into one combined estimate.
-    - Detect Animals now shows an Ultralytics license notice (AGPL-3.0; commercial use requires an Ultralytics Enterprise License) before running; cancelling aborts the detection, and a "Remember my decision" checkbox skips the notice in subsequent runs.
-    - Processing tool: Added a label about the target CRS input form, that we need a UTM CRS.
-    Fixed:
-    - Frame GeoTIFF export: the antialiased edge of each frame's footprint left a thin dark rim (alpha > 0 but the RGB bled towards black), which showed up as seams wherever frames overlapped in the orthomosaic. Each frame's valid footprint is now eroded inward by a configurable number of pixels (new "Erode px" control next to "Export Frames as GeoTIFF", default 2) before saving, so neighbouring frames cover the rim; set it to 0 to disable.
-    - GeoTIFF to mesh conversion: DEMs with a compound CRS (e.g. Dutch AHN tiles tagged "Amersfoort / RD New + NAP height") were converted without reprojection and silently mislabeled with the target CRS, placing the mesh hundreds of kilometres from the flight and yielding empty geo-referencing results. The CRS is now identified via GDAL when rasterio cannot read it, and the conversion fails with a clear message if the source CRS cannot be determined.
-    - GeoTIFF to mesh conversion now supports any UTM target zone (previously only zones 32-34) and EPSG:28992 (Dutch RD New) as a source CRS, including its Bessel datum shift.
-    - Re-tagging a GeoTIFF with a source CRS override failed with newer rasterio versions (read-only LIBERTIFF driver).
-
-    Version 5.1.0:
-    Added:
-    - Transect splitting tool: define named transects as start/end frame ranges of a flight, with a flight-route overview map highlighting the current frame's position, flight-path length measurement between start and end, and an "end after X metres" helper. Definitions are saved to transects_{t,w}/transects.json (+ .csv) in the output folder and loaded automatically.
-    - Survey analytics: transect-based population estimation with three estimators (naive, bootstrap and zero-inflated negative binomial regression), ported from the R analysis of Praschl et al. 2026 and validated against it. Tracks are assigned to the transect nearest in perpendicular distance (with an optional truncation), and a transect's monitored area is the union of its frames' field-of-view footprints. Requires the transect definitions, "Calculate Field of View" and "Calculate Track Perpendicular"; results are written to analytics_{t,w}/population_estimate.json plus per-transect and per-track CSVs, and the transects can be loaded into QGIS as one layer group each (its merged field of view, its sub-flight route and the tracks assigned to it), nested under a "BAMBI Transect Areas" group. An optional study area (entered manually or derived from the flight's total field-of-view coverage) extrapolates every density to an abundance.
-    Changed:
-    - Labelling tool: considering masks during frame propagation; allows to move/rescale all bounding boxes of a track simultaneously
-
-    Version 5.0.0:
-    Added:
-    - Labelling tool: key-frame based review and annotation of detections/tracks on extracted frames. Draw and edit track bounding boxes, assign species/sex/age/occlusion classes, interpolate between key frames, mark stop frames, and propagate boxes across frames via DEM geo-referencing. Includes a "Copy labels from RGB/Thermal" action that time-matches and reprojects labels between both modalities, plus user-defined custom label fields.
-    - Result video creator: renders annotated result videos from processed flights.
-    - Survey analytics: kernel-density heatmaps (points/ha) and line-transect distance sampling for density and abundance estimation, computed from either detections or tracks.
-    - Coverage map tool: per-pixel frame-overlap count raster for a flight.
-    - TRex tracklet import: pre-computed TRex tracklets can now be imported directly from the tracking configuration.
-    - True orthomosaic export: a new step that merges the per-frame GeoTIFFs into a real orthomosaic (methods: first, last, min, max, average).
-    - Pixel-based track export: converts geo-referenced tracks back into pixel-space tracks.
-    - Manual padding input for flat-surface DEM generation.
-    Changed:
-    - BREAKING: what previous versions called "orthomosaic" was in fact a light-field mosaic and is now called "ALFS", with its config key renamed from "orthomosaic" to "alfs". The "orthomosaic" key still exists but now selects the new true-orthomosaic step, so an unmodified v4 config will silently run a different algorithm. Rename "orthomosaic" to "alfs" in existing configs to keep the previous behaviour.
-    - Correction wizard reworked around an analytic tz/rz solver instead of a brute-force probe.
-    - DEM and Target form groups reordered, since downloaded/created DEMs are written to the target folder.
-    - Plugin settings are reset when a new QGIS project is opened.
-    - Scrollbars added to the labelling and video creator dialogs; video creator dialog refined; minor default settings adjusted.
-    - Bumped the required bambi-detection version.
-    Fixed:
-    - SRT/AirData timestamp offsets caused by timezone shifts.
-    - Field-of-view footprint computation.
-    - GeoTIFF and orthomosaic georeferencing bugs; added a GeoTIFF size sanity check.
-    - Orthomosaic generation failure during mosaic assembly.
-    - Processing step ordering and status-code signalling.
-    - Duplicated camera selector in the TRex import dialog.
-    - Consistency of pixel-based tracks.
+    - GeoJSON exports wrote the project CRS - usually UTM metres - into a format that has exactly one coordinate system, WGS84 longitude/latitude. The crs member that named the projection was dropped from the GeoJSON specification years ago and readers ignore it, so every animal landed at a longitude of several hundred thousand degrees. Both GeoJSON exports now project to WGS84 and write no crs member; an export without a known project CRS is refused rather than written wrong.
+    - Camtrap DP media.csv left the timestamp column empty. The poses store each frame's capture time as an ISO-8601 string with the drone clock's timezone, which the exporter took for epoch seconds and silently failed to parse. Both forms are read now, and the timestamps are written at second precision with their offset; this also fills deploymentStart and deploymentEnd in deployments.csv and eventDate in the Darwin Core Archive, which went through the same code.
 
 tracker=https://github.com/bambi-eco/Bambi-QGIS/issues
 repository=https://github.com/bambi-eco/Bambi-QGIS

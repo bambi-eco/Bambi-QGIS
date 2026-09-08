@@ -253,6 +253,30 @@ def tracks_of(rows: List[dict]) -> Dict[int, List[dict]]:
     return grouped
 
 
+def to_wgs84(points, epsg: Optional[int]):
+    """Project ``[(x, y), …]`` from *epsg* to ``(lon, lat)`` pairs.
+
+    GeoJSON (RFC 7946), Camtrap DP and Darwin Core all publish WGS84
+    latitude/longitude, while the store keeps the project CRS - usually a UTM
+    zone. Raises :class:`ExportError` rather than guessing: publishing
+    coordinates in the wrong reference system is worse than not publishing.
+    """
+    if not epsg:
+        raise ExportError(
+            "This format publishes latitude/longitude, so the project CRS must "
+            "be known. Set the target CRS before exporting.")
+    try:
+        from pyproj import Transformer
+    except ImportError as exc:  # pragma: no cover - environment dependent
+        raise ExportError(
+            "pyproj is required to convert the project CRS to "
+            "latitude/longitude. Install it from the Dependencies tab.") from exc
+
+    transformer = Transformer.from_crs(
+        f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
+    return [transformer.transform(x, y) for x, y in points]
+
+
 def ensure_folder(path: str) -> str:
     os.makedirs(path, exist_ok=True)
     return path

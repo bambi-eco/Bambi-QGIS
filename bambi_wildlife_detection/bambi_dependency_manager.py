@@ -200,9 +200,10 @@ class DependencyManagerDialog(QDialog):
                 label='Transformers + Hugging Face Hub',
                 desc=(
                     'DINOv3 feature extraction for the occlusion, species and '
-                    'sex classifiers. The backbone itself is a gated Hugging '
-                    'Face model - request access and enter a token in the '
-                    'Classification configuration tab.'
+                    'sex classifiers, and local SAM3 segmentation (transformers '
+                    '>= 5.0). Both models are gated on Hugging Face - request '
+                    'access and enter a token in the Classification '
+                    'configuration tab.'
                 ),
                 callback=self._install_classification,
                 dist_names=[('transformers', 'transformers'),
@@ -680,6 +681,11 @@ class DependencyManagerDialog(QDialog):
             log_fn(f'  https://huggingface.co/{_DEFAULT_BACKBONE}')
             log_fn('then enter a read token in the Classification tab and press')
             log_fn('"Check access". The backbone (~3.3 GB) downloads on first use.')
+            log_fn('')
+            log_fn('The same token serves local SAM3 segmentation (facebook/sam3,')
+            log_fn('also gated, ~3.4 GB): request access at')
+            log_fn('  https://huggingface.co/facebook/sam3')
+            log_fn('and tick "Run SAM3 locally" in the SAM3 Segmentation tab.')
         self._start_worker('classification', _do)
 
     def _install_gpu(self):

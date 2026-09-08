@@ -183,6 +183,10 @@ CONFIG_ENTRIES: List[ConfigEntry] = [
     ConfigEntry("Ortho/StartFrame", "int_double", 0),
     ConfigEntry("Ortho/EndFrame", "int_double", 999999),
     # ===== SAM3 Settings (API key intentionally NOT saved) =====
+    # Local inference: a gated Hugging Face model, fetched with the token from
+    # the Classification tab (which, being a credential, is not saved here).
+    ConfigEntry("SAM3/Local", "bool", False),
+    ConfigEntry("SAM3/Model", "str", ""),
     ConfigEntry("SAM3/Prompts", "str"),
     ConfigEntry("SAM3/Confidence", "double", 0.5),
     ConfigEntry("SAM3/AllFrames", "bool", True),
@@ -341,6 +345,8 @@ WIDGET_BINDINGS: Dict[str, Tuple[str, str]] = {
     "Ortho/AllFrames": ("ortho_all_frames_check", "check"),
     "Ortho/StartFrame": ("ortho_start_frame_spin", "spin"),
     "Ortho/EndFrame": ("ortho_end_frame_spin", "spin"),
+    "SAM3/Local": ("sam3_local_check", "check"),
+    "SAM3/Model": ("sam3_model_edit", "text"),
     "SAM3/Prompts": ("sam3_prompts_edit", "text"),
     "SAM3/Confidence": ("sam3_confidence_spin", "spin"),
     "SAM3/AllFrames": ("sam3_all_frames_check", "check"),

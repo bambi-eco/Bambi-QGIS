@@ -39,6 +39,7 @@ from .bambi_click_tool import BambiClickTool
 # so they are importable without QGIS, e.g. by the integration tests).
 from .bambi_calibrations import THERMAL_CALIBRATIONS, RGB_CALIBRATIONS  # noqa: F401
 from .core.hf_access import DEFAULT_BACKBONE as HF_DEFAULT_BACKBONE
+from .core.sam3_local import DEFAULT_SAM3_REPO as SAM3_DEFAULT_REPO
 # Stage kinds, for asking whether a step has results rather than whether its
 # legacy text file happens to be on disk.
 from .core import store as _store_kinds
@@ -2747,6 +2748,60 @@ class BambiDockWidget(QDockWidget):
 
         sam3_tab_layout.addWidget(sam3_api_group)
 
+        # --- Local inference (Hugging Face) ---
+        sam3_local_group = QGroupBox("Local Inference (Hugging Face)")
+        sam3_local_layout = QFormLayout(sam3_local_group)
+
+        sam3_local_info = QLabel(
+            "Run SAM3 on this machine through transformers instead of the "
+            'Roboflow API. <a href="https://huggingface.co/facebook/sam3">'
+            "facebook/sam3</a> is a <b>gated</b> model like the DINOv3 "
+            "backbone: request access once, then the Hugging Face token from "
+            "the Classification tab downloads it into the shared model cache "
+            "on first use (~3.4 GB). Needs transformers 5.0 or newer."
+        )
+        sam3_local_info.setWordWrap(True)
+        sam3_local_info.setTextFormat(Qt.TextFormat.RichText)
+        sam3_local_info.setOpenExternalLinks(True)
+        sam3_local_info.setStyleSheet("color: gray; font-size: 10px;")
+        sam3_local_layout.addRow(sam3_local_info)
+
+        self.sam3_local_check = QCheckBox(
+            "Run SAM3 locally (no Roboflow key needed)")
+        self.sam3_local_check.setToolTip(
+            "Segment with the transformers SAM3 model on the device chosen "
+            "in the Classification tab. The Roboflow key is ignored while "
+            "this is ticked."
+        )
+        self.sam3_local_check.stateChanged.connect(self._on_sam3_local_toggled)
+        sam3_local_layout.addRow("", self.sam3_local_check)
+
+        self.sam3_model_edit = QLineEdit()
+        self.sam3_model_edit.setPlaceholderText(SAM3_DEFAULT_REPO)
+        self.sam3_model_edit.setToolTip(
+            "Hugging Face repository of the SAM3 checkpoint. Leave empty for "
+            "Meta's published model.\n\n"
+            "Append '@' and a commit hash to pin a revision (repo@abc123…)."
+        )
+        sam3_local_layout.addRow("Model:", self.sam3_model_edit)
+
+        sam3_check_row = QHBoxLayout()
+        self.sam3_check_access_btn = QPushButton("Check access")
+        self.sam3_check_access_btn.setToolTip(
+            "Ask Hugging Face whether the token from the Classification tab "
+            "may download this model, before a run finds out the hard way."
+        )
+        self.sam3_check_access_btn.clicked.connect(self.check_sam3_access)
+        sam3_check_row.addWidget(self.sam3_check_access_btn)
+        self.sam3_access_status = QLabel("⚪ Not checked")
+        self.sam3_access_status.setWordWrap(True)
+        sam3_check_row.addWidget(self.sam3_access_status, 1)
+        sam3_local_layout.addRow("", sam3_check_row)
+
+        sam3_tab_layout.addWidget(sam3_local_group)
+        self._sam3_api_group = sam3_api_group
+        self._on_sam3_local_toggled(self.sam3_local_check.isChecked())
+
         sam3_prompts_group = QGroupBox("Segmentation Prompts")
         sam3_prompts_layout = QVBoxLayout(sam3_prompts_group)
 
@@ -3324,7 +3379,9 @@ class BambiDockWidget(QDockWidget):
         step9_row = QHBoxLayout()
         self.sam3_segment_btn = QPushButton("S1. Run SAM3 Segmentation")
         self.sam3_segment_btn.clicked.connect(self.run_sam3_segmentation)
-        self.sam3_segment_btn.setToolTip("Run SAM3 segmentation on extracted frames using Roboflow API")
+        self.sam3_segment_btn.setToolTip(
+            "Run SAM3 segmentation on the extracted frames (Roboflow API, or "
+            "the local Hugging Face model when configured)")
         self.sam3_camera_combo = QComboBox()
         self.sam3_camera_combo.addItems(["T - Thermal", "W - RGB"])
         self.sam3_camera_combo.setFixedWidth(100)
@@ -4323,6 +4380,12 @@ class BambiDockWidget(QDockWidget):
             "fov_sample_rate": self.fov_sample_rate_spin.value() if hasattr(self, 'fov_sample_rate_spin') else 1,
 
             # SAM3 Segmentation
+            "sam3_local": (
+                self.sam3_local_check.isChecked()
+                if hasattr(self, 'sam3_local_check') else False),
+            "sam3_model": (
+                self.sam3_model_edit.text().strip()
+                if hasattr(self, 'sam3_model_edit') else ""),
             "sam3_api_key": self.sam3_api_key_edit.text() if hasattr(self, 'sam3_api_key_edit') else "",
             "sam3_prompts": [p.strip() for p in self.sam3_prompts_edit.toPlainText().split("\n") if
                              p.strip()] if hasattr(self, 'sam3_prompts_edit') else [],
@@ -5243,7 +5306,9 @@ class BambiDockWidget(QDockWidget):
             "either an animal the other sensor cannot make out, or noise. The "
             "classifiers and the label sync both read the answer.<br><br>"
             "<b>S1 - Run SAM3 Segmentation</b><br>"
-            "Segments detected objects using Roboflow SAM3.<br><br>"
+            "Segments the frames by text prompt with SAM3 - through the "
+            "Roboflow API, or locally with the gated Hugging Face model when "
+            "'Run SAM3 locally' is ticked in the configuration.<br><br>"
             "<b>→ Geo-Reference Segmentation</b><br>"
             "Projects the masks onto the DEM to world coordinates.<br><br>"
 
@@ -7491,6 +7556,71 @@ class BambiDockWidget(QDockWidget):
         else:
             self.sam3_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
 
+    def _on_sam3_local_toggled(self, state):
+        """Grey out the Roboflow key while the local backend is selected.
+
+        Disabled rather than hidden, so it stays visible that the key is
+        still there and simply not in use.
+        """
+        local = bool(state)
+        if hasattr(self, "_sam3_api_group"):
+            self._sam3_api_group.setEnabled(not local)
+        for widget in ("sam3_model_edit", "sam3_check_access_btn"):
+            if hasattr(self, widget):
+                getattr(self, widget).setEnabled(local)
+
+    def _sam3_model(self) -> str:
+        """The SAM3 repository to load, the default when the field is empty."""
+        return (self.sam3_model_edit.text().strip()
+                if hasattr(self, "sam3_model_edit") else "") or SAM3_DEFAULT_REPO
+
+    def check_sam3_access(self):
+        """Report whether the Classification tab's token can read the SAM3 repo.
+
+        Same shape as :meth:`check_hf_access`: the repository is gated, and a
+        refused download is better learned here than after the frames are
+        loaded.
+        """
+        from .core import hf_access
+        from .core.classification import split_revision
+
+        if hasattr(self, "hf_token_edit"):
+            self._save_hf_token()
+            token, source = hf_access.resolve_token(self.hf_token_edit.text())
+        else:
+            token, source = hf_access.resolve_token("")
+        repo, _revision = split_revision(self._sam3_model())
+
+        self.sam3_access_status.setText("🟡 Checking…")
+        self.sam3_check_access_btn.setEnabled(False)
+        try:
+            result = hf_access.check_repo_access(repo, token)
+        finally:
+            self.sam3_check_access_btn.setEnabled(True)
+
+        icons = {
+            hf_access.ACCESS_GRANTED: "🟢",
+            hf_access.ACCESS_GATED: "🔴",
+            hf_access.ACCESS_NO_TOKEN: "🔴",
+            hf_access.ACCESS_MISSING: "🔴",
+            hf_access.ACCESS_UNAVAILABLE: "🟠",
+            hf_access.ACCESS_ERROR: "🟠",
+        }
+        icon = icons.get(result["status"], "⚪")
+        if result["status"] == hf_access.ACCESS_GRANTED:
+            using = hf_access.describe_token_source(source)
+            self.sam3_access_status.setText(
+                f"{icon} Access granted (using {using})")
+        else:
+            message = result["message"]
+            if result["status"] in (hf_access.ACCESS_NO_TOKEN,
+                                    hf_access.ACCESS_GATED):
+                message += " The token is entered in the Classification tab."
+            self.sam3_access_status.setText(f"{icon} {message}")
+
+        self.log(f"Hugging Face access check for {repo}: "
+                 f"{result['status']} - {result['message']}")
+
     def _toggle_frame_marker_interval(self, state):
         """Toggle the frame marker interval spinbox based on checkbox state."""
         self.frame_marker_interval_spin.setEnabled(state)
@@ -8714,12 +8844,16 @@ class BambiDockWidget(QDockWidget):
             )
             return
 
-        # Check API key
-        if not config.get("sam3_api_key"):
+        # Check API key - only the hosted backend needs one. The local
+        # backend resolves its token at load time and reports a gated or
+        # missing token with the Hugging Face message.
+        if not config.get("sam3_local") and not config.get("sam3_api_key"):
             QMessageBox.warning(
                 self,
                 "Missing API Key",
-                "Please enter your Roboflow API key in the SAM3 Segmentation configuration tab."
+                "Please enter your Roboflow API key in the SAM3 Segmentation "
+                "configuration tab, or tick 'Run SAM3 locally' to use the "
+                "Hugging Face model instead."
             )
             return
 

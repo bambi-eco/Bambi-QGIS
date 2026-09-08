@@ -9264,11 +9264,21 @@ class BambiProcessor:
     # =========================================================================
 
     def run_sam3_segmentation(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
-        """Run SAM3 segmentation on extracted frames using Roboflow Serverless API.
+        """Run SAM3 concept segmentation on the extracted frames.
+
+        Two backends write the same ``segmentation_pixel.json``:
+
+        * Roboflow's hosted endpoint (the default) - needs ``sam3_api_key``.
+        * A local ``transformers`` model (``sam3_local``) - the gated
+          ``facebook/sam3`` checkpoint, fetched with ``hf_token`` into the
+          shared model cache, exactly like the DINOv3 backbone.
 
         Expects:
           config["target_folder"]
-          config["sam3_api_key"]
+          config["sam3_local"] (bool, default False)
+          config["sam3_api_key"] (Roboflow backend)
+          config["hf_token"], config["sam3_model"], config["classification_device"]
+              (local backend; the model defaults to facebook/sam3)
           config["sam3_prompts"] (list[str])
           config["sam3_confidence"] (float, default 0.5)
           config["sam3_format"] (str: "polygon" | "rle" | "json", default "polygon")
@@ -9279,13 +9289,13 @@ class BambiProcessor:
         import os
         import json
         import base64
-        import requests
 
         camera = config.get("sam3_camera", "T")
         camera_suffix = "t" if camera == "T" else "w"
         camera_name = "Thermal" if camera == "T" else "RGB"
 
         target_folder = config["target_folder"]
+        use_local = bool(config.get("sam3_local", False))
         api_key = config.get("sam3_api_key", "")
         prompts = config.get("sam3_prompts", [])
         confidence = float(config.get("sam3_confidence", 0.5))
@@ -9300,7 +9310,7 @@ class BambiProcessor:
         # Set frames folder based on camera selection
         frames_folder = os.path.join(target_folder, f"frames_{camera_suffix}")
 
-        if not api_key:
+        if not use_local and not api_key:
             raise ValueError("Roboflow API key is required for SAM3 segmentation")
         if not prompts:
             raise ValueError("At least one text prompt is required for SAM3 segmentation")
@@ -9309,7 +9319,8 @@ class BambiProcessor:
 
         if log_fn:
             log_fn(
-                f"Starting SAM3 segmentation on {camera_name} frames (serverless)"
+                f"Starting SAM3 segmentation on {camera_name} frames "
+                f"({'local transformers model' if use_local else 'Roboflow serverless'})"
                 f" with {len(prompts)} prompts: {prompts}"
             )
             log_fn(f"Confidence threshold: {confidence}")
@@ -9338,6 +9349,21 @@ class BambiProcessor:
         # Docs show: https://serverless.roboflow.com/sam3/concept_segment?api_key=...
         # :contentReference[oaicite:3]{index=3}
         endpoint = "https://serverless.roboflow.com/sam3/concept_segment"
+
+        # The local model is loaded before the frame loop, so a missing
+        # token, an old transformers or a gated repo fails here - in one
+        # message - rather than once per frame in the warnings below.
+        local_model = None
+        if use_local:
+            from .core.sam3_local import LocalSam3
+
+            local_model = LocalSam3(
+                model_id=config.get("sam3_model", ""),
+                models_dir=self._get_default_model_dir(),
+                token=config.get("hf_token", ""),
+                device=config.get("classification_device", "auto"),
+                log_fn=log_fn)
+            local_model.load()
 
         # Build list of frame indices to process (start/end frame, then step)
         total_frames = len(images)
@@ -9386,11 +9412,66 @@ class BambiProcessor:
                 "prompts": [{"type": "text", "text": p} for p in prompts],
             }
 
+        def _prompt_results_roboflow(image_path: str) -> List[Dict[str, Any]]:
+            """Ask the hosted endpoint; normalise into the shared structure."""
+            payload = _make_payload(_encode_image_b64(image_path))
+            # API key can be passed as query param (as shown in SAM3 serverless
+            # example). :contentReference[oaicite:7]{index=7}
+            resp = session.post(
+                endpoint,
+                params={"api_key": api_key},
+                headers=headers,
+                json=payload,
+                timeout=(10, 120),  # connect/read timeouts
+            )
+            resp.raise_for_status()
+            resp_json = resp.json()
+
+            normalised = []
+            for prompt_result in resp_json.get("prompt_results", []):
+                echo = prompt_result.get("echo", {}) or {}
+                prompt_text = (echo.get("text") or prompt_result.get("prompt") or prompt_result.get("text") or "")
+
+                prompt_data = {
+                    "prompt": prompt_text,
+                    "predictions": [],
+                }
+
+                for prediction in prompt_result.get("predictions", []):
+                    pred_data = {
+                        "confidence": float(prediction.get("confidence", 0.0)),
+                    }
+
+                    masks = prediction.get("masks", None)
+
+                    # For "polygon" format, masks is typically a list of polygons
+                    # (list[list[points]]). :contentReference[oaicite:8]{index=8}
+                    if output_format == "polygon" and masks is not None:
+                        pred_data["polygons"] = masks
+                    else:
+                        # Keep raw masks for other formats (e.g., rle/json)
+                        if masks is not None:
+                            pred_data["masks"] = masks
+
+                    prompt_data["predictions"].append(pred_data)
+
+                normalised.append(prompt_data)
+            return normalised
+
+        def _prompt_results_local(image_path: str) -> List[Dict[str, Any]]:
+            return local_model.segment_path(image_path, prompts, confidence)
+
+        prompt_results_of = (_prompt_results_local if use_local
+                             else _prompt_results_roboflow)
+
         all_results = []
 
         # Use a session for connection pooling
-        session = requests.Session()
-        headers = {"Content-Type": "application/json"}
+        session = headers = None
+        if not use_local:
+            import requests
+            session = requests.Session()
+            headers = {"Content-Type": "application/json"}
 
         for idx, frame_idx in enumerate(frames_to_process):
             # Check for cancellation
@@ -9414,57 +9495,13 @@ class BambiProcessor:
                 continue
 
             try:
-                image_b64 = _encode_image_b64(image_path)
-                payload = _make_payload(image_b64)
-
-                # API key can be passed as query param (as shown in SAM3 serverless
-                # example). :contentReference[oaicite:7]{index=7}
-                resp = session.post(
-                    endpoint,
-                    params={"api_key": api_key},
-                    headers=headers,
-                    json=payload,
-                    timeout=(10, 120),  # connect/read timeouts
-                )
-                resp.raise_for_status()
-                resp_json = resp.json()
-
-                # Normalize into your existing output structure
+                # Both backends hand back the same structure, so the file
+                # written below does not depend on which one ran.
                 frame_results = {
                     "frame_idx": frame_idx,
                     "imagefile": imagefile,
-                    "prompts": [],
+                    "prompts": prompt_results_of(image_path),
                 }
-
-                for prompt_result in resp_json.get("prompt_results", []):
-                    echo = prompt_result.get("echo", {}) or {}
-                    prompt_text = (echo.get("text") or prompt_result.get("prompt") or prompt_result.get("text") or "")
-
-                    prompt_data = {
-                        "prompt": prompt_text,
-                        "predictions": [],
-                    }
-
-                    for prediction in prompt_result.get("predictions", []):
-                        pred_data = {
-                            "confidence": float(prediction.get("confidence", 0.0)),
-                        }
-
-                        masks = prediction.get("masks", None)
-
-                        # For "polygon" format, masks is typically a list of polygons
-                        # (list[list[points]]). :contentReference[oaicite:8]{index=8}
-                        if output_format == "polygon" and masks is not None:
-                            pred_data["polygons"] = masks
-                        else:
-                            # Keep raw masks for other formats (e.g., rle/json)
-                            if masks is not None:
-                                pred_data["masks"] = masks
-
-                        prompt_data["predictions"].append(pred_data)
-
-                    frame_results["prompts"].append(prompt_data)
-
                 all_results.append(frame_results)
 
             except Exception as e:

@@ -387,14 +387,16 @@ def test_segmentation_geojson_writes_polygons(survey, tmp_path):
     feature = document["features"][0]
     assert feature["geometry"]["type"] == "Polygon"
     assert feature["properties"]["detection_id"] == 1
-    assert "EPSG::32633" in document["crs"]["properties"]["name"]
+    assert "crs" not in document
+    for lon, lat in feature["geometry"]["coordinates"][0]:
+        assert -180.0 <= lon <= 180.0 and -90.0 <= lat <= 90.0
 
 
 def test_segmentation_rings_are_closed(survey, tmp_path):
     """GeoJSON polygons must close; the store need not."""
     _add_segments(survey, [{"frame": 0, "polygon_geo": SQUARE}])
     path = str(tmp_path / "s.geojson")
-    exporters.export_segmentation_geojson(survey, "t", path)
+    exporters.export_segmentation_geojson(survey, "t", path, epsg=32633)
 
     ring = json.load(open(path, encoding="utf-8"))[
         "features"][0]["geometry"]["coordinates"][0]
@@ -405,7 +407,7 @@ def test_segmentation_rings_are_closed(survey, tmp_path):
 def test_an_already_nested_ring_list_is_accepted(survey, tmp_path):
     _add_segments(survey, [{"frame": 0, "polygon_geo": [SQUARE]}])
     path = str(tmp_path / "s.geojson")
-    exporters.export_segmentation_geojson(survey, "t", path)
+    exporters.export_segmentation_geojson(survey, "t", path, epsg=32633)
 
     rings = json.load(open(path, encoding="utf-8"))[
         "features"][0]["geometry"]["coordinates"]
@@ -419,7 +421,7 @@ def test_masks_without_world_coordinates_are_reported(survey, tmp_path):
                            {"frame": 1, "polygon_geo": SQUARE}])
     logs = []
     path = str(tmp_path / "s.geojson")
-    exporters.export_segmentation_geojson(survey, "t", path,
+    exporters.export_segmentation_geojson(survey, "t", path, epsg=32633,
                                           log_fn=logs.append)
 
     assert len(json.load(open(path, encoding="utf-8"))["features"]) == 1
@@ -429,7 +431,7 @@ def test_masks_without_world_coordinates_are_reported(survey, tmp_path):
 def test_a_degenerate_polygon_is_skipped(survey, tmp_path):
     _add_segments(survey, [{"frame": 0, "polygon_geo": [[1.0, 2.0]]}])
     path = str(tmp_path / "s.geojson")
-    exporters.export_segmentation_geojson(survey, "t", path)
+    exporters.export_segmentation_geojson(survey, "t", path, epsg=32633)
     assert json.load(open(path, encoding="utf-8"))["features"] == []
 
 
@@ -437,7 +439,7 @@ def test_segment_attributes_reach_the_properties(survey, tmp_path):
     _add_segments(survey, [{"frame": 0, "polygon_geo": SQUARE,
                             "attributes": {"prompt": "deer", "score": 0.8}}])
     path = str(tmp_path / "s.geojson")
-    exporters.export_segmentation_geojson(survey, "t", path)
+    exporters.export_segmentation_geojson(survey, "t", path, epsg=32633)
 
     properties = json.load(open(path, encoding="utf-8"))[
         "features"][0]["properties"]
@@ -457,8 +459,8 @@ def test_the_two_geojson_exports_are_separate_documents(survey, tmp_path):
     _add_segments(survey, [{"frame": 0, "polygon_geo": SQUARE}])
     animals = str(tmp_path / "animals.geojson")
     segments = str(tmp_path / "segmentations.geojson")
-    exporters.export_geojson(survey, "t", animals)
-    exporters.export_segmentation_geojson(survey, "t", segments)
+    exporters.export_geojson(survey, "t", animals, epsg=32633)
+    exporters.export_segmentation_geojson(survey, "t", segments, epsg=32633)
 
     kinds = set()
     for path in (animals, segments):
@@ -476,14 +478,49 @@ def test_geojson_points(survey, tmp_path):
     exporters.export_geojson(survey, "t", path, epsg=32633)
     with open(path, encoding="utf-8") as fh:
         document = json.load(fh)
-    assert document["crs"]["properties"]["name"].endswith("32633")
+    assert "crs" not in document
     assert all(f["geometry"]["type"] == "Point" for f in document["features"])
+
+
+def test_geojson_coordinates_are_wgs84_lon_lat(survey, tmp_path):
+    """GeoJSON (RFC 7946) has one CRS: WGS84 lon/lat. The store keeps UTM,
+    and writing that out unchanged - even with the deprecated ``crs``
+    member - put every animal at (500000°, 5300000°) in any reader."""
+    path = str(tmp_path / "detections.geojson")
+    exporters.export_geojson(survey, "t", path, epsg=32633)
+    with open(path, encoding="utf-8") as fh:
+        document = json.load(fh)
+
+    # 500000 E / 5300000 N in UTM 33N is the zone's central meridian (15° E)
+    # at roughly 47.8° N.
+    lon, lat = document["features"][0]["geometry"]["coordinates"]
+    assert lon == pytest.approx(15.0, abs=1e-3)
+    assert lat == pytest.approx(47.85, abs=0.05)
+
+
+def test_geojson_tracks_are_wgs84_too(survey, tmp_path):
+    path = str(tmp_path / "tracks.geojson")
+    exporters.export_geojson(survey, "t", path, epsg=32633, tracks_only=True)
+    with open(path, encoding="utf-8") as fh:
+        line = json.load(fh)["features"][0]["geometry"]["coordinates"]
+    for lon, lat in line:
+        assert lon == pytest.approx(15.0, abs=1e-3)
+        assert lat == pytest.approx(47.85, abs=0.05)
+
+
+def test_geojson_without_a_crs_is_refused(survey, tmp_path):
+    """Better no file than one in a reference system GeoJSON cannot express."""
+    _add_segments(survey, [{"frame": 0, "polygon_geo": SQUARE}])
+    for export in (exporters.export_geojson,
+                   exporters.export_segmentation_geojson):
+        with pytest.raises(exporters.ExportError, match="CRS"):
+            export(survey, "t", str(tmp_path / "x.geojson"))
 
 
 def test_geojson_keeps_false_positives(survey, tmp_path):
     """A survey record says what was rejected; it does not omit it."""
     path = str(tmp_path / "detections.geojson")
-    exporters.export_geojson(survey, "t", path)
+    exporters.export_geojson(survey, "t", path, epsg=32633)
     with open(path, encoding="utf-8") as fh:
         species = {f["properties"]["species"] for f in json.load(fh)["features"]}
     assert "not-an-animal" in species
@@ -491,7 +528,7 @@ def test_geojson_keeps_false_positives(survey, tmp_path):
 
 def test_geojson_tracks_are_linestrings(survey, tmp_path):
     path = str(tmp_path / "tracks.geojson")
-    exporters.export_geojson(survey, "t", path, tracks_only=True)
+    exporters.export_geojson(survey, "t", path, epsg=32633, tracks_only=True)
     with open(path, encoding="utf-8") as fh:
         features = json.load(fh)["features"]
     assert len(features) == 1          # only track 1 has two points
@@ -584,6 +621,44 @@ def test_camtrap_media_reference_the_frames(survey, tmp_path):
         rows = list(csv.DictReader(fh))
     assert {r["fileName"] for r in rows} == \
         {"frame_000000.jpg", "frame_000001.jpg"}
+
+
+def test_camtrap_media_carry_the_frame_timestamp(survey, tmp_path):
+    """Every media row gets its frame's capture time from the poses file."""
+    pytest.importorskip("pyproj")
+    folder = str(tmp_path / "camtrap")
+    exporters.export_camtrap_dp(survey, "t", folder, epsg=32633)
+    with open(os.path.join(folder, "media.csv"), encoding="utf-8") as fh:
+        stamps = {r["fileName"]: r["timestamp"] for r in csv.DictReader(fh)}
+    assert stamps == {"frame_000000.jpg": "2024-05-29T16:26:40+00:00",
+                      "frame_000001.jpg": "2024-05-29T16:26:41+00:00"}
+
+
+def test_camtrap_reads_the_iso_timestamps_real_poses_files_carry(
+        survey, tmp_path):
+    """The extraction step writes an ISO-8601 ``timestamp`` with the SRT
+    clock's offset, not epoch seconds; media.csv used to come out blank."""
+    pytest.importorskip("pyproj")
+    with open(os.path.join(survey, "poses_t.json"), "w",
+              encoding="utf-8") as fh:
+        json.dump({"images": [
+            {"imagefile": "frame_000000.jpg",
+             "timestamp": "2023-09-20T10:00:00.250000+02:00"},
+            {"imagefile": "frame_000001.jpg",
+             "timestamp": "2023-09-20T10:00:01+02:00"},
+        ]}, fh)
+    folder = str(tmp_path / "camtrap")
+    exporters.export_camtrap_dp(survey, "t", folder, epsg=32633)
+
+    with open(os.path.join(folder, "media.csv"), encoding="utf-8") as fh:
+        stamps = {r["fileName"]: r["timestamp"] for r in csv.DictReader(fh)}
+    assert stamps == {"frame_000000.jpg": "2023-09-20T10:00:00+02:00",
+                      "frame_000001.jpg": "2023-09-20T10:00:01+02:00"}
+
+    with open(os.path.join(folder, "deployments.csv"), encoding="utf-8") as fh:
+        deployment = next(csv.DictReader(fh))
+    assert deployment["deploymentStart"] == "2023-09-20T10:00:00+02:00"
+    assert deployment["deploymentEnd"] == "2023-09-20T10:00:01+02:00"
 
 
 def test_camtrap_without_a_crs_is_refused(survey, tmp_path):
@@ -900,7 +975,7 @@ def test_geojson_reports_detections_that_were_never_geo_referenced(tmp_path):
     """The state the user's project was in: detections but no geo store."""
     root = _untracked(tmp_path)
     messages = []
-    exporters.export_geojson(root, "t", str(tmp_path / "t.geojson"),
+    exporters.export_geojson(root, "t", str(tmp_path / "t.geojson"), epsg=32633,
                              log_fn=messages.append)
     assert any("Geo-reference" in m for m in messages)
 
@@ -911,7 +986,7 @@ def test_geojson_tracks_explain_an_empty_export(survey, tmp_path):
     os.remove(trk)
 
     messages = []
-    exporters.export_geojson(survey, "t", str(tmp_path / "t.geojson"),
+    exporters.export_geojson(survey, "t", str(tmp_path / "t.geojson"), epsg=32633,
                              tracks_only=True, log_fn=messages.append)
     assert any("Run tracking first" in m for m in messages)
 

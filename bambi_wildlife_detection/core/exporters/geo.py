@@ -5,6 +5,13 @@ GeoJSON keeps ``not-an-animal`` by default: it is a record of what was seen and
 decided, not a training set, so a labelled false positive is information rather
 than noise.
 
+GeoJSON (RFC 7946) has exactly one coordinate reference system: WGS84
+longitude/latitude. The store holds world coordinates in the project CRS -
+usually a UTM zone - so both writers here project through
+:func:`common.to_wgs84` and write no ``crs`` member. The old ``crs`` member was
+dropped from the specification and most readers ignore it, which is how a UTM
+export ended up plotted in degrees.
+
 The TRex writer closes the loop with the importer that has existed since 5.x -
 BAMBI could read TRex tracklets but never write them.
 """
@@ -31,12 +38,20 @@ def export_geojson(target_folder: str, modality: str, output_path: str,
         target_folder, modality, include_not_an_animal)
     rows = [row for row in all_rows if row.get("gx1") is not None]
 
+    # Project every centre once, up front; the CRS check fires even for an
+    # empty document so a missing CRS is reported rather than silently
+    # producing a file that would be wrong as soon as it had content.
+    lonlat = common.to_wgs84(
+        [((r["gx1"] + r["gx2"]) / 2.0, (r["gy1"] + r["gy2"]) / 2.0)
+         for r in rows], epsg)
+    centre = {row["detection_id"]: [lon, lat]
+              for row, (lon, lat) in zip(rows, lonlat)}
+
     features = []
     if tracks_only:
         for track_id, points in sorted(common.tracks_of(rows).items()):
             ordered = sorted(points, key=lambda r: r["frame"])
-            coordinates = [[(p["gx1"] + p["gx2"]) / 2.0,
-                            (p["gy1"] + p["gy2"]) / 2.0] for p in ordered]
+            coordinates = [centre[p["detection_id"]] for p in ordered]
             if len(coordinates) < 2:
                 continue
             first = ordered[0]
@@ -60,8 +75,7 @@ def export_geojson(target_folder: str, modality: str, output_path: str,
                 "type": "Feature",
                 "geometry": {
                     "type": "Point",
-                    "coordinates": [(row["gx1"] + row["gx2"]) / 2.0,
-                                    (row["gy1"] + row["gy2"]) / 2.0],
+                    "coordinates": centre[row["detection_id"]],
                 },
                 "properties": {
                     "detection_id": row["detection_id"],
@@ -76,11 +90,6 @@ def export_geojson(target_folder: str, modality: str, output_path: str,
             })
 
     document = {"type": "FeatureCollection", "features": features}
-    if epsg:
-        document["crs"] = {
-            "type": "name",
-            "properties": {"name": f"urn:ogc:def:crs:EPSG::{epsg}"},
-        }
 
     common.ensure_folder(os.path.dirname(os.path.abspath(output_path)))
     with open(output_path, "w", encoding="utf-8") as fh:
@@ -112,6 +121,9 @@ def export_segmentation_geojson(target_folder: str, modality: str,
 
     Masks that were never geo-referenced are skipped and reported - a
     pixel-space polygon has no place in a world-coordinate document.
+
+    The stored rings are in the project CRS; they are projected to WGS84
+    longitude/latitude here, as GeoJSON requires.
     """
     from .. import store
 
@@ -129,12 +141,17 @@ def export_segmentation_geojson(target_folder: str, modality: str,
     finally:
         conn.close()
 
+    # Fires the CRS check even when nothing is geo-referenced (see above).
+    common.to_wgs84([], epsg)
+
     features, without_world = [], 0
     for row in rows:
         rings = _polygon_rings(row.get("polygon_geo"))
         if not rings:
             without_world += 1
             continue
+        rings = [[list(pair) for pair in common.to_wgs84(ring, epsg)]
+                 for ring in rings]
         properties = {
             "segment_id": row["segment_id"],
             "detection_id": row.get("detection_id"),
@@ -148,11 +165,6 @@ def export_segmentation_geojson(target_folder: str, modality: str,
         })
 
     document = {"type": "FeatureCollection", "features": features}
-    if epsg:
-        document["crs"] = {
-            "type": "name",
-            "properties": {"name": f"urn:ogc:def:crs:EPSG::{epsg}"},
-        }
 
     common.ensure_folder(os.path.dirname(os.path.abspath(output_path)))
     with open(output_path, "w", encoding="utf-8") as fh:
