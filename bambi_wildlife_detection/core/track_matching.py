@@ -58,6 +58,26 @@ class MatchConfig(NamedTuple):
     #: How far apart two frames may be on the shared clock and still be called
     #: the same moment, in seconds.
     max_time_offset: float = 0.10
+    #: Where the distances are measured: ``"pixel"`` is the paper's recipe
+    #: (RGB centres mapped onto the thermal image through the affine, gated
+    #: by ``gate_px``); ``"world"`` compares the geo-referenced centres both
+    #: modalities already carry, in metres, gated by ``gate_m`` - no affine
+    #: to estimate, and the frames' own poses absorb the aircraft's motion
+    #: between the two capture instants.
+    space: str = "pixel"
+    #: Maximum median inter-centre distance in world space, in metres. Two
+    #: animals in a herd stand more than a body length apart; a box placed on
+    #: the same animal by the two cameras lands well inside one.
+    gate_m: float = 1.5
+
+    @property
+    def gate(self) -> float:
+        """The distance gate in the units of :attr:`space`."""
+        return self.gate_m if self.space == "world" else self.gate_px
+
+    @property
+    def unit(self) -> str:
+        return "m" if self.space == "world" else "px"
 
 
 class Detection(NamedTuple):
@@ -426,7 +446,7 @@ def passes_gates(candidate: Candidate, config: MatchConfig) -> bool:
     """Whether a candidate is admissible at all, before any assignment."""
     if candidate.shared < config.min_shared:
         return False
-    if candidate.median_dist >= config.gate_px:
+    if candidate.median_dist >= config.gate:
         return False
     if candidate.conf_t < config.min_confidence:
         return False
@@ -474,11 +494,68 @@ def assign(candidates_in: Sequence[Candidate],
 # Top level
 # ---------------------------------------------------------------------------
 
+def in_world(detections: Iterable[Detection],
+             world: Dict[int, Tuple[float, float]]) -> List[Detection]:
+    """The same detections with their centres replaced by world coordinates.
+
+    *world* maps ``detection_id`` to a ground-plane ``(x, y)`` - the centre of
+    the geo-referenced box. Detections without one are left out: they cannot
+    be compared in metres, and geo-referencing has already recorded why.
+    """
+    result = []
+    for detection in detections:
+        centre = world.get(detection.detection_id)
+        if centre is None:
+            continue
+        result.append(detection._replace(cx=float(centre[0]),
+                                         cy=float(centre[1])))
+    return result
+
+
+def _affine_from_matches(boxes_t: Sequence[Detection],
+                         boxes_w: Sequence[Detection],
+                         matches: Sequence[Candidate],
+                         frame_size_t, frame_size_w,
+                         log_fn=None) -> Tuple[Affine, float]:
+    """The pixel affine, fitted from pairs that world-space matching confirmed.
+
+    World-space matching needs no affine, but the *matched* classifiers still
+    size an RGB crop from its thermal partner's box through one - and
+    confirmed pairs are the best correspondences there are to fit it from.
+    """
+    centre_t = {d.detection_id: (d.cx, d.cy) for d in boxes_t}
+    centre_w = {d.detection_id: (d.cx, d.cy) for d in boxes_w}
+    pairs = []
+    for match in matches:
+        for pair in match.pairs:
+            p = centre_w.get(pair["detection_id_w"])
+            q = centre_t.get(pair["detection_id_t"])
+            if p is not None and q is not None:
+                pairs.append((p, q))
+    affine = fit_affine(pairs)
+    if affine is None:
+        affine = _size_fallback(frame_size_t, frame_size_w)
+        rmse = float("inf")
+        if log_fn:
+            log_fn("Cross-modal registration: too few confirmed pairs to fit "
+                   "the pixel transform, so the scale implied by the two "
+                   "frame sizes is used for sizing matched crops.")
+    else:
+        rmse = affine_rmse(affine, pairs)
+        if log_fn:
+            log_fn(f"Cross-modal registration: pixel transform fitted from "
+                   f"{len(pairs)} confirmed correspondence(s), RMSE "
+                   f"{rmse:.2f} px")
+    return affine, rmse
+
+
 def match_tracks(detections_t: Iterable[dict], detections_w: Iterable[dict],
                  frame_map: Dict[int, int],
                  config: MatchConfig = MatchConfig(),
                  frame_size_t: Optional[Tuple[float, float]] = None,
                  frame_size_w: Optional[Tuple[float, float]] = None,
+                 world_t: Optional[Dict[int, Tuple[float, float]]] = None,
+                 world_w: Optional[Dict[int, Tuple[float, float]]] = None,
                  log_fn=None) -> dict:
     """Match thermal tracks to RGB tracks. The whole of §3.2 in one call.
 
@@ -486,17 +563,44 @@ def match_tracks(detections_t: Iterable[dict], detections_w: Iterable[dict],
     ``track_id``, ``frame``, the box, and ``confidence``; *frame_map* maps a
     thermal frame index onto the RGB frame taken at the same moment.
 
-    Returns ``{"matches", "affine", "affine_rmse", "candidates", "rejected"}``,
-    where ``matches`` is ready for :func:`core.match_store.record_matches`.
+    With ``config.space == "world"``, *world_t* / *world_w* map each
+    ``detection_id`` to the ground-plane centre of its geo-referenced box and
+    the distances are metres on the ground. That sidesteps the affine, which
+    on a real flight has to be bootstrapped from the very correspondences it
+    is meant to find - and a wrong one pairs neighbours instead of partners
+    while still clearing the pixel gate. The affine is then fitted afterwards
+    from the confirmed pairs, for the crop sizing that still needs it.
+
+    Returns ``{"matches", "affine", "affine_rmse", "candidates", "rejected",
+    "space"}``, where ``matches`` is ready for
+    :func:`core.match_store.record_matches`.
     """
     boxes_t = to_detections(detections_t)
     boxes_w = to_detections(detections_w)
 
-    affine, rmse, _ = estimate_affine(
-        boxes_t, boxes_w, frame_map, frame_size_t, frame_size_w, log_fn=log_fn)
-
-    everything = candidates(boxes_t, boxes_w, frame_map, affine)
-    accepted = assign(everything, config)
+    if config.space == "world":
+        if world_t is None or world_w is None:
+            raise ValueError("world-space matching needs the geo-referenced "
+                             "centres of both modalities")
+        compared_t = in_world(boxes_t, world_t)
+        compared_w = in_world(boxes_w, world_w)
+        if log_fn:
+            log_fn(f"Cross-modal matching in world coordinates: "
+                   f"{len(compared_t)} of {len(boxes_t)} thermal and "
+                   f"{len(compared_w)} of {len(boxes_w)} RGB detection(s) "
+                   f"carry ground positions")
+        everything = candidates(compared_t, compared_w, frame_map,
+                                Affine.identity())
+        accepted = assign(everything, config)
+        affine, rmse = _affine_from_matches(
+            boxes_t, boxes_w, accepted, frame_size_t, frame_size_w,
+            log_fn=log_fn)
+    else:
+        affine, rmse, _ = estimate_affine(
+            boxes_t, boxes_w, frame_map, frame_size_t, frame_size_w,
+            log_fn=log_fn)
+        everything = candidates(boxes_t, boxes_w, frame_map, affine)
+        accepted = assign(everything, config)
 
     matches = [{
         "track_id_t": candidate.track_id_t,
@@ -514,8 +618,8 @@ def match_tracks(detections_t: Iterable[dict], detections_w: Iterable[dict],
             worst = max(c.median_dist for c in accepted)
             log_fn(f"Cross-modal matching: {len(accepted)} pair(s) confirmed "
                    f"from {len(everything)} candidate(s); median inter-centre "
-                   f"distance {best:.1f}–{worst:.1f} px inside a "
-                   f"{config.gate_px:.0f} px gate")
+                   f"distance {best:.1f}–{worst:.1f} {config.unit} inside a "
+                   f"{config.gate:g} {config.unit} gate")
         else:
             # "No matches" and "the gate is wrong" look identical from the
             # outside, and the defaults are calibrated to a resolution the
@@ -527,8 +631,8 @@ def match_tracks(detections_t: Iterable[dict], detections_w: Iterable[dict],
                    f"{reasons['shared_frames']} shared too few frames, "
                    f"{reasons['distance']} were too far apart, "
                    f"{reasons['confidence']} were too low-confidence. The "
-                   f"closest candidate sat at {closest:.1f} px against a "
-                   f"{config.gate_px:.0f} px gate.")
+                   f"closest candidate sat at {closest:.1f} {config.unit} "
+                   f"against a {config.gate:g} {config.unit} gate.")
 
     return {
         "matches": matches,
@@ -536,6 +640,7 @@ def match_tracks(detections_t: Iterable[dict], detections_w: Iterable[dict],
         "affine_rmse": rmse,
         "candidates": len(everything),
         "rejected": len(everything) - len(accepted),
+        "space": config.space,
     }
 
 
@@ -550,7 +655,7 @@ def rejection_reasons(candidates_in: Sequence[Candidate],
     for candidate in candidates_in:
         if candidate.shared < config.min_shared:
             counts["shared_frames"] += 1
-        elif candidate.median_dist >= config.gate_px:
+        elif candidate.median_dist >= config.gate:
             counts["distance"] += 1
         elif min(candidate.conf_t, candidate.conf_w) < config.min_confidence:
             counts["confidence"] += 1

@@ -104,6 +104,7 @@ from .gui_utils import fit_to_screen
 
 from .core.labelling import (  # noqa: F401 - re-exported API
     AGE_CLASSES,
+    pipeline_track_labels,
     FIELD_SCOPES,
     FIELD_TYPES,
     CustomField,
@@ -1733,6 +1734,7 @@ class LabellingToolDialog(QDialog):
 
         self._detections = _load_detections_by_frame(self._target_folder, m)
         self._pixel_tracks = self._load_pipeline_tracks(m)
+        self._pipeline_labels = pipeline_track_labels(self._target_folder, m)
 
         self._store = LabelStore(self._target_folder, m)
         try:
@@ -2365,14 +2367,26 @@ class LabellingToolDialog(QDialog):
             return None
 
         step = self.import_resample_spin.value()
-        track = LabelTrack(self._store.next_track_id(), origin_track_id=src_tid)
+        # Carry over what the pipeline already decided - the species vote,
+        # sex, age and per-detection occlusion - instead of starting the
+        # label track at "unknown" everywhere.
+        known = (getattr(self, "_pipeline_labels", None) or {}).get(src_tid, {})
+        track = LabelTrack(
+            self._store.next_track_id(),
+            species=known.get("species", "unknown"),
+            sex=known.get("sex", "unknown"),
+            age=known.get("age", "unknown"),
+            origin_track_id=src_tid)
+        occlusion_of = known.get("occlusion", {})
         frames = [d["frame"] for d in entries]
         first, last = frames[0], frames[-1]
         for d in entries:
             f = d["frame"]
             if f == first or f == last or (f - first) % step == 0:
                 track.set_keyframe(
-                    f, (d["x1"], d["y1"], d["x2"], d["y2"]), occlusion=OCCLUSION_LEVELS[0])
+                    f, (d["x1"], d["y1"], d["x2"], d["y2"]),
+                    occlusion=occlusion_of.get(d.get("detection_id"),
+                                               OCCLUSION_LEVELS[0]))
                 # Provenance: which detection this key frame was copied from.
                 if d.get("detection_id") is not None:
                     track.keyframes[f]["origin_detection_id"] = d["detection_id"]
@@ -3010,6 +3024,7 @@ class LabellingToolDialog(QDialog):
         # boxes and the deleted pipeline tracks disappear.
         self._detections = _load_detections_by_frame(self._target_folder, m)
         self._pixel_tracks = _load_pixel_tracks(self._target_folder, m)
+        self._pipeline_labels = pipeline_track_labels(self._target_folder, m)
         self._render_frame()
 
         removed_note = ""

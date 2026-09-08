@@ -13,6 +13,8 @@ without either.
 
 import math
 import os
+import threading
+import time
 from typing import Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple
 
 from . import hf_access
@@ -211,6 +213,24 @@ def resolve_device(preference: str = "auto") -> str:
     return "cuda" if available else "cpu"
 
 
+def reduced_precision_dtype():
+    """The reduced-precision dtype to run the backbone in, or ``None``.
+
+    bfloat16 where the GPU supports it: it trades mantissa for the full fp32
+    exponent range, which is exactly what the ViT-H+ needs - fp16 overflows
+    in its attention and returns NaN. ``None`` means "use ``half()``" (fp16),
+    for older GPUs and for torch builds without the probe.
+    """
+    try:
+        import torch
+        probe = getattr(torch.cuda, "is_bf16_supported", None)
+        if probe is not None and probe():
+            return getattr(torch, "bfloat16", None)
+    except Exception:  # nosec B110
+        pass
+    return None
+
+
 class Backbone:
     """Frozen DINOv3, producing one CLS vector per crop.
 
@@ -234,6 +254,7 @@ class Backbone:
         self._log = log_fn
         self._model = None
         self._processor = None
+        self._reduced_dtype = None
 
     # -- loading ---------------------------------------------------------
 
@@ -245,9 +266,7 @@ class Backbone:
         try:
             from transformers import AutoImageProcessor, AutoModel
         except ImportError as exc:
-            raise BackboneError(
-                "transformers is not installed. Install the Classification "
-                "dependencies from the Dependency Manager.") from exc
+            raise BackboneError(_transformers_import_message(exc)) from exc
 
         # cache_dir rather than HF_HOME: setting that environment variable
         # would relocate the cache for everything else in the QGIS process
@@ -267,24 +286,80 @@ class Backbone:
         if self.revision:
             kwargs["revision"] = self.revision
 
+        # The checkpoint is gigabytes, so the wait between "Loading" and
+        # "ready" is minutes on a first run - say what the time is going on.
+        cached = describe_cache(self.model_id, cache_dir, self.revision,
+                                self.token or None, log_fn=self._log)
+        started = time.monotonic()
         try:
             # nosec B615 - the revision is deliberately optional: the model id
             # is user-configurable, so a hardcoded pin would be wrong for a
             # custom backbone. See split_revision for how a user pins one.
-            self._processor = AutoImageProcessor.from_pretrained(
-                self.model_id, **kwargs)  # nosec B615
-            self._model = AutoModel.from_pretrained(
-                self.model_id, **kwargs)  # nosec B615
+            with DownloadReporter(cache_dir, self.model_id, cached.expected_bytes,
+                                  log_fn=self._log, active=not cached.complete):
+                self._processor = AutoImageProcessor.from_pretrained(
+                    self.model_id, **kwargs)  # nosec B615
+                if self._log:
+                    self._log("Image processor ready; loading the weights…")
+                self._model = AutoModel.from_pretrained(
+                    self.model_id, **kwargs)  # nosec B615
         except Exception as exc:
             raise BackboneError(_load_failure_message(self.model_id, exc)) from exc
 
+        if self._log:
+            self._log(f"Weights loaded in {time.monotonic() - started:.0f} s"
+                      f"{_parameter_note(self._model)}; moving to "
+                      f"{self.device}…")
         self._model.to(self.device)
         if self.fp16:
-            self._model.half()
+            self._reduced_dtype = reduced_precision_dtype()
+            if self._reduced_dtype is not None:
+                self._model.to(self._reduced_dtype)
+            else:
+                self._model.half()
         self._model.eval()
 
         if self._log:
-            self._log(f"Backbone ready ({self.dim}-d features)")
+            self._log(f"Backbone ready ({self.dim}-d features) on "
+                      f"{describe_device(self.device)}"
+                      f"{' in ' + self.precision if self.fp16 else ''}, "
+                      f"{time.monotonic() - started:.0f} s in total")
+
+    @property
+    def precision(self) -> str:
+        """``"bf16"``, ``"fp16"`` or ``"fp32"`` - what the weights are in."""
+        if not self.fp16:
+            return "fp32"
+        name = str(getattr(self._reduced_dtype, "__name__", None)
+                   or self._reduced_dtype or "")
+        return "bf16" if "bfloat16" in name else "fp16"
+
+    def _demote_to_fp32(self, reason: str) -> None:
+        """Leave reduced precision for the rest of the run.
+
+        Tried on the current device first; when the fp32 weights do not fit
+        (3.4 GB for the ViT-H+), the model moves to the CPU rather than
+        failing - slower, but it produces numbers.
+        """
+        import torch
+
+        self.fp16 = False
+        self._reduced_dtype = None
+        try:
+            self._model.float()
+            where = self.device
+        except RuntimeError:
+            # CUDA out of memory: the reduced-precision weights alone nearly
+            # filled the card.
+            self._model.to("cpu").float()
+            self.device = "cpu"
+            try:
+                torch.cuda.empty_cache()
+            except Exception:  # nosec B110
+                pass
+            where = "cpu (the fp32 weights do not fit on the GPU)"
+        if self._log:
+            self._log(f"{reason}; continuing in fp32 on {where}")
 
     @property
     def dim(self) -> int:
@@ -305,10 +380,41 @@ class Backbone:
             return np.zeros((0, self.dim), dtype=np.float32)
 
         self.load()
+        features = self._forward(crops)
+
+        # fp16 has a range of 65 504, and the ViT-H+ exceeds it inside the
+        # attention on some crops: the CLS vector comes out NaN and nothing
+        # downstream can use it (2026-09-07: 3400 of 3428 vectors on a flight
+        # were NaN, and the heads then wrote NaN probabilities). bf16 keeps
+        # the fp32 range and is preferred where the GPU supports it; whatever
+        # the precision, a non-finite batch is redone in fp32 rather than
+        # written to disk.
+        finite = np.isfinite(features).all(axis=1)
+        if not finite.all():
+            bad = int((~finite).sum())
+            if self.fp16:
+                self._demote_to_fp32(
+                    f"{bad} of {len(features)} feature vector(s) came out "
+                    f"non-finite in {self.precision}")
+                features = self._forward(crops)
+                finite = np.isfinite(features).all(axis=1)
+            if not finite.all():
+                raise BackboneError(
+                    f"{int((~finite).sum())} of {len(features)} feature "
+                    "vector(s) are non-finite even in fp32. The crops fed to "
+                    "the backbone are probably empty or corrupt; check the "
+                    "extracted frames.")
+        return features
+
+    def _forward(self, crops: Sequence["object"]):
+        """One pass through the backbone, as float32 rows."""
+        import torch
+
         inputs = self._processor(images=list(crops), return_tensors="pt")
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
         if self.fp16:
-            inputs = {k: (v.half() if v.dtype == torch.float32 else v)
+            inputs = {k: (self._to_reduced(v) if v.dtype == torch.float32
+                          else v)
                       for k, v in inputs.items()}
 
         # no_grad throughout: without it the autograd graph grows across the
@@ -323,6 +429,230 @@ class Backbone:
             # published heads were trained on.
             features = outputs.last_hidden_state[:, 0]
         return features.detach().to("cpu").float().numpy()
+
+    def _to_reduced(self, tensor):
+        if self._reduced_dtype is not None:
+            return tensor.to(self._reduced_dtype)
+        return tensor.half()
+
+
+def repo_cache_folder(cache_dir: Optional[str], model_id: str) -> str:
+    """The folder the Hugging Face cache keeps *model_id* in, or ``""``.
+
+    ``hf_cache/models--facebook--dinov3-.../`` - the hub's own naming, taken
+    from ``huggingface_hub`` when it is importable and reproduced otherwise.
+    """
+    if not cache_dir:
+        return ""
+    try:
+        from huggingface_hub.file_download import repo_folder_name
+        name = repo_folder_name(repo_id=model_id, repo_type="model")
+    except Exception:  # nosec B110 - the naming has been stable for years
+        name = "models--" + model_id.replace("/", "--")
+    return os.path.join(cache_dir, name)
+
+
+def cached_bytes(repo_folder: str) -> int:
+    """Bytes of *repo_folder*'s blobs on disk, partial downloads included.
+
+    The hub streams each file into ``blobs/<hash>.incomplete`` and moves it
+    into place when done, so the folder size grows with the download - which
+    is the progress signal, without hooking the hub's own progress bars.
+
+    Where the finished file ends up differs by platform: with symlinks the
+    blob stays in ``blobs/`` and ``snapshots/<rev>/`` links to it; on Windows
+    without symlink rights the file sits under ``snapshots/`` and ``blobs/``
+    is left empty. Both are walked, links are not followed, so a file is
+    counted exactly once either way.
+    """
+    if not repo_folder:
+        return 0
+    total = 0
+    for base in ("blobs", "snapshots"):
+        root = os.path.join(repo_folder, base)
+        for dirpath, _dirs, files in os.walk(root):
+            for name in files:
+                try:
+                    total += os.lstat(os.path.join(dirpath, name)).st_size
+                except OSError:
+                    pass
+    return total
+
+
+class CacheState(NamedTuple):
+    """What is known about the backbone's local cache before loading."""
+
+    complete: bool
+    expected_bytes: Optional[int]
+
+
+def describe_cache(model_id: str, cache_dir: Optional[str], revision: str,
+                   token: Optional[str], log_fn=None) -> CacheState:
+    """Log whether the weights are on disk already, and how big they are.
+
+    Answers the question the log otherwise leaves open for minutes: is this
+    downloading, or loading? The remote size comes from one metadata call
+    and is skipped when the snapshot is already complete; every hub call is
+    best-effort, so a missing or old ``huggingface_hub`` only costs detail.
+    """
+    folder = repo_cache_folder(cache_dir, model_id)
+    on_disk = cached_bytes(folder)
+
+    complete = False
+    try:
+        from huggingface_hub import try_to_load_from_cache
+        found = try_to_load_from_cache(
+            model_id, "config.json", cache_dir=cache_dir or None,
+            revision=revision or None)
+        # A cached config.json plus no partial blobs means a finished snapshot.
+        partial = any(
+            name.endswith(".incomplete")
+            for name in _listdir(os.path.join(folder, "blobs")))
+        complete = isinstance(found, str) and on_disk > 0 and not partial
+    except Exception:  # nosec B110
+        complete = False
+
+    if complete:
+        if log_fn:
+            log_fn(f"Weights are in the local cache ({_mb(on_disk)} MB at "
+                   f"{folder}); no download needed")
+        return CacheState(True, on_disk)
+
+    expected = None
+    try:
+        from huggingface_hub import HfApi
+        info = HfApi().model_info(model_id, revision=revision or None,
+                                  token=token, files_metadata=True)
+        sizes = [getattr(s, "size", None) for s in (info.siblings or [])]
+        if any(sizes):
+            expected = int(sum(s for s in sizes if s))
+    except Exception:  # nosec B110 - offline, gated, old hub: size unknown
+        expected = None
+
+    if log_fn:
+        size = f"about {_mb(expected)} MB" if expected else "several GB"
+        have = f"; {_mb(on_disk)} MB already on disk" if on_disk else ""
+        log_fn(f"Weights are not in the local cache yet - downloading "
+               f"{size} from Hugging Face into {folder or 'the default cache'}"
+               f"{have}. This happens once; later runs load from disk.")
+    return CacheState(False, expected)
+
+
+def _listdir(folder: str) -> List[str]:
+    try:
+        return os.listdir(folder)
+    except OSError:
+        return []
+
+
+def _mb(value: Optional[int]) -> str:
+    return f"{(value or 0) / (1024 * 1024):,.0f}"
+
+
+class DownloadReporter:
+    """Log the growth of the cache folder while ``from_pretrained`` runs.
+
+    A thread samples :func:`cached_bytes` every *interval* seconds and logs a
+    line whenever the number moved, with a percentage when the total is
+    known. Inactive when the weights are already cached, so a warm start
+    logs nothing extra.
+    """
+
+    def __init__(self, cache_dir: Optional[str], model_id: str,
+                 expected_bytes: Optional[int], log_fn=None,
+                 active: bool = True, interval: float = 5.0):
+        self._folder = repo_cache_folder(cache_dir, model_id)
+        self._expected = expected_bytes
+        self._log = log_fn
+        self._active = bool(active and log_fn and self._folder)
+        self._interval = interval
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._last = -1
+
+    def __enter__(self):
+        if self._active:
+            self._thread = threading.Thread(
+                target=self._run, name="bambi-download-progress", daemon=True)
+            self._thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=self._interval + 1.0)
+        return False
+
+    def _run(self):
+        while not self._stop.wait(self._interval):
+            self.report()
+
+    def report(self):
+        """One sample; public so a test can drive it without the thread."""
+        current = cached_bytes(self._folder)
+        if current == self._last or current <= 0:
+            return
+        self._last = current
+        line = f"Downloading weights: {_mb(current)} MB"
+        if self._expected:
+            percent = min(100.0, 100.0 * current / self._expected)
+            line += f" of {_mb(self._expected)} MB ({percent:.0f}%)"
+        self._log(line)
+
+
+def _parameter_note(model) -> str:
+    """`` (840 M parameters)`` when the model can count them, else ``""``."""
+    try:
+        count = sum(int(p.numel()) for p in model.parameters())
+    except Exception:  # nosec B110 - a fake or exotic model
+        return ""
+    return f" ({count / 1e6:,.0f} M parameters)" if count else ""
+
+
+def describe_device(device: str) -> str:
+    """``cuda (NVIDIA RTX A2000, 11.2 GB free of 12.0 GB)`` or just the name."""
+    if not str(device).startswith("cuda"):
+        return str(device)
+    try:
+        import torch
+        index = torch.device(device).index or 0
+        name = torch.cuda.get_device_name(index)
+        free, total = torch.cuda.mem_get_info(index)
+        return (f"{device} ({name}, {free / 2**30:.1f} GB free of "
+                f"{total / 2**30:.1f} GB)")
+    except Exception:  # nosec B110
+        return str(device)
+
+
+def _transformers_import_message(exc: ImportError) -> str:
+    """Say what actually stopped ``transformers`` from importing.
+
+    ``transformers`` imports lazily and pulls in a long tail (scikit-learn,
+    pyarrow, ...), so an ``ImportError`` here is more often one of *those*
+    breaking than transformers being absent. Reporting "not installed" for a
+    package the Dependency Manager shows as installed sends the user to the
+    wrong place - the real case was a user-site pyarrow that could not load
+    its DLL inside QGIS.
+    """
+    if isinstance(exc, ModuleNotFoundError) and exc.name == "transformers":
+        return ("transformers is not installed. Install the Classification "
+                "dependencies from the Dependency Manager.")
+    # The innermost cause is the one that names the broken package.
+    root = exc
+    while root.__cause__ is not None or root.__context__ is not None:
+        root = root.__cause__ or root.__context__
+    culprit = getattr(root, "name", None) or ""
+    module = f" while importing '{culprit}'" if culprit else ""
+    message = (f"transformers is installed but could not be imported{module}: "
+               f"{root}")
+    if "dll load failed" in str(root).lower():
+        message += (
+            "\n\nA native library failed to load inside QGIS. This usually "
+            "means a package in the user site-packages shadows the copy QGIS "
+            "ships, and the two disagree on the DLLs QGIS has already loaded. "
+            "Open the Dependency Manager and repair the shadowed packages, "
+            "or uninstall the user-site copy of that package.")
+    return message
 
 
 def _load_failure_message(model_id: str, exc: Exception) -> str:
@@ -574,6 +904,17 @@ class Head:
                 f"but was given {array.shape[1]}-d. Check that the classifier "
                 "matches the configured modality - a 'matched' head takes both "
                 "modalities concatenated.")
+        finite = np.isfinite(array).all(axis=1)
+        if not finite.all():
+            # A NaN feature gives a NaN probability, which SQLite stores as
+            # NULL - the NOT NULL constraint on frame_predictions.prob was
+            # how this first surfaced. Name the cause instead.
+            raise HeadError(
+                f"{int((~finite).sum())} of {len(array)} feature vector(s) "
+                "contain NaN or infinite values, so the classifier cannot "
+                "score them. The embeddings were computed in a precision "
+                "the backbone overflowed in; re-run 'Compute Embeddings' - "
+                "it recomputes the unusable vectors - and then this step.")
 
         with torch.no_grad():
             _embedding, probabilities = self._module(torch.from_numpy(array))

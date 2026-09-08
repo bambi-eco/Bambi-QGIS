@@ -7,7 +7,7 @@ each step is passed in as a suffix dict so this stays widget-free.
 """
 
 import os
-from typing import Dict, List
+from typing import Dict, List, Sequence
 
 # Steps whose status is derived from output folders (reset to "Not started"
 # before re-checking).
@@ -15,9 +15,106 @@ FOLDER_STATUS_STEPS = (
     "extract_thermal_frames", "extract_rgb_frames", "detection",
     "georeference", "tracking", "calculate_fov", "flight_route",
     "alfs", "export_geotiffs", "orthomosaic", "sam3_segmentation",
-    "sam3_georeference", "trex_import",
+    "sam3_georeference", "trex_import", "track_matching", "track_inventory",
 )
 PERPENDICULAR_STEPS = ("perpendicular", "track_perpendicular")
+
+# Classification steps are store-backed and recorded per modality, and their
+# status is read from the store's stage states rather than from folders:
+# ``complete``, ``stale`` (an upstream step re-ran since) or ``pending``.
+CLASSIFICATION_STATUS_STEPS = (
+    "embeddings", "classify_occlusion", "classify_species", "classify_sex",
+    "life_stage",
+)
+#: Which status label each classification task reports on, and which stage
+#: carries its staleness.
+CLASSIFICATION_TASKS = {
+    "occlusion": ("classify_occlusion", "classification"),
+    "species": ("classify_species", "classification"),
+    "sex": ("classify_sex", "classification"),
+    "life_stage": ("life_stage", "life_stage"),
+}
+
+
+def cross_modal_states(target_folder: str) -> Dict[str, str]:
+    """``status_key -> "complete" | "stale" | "pending"`` for the steps
+    recorded against both cameras at once (cross-modal track matching).
+
+    The file scan can only say the matches exist; whether they still refer
+    to the current tracking runs is what the stage state adds.
+    """
+    from . import stages
+
+    if not target_folder or not os.path.isdir(target_folder):
+        return {}
+    recorded = stages.states(target_folder, stages.CROSS_MODAL)
+    result: Dict[str, str] = {}
+    for stage in stages.STAGE_SHARED_STORE_KIND:
+        row = recorded.get(stage)
+        if row is None or row.get("state") not in (stages.COMPLETE, stages.STALE):
+            result[stage] = ("complete" if stages.has_output(
+                target_folder, stage, stages.CROSS_MODAL) else "pending")
+        else:
+            result[stage] = ("stale" if row["state"] == stages.STALE
+                             else "complete")
+    return result
+
+
+def _combine(states: List[str]) -> str:
+    """One state for a step that spans several modalities.
+
+    Pending anywhere means the step has not been run as configured; stale
+    anywhere means part of its answer is out of date.
+    """
+    if not states or "pending" in states:
+        return "pending"
+    return "stale" if "stale" in states else "complete"
+
+
+def classification_states(target_folder: str,
+                          embeddings_targets: Sequence[str],
+                          task_targets: Dict[str, Sequence[str]]
+                          ) -> Dict[str, str]:
+    """``status_key -> "complete" | "stale" | "pending"`` for the
+    classification steps, as configured.
+
+    :param target_folder: the pipeline output root folder
+    :param embeddings_targets: modalities the embeddings step is set to
+        cover (``"t"``, ``"w"`` or both for *matched*)
+    :param task_targets: per task (``occlusion``, ``species``, ``sex``,
+        ``life_stage``), the modalities its answers are recorded on
+    """
+    from . import classification_store, stages
+
+    result: Dict[str, str] = {}
+    if not target_folder or not os.path.isdir(target_folder):
+        return result
+
+    recorded = {m: stages.states(target_folder, m) for m in ("t", "w")}
+
+    def _stage_state(stage: str, modality: str) -> str:
+        row = recorded.get(modality, {}).get(stage)
+        if row is None or row.get("state") not in (stages.COMPLETE, stages.STALE):
+            return "pending"
+        return "stale" if row["state"] == stages.STALE else "complete"
+
+    result["embeddings"] = _combine(
+        [_stage_state("embeddings", m) for m in embeddings_targets])
+
+    predicted = {m: set(classification_store.predicted_tasks(target_folder, m))
+                 for m in ("t", "w")}
+    for task, (status_key, stage) in CLASSIFICATION_TASKS.items():
+        per_modality = []
+        for modality in task_targets.get(task, ()):
+            if task not in predicted.get(modality, set()):
+                per_modality.append("pending")
+            else:
+                state = _stage_state(stage, modality)
+                # The predictions exist, so the stage ran even if its row
+                # was never written (older projects).
+                per_modality.append("complete" if state == "pending" else state)
+        result[status_key] = _combine(per_modality)
+    return result
 
 # (subfolder_base, status_step_key, additional_check_file, camera_key)
 _FOLDER_STATUS_MAPPING = [
@@ -96,6 +193,21 @@ def check_existing_outputs(target_folder: str,
 
         if os.listdir(subfolder_path):
             completed.append(status_key)
+
+    # Cross-modal matching belongs to both cameras at once, so its store sits
+    # beside project.gpkg rather than under a modality, and no camera combo
+    # has a say in whether it counts.
+    from . import store
+    if os.path.isfile(store.matches_path(target_folder)):
+        completed.append("track_matching")
+
+    # The track inventory is a report per camera in that camera's analytics
+    # folder.
+    inventory_csv = os.path.join(
+        target_folder, "analytics" + cameras.get("inventory", "_t"),
+        "track_inventory.csv")
+    if os.path.isfile(inventory_csv):
+        completed.append("track_inventory")
 
     # Perpendicular results live in the selected flight-route camera's folder
     # and are suffixed with the camera of the detections/tracks they were

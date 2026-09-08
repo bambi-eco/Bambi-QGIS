@@ -32,7 +32,12 @@ _DJI_SDK_URL = (
 # ``numpy<=2.1.1`` while QGIS 3.34 ships 2.2.6), which makes the constrained
 # resolve impossible.  In that case we retry unpinned and then remove the
 # shadowing user-site copy again - see ``_repair_user_site_shadows``.
-_BUNDLED_PIN_PACKAGES = ('numpy', 'scipy')
+# pyarrow joined the list on 2026-09-07: QGIS 3.44 links GDAL against its
+# own Arrow DLLs and ships the matching pyarrow, so a user-site pyarrow of
+# any other version binds to the already-loaded DLLs and dies with "The
+# specified procedure could not be found" - taking transformers (via
+# scikit-learn) and with it the whole classification step down.
+_BUNDLED_PIN_PACKAGES = ('numpy', 'scipy', 'pyarrow')
 
 # Cache for _detect_bundled_versions: None = not probed yet, dict = result.
 _bundled_versions_cache = None

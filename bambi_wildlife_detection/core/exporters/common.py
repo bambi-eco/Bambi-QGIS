@@ -143,10 +143,16 @@ def load_detections(target_folder: str, modality: str,
     if run_ids and os.path.isfile(trk_path):
         placeholders = ", ".join("?" for _ in run_ids)
         columns.append("m.track_id")
-        joins += (" LEFT JOIN trk.track_members m "
-                  "ON m.detection_id = d.detection_id"
-                  " LEFT JOIN trk.tracks t ON t.track_id = m.track_id"
-                  f" AND t.run_id IN ({placeholders})")  # nosec B608 - ints
+        # The run filter has to sit inside the joined set: putting it on the
+        # tracks join only blanked the track row while the membership row -
+        # and its track_id - of a superseded run stayed attached, so an
+        # export after a re-run listed both runs' tracks (2026-09-07: 93
+        # thermal tracks for a run of 31).
+        joins += (" LEFT JOIN (SELECT m.detection_id, m.track_id "
+                  "FROM trk.track_members m "
+                  "JOIN trk.tracks t ON t.track_id = m.track_id "
+                  f"WHERE t.run_id IN ({placeholders})) m "  # nosec B608 - ints
+                  "ON m.detection_id = d.detection_id")
 
     conn = store.open_store(det_path, store.DETECTIONS, modality)
     try:

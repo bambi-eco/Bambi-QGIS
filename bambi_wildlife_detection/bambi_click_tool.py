@@ -51,6 +51,38 @@ DETECTION_TYPE = "detection"
 FOV_TYPE = "fov"
 
 
+def open_track_in_viewer(main_window, target_folder: str, modality: str,
+                         track_id: int, dem_path: str = "",
+                         correction_path: str = "",
+                         frame: Optional[int] = None) -> bool:
+    """Show a track in the inspector, as a click on its layer would.
+
+    Shared by the map tool and the track inventory report, whose start and
+    end frame cells open the animal at that frame. Returns ``False`` when the
+    store holds no boxes for the track (the caller says so).
+
+    :param frame: the frame to open on; the first frame when ``None`` or
+        not part of the track
+    """
+    all_tracks = inspection.load_pixel_tracks(target_folder, modality)
+    members = sorted(all_tracks.get(track_id, []), key=lambda d: d["frame"])
+    if not members:
+        return False
+    frames = inspection.build_frames_from_pixel_tracks(
+        members, all_tracks, track_id, target_folder, modality)
+    inspection.fill_interpolated_boxes(frames)
+    if not frames:
+        return False
+    frame_list = [f["frame_idx"] for f in frames]
+    start_idx = frame_list.index(frame) if frame in frame_list else 0
+    viewer = FeatureViewerDialog.get_instance(main_window)
+    viewer.show_track(
+        f"Track {track_id}   |   {len(frames)} frame(s)", frames, start_idx,
+        target_folder=target_folder, dem_path=dem_path,
+        correction_path=correction_path)
+    return True
+
+
 class BambiClickTool(QgsMapToolIdentify):
     """Map tool that opens FeatureViewerDialog on BAMBI layer feature clicks.
 
@@ -220,21 +252,30 @@ class BambiClickTool(QgsMapToolIdentify):
             for d in not_clicked
         ]
 
-        image_path_t, image_path_w = self._resolve_image_paths(target_folder, frame_idx)
+        found = inspection.frame_images(target_folder, frame_idx, boxes_modality)
         title = (
             f"Detection - Frame {frame_idx}"
             f"   |   conf: {det_conf:.3f}"
             f"   |   cls: {det_class}"
         )
 
+        other_green, other_blue = inspection.other_camera_boxes(
+            target_folder, boxes_modality,
+            found["frame_idx_w" if boxes_modality == "t" else "frame_idx_t"],
+            [d["detection_id"] for d in clicked])
+
         viewer = FeatureViewerDialog.get_instance(self.iface.mainWindow())
         viewer.show_detection(
             title, green_boxes, blue_boxes,
-            image_path_t=image_path_t, image_path_w=image_path_w,
+            image_path_t=found["image_path_t"],
+            image_path_w=found["image_path_w"],
             boxes_modality=boxes_modality,
             target_folder=target_folder, dem_path=dem_path,
             correction_path=correction_path,
             frame_idx=frame_idx,
+            frame_idx_t=found["frame_idx_t"],
+            frame_idx_w=found["frame_idx_w"],
+            other_green=other_green, other_blue=other_blue,
         )
 
     def _handle_fov_click(self, fov_results, click_xy: Optional[Tuple[float, float]] = None):
@@ -286,10 +327,14 @@ class BambiClickTool(QgsMapToolIdentify):
                 (d["x1"], d["y1"], d["x2"], d["y2"], d["confidence"], d["class_id"])
                 for d in same_frame
             ]
-            image_path_t, image_path_w = self._resolve_image_paths(target_folder, frame_idx)
+            found = inspection.frame_images(target_folder, frame_idx, boxes_modality)
+            image_path_t = found["image_path_t"]
+            image_path_w = found["image_path_w"]
 
             frame_dict = {
                 "frame_idx": frame_idx,
+                "frame_idx_t": found["frame_idx_t"],
+                "frame_idx_w": found["frame_idx_w"],
                 "image_path_t": image_path_t,
                 "image_path_w": image_path_w,
                 "boxes_modality": boxes_modality,
@@ -300,6 +345,11 @@ class BambiClickTool(QgsMapToolIdentify):
                 "dem_path": dem_path,
                 "correction_path": correction_path,
             }
+            # Every detection on the frame is highlighted here, so on the
+            # other camera every matched partner is too.
+            inspection.attach_other_camera_boxes(
+                frame_dict, target_folder,
+                [d["detection_id"] for d in same_frame])
 
             # Project the clicked map position into this frame's image space.
             # Failures are non-fatal - the frame is still shown, just without
@@ -317,14 +367,18 @@ class BambiClickTool(QgsMapToolIdentify):
                         pt = xform.transform(QgsPointXY(*click_xy))
                         layer_xy = (pt.x(), pt.y())
 
-                    frame_dict["click_point_t"] = self._project_map_point(
-                        layer_xy, frame_idx, image_path_t,
-                        target_folder, dem_path, correction_path, "t",
-                    )
-                    frame_dict["click_point_w"] = self._project_map_point(
-                        layer_xy, frame_idx, image_path_w,
-                        target_folder, dem_path, correction_path, "w",
-                    )
+                    # Each camera's crosshair is projected through that
+                    # camera's own pose for this moment.
+                    if found["frame_idx_t"] is not None:
+                        frame_dict["click_point_t"] = self._project_map_point(
+                            layer_xy, found["frame_idx_t"], image_path_t,
+                            target_folder, dem_path, correction_path, "t",
+                        )
+                    if found["frame_idx_w"] is not None:
+                        frame_dict["click_point_w"] = self._project_map_point(
+                            layer_xy, found["frame_idx_w"], image_path_w,
+                            target_folder, dem_path, correction_path, "w",
+                        )
                 except Exception:  # nosec B110
                     pass
 

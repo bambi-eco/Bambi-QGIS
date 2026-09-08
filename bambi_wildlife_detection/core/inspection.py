@@ -17,7 +17,7 @@ QGIS-specific pieces are injected by the caller:
 
 import os
 import json
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 
 def _noop_log(message: str, level: str = "info") -> None:
@@ -71,33 +71,198 @@ def load_pixel_tracks(target_folder: str,
     return result
 
 
-def resolve_image_paths(target_folder: str, frame_idx: int) -> tuple:
-    """Return ``(path_t, path_w)`` for frame *frame_idx*.
+#: Poses files, keyed by target folder. The inspector resolves a frame per
+#: click and per track frame, and re-reading a 1300-image JSON each time is
+#: what made the RGB toggle sluggish.
+_POSES_CACHE: Dict[Tuple[str, str], Tuple[float, List[dict]]] = {}
 
-    Each element is the filesystem path to the thermal / RGB frame image,
-    or an empty string when that frame type has not been extracted.
+
+def _pose_images(target_folder: str, modality: str) -> List[dict]:
+    """The ``images`` list of ``poses_{modality}.json``, or ``[]``."""
+    poses_path = os.path.join(target_folder, f"poses_{modality}.json")
+    try:
+        stamp = os.path.getmtime(poses_path)
+    except OSError:
+        return []
+    key = (os.path.normcase(os.path.abspath(target_folder)), modality)
+    cached = _POSES_CACHE.get(key)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    try:
+        with open(poses_path, "r", encoding="utf-8") as fh:
+            images = json.load(fh).get("images", [])
+    except Exception:  # nosec B110
+        images = []
+    _POSES_CACHE[key] = (stamp, images)
+    return images
+
+
+def partner_frame(target_folder: str, frame_idx: int, modality: str,
+                  max_dt: Optional[float] = None) -> Optional[int]:
+    """The other camera's frame taken at the same moment as *frame_idx*.
+
+    Thermal and RGB record at different rates, so the same index is a
+    different moment on the other camera - on a real flight the thermal
+    stream had 1342 frames to the RGB stream's fewer, and index-for-index
+    lookups put the RGB view several seconds off. Frames are lined up on the
+    shared capture clock instead (:mod:`core.frame_matching`).
+
+    Falls back to the same index when the poses carry no timestamps (old
+    extractions), so nothing gets worse than it was. ``None`` when the other
+    camera has no frame at all, or none within *max_dt* seconds.
     """
-    paths = []
-    for poses_name, frames_dir in [
-        ("poses_t.json", "frames_t"),
-        ("poses_w.json", "frames_w"),
-    ]:
-        poses_path = os.path.join(target_folder, poses_name)
-        found = ""
-        if os.path.isfile(poses_path):
-            try:
-                with open(poses_path, "r", encoding="utf-8") as fh:
-                    data = json.load(fh)
-                images = data.get("images", [])
-                if 0 <= frame_idx < len(images):
-                    imagefile = images[frame_idx].get("imagefile", "")
-                    candidate = os.path.join(target_folder, frames_dir, imagefile)
-                    if imagefile and os.path.isfile(candidate):
-                        found = candidate
-            except Exception:  # nosec B110
-                pass
-        paths.append(found)
-    return paths[0], paths[1]
+    from . import frame_matching
+
+    other = "w" if modality == "t" else "t"
+    src = _pose_images(target_folder, modality)
+    dst = _pose_images(target_folder, other)
+    if not dst:
+        return None
+    matcher = frame_matching.FrameMatcher(src, dst)
+    if not matcher.usable:
+        return frame_idx if 0 <= frame_idx < len(dst) else None
+    if max_dt is not None:
+        return matcher.matches_within(frame_idx, max_dt)
+    found = matcher.match(frame_idx)
+    return None if found is None else found[0]
+
+
+def frame_image(target_folder: str, frame_idx: Optional[int],
+                modality: str) -> str:
+    """Path of one camera's extracted frame image, or ``""``."""
+    if frame_idx is None:
+        return ""
+    images = _pose_images(target_folder, modality)
+    if not (0 <= frame_idx < len(images)):
+        return ""
+    imagefile = images[frame_idx].get("imagefile", "")
+    candidate = os.path.join(target_folder, f"frames_{modality}", imagefile)
+    return candidate if imagefile and os.path.isfile(candidate) else ""
+
+
+def frame_images(target_folder: str, frame_idx: int,
+                 modality: str = "t") -> Dict[str, object]:
+    """Both cameras' images for the moment of *frame_idx* on *modality*.
+
+    Returns ``{"frame_idx_t", "frame_idx_w", "image_path_t", "image_path_w"}``:
+    the frame's own index and path on its camera, and the time-matched
+    partner's on the other. A missing partner leaves its index ``None`` and
+    its path ``""``.
+    """
+    other = "w" if modality == "t" else "t"
+    partner = partner_frame(target_folder, frame_idx, modality)
+    result = {
+        f"frame_idx_{modality}": frame_idx,
+        f"frame_idx_{other}": partner,
+        f"image_path_{modality}": frame_image(target_folder, frame_idx, modality),
+        f"image_path_{other}": frame_image(target_folder, partner, other),
+    }
+    return result
+
+
+#: Per-modality detections and the cross-modal partner map, keyed by target
+#: folder and refreshed when the store file changes. A track viewer asks for
+#: every frame of a track, and the RGB store is 2600 rows read once, not
+#: once per frame.
+_DETECTIONS_CACHE: Dict[Tuple[str, str], Tuple[float, List[dict]]] = {}
+_PARTNERS_CACHE: Dict[Tuple[str, str], Tuple[float, Dict[int, int]]] = {}
+
+
+def _mtime(path: str) -> float:
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return -1.0
+
+
+def _detections(target_folder: str, modality: str) -> List[dict]:
+    from . import store
+
+    key = (os.path.normcase(os.path.abspath(target_folder)), modality)
+    stamp = _mtime(store.stage_path(target_folder, store.DETECTIONS, modality))
+    cached = _DETECTIONS_CACHE.get(key)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    rows = load_pixel_detections(target_folder, modality) if stamp >= 0 else []
+    _DETECTIONS_CACHE[key] = (stamp, rows)
+    return rows
+
+
+def _partners(target_folder: str, modality: str) -> Dict[int, int]:
+    """``detection_id -> partner detection_id`` from the active match run."""
+    from . import match_store, store
+
+    key = (os.path.normcase(os.path.abspath(target_folder)), modality)
+    stamp = _mtime(store.matches_path(target_folder))
+    cached = _PARTNERS_CACHE.get(key)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    try:
+        mapping = match_store.partner_detections(target_folder, modality) \
+            if stamp >= 0 else {}
+    except Exception:  # nosec B110 - an unreadable match store is no match
+        mapping = {}
+    _PARTNERS_CACHE[key] = (stamp, mapping)
+    return mapping
+
+
+def other_camera_boxes(target_folder: str, boxes_modality: str,
+                       partner_frame_idx: Optional[int],
+                       highlighted_ids: Iterable[int] = ()) -> Tuple[list, list]:
+    """What the *other* camera detected at this moment, as ``(green, blue)``.
+
+    The viewer used to show only what it could project: the source camera's
+    boxes carried onto the other frame through the DEM. But the other camera
+    ran its own detector on that moment, and those boxes are the ones its
+    tracks, matches and classifications are built from. They are returned in
+    the other camera's own pixel space, on its time-matched frame.
+
+    Green are the boxes cross-modal matching paired with *highlighted_ids*
+    (the clicked detection, the track being followed); blue are the rest of
+    that frame. Without a match run everything is blue.
+    """
+    if partner_frame_idx is None:
+        return [], []
+    other = "w" if boxes_modality == "t" else "t"
+    on_frame = [d for d in _detections(target_folder, other)
+                if d["frame"] == partner_frame_idx]
+    if not on_frame:
+        return [], []
+    wanted = set(int(i) for i in highlighted_ids)
+    partners = set()
+    if wanted:
+        mapping = _partners(target_folder, boxes_modality)
+        partners = {mapping[i] for i in wanted if i in mapping}
+    green, blue = [], []
+    for d in on_frame:
+        box = (d["x1"], d["y1"], d["x2"], d["y2"], d["confidence"], d["class_id"])
+        (green if d["detection_id"] in partners else blue).append(box)
+    return green, blue
+
+
+def attach_other_camera_boxes(frame: dict, target_folder: str,
+                              highlighted_ids: Iterable[int] = ()) -> dict:
+    """Add ``boxes_green_other`` / ``boxes_blue_other`` to a viewer frame."""
+    modality = frame.get("boxes_modality", "t")
+    other = "w" if modality == "t" else "t"
+    green, blue = other_camera_boxes(
+        target_folder, modality, frame.get(f"frame_idx_{other}"),
+        highlighted_ids)
+    frame["boxes_green_other"] = green
+    frame["boxes_blue_other"] = blue
+    return frame
+
+
+def resolve_image_paths(target_folder: str, frame_idx: int,
+                        modality: str = "t") -> tuple:
+    """Return ``(path_t, path_w)`` for frame *frame_idx* of *modality*.
+
+    The other camera's path is the frame it took at the same moment, not the
+    same index (see :func:`partner_frame`). Each element is an empty string
+    when that camera's frame has not been extracted.
+    """
+    found = frame_images(target_folder, frame_idx, modality)
+    return found["image_path_t"], found["image_path_w"]
 
 
 def find_dem_mesh_path(dem_path: str,
@@ -138,18 +303,21 @@ def build_frames_from_pixel_tracks(
             for d in dets
             if d["frame"] == fi
         ]
-        path_t, path_w = resolve_image_paths(target_folder, fi)
-        frames.append({
+        found = frame_images(target_folder, fi, boxes_modality)
+        frames.append(attach_other_camera_boxes({
             "frame_idx": fi,
-            "image_path_t": path_t,
-            "image_path_w": path_w,
+            "frame_idx_t": found["frame_idx_t"],
+            "frame_idx_w": found["frame_idx_w"],
+            "image_path_t": found["image_path_t"],
+            "image_path_w": found["image_path_w"],
             "boxes_modality": boxes_modality,
             "boxes_green": [
                 (det["x1"], det["y1"], det["x2"], det["y2"],
                  det["conf"], det["cls"], is_interp)
             ],
             "boxes_blue": other_on_frame,
-        })
+        }, target_folder, [det["detection_id"]] if det.get("detection_id")
+            is not None else []))
     return frames
 
 

@@ -333,3 +333,25 @@ def test_the_classification_stage_does_not_own_the_file(root):
 
     assert stages.STAGE_STORE_KIND.get("embeddings") == store.CLASSIFICATION
     assert "classification" not in stages.STAGE_STORE_KIND
+
+
+def test_a_nan_probability_is_refused_with_its_cause(root):
+    """SQLite stores NaN as NULL; the NOT NULL constraint that fired named
+    the column, not the reason (2026-09-07)."""
+    import math
+
+    rows = _frames()
+    rows[0]["prob"] = math.nan
+    with pytest.raises(ValueError, match="NaN or infinite probability"):
+        cs.record_frame_predictions(root, "t", "sex", rows)
+
+
+def test_predicted_tasks_includes_frame_only_heads(root):
+    """Occlusion never votes per track; the status display must still see it."""
+    _run(root)
+    cs.record_frame_predictions(root, "t", "occlusion", [
+        {"detection_id": 1, "label": "clear", "class_index": 0, "prob": 0.8}])
+    cs.record_track_predictions(root, "t", "sex", [
+        {"track_id": 1, "label": "male", "votes": 2, "n": 2, "fraction": 1.0}])
+    assert cs.predicted_tasks(root, "t") == ["occlusion", "sex"]
+    assert cs.predicted_tasks(root, "w") == []

@@ -265,3 +265,93 @@ class TestModelLayout:
         # other two vote over, and sex reuses exactly the species frames.
         assert hf_access.TASKS.index("occlusion") == 0
         assert hf_access.TASKS.index("species") < hf_access.TASKS.index("sex")
+
+
+class TestDownloadHead:
+    """The class-mapping dialog and the classification run share one
+    download, so a mapping can be configured before the classifier ever
+    ran (2026-09-07: the dialog told the user to run it first)."""
+
+    def _hub(self, monkeypatch, calls, fetched_name="species_matched.pt"):
+        hub = types.ModuleType("huggingface_hub")
+
+        def hf_hub_download(repo_id, filename, token=None, local_dir=None):
+            calls.append((repo_id, filename, token, local_dir))
+            path = os.path.join(local_dir, *filename.split("/"))
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "wb") as fh:
+                fh.write(b"head")
+            return path
+
+        hub.hf_hub_download = hf_hub_download
+        monkeypatch.setitem(sys.modules, "huggingface_hub", hub)
+
+    def test_fetches_into_the_local_layout(self, monkeypatch, tmp_path):
+        calls, logs = [], []
+        self._hub(monkeypatch, calls)
+        destination = hf_access.head_local_path(
+            str(tmp_path), "species", "non_geo", "matched")
+        result = hf_access.download_head(
+            "cpraschl/bambi-species-classification", "species", "non_geo",
+            "matched", destination, "hf_x", log_fn=logs.append)
+        assert result == destination and os.path.isfile(destination)
+        assert calls == [("cpraschl/bambi-species-classification",
+                          "non_geo/species_matched.pt", "hf_x",
+                          os.path.dirname(os.path.dirname(destination)))]
+        assert logs and "Downloading" in logs[0]
+
+    def test_an_empty_token_is_sent_as_none(self, monkeypatch, tmp_path):
+        calls = []
+        self._hub(monkeypatch, calls)
+        destination = hf_access.head_local_path(str(tmp_path), "sex", "non_geo", "rgb")
+        hf_access.download_head("r/s", "sex", "non_geo", "rgb", destination, "")
+        assert calls[0][2] is None
+
+    def test_a_failed_download_names_the_head(self, monkeypatch, tmp_path):
+        hub = types.ModuleType("huggingface_hub")
+
+        def boom(**kwargs):
+            raise OSError("401 gated")
+        hub.hf_hub_download = boom
+        monkeypatch.setitem(sys.modules, "huggingface_hub", hub)
+        with pytest.raises(RuntimeError, match="species classifier .*401 gated"):
+            hf_access.download_head("r/s", "species", "non_geo", "matched",
+                                    str(tmp_path / "x.pt"), "")
+
+    def test_missing_hub_is_reported(self, monkeypatch, tmp_path):
+        monkeypatch.setitem(sys.modules, "huggingface_hub", None)
+        with pytest.raises(RuntimeError, match="Dependency Manager"):
+            hf_access.download_head("r/s", "species", "non_geo", "matched",
+                                    str(tmp_path / "x.pt"), "")
+
+
+class TestPerSpeciesDefaults:
+    """The per-species dialog showed "Default (size-based)" for every species
+    while the run read an empty selection and measured nothing
+    (2026-09-07). One function now answers both."""
+
+    def test_defaults_follow_the_published_heads(self):
+        assert hf_access.default_species_source("sex", "red deer") == "default"
+        assert hf_access.default_species_source("sex", "wild boar") == "off"
+        assert hf_access.default_species_source("life_stage", "red deer") == "size"
+        assert hf_access.default_species_source("life_stage", "roe deer") == "size"
+
+    def test_never_saved_takes_the_defaults(self):
+        sources = hf_access.per_species_sources(
+            {"modality": "thermal"}, "life_stage", ["red deer", "roe deer"])
+        assert sources == {"red deer": {"model": "size"},
+                           "roe deer": {"model": "size"}}
+
+    def test_a_saved_selection_is_kept_and_omissions_are_off(self):
+        spec = {"species": {"red deer": {"model": "custom", "path": "x.pt"}}}
+        sources = hf_access.per_species_sources(spec, "sex", ["red deer", "roe deer"])
+        assert sources["red deer"] == {"model": "custom", "path": "x.pt"}
+        assert sources["roe deer"] == {"model": "off"}
+
+    def test_an_explicitly_empty_selection_is_all_off(self):
+        sources = hf_access.per_species_sources(
+            {"species": {}}, "life_stage", ["red deer"])
+        assert sources == {"red deer": {"model": "off"}}
+
+    def test_project_species_falls_back_to_the_published_one(self, tmp_path):
+        assert hf_access.project_species(str(tmp_path)) == ["red deer"]

@@ -19,6 +19,7 @@ lets the quorum be changed afterwards without re-running anything.
 """
 
 import json
+import math
 import os
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Set
@@ -231,6 +232,18 @@ def record_frame_predictions(target_folder: str, modality: str, task: str,
     leave the previous verdict beside the new one.
     """
     predictions = list(predictions)
+    # SQLite stores NaN as NULL, so a NaN probability would fail the NOT NULL
+    # constraint with a message that names the column and not the cause.
+    unusable = [row["detection_id"] for row in predictions
+                if not math.isfinite(float(row["prob"]))]
+    if unusable:
+        shown = ", ".join(str(i) for i in unusable[:5])
+        more = f" (and {len(unusable) - 5} more)" if len(unusable) > 5 else ""
+        raise ValueError(
+            f"{len(unusable)} '{task}' prediction(s) have a NaN or infinite "
+            f"probability (detection ids {shown}{more}); nothing was "
+            "recorded. This comes from non-finite embeddings - re-run "
+            "'Compute Embeddings' for this camera.")
     conn = _conn(target_folder, modality)
     try:
         with store.transaction(conn):
@@ -349,6 +362,26 @@ def clear_task(target_folder: str, modality: str, task: str) -> Dict[str, int]:
     finally:
         conn.close()
     return {"frames": frame_count, "tracks": track_count}
+
+
+def predicted_tasks(target_folder: str, modality: str) -> List[str]:
+    """Every task with any output in this modality, per frame or per track.
+
+    :func:`tasks_present` answers "which tasks voted", which is what the
+    exports need; the status display needs the wider question, because the
+    occlusion head writes per-frame calls only and never votes.
+    """
+    if not has_store(target_folder, modality):
+        return []
+    conn = _conn(target_folder, modality)
+    try:
+        tasks = {row["task"] for row in conn.execute(
+            "SELECT DISTINCT task FROM frame_predictions")}
+        tasks |= {row["task"] for row in conn.execute(
+            "SELECT DISTINCT task FROM track_predictions")}
+        return sorted(tasks)
+    finally:
+        conn.close()
 
 
 def tasks_present(target_folder: str, modality: str) -> List[str]:

@@ -516,3 +516,99 @@ class TestMatchTracks:
                         log_fn=logged.append)
         line = next(x for x in logged if "no pair confirmed" in x)
         assert "1 shared too few frames" in line
+
+
+class TestWorldSpace:
+    """Matching on the ground, where the affine plays no part.
+
+    Modelled on the flight that motivated it: the pixel affine converged
+    39 px off and paired each thermal track with its neighbour's RGB track,
+    while the geo-referenced boxes of the true partners sat within a metre.
+    """
+
+    FRAMES = list(range(20))
+
+    def _flight(self):
+        # Two animals ~4 m apart on the ground. Pixel boxes are deliberately
+        # unrelated to the ground truth so a pixel-space matcher could not
+        # get this right by accident.
+        rows_t = _rows(1, self.FRAMES, 100, 100, first_id=0) + \
+            _rows(2, self.FRAMES, 400, 300, first_id=100)
+        rows_w = _rows(11, self.FRAMES, 900, 1500, first_id=1000) + \
+            _rows(12, self.FRAMES, 1300, 1700, first_id=1100)
+        world_t, world_w = {}, {}
+        for i, f in enumerate(self.FRAMES):
+            a = (500000.0 + 0.3 * i, 5300000.0 + 0.1 * i)
+            b = (500004.0 + 0.3 * i, 5300001.0 + 0.1 * i)
+            world_t[i] = a
+            world_t[100 + i] = b
+            world_w[1000 + i] = (b[0] + 0.3, b[1] - 0.2)   # w11 is animal b
+            world_w[1100 + i] = (a[0] - 0.2, a[1] + 0.3)   # w12 is animal a
+        frame_map = {f: f for f in self.FRAMES}
+        return rows_t, rows_w, world_t, world_w, frame_map
+
+    def test_pairs_by_ground_distance_not_pixels(self):
+        rows_t, rows_w, world_t, world_w, frame_map = self._flight()
+        result = tm.match_tracks(
+            rows_t, rows_w, frame_map, world_t=world_t, world_w=world_w,
+            config=MatchConfig(space="world"))
+        pairs = {(m["track_id_t"], m["track_id_w"]) for m in result["matches"]}
+        assert pairs == {(1, 12), (2, 11)}
+        assert result["space"] == "world"
+        for match in result["matches"]:
+            assert match["median_dist"] < 0.5          # metres
+
+    def test_gate_is_in_metres(self):
+        rows_t, rows_w, world_t, world_w, frame_map = self._flight()
+        result = tm.match_tracks(
+            rows_t, rows_w, frame_map, world_t=world_t, world_w=world_w,
+            config=MatchConfig(space="world", gate_m=0.1))
+        assert result["matches"] == []
+
+    def test_detections_without_ground_position_are_left_out(self):
+        rows_t, rows_w, world_t, world_w, frame_map = self._flight()
+        for i in range(0, 20):                       # thermal track 2 unplaced
+            world_t.pop(100 + i)
+        result = tm.match_tracks(
+            rows_t, rows_w, frame_map, world_t=world_t, world_w=world_w,
+            config=MatchConfig(space="world"))
+        assert {(m["track_id_t"], m["track_id_w"]) for m in result["matches"]} == {(1, 12)}
+
+    def test_pixel_affine_is_fitted_from_the_confirmed_pairs(self):
+        rows_t, rows_w, world_t, world_w, frame_map = self._flight()
+        # Make the pixel relationship a real affine so the fit is exact.
+        rows_t = _through(rows_w, first_id=0)
+        for row in rows_t:
+            row["track_id"] = {11: 2, 12: 1}[row["track_id"]]
+        # _through keeps row order, so row i of rows_t is row i of rows_w
+        # seen by the other camera: same animal, same spot on the ground.
+        world_t = {t["detection_id"]: world_w[w["detection_id"]]
+                   for w, t in zip(rows_w, rows_t)}
+        logs = []
+        result = tm.match_tracks(
+            rows_t, rows_w, frame_map, world_t=world_t, world_w=world_w,
+            config=MatchConfig(space="world"), log_fn=logs.append)
+        assert len(result["matches"]) == 2
+        for got, want in zip(result["affine"], TRUTH):
+            assert got == pytest.approx(want, abs=1e-6)
+        assert result["affine_rmse"] == pytest.approx(0.0, abs=1e-6)
+        assert any("confirmed correspondence" in line for line in logs)
+
+    def test_world_space_needs_both_sides(self):
+        rows_t, rows_w, world_t, world_w, frame_map = self._flight()
+        with pytest.raises(ValueError):
+            tm.match_tracks(rows_t, rows_w, frame_map, world_t=world_t,
+                            config=MatchConfig(space="world"))
+
+    def test_log_reports_metres(self):
+        rows_t, rows_w, world_t, world_w, frame_map = self._flight()
+        logs = []
+        tm.match_tracks(rows_t, rows_w, frame_map, world_t=world_t,
+                        world_w=world_w, config=MatchConfig(space="world"),
+                        log_fn=logs.append)
+        assert any("m inside a 1.5 m gate" in line for line in logs)
+
+    def test_config_gate_follows_the_space(self):
+        assert MatchConfig().gate == 28.0 and MatchConfig().unit == "px"
+        assert MatchConfig(space="world").gate == 1.5
+        assert MatchConfig(space="world", gate_m=3).unit == "m"

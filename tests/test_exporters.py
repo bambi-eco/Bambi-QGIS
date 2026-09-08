@@ -1016,3 +1016,29 @@ def test_a_missing_frame_is_reported_not_hidden(survey, tmp_path):
     exporters.export_coco(survey, "t", str(tmp_path / "c.json"),
                           image_size=SIZE, log_fn=messages.append)
     assert any("frame_000001.jpg" in m for m in messages)
+
+
+def test_a_rerun_of_tracking_drops_the_previous_runs_track_ids(survey):
+    """The membership rows of a superseded run must not keep their track ids
+    attached to the detections (2026-09-07: an export after a re-run listed
+    93 thermal tracks for a run of 31)."""
+    ids = [d["detection_id"] for d in track_store.load_detections(survey, "t")]
+    first = {row["detection_id"]: row["track_id"]
+             for row in common.load_detections(survey, "t",
+                                               include_not_an_animal=True)}
+    assert first[ids[0]] == 1 and first[ids[2]] == 2
+
+    # Re-run tracking: the new run groups the animals differently and its
+    # tracks get fresh ids.
+    track_store.record_tracks(survey, "t", [
+        {"track_id": 1, "detection_id": ids[0]},
+        {"track_id": 1, "detection_id": ids[1]},
+        {"track_id": 1, "detection_id": ids[2]},
+    ])
+    active = {row["track_id"] for row in track_store.load_pixel_tracks(survey, "t")}
+    rows = {row["detection_id"]: row["track_id"]
+            for row in common.load_detections(survey, "t",
+                                              include_not_an_animal=True)}
+    assert {t for t in rows.values() if t is not None} == active
+    assert len(active) == 1
+    assert rows[ids[3]] is None            # only in the old run

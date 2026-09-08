@@ -19,6 +19,7 @@ Every detection ends up either geo-referenced or explicitly failed -
 :func:`accounting` asserts exactly that, which the text format could not express.
 """
 
+import json
 import os
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional
@@ -359,6 +360,104 @@ def load_pixel_tracks(target_folder: str, modality: str,
         return [row for row in rows if row["track_id"] not in superseded]
     finally:
         conn.close()
+
+
+def track_labels(target_folder: str, modality: str) -> Dict[int, dict]:
+    """What the pipeline has said about each track and its detections.
+
+    ``{track_id: {"species_id", "attributes", "detections":
+    {detection_id: attributes}}}`` for the active run(s). The species is the
+    one on the track; the attributes are the JSON the classifiers and label
+    sync wrote (``sex``, ``age`` on the track, ``occlusion`` per detection).
+    This is what an import into the labelling tool carries over, so a
+    classified animal does not arrive there as "unknown".
+    """
+    det_path = store.stage_path(target_folder, store.DETECTIONS, modality)
+    trk_path = store.stage_path(target_folder, store.TRACKS, modality)
+    if not (os.path.isfile(det_path) and os.path.isfile(trk_path)):
+        return {}
+    run_ids = analysis_runs(target_folder, modality)
+    if not run_ids:
+        return {}
+    superseded = superseded_track_ids(target_folder, modality)
+    placeholders = ", ".join("?" for _ in run_ids)
+
+    conn = store.open_store(det_path, store.DETECTIONS, modality)
+    try:
+        from . import gpkg
+        gpkg.attach(conn, trk_path, "trk")
+        rows = [dict(row) for row in conn.execute(
+            "SELECT t.track_id, t.species_id, t.attributes AS track_attributes, "
+            "m.detection_id, d.attributes AS detection_attributes "
+            "FROM trk.track_members m "
+            "JOIN trk.tracks t ON t.track_id = m.track_id "
+            "JOIN detections d ON d.detection_id = m.detection_id "
+            f"WHERE t.run_id IN ({placeholders})",  # nosec B608 - ints only
+            run_ids)]
+        gpkg.detach(conn, "trk")
+    finally:
+        conn.close()
+
+    result: Dict[int, dict] = {}
+    for row in rows:
+        track_id = int(row["track_id"])
+        if track_id in superseded:
+            continue
+        entry = result.setdefault(track_id, {
+            "species_id": row["species_id"],
+            "attributes": _json_dict(row["track_attributes"]),
+            "detections": {},
+        })
+        entry["detections"][int(row["detection_id"])] = _json_dict(
+            row["detection_attributes"])
+    return result
+
+
+def set_track_attribute(target_folder: str, modality: str, track_id: int,
+                        field: str, value) -> bool:
+    """Write one attribute of one track; ``None`` removes it.
+
+    The user's own verdicts live beside the classifiers' - the inventory's
+    "approved" checkmark is the first - in the same ``attributes`` JSON, so
+    they travel with the track through exports and the inventory alike.
+    Returns whether anything changed.
+    """
+    path = store.stage_path(target_folder, store.TRACKS, modality)
+    if not os.path.isfile(path):
+        return False
+    conn = store.open_store(path, store.TRACKS, modality)
+    try:
+        with store.transaction(conn):
+            row = conn.execute(
+                "SELECT attributes FROM tracks WHERE track_id = ?",
+                (int(track_id),)).fetchone()
+            if row is None:
+                return False
+            attributes = _json_dict(row["attributes"])
+            if value is None:
+                if field not in attributes:
+                    return False
+                del attributes[field]
+            else:
+                if attributes.get(field) == value:
+                    return False
+                attributes[field] = value
+            conn.execute(
+                "UPDATE tracks SET attributes = ? WHERE track_id = ?",
+                (json.dumps(attributes), int(track_id)))
+            return True
+    finally:
+        conn.close()
+
+
+def _json_dict(raw) -> dict:
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def track_species(target_folder: str, modality: str) -> Dict[int, int]:

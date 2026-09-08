@@ -59,6 +59,43 @@ def normalise_label(label: str) -> str:
     return " ".join(text.split()).lower()
 
 
+#: Separators a head uses to join two ideas into one class name.
+_COMPOUND_SEPARATORS = ("/", "_", "-", "+", "&", ",")
+
+
+def label_candidates(label: str) -> List[str]:
+    """Names to try for a head label, best first.
+
+    The label itself, normalised; then, for a compound label, its leading
+    part. The published red deer sex head answers ``female_juvenile`` -
+    females and juveniles look alike from above - and a project whose sex
+    vocabulary is ``female`` / ``male`` should count that as female without
+    anyone opening the mapping dialog. Only the leading part is tried:
+    ``female_juvenile`` says female first, and ``juvenile`` is a life stage,
+    not a sex.
+    """
+    whole = normalise_label(label)
+    candidates = [whole] if whole else []
+    text = str(label or "")
+    for separator in _COMPOUND_SEPARATORS:
+        text = text.replace(separator, " ")
+    parts = text.split()
+    if len(parts) > 1:
+        leading = normalise_label(parts[0])
+        if leading and leading not in candidates:
+            candidates.append(leading)
+    return candidates
+
+
+def match_by_name(label: str, known: Dict[str, object]):
+    """The value of *label* in a ``{normalised name: value}`` table, or
+    ``None`` - trying the whole label, then its leading part."""
+    for candidate in label_candidates(label):
+        if candidate in known:
+            return known[candidate]
+    return None
+
+
 def label_values(spec: dict, vocabulary: dict, task: str) -> Dict[str, int]:
     """``{model label: project value id}`` for one task.
 
@@ -77,8 +114,10 @@ def label_values(spec: dict, vocabulary: dict, task: str) -> Dict[str, int]:
 
     known = _vocabulary_values(vocabulary, task)
     for label in labels:
-        if label not in resolved and normalise_label(label) in known:
-            resolved[label] = known[normalise_label(label)]
+        if label not in resolved:
+            value = match_by_name(label, known)
+            if value is not None:
+                resolved[label] = value
     # A head whose classes were never listed can still be resolved by name.
     for label, value in known.items():
         resolved.setdefault(label, value)
@@ -108,7 +147,7 @@ def resolve(values: Dict[str, object], label: str):
     """
     value = values.get(label)
     if value is None:
-        value = values.get(normalise_label(label))
+        value = match_by_name(label, values)
     return value
 
 

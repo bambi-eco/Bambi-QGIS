@@ -257,3 +257,145 @@ class TestProjectMapPoint:
         result = inspection.project_map_point(
             (0, 0), 0, folder, "", "", "w", mesh_cache={})
         assert result is None
+
+
+class TestPartnerFrames:
+    """The other camera's frame for a moment is found on the shared capture
+    clock, not by index: the cameras run at different rates, so the same
+    index is a different moment (and, for the shorter stream, may not exist)."""
+
+    @staticmethod
+    def _poses(root, modality, stamps, with_files=True):
+        images = []
+        for i, stamp in enumerate(stamps):
+            name = f"{modality}{i}.jpg"
+            images.append({"imagefile": name, "timestamp": stamp})
+            if with_files:
+                (root / f"frames_{modality}").mkdir(exist_ok=True)
+                (root / f"frames_{modality}" / name).write_bytes(b"")
+        (root / f"poses_{modality}.json").write_text(json.dumps({"images": images}))
+
+    def test_partner_is_the_frame_taken_at_the_same_moment(self, tmp_path):
+        # Thermal at 10 Hz, RGB at 5 Hz starting half a second later.
+        self._poses(tmp_path, "t", [f"2026-06-26T08:03:{32 + i // 10:02d}.{i % 10}00000+00:00"
+                                    for i in range(20)])
+        self._poses(tmp_path, "w", [f"2026-06-26T08:03:{32 + (5 + 2 * i) // 10:02d}.{(5 + 2 * i) % 10}00000+00:00"
+                                    for i in range(6)])
+        assert inspection.partner_frame(str(tmp_path), 5, "t") == 0     # 32.5 s
+        assert inspection.partner_frame(str(tmp_path), 9, "t") == 2     # 32.9 s -> 32.9 s
+        assert inspection.partner_frame(str(tmp_path), 0, "w") == 5     # back the other way
+        found = inspection.frame_images(str(tmp_path), 9, "t")
+        assert found["frame_idx_t"] == 9 and found["frame_idx_w"] == 2
+        assert found["image_path_t"].endswith("t9.jpg")
+        assert found["image_path_w"].endswith("w2.jpg")
+
+    def test_resolve_image_paths_uses_the_partner(self, tmp_path):
+        self._poses(tmp_path, "t", [f"2026-06-26T08:03:32.{i}00000+00:00" for i in range(10)])
+        self._poses(tmp_path, "w", ["2026-06-26T08:03:32.900000+00:00"])
+        path_t, path_w = inspection.resolve_image_paths(str(tmp_path), 9, "t")
+        assert path_t.endswith("t9.jpg")
+        assert path_w.endswith("w0.jpg")           # index 9 does not exist on RGB
+        path_t, path_w = inspection.resolve_image_paths(str(tmp_path), 0, "w")
+        assert path_w.endswith("w0.jpg") and path_t.endswith("t9.jpg")
+
+    def test_without_timestamps_the_same_index_is_kept(self, tmp_path):
+        self._poses(tmp_path, "t", [""] * 3)
+        self._poses(tmp_path, "w", [""] * 3)
+        assert inspection.partner_frame(str(tmp_path), 1, "t") == 1
+        assert inspection.partner_frame(str(tmp_path), 5, "t") is None
+
+    def test_no_other_camera_means_no_partner(self, tmp_path):
+        self._poses(tmp_path, "t", ["2026-06-26T08:03:32+00:00"])
+        assert inspection.partner_frame(str(tmp_path), 0, "t") is None
+        found = inspection.frame_images(str(tmp_path), 0, "t")
+        assert found["frame_idx_w"] is None and found["image_path_w"] == ""
+
+    def test_track_frames_carry_both_indices(self, tmp_path):
+        self._poses(tmp_path, "t", [f"2026-06-26T08:03:32.{i}00000+00:00" for i in range(10)])
+        self._poses(tmp_path, "w", ["2026-06-26T08:03:32.300000+00:00"])
+        dets = [{"frame": 3, "x1": 1, "y1": 2, "x2": 3, "y2": 4, "conf": 0.9, "cls": 0}]
+        frames = inspection.build_frames_from_pixel_tracks(dets, {1: dets}, 1, str(tmp_path), "t")
+        assert frames[0]["frame_idx_t"] == 3 and frames[0]["frame_idx_w"] == 0
+
+
+class TestOtherCameraBoxes:
+    """On the other camera the viewer showed only projected boxes, never
+    what that camera itself detected at the same moment (2026-09-07)."""
+
+    @staticmethod
+    def _flight(root):
+        from bambi_wildlife_detection.core import match_store
+        detection_store.record_detections(root, "t", [
+            {"frame": 3, "x1": 1, "y1": 1, "x2": 2, "y2": 2, "confidence": 0.9, "source_class": "0"},
+            {"frame": 3, "x1": 5, "y1": 5, "x2": 6, "y2": 6, "confidence": 0.8, "source_class": "0"},
+        ])
+        detection_store.record_detections(root, "w", [
+            {"frame": 0, "x1": 10, "y1": 10, "x2": 20, "y2": 20, "confidence": 0.7, "source_class": "animal"},
+            {"frame": 0, "x1": 50, "y1": 50, "x2": 60, "y2": 60, "confidence": 0.6, "source_class": "animal"},
+            {"frame": 1, "x1": 90, "y1": 90, "x2": 99, "y2": 99, "confidence": 0.5, "source_class": "animal"},
+        ])
+        ids_t = [d["detection_id"] for d in track_store.load_detections(root, "t")]
+        ids_w = [d["detection_id"] for d in track_store.load_detections(root, "w")]
+        match_store.record_matches(root, [{
+            "track_id_t": 1, "track_id_w": 1, "shared": 1, "median_dist": 0.3,
+            "conf_t": 0.9, "conf_w": 0.7,
+            "pairs": [{"frame_t": 3, "frame_w": 0, "detection_id_t": ids_t[0],
+                       "detection_id_w": ids_w[0], "dist": 0.3}],
+        }])
+        return ids_t, ids_w
+
+    def test_matched_partner_is_green_and_the_rest_blue(self, tmp_path):
+        root = str(tmp_path)
+        ids_t, _ids_w = self._flight(root)
+        green, blue = inspection.other_camera_boxes(root, "t", 0, [ids_t[0]])
+        assert [b[:4] for b in green] == [(10, 10, 20, 20)]
+        assert [b[:4] for b in blue] == [(50, 50, 60, 60)]
+        assert green[0][4] == 0.7 and green[0][5] == 0      # conf, species_id
+
+    def test_only_that_frame_of_the_other_camera(self, tmp_path):
+        root = str(tmp_path)
+        self._flight(root)
+        green, blue = inspection.other_camera_boxes(root, "t", 1, [])
+        assert green == [] and [b[:4] for b in blue] == [(90, 90, 99, 99)]
+
+    def test_unhighlighted_or_unmatched_is_all_blue(self, tmp_path):
+        root = str(tmp_path)
+        ids_t, _ = self._flight(root)
+        _, blue = inspection.other_camera_boxes(root, "t", 0, [])
+        assert len(blue) == 2
+        green, blue = inspection.other_camera_boxes(root, "t", 0, [ids_t[1]])
+        assert green == [] and len(blue) == 2
+
+    def test_works_from_the_rgb_side_too(self, tmp_path):
+        root = str(tmp_path)
+        _, ids_w = self._flight(root)
+        green, blue = inspection.other_camera_boxes(root, "w", 3, [ids_w[0]])
+        assert [b[:4] for b in green] == [(1, 1, 2, 2)]
+        assert [b[:4] for b in blue] == [(5, 5, 6, 6)]
+
+    def test_no_partner_frame_means_no_boxes(self, tmp_path):
+        root = str(tmp_path)
+        self._flight(root)
+        assert inspection.other_camera_boxes(root, "t", None, [1]) == ([], [])
+
+    def test_without_a_match_run_everything_is_blue(self, tmp_path):
+        root = str(tmp_path)
+        detection_store.record_detections(root, "w", [
+            {"frame": 0, "x1": 10, "y1": 10, "x2": 20, "y2": 20, "confidence": 0.7, "source_class": "animal"}])
+        green, blue = inspection.other_camera_boxes(root, "t", 0, [1, 2, 3])
+        assert green == [] and len(blue) == 1
+
+    def test_track_frames_carry_the_other_camera(self, tmp_path):
+        root = str(tmp_path)
+        ids_t, _ = self._flight(root)
+        (tmp_path / "poses_t.json").write_text(json.dumps({"images": [
+            {"imagefile": f"t{i}.jpg", "timestamp": f"2026-06-26T08:03:32.{i}00000+00:00"}
+            for i in range(5)]}))
+        (tmp_path / "poses_w.json").write_text(json.dumps({"images": [
+            {"imagefile": "w0.jpg", "timestamp": "2026-06-26T08:03:32.300000+00:00"}]}))
+        dets = [{"detection_id": ids_t[0], "frame": 3, "x1": 1, "y1": 1, "x2": 2, "y2": 2,
+                 "conf": 0.9, "cls": 0}]
+        frames = inspection.build_frames_from_pixel_tracks(dets, {1: dets}, 1, root, "t")
+        assert frames[0]["frame_idx_w"] == 0
+        assert [b[:4] for b in frames[0]["boxes_green_other"]] == [(10, 10, 20, 20)]
+        assert len(frames[0]["boxes_blue_other"]) == 1

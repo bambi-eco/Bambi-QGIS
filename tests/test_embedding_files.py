@@ -190,3 +190,22 @@ class TestReadVectors:
         self._populate(folder)
         wanted = [{"detection_id": 10, "frame": 1, "imagefile": "a.jpg"}]
         assert ef.read_vectors(folder, "t", "geo_2k", wanted) == {}
+
+
+class TestUsableIds:
+    """A NaN vector on disk is worse than a missing one: the store believes
+    it and every head fed with it returns NaN (2026-09-07)."""
+
+    def test_splits_finite_from_non_finite(self, tmp_path):
+        root = str(tmp_path)
+        ef.write_frame(ef.frame_path(root, "t", "non_geo", 3, "f3.jpg"), {
+            1: np.ones(4, dtype=np.float32),
+            2: np.array([1.0, np.nan, 0.0, 0.0], dtype=np.float32),
+            3: np.array([np.inf, 0.0, 0.0, 0.0], dtype=np.float32),
+        })
+        wanted = [{"detection_id": i, "frame": 3, "imagefile": "f3.jpg"}
+                  for i in (1, 2, 3, 4)]
+        usable, unusable = ef.usable_ids(root, "t", "non_geo", wanted)
+        assert usable == [1]
+        assert unusable == [2, 3]            # 4 is absent: neither list
+        assert ef.present_ids(root, "t", "non_geo", wanted) == [1, 2, 3]

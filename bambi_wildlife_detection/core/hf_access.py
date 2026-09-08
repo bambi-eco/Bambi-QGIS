@@ -265,9 +265,107 @@ def has_default_head(task: str) -> bool:
     return bool(DEFAULT_HEAD_REPOS.get(task))
 
 
+#: The one species the published per-species heads were fitted on.
+DEFAULT_HEAD_SPECIES = "red deer"
+
+
+def default_species_source(task: str, species: str) -> str:
+    """What decides *task* for *species* when nobody has chosen.
+
+    The published model for the species it was fitted on; for life stage,
+    the size-based estimate, which needs no model; otherwise nothing. This
+    is what the per-species dialog shows before anything is saved, and it
+    is what the run uses for the same case - the two must agree, or the
+    dialog promises a default that never runs (2026-09-07: life stage
+    reported "nothing to measure" while every species showed "Default
+    (size-based)").
+    """
+    if species == DEFAULT_HEAD_SPECIES and has_default_head(task):
+        return "default"
+    if task == "life_stage":
+        return "size"
+    return "off"
+
+
+def per_species_sources(spec: dict, task: str,
+                        species: List[str]) -> Dict[str, dict]:
+    """``species -> {"model": ..., ...}`` with the defaults applied.
+
+    A spec whose ``species`` entry was never written takes the defaults for
+    every species. Once the dialog has saved, every species is listed
+    explicitly, and one that is missing from a saved selection (older
+    projects, which dropped "Off") is off.
+    """
+    saved = (spec or {}).get("species")
+    result: Dict[str, dict] = {}
+    for name in species:
+        entry = (saved or {}).get(name)
+        if entry is None:
+            source = (default_species_source(task, name) if saved is None
+                      else "off")
+            entry = {"model": source}
+        result[name] = dict(entry)
+    return result
+
+
+def project_species(target_folder: str) -> List[str]:
+    """The project's concrete species names, the base classes excluded.
+
+    Falls back to the published species when the project has no vocabulary
+    yet, so a default still names something.
+    """
+    from . import label_store
+
+    vocabulary = label_store.vocabulary(target_folder)
+    rows = vocabulary.get("species", []) if vocabulary else []
+    names = [row["name"] for row in rows if not row.get("protected")]
+    return names or [DEFAULT_HEAD_SPECIES]
+
+
 def feature_dim(modality: str, backbone_dim: int = BACKBONE_DIM) -> int:
     """Input width of a head: ``matched`` concatenates both modalities."""
     return backbone_dim * 2 if modality == "matched" else backbone_dim
+
+
+def download_head(repo: str, task: str, projection: str, modality: str,
+                  destination: str, token: str = "", log_fn=None) -> str:
+    """Fetch a published head into *destination* and return that path.
+
+    Shared by the classification run and the class-mapping dialog: the
+    mapping needs the model's class list, the model only used to arrive
+    when the classifier ran, and telling a user to run a classifier in order
+    to configure it was the wrong way round.
+    """
+    import shutil
+
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError as exc:
+        raise RuntimeError(
+            "huggingface_hub is not installed. Install the Classification "
+            "dependencies from the Dependency Manager.") from exc
+
+    remote = head_repo_path(task, projection, modality)
+    if log_fn:
+        log_fn(f"Downloading {repo}/{remote} …")
+    os.makedirs(os.path.dirname(destination), exist_ok=True)
+    try:
+        # nosec B615 - deliberately unpinned, for the same reason as the
+        # backbone: the repository is user-overridable, so a hardcoded
+        # revision would be wrong for a custom head. Reproducibility comes
+        # from the model file itself, which is recorded with every
+        # prediction.
+        fetched = hf_hub_download(  # nosec B615
+            repo_id=repo, filename=remote, token=token or None,
+            local_dir=os.path.dirname(os.path.dirname(destination)))
+    except Exception as exc:
+        raise RuntimeError(
+            f"Could not download the {task} classifier "
+            f"({repo}/{remote}): {exc}") from exc
+    if os.path.abspath(fetched) != os.path.abspath(destination):
+        os.makedirs(os.path.dirname(destination), exist_ok=True)
+        shutil.copyfile(fetched, destination)
+    return destination
 
 
 def missing_heads(models_dir: str, wanted: List[Tuple[str, str, str]]

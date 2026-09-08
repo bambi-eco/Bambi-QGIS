@@ -185,7 +185,7 @@ class TestCheckExistingOutputs:
             "detection", "georeference", "tracking", "calculate_fov", "alfs",
             "export_geotiffs", "orthomosaic", "sam3_segmentation",
             "sam3_georeference", "trex_import", "perpendicular",
-            "track_perpendicular"}
+            "track_perpendicular", "track_matching"}
         assert possible <= resettable
 
 
@@ -228,3 +228,105 @@ class TestStoreBackedOutputs:
             store.DETECTIONS, "w").close()
 
         assert "detection" not in check_existing_outputs(root, ALL_T)
+
+
+class TestCrossModalOutputs:
+    """Track matching is recorded against both cameras at once, in a store
+    beside project.gpkg - which the per-camera scan used to walk straight
+    past, so a reopened project showed the step as never run."""
+
+    def test_matches_store_marks_track_matching_complete(self, tmp_path):
+        from bambi_wildlife_detection.core import store
+
+        root = str(tmp_path)
+        store.open_store(store.matches_path(root), store.MATCHES).close()
+
+        assert "track_matching" in check_existing_outputs(root, ALL_T)
+        # ... whichever camera any step is set to.
+        all_w = {key: "_w" for key in ALL_T}
+        assert "track_matching" in check_existing_outputs(root, all_w)
+
+    def test_without_the_store_it_is_not_started(self, tmp_path):
+        assert "track_matching" not in check_existing_outputs(str(tmp_path), ALL_T)
+
+
+class TestClassificationStates:
+    """Classification steps are store-backed and per modality; the folder
+    scan never saw them, so a reopened project showed them as never run
+    (2026-09-07). They also know when they are out of date."""
+
+    @staticmethod
+    def _project(root):
+        from bambi_wildlife_detection.core import (classification_store, stages,
+                                                   store)
+        store.open_store(store.project_path(root), store.PROJECT).close()
+        for modality in ("t", "w"):
+            classification_store.start_embedding_run(
+                root, modality, backbone="b", dim=4, crop_size=8,
+                padding=0.0, projection="non_geo", thermal_anchored=False,
+                folder=f"embeddings_{modality}/non_geo", plugin_version="x")
+            stages.mark_complete(root, "embeddings", modality)
+        classification_store.record_frame_predictions(root, "t", "occlusion", [
+            {"detection_id": 1, "label": "clear", "class_index": 0, "prob": 0.9}])
+        classification_store.record_frame_predictions(root, "w", "occlusion", [
+            {"detection_id": 1, "label": "clear", "class_index": 0, "prob": 0.9}])
+        classification_store.record_track_predictions(root, "t", "species", [
+            {"track_id": 1, "label": "red_deer", "votes": 1, "n": 1, "fraction": 1.0}])
+        stages.mark_complete(root, "classification", "t")
+        stages.mark_complete(root, "classification", "w")
+        return stages
+
+    def test_reads_the_configured_modalities(self, tmp_path):
+        from bambi_wildlife_detection.core.output_inventory import classification_states
+        root = str(tmp_path)
+        self._project(root)
+        states = classification_states(root, ("t", "w"), {
+            "occlusion": ("t", "w"), "species": ("t",), "sex": ("t",),
+            "life_stage": ("t",)})
+        assert states["embeddings"] == "complete"
+        assert states["classify_occlusion"] == "complete"
+        assert states["classify_species"] == "complete"
+        assert states["classify_sex"] == "pending"
+        assert states["life_stage"] == "pending"
+
+    def test_a_task_missing_on_one_configured_modality_is_pending(self, tmp_path):
+        from bambi_wildlife_detection.core.output_inventory import classification_states
+        root = str(tmp_path)
+        self._project(root)
+        states = classification_states(root, ("w",), {"species": ("t", "w")})
+        assert states["classify_species"] == "pending"     # w has no species
+        assert states["embeddings"] == "complete"
+
+    def test_stale_shows_through(self, tmp_path):
+        from bambi_wildlife_detection.core.output_inventory import classification_states
+        root = str(tmp_path)
+        stages = self._project(root)
+        stages.mark_dependents_stale(root, "tracking", "t")   # re-ran tracking
+        states = classification_states(root, ("t", "w"), {"occlusion": ("t", "w")})
+        assert states["embeddings"] == "stale"
+        assert states["classify_occlusion"] == "stale"
+        states = classification_states(root, ("w",), {"occlusion": ("w",)})
+        assert states["embeddings"] == "complete"
+        assert states["classify_occlusion"] == "complete"
+
+    def test_empty_project_is_all_pending(self, tmp_path):
+        from bambi_wildlife_detection.core.output_inventory import classification_states
+        states = classification_states(str(tmp_path), ("t",), {"occlusion": ("t",)})
+        assert states == {"embeddings": "pending", "classify_occlusion": "pending",
+                          "classify_species": "pending", "classify_sex": "pending",
+                          "life_stage": "pending"}
+
+
+class TestCrossModalStates:
+    def test_reads_the_match_stage_state(self, tmp_path):
+        from bambi_wildlife_detection.core import stages, store
+        from bambi_wildlife_detection.core.output_inventory import cross_modal_states
+        root = str(tmp_path)
+        store.open_store(store.project_path(root), store.PROJECT).close()
+        assert cross_modal_states(root) == {"track_matching": "pending"}
+        store.open_store(store.matches_path(root), store.MATCHES).close()
+        assert cross_modal_states(root) == {"track_matching": "complete"}
+        stages.mark_complete(root, "track_matching", stages.CROSS_MODAL)
+        stages.mark_complete(root, "tracking", "w")
+        stages.mark_complete(root, "tracking", "w")        # a re-run
+        assert cross_modal_states(root) == {"track_matching": "stale"}

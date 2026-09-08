@@ -310,18 +310,25 @@ class BoxProjectionWorker(QThread):
             frame_idx = frame_data.get("frame_idx")
             boxes_green = frame_data.get("boxes_green", [])
             boxes_blue = frame_data.get("boxes_blue", [])
+            # The destination camera's frame is the one it took at the same
+            # moment, which the inspector looked up on the shared capture
+            # clock; the same index would be a different moment on a camera
+            # with a different frame rate. Older frame dicts carry no
+            # partner index and keep the index-for-index behaviour.
+            dst_idx = frame_data.get(f"frame_idx_{dst_modality}", frame_idx)
 
-            if frame_idx is None or frame_idx >= len(images):
+            if frame_idx is None or dst_idx is None or dst_idx >= len(images):
                 results[i] = {"green": [], "blue": []}
                 continue
 
             # Camera pose for this frame in the destination modality, with
             # the same correction as used for geo-referencing (1× rule).
-            t_corr, r_corr = _correction_for_frame(frame_idx, corr)
+            t_corr, r_corr = _correction_for_frame(dst_idx, corr)
             camera = build_camera(
-                images[frame_idx], t_corr, r_corr, aspect_ratio=1.0)
+                images[dst_idx], t_corr, r_corr, aspect_ratio=1.0)
 
-            # Match viewer boxes to geo-referenced entries
+            # Match viewer boxes to geo-referenced entries - these were
+            # geo-referenced on the source camera's frame.
             on_frame = georef_by_frame.get(frame_idx, [])
 
             def _project_list(viewer_boxes):

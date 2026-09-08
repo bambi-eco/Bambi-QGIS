@@ -368,3 +368,19 @@ def test_the_stage_is_recorded(flight):
 
     _run(flight)
     assert stages.states(flight, "t")["life_stage"]["state"] == stages.COMPLETE
+
+
+def test_a_never_configured_selection_measures_by_default(flight):
+    """What the Species… dialog shows before it is ever saved - size for
+    every species - is what runs, instead of "nothing to measure"."""
+    classification_store.record_track_predictions(flight, "t", "species", [
+        {"track_id": 1, "label": "red deer", "votes": 3, "n": 3,
+         "fraction": 1.0},
+        {"track_id": 2, "label": "wild boar", "votes": 3, "n": 3,
+         "fraction": 1.0}])
+    logs = _run(flight, classification_models={
+        "life_stage": {"modality": "thermal"}})
+
+    assert not any("nothing to measure" in line for line in logs)
+    called = _labels(flight)
+    assert 1 in called and 2 in called

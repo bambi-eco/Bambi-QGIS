@@ -32,7 +32,7 @@ gives exactly the file count of ``frames_{m}/`` and mirrors it one-to-one.
 import os
 import re
 import zipfile
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Tuple
 
 #: Prefix of the array holding one detection's vector inside a frame's archive.
 KEY_PREFIX = "det_"
@@ -177,3 +177,26 @@ def present_ids(target_folder: str, modality: str, projection: str,
     by hand is noticed rather than believed.
     """
     return sorted(read_vectors(target_folder, modality, projection, wanted))
+
+
+def usable_ids(target_folder: str, modality: str, projection: str,
+               wanted: Iterable[dict]) -> Tuple[List[int], List[int]]:
+    """Split *wanted* into ``(usable, unusable)`` by what is on disk.
+
+    A vector is usable when it exists and every value is finite. A vector
+    of NaN is what a half-precision overflow in the backbone leaves behind
+    (2026-09-07: nearly a whole flight's worth), and it is worse than a
+    missing one - the store believes it, and every head fed with it returns
+    NaN. Reporting it as unusable lets the embedding step recompute it the
+    way it recomputes a deleted file.
+    """
+    import numpy as np
+
+    vectors = read_vectors(target_folder, modality, projection, wanted)
+    usable, unusable = [], []
+    for detection_id, vector in vectors.items():
+        if np.isfinite(np.asarray(vector, dtype=np.float64)).all():
+            usable.append(detection_id)
+        else:
+            unusable.append(detection_id)
+    return sorted(usable), sorted(unusable)

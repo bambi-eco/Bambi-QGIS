@@ -188,7 +188,8 @@ class FeatureViewerDialog(QDialog):
     def show_detection(self, title, green_boxes, blue_boxes,
                        image_path_t="", image_path_w="", boxes_modality="t",
                        target_folder="", dem_path="", correction_path="",
-                       frame_idx=None):
+                       frame_idx=None, frame_idx_t=None, frame_idx_w=None,
+                       other_green=(), other_blue=()):
         """Show a single detection frame.
 
         :param title: String shown in the title label.
@@ -203,19 +204,35 @@ class FeatureViewerDialog(QDialog):
         :param correction_path: Explicit correction.json path (may be empty).
         :param frame_idx: Integer index of the frame in the poses file (needed for
                           box projection); None when unknown.
+        :param frame_idx_t: Thermal frame index of this moment; ``frame_idx``
+                            itself when the boxes are thermal, otherwise the
+                            time-matched partner (None when unknown).
+        :param frame_idx_w: The same for the RGB camera.
+        :param other_green: Boxes the *other* camera detected on its frame of
+                            this moment that are matched to the highlighted
+                            detection, in that camera's pixel space.
+        :param other_blue: The other camera's remaining boxes on that frame.
         """
         self._stop_projection_worker()
         self._target_folder = target_folder
         self._dem_path = dem_path
         self._correction_path = correction_path
 
+        if boxes_modality == "t" and frame_idx_t is None:
+            frame_idx_t = frame_idx
+        if boxes_modality == "w" and frame_idx_w is None:
+            frame_idx_w = frame_idx
         self._frames = [{
             "frame_idx": frame_idx,
+            "frame_idx_t": frame_idx_t,
+            "frame_idx_w": frame_idx_w,
             "image_path_t": image_path_t,
             "image_path_w": image_path_w,
             "boxes_modality": boxes_modality,
             "boxes_green": list(green_boxes),
             "boxes_blue": list(blue_boxes),
+            "boxes_green_other": list(other_green),
+            "boxes_blue_other": list(other_blue),
         }]
         self._current_idx = 0
         self.title_label.setText(title)
@@ -428,27 +445,38 @@ class FeatureViewerDialog(QDialog):
         else:
             image_path = data.get("image_path_w") or data.get("image_path_t", "")
 
-        # Select boxes: native boxes on matching modality, projected otherwise
+        # Select boxes. On the source camera: its own boxes. On the other
+        # camera: what that camera detected on its frame of this moment
+        # (green = matched to the highlighted detection, blue = the rest),
+        # with the source boxes projected through the DEM drawn on top in
+        # red/orange once they have been computed.
         boxes_modality = data.get("boxes_modality", "t")
+        projected_green, projected_blue = [], []
         if self._view_mode == boxes_modality:
             boxes_green = data.get("boxes_green", [])
             boxes_blue = data.get("boxes_blue", [])
             projected = False
         else:
-            # Use projected boxes if available, otherwise show none
-            boxes_green = data.get("boxes_green_proj", [])
-            boxes_blue = data.get("boxes_blue_proj", [])
-            projected = True
+            boxes_green = data.get("boxes_green_other", [])
+            boxes_blue = data.get("boxes_blue_other", [])
+            projected_green = data.get("boxes_green_proj") or []
+            projected_blue = data.get("boxes_blue_proj") or []
+            projected = bool(projected_green or projected_blue)
 
-        # Navigation label + button states
+        # Navigation label + button states. On the other camera the frame
+        # shown is the time-matched partner, which has its own index.
+        label = f"Frame {frame_idx}" if frame_idx is not None else ""
+        if self._view_mode != boxes_modality:
+            partner = data.get(f"frame_idx_{self._view_mode}")
+            camera = "RGB" if self._view_mode == "w" else "thermal"
+            if partner is not None and partner != frame_idx:
+                label += f"   ({camera} frame {partner})"
         if total > 1:
             self.frame_label.setText(
-                f"Frame {frame_idx}   ({self._current_idx + 1} / {total})"
+                f"{label}   ({self._current_idx + 1} / {total})"
             )
         else:
-            self.frame_label.setText(
-                f"Frame {frame_idx}" if frame_idx is not None else ""
-            )
+            self.frame_label.setText(label)
         self.prev_btn.setEnabled(self._current_idx > 0)
         self.next_btn.setEnabled(self._current_idx < total - 1)
 
@@ -465,7 +493,10 @@ class FeatureViewerDialog(QDialog):
             return
 
         # Draw bounding boxes and optional click-position crosshair.
-        annotated = self._draw_boxes(img, boxes_green, boxes_blue, projected=projected)
+        annotated = self._draw_boxes(img, boxes_green, boxes_blue, projected=False)
+        if projected:
+            annotated = self._draw_boxes(annotated, projected_green,
+                                         projected_blue, projected=True)
         click_key = "click_point_t" if self._view_mode == "t" else "click_point_w"
         click_pt = data.get(click_key)
         if click_pt is not None:
@@ -484,7 +515,14 @@ class FeatureViewerDialog(QDialog):
         info_parts = []
         if frame_idx is not None:
             info_parts.append(f"Frame: {frame_idx}")
-        if is_fov_frame:
+        if self._view_mode != boxes_modality:
+            camera = "RGB" if self._view_mode == "w" else "thermal"
+            info_parts.append(
+                f"{len(boxes_green) + len(boxes_blue)} {camera} detection(s), "
+                f"{len(boxes_green)} matched")
+            if projected:
+                info_parts.append("projected boxes in red/orange")
+        elif is_fov_frame:
             info_parts.append(f"{len(boxes_green)} detection(s)")
         elif boxes_green:
             b = boxes_green[0]

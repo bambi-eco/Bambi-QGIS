@@ -1127,6 +1127,54 @@ def _load_pixel_tracks(target_folder: str,
     return result
 
 
+def pipeline_track_labels(target_folder: str,
+                          modality: str) -> Dict[int, dict]:
+    """What an imported pipeline track already knows about itself.
+
+    ``{track_id: {"species", "sex", "age", "occlusion": {detection_id:
+    level}}}`` in the labelling tool's own words - species and enum
+    *labels*, not ids - read from the store the classifiers and label sync
+    wrote into. Importing a track used to start it at "unknown" everywhere,
+    which threw the species classification away (2026-09-07). Anything the
+    store does not say stays "unknown" (or the first occlusion level).
+    """
+    from . import label_store, store, track_store
+
+    if modality not in store.MODALITIES:
+        return {}
+    vocabulary = label_store.vocabulary(target_folder)
+    if not vocabulary:
+        return {}
+    species_names = {row["species_id"]: row["name"]
+                     for row in vocabulary.get("species", [])
+                     if not row.get("protected")}
+    enums = vocabulary.get("enums", {})
+
+    def _label(enum: str, value) -> Optional[str]:
+        if value is None:
+            return None
+        for entry in enums.get(enum, []):
+            if entry["value_id"] == value:
+                return entry["label"]
+        return None
+
+    result: Dict[int, dict] = {}
+    for track_id, entry in track_store.track_labels(target_folder, modality).items():
+        attributes = entry.get("attributes") or {}
+        occlusion = {}
+        for detection_id, det_attributes in entry.get("detections", {}).items():
+            level = _label("occlusion", (det_attributes or {}).get("occlusion"))
+            if level is not None:
+                occlusion[detection_id] = level
+        result[track_id] = {
+            "species": species_names.get(entry.get("species_id"), "unknown"),
+            "sex": _label("sex", attributes.get("sex")) or "unknown",
+            "age": _label("age", attributes.get("age")) or "unknown",
+            "occlusion": occlusion,
+        }
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Cross-modality frame correspondence (by capture timestamp)
 # ---------------------------------------------------------------------------

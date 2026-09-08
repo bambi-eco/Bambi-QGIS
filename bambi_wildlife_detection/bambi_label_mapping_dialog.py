@@ -41,6 +41,7 @@ class BambiLabelMappingDialog(QDialog):
 
     def __init__(self, task: str, spec: dict, target_folder: str,
                  models_dir: str = "", projection: str = "non_geo",
+                 hf_token: str = "",  # nosec B107 - "none supplied"
                  parent=None):
         super().__init__(parent)
         self.task = task
@@ -48,6 +49,7 @@ class BambiLabelMappingDialog(QDialog):
         self.target_folder = target_folder
         self.models_dir = models_dir
         self.projection = projection
+        self.hf_token = hf_token
 
         self.setWindowTitle(f"{task.capitalize()} - class mapping")
         self.setMinimumSize(560, 420)
@@ -161,9 +163,15 @@ class BambiLabelMappingDialog(QDialog):
         for index, name in enumerate(labels):
             self._add_row(name, mapping.get(str(index)))
         if not labels:
+            # A model that is already on disk can answer straight away; the
+            # empty table with a hint to press a button was one step too
+            # many for the common case.
+            if self._model_path():
+                self.detect_classes(quiet=True)
+                return
             self.status.setText(
-                "No classes are defined yet. Read them from the model, or "
-                "add them by hand if it is not available.")
+                "No classes are defined yet. Read them from the model - it "
+                "is downloaded if needed - or add them by hand.")
 
     def _add_row(self, name: str, value_id):
         row = self.table.rowCount()
@@ -190,11 +198,12 @@ class BambiLabelMappingDialog(QDialog):
             # language needs no clicks at all. "red_deer" and "red deer" are
             # the same word - compared the way the results are applied, so
             # what this shows is what the run will do.
-            wanted = apply_results.normalise_label(name)
-            for position, (label, _identifier) in enumerate(self._values, 1):
-                if apply_results.normalise_label(label) == wanted:
-                    combo.setCurrentIndex(position)
-                    break
+            by_name = {apply_results.normalise_label(label): position
+                       for position, (label, _identifier)
+                       in enumerate(self._values, 1)}
+            position = apply_results.match_by_name(name, by_name)
+            if position is not None:
+                combo.setCurrentIndex(position)
         self.table.setCellWidget(row, 2, combo)
 
     def _remove_selected(self):
@@ -211,16 +220,22 @@ class BambiLabelMappingDialog(QDialog):
 
     # -- discovery -------------------------------------------------------
 
-    def detect_classes(self):
-        """Read the class list off the model, by whichever route works."""
+    def detect_classes(self, quiet: bool = False):
+        """Read the class list off the model, by whichever route works.
+
+        *quiet* is the automatic call on opening: it never downloads, never
+        pops a dialog, and reports through the status line only.
+        """
         path = self._model_path()
+        if not path and not quiet:
+            path = self._offer_download()
         if not path:
-            QMessageBox.information(
-                self, "Class Mapping",
-                "The model is not available locally yet.\n\n"
-                "Either choose a custom model file, or run the classifier "
-                "once so the default is downloaded - or define the classes "
-                "by hand with 'Add class'.")
+            if not quiet:
+                QMessageBox.information(
+                    self, "Class Mapping",
+                    "The model is not available locally.\n\n"
+                    "Choose a custom model file, or define the classes by "
+                    "hand with 'Add class'.")
             return
 
         modality = self.spec.get("modality", "matched")
@@ -230,7 +245,11 @@ class BambiLabelMappingDialog(QDialog):
             names = head.classes
             source = head.class_source
         except classification.HeadError as exc:
-            QMessageBox.warning(self, "Class Mapping", str(exc))
+            if quiet:
+                self.status.setText(
+                    f"The model could not be read: {exc}")
+            else:
+                QMessageBox.warning(self, "Class Mapping", str(exc))
             return
 
         if not names:
@@ -251,6 +270,36 @@ class BambiLabelMappingDialog(QDialog):
                       "name them - fill the names in if you want them "
                       "readable; the mapping works either way."),
         }.get(source, f"{len(names)} class(es) found."))
+
+    def _offer_download(self) -> str:
+        """Fetch the default head so its classes can be read. ``""`` if not."""
+        source = self.spec.get("model", "default")
+        repo = hf_access.default_head_repo(self.task)
+        if source in ("custom", "off") or not repo or not self.models_dir:
+            return ""
+        modality = self.spec.get("modality", "matched")
+        remote = hf_access.head_repo_path(self.task, self.projection, modality)
+        standard = QMessageBox.StandardButton
+        answer = QMessageBox.question(
+            self, "Class Mapping",
+            f"The default model is not downloaded yet.\n\n"
+            f"Download {repo}/{remote} now to read its classes? It is a few "
+            "MB and is the file the classifier will run with.",
+            standard.Yes | standard.No, standard.Yes)
+        if answer != standard.Yes:
+            return ""
+        destination = hf_access.head_local_path(
+            self.models_dir, self.task, self.projection, modality)
+        parent_log = getattr(self.parent(), "log", None)
+        try:
+            hf_access.download_head(
+                repo, self.task, self.projection, modality, destination,
+                self.hf_token, log_fn=parent_log if callable(parent_log) else None)
+        except Exception as exc:
+            QMessageBox.warning(self, "Class Mapping", str(exc))
+            return ""
+        self.model_label.setText(self._describe_model())
+        return destination if os.path.isfile(destination) else ""
 
     def _model_path(self):
         source = self.spec.get("model", "default")

@@ -68,6 +68,8 @@ class BambiWildlifeDetection:
         self._labelling_tool_dlg = None
         self.transect_tool_action = None
         self._transect_tool_dlg = None
+        self.agl_tool_action = None
+        self._agl_tool_dlg = None
 
     def tr(self, message):
         """Get the translation for a string using Qt translation API.
@@ -222,6 +224,17 @@ class BambiWildlifeDetection:
                 'Review detections/tracks on extracted frames and create '
                 'key-frame based track annotations'))
 
+        # AGL profile: flight altitude over the DEM relief along the route
+        self.agl_tool_action = self.add_action(
+            os.path.join(self.plugin_dir, 'icons', 'icon_agl.png'),
+            text=self.tr('AGL Profile'),
+            callback=self._on_agl_tool,
+            parent=self.iface.mainWindow(),
+            add_to_menu=True,
+            status_tip=self.tr(
+                'Show the flight altitude above the ground along the route, '
+                'with the height above ground level under the cursor'))
+
         # Transect Splitting Tool
         self.transect_tool_action = self.add_action(
             os.path.join(self.plugin_dir, 'icons', 'icon_transect.png'),
@@ -303,6 +316,11 @@ class BambiWildlifeDetection:
         if self._transect_tool_dlg is not None:
             self._transect_tool_dlg.close()
             self._transect_tool_dlg = None
+
+        # Close AGL profile window if open
+        if self._agl_tool_dlg is not None:
+            self._agl_tool_dlg.close()
+            self._agl_tool_dlg = None
 
         # Disconnect project signals and remove dock widget
         if self.dock_widget:
@@ -430,6 +448,25 @@ class BambiWildlifeDetection:
         self._labelling_tool_dlg.show()
         self._labelling_tool_dlg.raise_()
         self._labelling_tool_dlg.activateWindow()
+
+    def _on_agl_tool(self):
+        """Toolbar action: open the AGL profile window (non-modal)."""
+        from .bambi_agl_tool import AglToolDialog
+        self._ensure_dock_widget()
+        if self._agl_tool_dlg is None:
+            self._agl_tool_dlg = AglToolDialog(
+                self.iface,
+                dock_widget=self.dock_widget,
+                parent=self.iface.mainWindow(),
+            )
+            self._agl_tool_dlg.finished.connect(
+                lambda _: setattr(self, '_agl_tool_dlg', None)
+            )
+        else:
+            self._agl_tool_dlg.apply_dock_defaults()
+        self._agl_tool_dlg.show()
+        self._agl_tool_dlg.raise_()
+        self._agl_tool_dlg.activateWindow()
 
     def _on_transect_tool(self):
         """Toolbar action: open the transect splitting tool (non-modal)."""

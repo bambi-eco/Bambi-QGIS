@@ -381,3 +381,47 @@ class TestLabelValues:
         assert apply_results.normalise_label("wild-boar") == "wild boar"
         assert apply_results.normalise_label("  roe   deer ") == "roe deer"
         assert apply_results.normalise_label(None) == ""
+
+
+class TestCompoundLabels:
+    """The red deer sex head answers ``female_juvenile``; a project whose sex
+    values are female / male counts that as female by default (2026-09-07:
+    9 of 11 animals stayed unsexed until the mapping dialog was opened)."""
+
+    def test_candidates_are_the_whole_label_then_its_leading_part(self):
+        assert apply_results.label_candidates("female_juvenile") == ["female juvenile", "female"]
+        # A slash is not folded by normalise_label, but still splits.
+        assert apply_results.label_candidates("female/juvenile") == ["female/juvenile", "female"]
+        assert apply_results.label_candidates("Red_Deer") == ["red deer", "red"]
+        assert apply_results.label_candidates("male") == ["male"]
+        assert apply_results.label_candidates("") == []
+
+    def test_the_whole_label_wins_over_its_leading_part(self):
+        known = {"red deer": 2, "red": 99}
+        assert apply_results.match_by_name("red_deer", known) == 2
+
+    def test_a_compound_sex_label_resolves_to_its_leading_part(self, flight):
+        from bambi_wildlife_detection.core import label_store
+        vocabulary = label_store.vocabulary(flight)
+        values = apply_results.label_values(
+            {"class_labels": ["female_juvenile", "male"]}, vocabulary, "sex")
+        enums = vocabulary["enum_ids"]["sex"]
+        assert values["female_juvenile"] == enums["female"]
+        assert values["male"] == enums["male"]
+        assert apply_results.resolve(values, "female_juvenile") == enums["female"]
+
+    def test_a_configured_mapping_still_wins(self, flight):
+        from bambi_wildlife_detection.core import label_store
+        vocabulary = label_store.vocabulary(flight)
+        enums = vocabulary["enum_ids"]["sex"]
+        values = apply_results.label_values(
+            {"class_labels": ["female_juvenile", "male"],
+             "labels": {"0": enums["male"]}}, vocabulary, "sex")
+        assert values["female_juvenile"] == enums["male"]
+
+    def test_an_unrelated_compound_label_stays_unmapped(self, flight):
+        from bambi_wildlife_detection.core import label_store
+        vocabulary = label_store.vocabulary(flight)
+        values = apply_results.label_values(
+            {"class_labels": ["red_deer"]}, vocabulary, "sex")
+        assert "red_deer" not in values

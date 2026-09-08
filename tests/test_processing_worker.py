@@ -211,3 +211,16 @@ class TestPatchFrameExtractionProgress:
             callback = fake_extractor_callback()
             callback(0, "img")
         assert percents == []
+
+
+def test_store_class_id_prefers_species_and_survives_text_labels():
+    """The RGB detector labels boxes "animal"; ``int("animal")`` killed
+    geo-referencing (2026-09-07). The resolved species_id is the class."""
+    from bambi_wildlife_detection.bambi_processing import _store_class_id
+
+    assert _store_class_id({"species_id": 0, "source_class": "animal"}) == 0
+    assert _store_class_id({"species_id": 3, "source_class": "0"}) == 3
+    assert _store_class_id({"species_id": None, "source_class": "5"}) == 5
+    assert _store_class_id({"species_id": None, "source_class": "animal"}) == 0
+    assert _store_class_id({"species_id": None, "source_class": None}) == 0
+    assert _store_class_id({}) == 0

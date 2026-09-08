@@ -1168,3 +1168,64 @@ class TestGroupTrackIds:
 
     def test_no_pairs_yield_no_groups(self):
         assert group_track_ids([]) == []
+
+
+class TestPipelineTrackLabels:
+    """An imported pipeline track carries the species vote, sex, age and
+    occlusion the store already holds, instead of arriving as "unknown"
+    (2026-09-07)."""
+
+    @staticmethod
+    def _classified(root):
+        from bambi_wildlife_detection.core import (apply_results, detection_store,
+                                                   label_store, track_store)
+        label_store.vocabulary(root, create=True)
+        detection_store.record_detections(root, "t", [
+            {"frame": 0, "x1": 1, "y1": 2, "x2": 3, "y2": 4, "confidence": 0.9, "source_class": "0"},
+            {"frame": 1, "x1": 1, "y1": 1, "x2": 2, "y2": 2, "confidence": 0.7, "source_class": "0"},
+            {"frame": 0, "x1": 5, "y1": 6, "x2": 7, "y2": 8, "confidence": 0.8, "source_class": "0"},
+        ])
+        ids = [d["detection_id"] for d in track_store.load_detections(root, "t")]
+        track_store.record_tracks(root, "t", [
+            {"track_id": 1, "detection_id": ids[0]},
+            {"track_id": 1, "detection_id": ids[1]},
+            {"track_id": 2, "detection_id": ids[2]},
+        ])
+        vocabulary = label_store.vocabulary(root)
+        species = vocabulary["species_by_name"]
+        enums = vocabulary["enum_ids"]
+        apply_results.apply_track_species(
+            root, "t", [{"track_id": 1, "label": "red deer"}],
+            {"red deer": species["red deer"]})
+        apply_results.apply_track_attribute(
+            root, "t", "sex", [{"track_id": 1, "label": "male"}],
+            {"male": enums["sex"]["male"]})
+        apply_results.apply_track_attribute(
+            root, "t", "age", [{"track_id": 1, "label": "adult"}],
+            {"adult": enums["age"]["adult"]})
+        apply_results.apply_occlusion(
+            root, "t", [{"detection_id": ids[1], "label": "occluded"}],
+            {"occluded": enums["occlusion"]["occluded"]})
+        return ids
+
+    def test_classified_track_is_read_in_the_tools_words(self, tmp_path):
+        from bambi_wildlife_detection.core.labelling import pipeline_track_labels
+        root = str(tmp_path)
+        ids = self._classified(root)
+        labels = pipeline_track_labels(root, "t")
+        assert labels[1]["species"] == "red deer"
+        assert labels[1]["sex"] == "male"
+        assert labels[1]["age"] == "adult"
+        assert labels[1]["occlusion"] == {ids[1]: "occluded"}
+
+    def test_an_unclassified_track_stays_unknown(self, tmp_path):
+        from bambi_wildlife_detection.core.labelling import pipeline_track_labels
+        root = str(tmp_path)
+        self._classified(root)
+        labels = pipeline_track_labels(root, "t")
+        assert labels[2] == {"species": "unknown", "sex": "unknown",
+                             "age": "unknown", "occlusion": {}}
+
+    def test_without_a_store_there_is_nothing_to_carry(self, tmp_path):
+        from bambi_wildlife_detection.core.labelling import pipeline_track_labels
+        assert pipeline_track_labels(str(tmp_path), "t") == {}

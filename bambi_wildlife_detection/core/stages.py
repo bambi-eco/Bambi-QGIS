@@ -59,6 +59,9 @@ STAGE_DEPENDENCIES: Dict[str, Tuple[str, ...]] = {
     "population": ("tracking",),
     "density": ("tracking",),
     "coverage": ("calculate_fov",),
+    # The per-individual inventory reads everything keyed on a track, so it
+    # goes stale with the tracks - and, being a report, is cheap to redo.
+    "track_inventory": ("tracking",),
 }
 
 #: Stages whose output is a store file, and which one.
@@ -213,14 +216,21 @@ def mark_dependents_stale(target_folder: str, stage: str,
     try:
         with store.transaction(conn):
             for dependent in dependents(stage):
+                # A cross-modal dependent is recorded once, under
+                # CROSS_MODAL: re-running either camera's tracking makes the
+                # match stale, and looking for it under that camera's
+                # modality found nothing (2026-09-07: matches referring to
+                # a superseded run stayed "complete").
+                recorded_as = (CROSS_MODAL if dependent in STAGE_SHARED_STORE_KIND
+                               else modality)
                 row = conn.execute(
                     "SELECT state FROM stages WHERE stage = ? AND modality = ?",
-                    (dependent, modality)).fetchone()
+                    (dependent, recorded_as)).fetchone()
                 if row is None or row["state"] not in (COMPLETE, STALE):
                     continue
                 conn.execute(
                     "UPDATE stages SET state = ? WHERE stage = ? AND "
-                    "modality = ?", (STALE, dependent, modality))
+                    "modality = ?", (STALE, dependent, recorded_as))
                 if row["state"] == COMPLETE:
                     affected.append(dependent)
     finally:

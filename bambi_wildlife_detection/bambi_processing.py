@@ -223,6 +223,9 @@ class ProcessingWorker(QObject):
                 self.processor.run_density_heatmap(
                     self.config, self.progress.emit, self.log.emit, self.is_cancelled
                 )
+            elif self.step == "track_inventory":
+                self.processor.run_track_inventory(
+                    self.config, self.progress.emit, self.log.emit, self.is_cancelled)
             elif self.step == "coverage_map":
                 self.processor.run_coverage_map(
                     self.config, self.progress.emit, self.log.emit, self.is_cancelled
@@ -297,6 +300,25 @@ def _record_stage(config: Dict[str, Any], stage: str, modality: str,
     if stale and log_fn:
         names = ", ".join(stale)
         log_fn(f"Now out of date after re-running '{stage}': {names}")
+
+
+def _store_class_id(row: Dict[str, Any]) -> int:
+    """The class a stored detection carries into geo-referencing and tracking.
+
+    ``species_id`` is the class the store resolved through the project's
+    class mapping, and it is what every other reader of the store uses. The
+    detector's raw ``source_class`` is only a fallback for rows without one,
+    and it is a *label*, not a number: the RGB detector says ``"animal"``
+    where the thermal one says ``"0"``, so it cannot be ``int()``-ed blindly.
+    """
+    species_id = row.get("species_id")
+    if species_id is not None:
+        return int(species_id)
+    source_class = row.get("source_class")
+    try:
+        return int(float(source_class)) if source_class not in (None, "") else 0
+    except (TypeError, ValueError):
+        return 0
 
 
 def _modality_name(modality: str) -> str:
@@ -1939,16 +1961,45 @@ class BambiProcessor:
         if cancel_check and cancel_check():
             raise CancelledException("Track matching cancelled")
 
+        # Where to measure: on the ground when both cameras' detections have
+        # been geo-referenced, which is the normal state of a project by the
+        # time it reaches this step. The paper's pixel affine has to be
+        # bootstrapped from the correspondences it is meant to find, and on
+        # a real flight it converged 39 px off - pairing neighbours instead
+        # of partners while still clearing the 28 px gate.
+        requested = str(config.get("match_space", "auto"))
+        world_t = self._world_centres(target_folder, "t")
+        world_w = self._world_centres(target_folder, "w")
+        have_world = bool(world_t) and bool(world_w)
+        if requested == "world" and not have_world:
+            missing = "RGB" if world_t else "thermal"
+            raise ValueError(
+                f"World-coordinate matching needs geo-referenced detections "
+                f"for both cameras, and the {missing} ones have none. Run "
+                "'Geo-reference Detections' for that camera, or match in "
+                "image pixels instead.")
+        space = "pixel" if requested == "pixel" else (
+            "world" if have_world else "pixel")
+        if log_fn and requested == "auto" and space == "pixel":
+            log_fn("One camera's detections are not geo-referenced, so the "
+                   "tracks are matched in image pixels through an estimated "
+                   "transform; geo-reference both cameras for a more "
+                   "reliable match.")
+
         settings = track_matching.MatchConfig(
             min_shared=int(config.get("match_min_shared", 8)),
             gate_px=float(config.get("match_gate_px", 28.0)),
+            gate_m=float(config.get("match_gate_m", 1.5)),
             min_confidence=float(config.get("match_min_confidence", 0.20)),
             max_time_offset=max_dt,
+            space=space,
         )
         result = track_matching.match_tracks(
             rows_t, rows_w, frame_map, config=settings,
             frame_size_t=self._frame_size(images_t),
             frame_size_w=self._frame_size(images_w),
+            world_t=world_t if space == "world" else None,
+            world_w=world_w if space == "world" else None,
             log_fn=log_fn)
 
         if progress_fn:
@@ -1961,7 +2012,8 @@ class BambiProcessor:
                          if math.isfinite(result["affine_rmse"]) else None),
             config_hash=stages.fingerprint(
                 config,
-                ("match_min_shared", "match_gate_px", "match_min_confidence",
+                ("match_min_shared", "match_gate_px", "match_gate_m",
+                 "match_space", "match_min_confidence",
                  "match_max_time_offset"),
                 upstream=("tracking",)),
             log_fn=log_fn)
@@ -2119,16 +2171,25 @@ class BambiProcessor:
         recorded = classification_store.embedded_ids(
             target_folder, suffix, run_id)
         if recorded:
-            on_disk = set(embedding_files.present_ids(
+            usable, unusable = embedding_files.usable_ids(
                 target_folder, suffix, projection,
-                [w for w in wanted if w["detection_id"] in recorded]))
-            vanished = sorted(recorded - on_disk)
+                [w for w in wanted if w["detection_id"] in recorded])
+            vanished = sorted(recorded - set(usable) - set(unusable))
             if vanished:
                 classification_store.forget_embedded(
                     target_folder, suffix, run_id, vanished)
                 if log_fn:
                     log_fn(f"{len(vanished)} recorded vector(s) are missing "
                            "from disk and will be recomputed")
+            if unusable:
+                # NaN vectors from a half-precision overflow: the files are
+                # there, so only their contents give them away.
+                classification_store.forget_embedded(
+                    target_folder, suffix, run_id, unusable)
+                if log_fn:
+                    log_fn(f"{len(unusable)} recorded vector(s) contain NaN "
+                           "or infinite values (a reduced-precision overflow "
+                           "in the backbone) and will be recomputed")
 
         boxes = {row["detection_id"]: row for row in rows}
         pending = classification_store.pending_ids(
@@ -2588,8 +2649,12 @@ class BambiProcessor:
         # Which species are measured rather than classified is chosen in the
         # per-species dialog, so the two routes are one decision rather than a
         # model choice plus a switch somewhere else.
-        per_species = ((config.get("classification_models") or {})
-                       .get("life_stage") or {}).get("species") or {}
+        # A selection that was never saved takes the dialog's defaults, so
+        # what the dialog shows is what runs.
+        from .core import hf_access
+        spec = (config.get("classification_models") or {}).get("life_stage") or {}
+        per_species = hf_access.per_species_sources(
+            spec, "life_stage", hf_access.project_species(target_folder))
         measured = {name for name, entry in per_species.items()
                     if (entry or {}).get("model") == "size"}
         if not measured:
@@ -2805,7 +2870,11 @@ class BambiProcessor:
                 # classifier for is left uncalled rather than guessed at - for
                 # life stage the size estimate then fills the gap.
                 key = resolved_species.get(track_id, "")
-                per_species = (spec.get("species") or {}).get(key)
+                # Defaults applied the same way the per-species dialog
+                # shows them, so a never-saved selection still runs the
+                # published model for the species it was fitted on.
+                per_species = hf_access.per_species_sources(
+                    spec, task, [key]).get(key) if key else None
                 selected = (per_species or {}).get("model", "off")
                 # "size" is a measurement, not a head - the life-stage step
                 # makes those calls.
@@ -2917,37 +2986,16 @@ class BambiProcessor:
     @staticmethod
     def _download_head(repo, task, projection, modality_in, destination,
                        token, log_fn=None):
-        """Fetch a published head into the shared models folder."""
+        """Fetch a published head into the shared models folder.
+
+        Kept as a thin wrapper: tests patch it, and the class-mapping dialog
+        shares the implementation in :func:`core.hf_access.download_head`.
+        """
         from .core import hf_access
 
-        try:
-            from huggingface_hub import hf_hub_download
-        except ImportError as exc:
-            raise RuntimeError(
-                "huggingface_hub is not installed. Install the Classification "
-                "dependencies from the Dependency Manager.") from exc
-
-        remote = hf_access.head_repo_path(task, projection, modality_in)
-        if log_fn:
-            log_fn(f"Downloading {repo}/{remote} …")
-        os.makedirs(os.path.dirname(destination), exist_ok=True)
-        try:
-            # nosec B615 - deliberately unpinned, for the same reason as the
-            # backbone: the repository is user-overridable, so a hardcoded
-            # revision would be wrong for a custom head. Reproducibility comes
-            # from the model file itself, which is recorded with every
-            # prediction.
-            fetched = hf_hub_download(  # nosec B615
-                repo_id=repo, filename=remote, token=token or None,
-                local_dir=os.path.dirname(os.path.dirname(destination)))
-        except Exception as exc:
-            raise RuntimeError(
-                f"Could not download the {task} classifier "
-                f"({repo}/{remote}): {exc}") from exc
-        if os.path.abspath(fetched) != os.path.abspath(destination):
-            os.makedirs(os.path.dirname(destination), exist_ok=True)
-            shutil.copyfile(fetched, destination)
-        return destination
+        return hf_access.download_head(
+            repo, task, projection, modality_in, destination, token,
+            log_fn=log_fn)
 
     @staticmethod
     def _stored_occlusion(target_folder: str, modality: str) -> Dict[int, Any]:
@@ -3054,6 +3102,22 @@ class BambiProcessor:
                 f"for this camera first.")
         with open(poses_file, "r", encoding="utf-8") as handle:
             return json.load(handle).get("images", [])
+
+    @staticmethod
+    def _world_centres(target_folder: str, camera_suffix: str) -> dict:
+        """``detection_id -> (x, y)`` ground centre of each geo-referenced box.
+
+        Empty when the modality has not been geo-referenced, which is how
+        cross-modal matching decides whether it can work in metres.
+        """
+        from .core import track_store
+
+        centres = {}
+        for row in track_store.load_georeferenced(target_folder, camera_suffix):
+            centres[row["detection_id"]] = (
+                (float(row["gx1"]) + float(row["gx2"])) / 2.0,
+                (float(row["gy1"]) + float(row["gy2"])) / 2.0)
+        return centres
 
     @staticmethod
     def _frame_size(images: list):
@@ -3694,6 +3758,61 @@ class BambiProcessor:
             raise RuntimeError(
                 "rasterio is required to write the density heatmap GeoTIFF."
             )
+
+    def run_track_inventory(self, config: Dict[str, Any], progress_fn=None,
+                            log_fn=None, cancel_check=None):
+        """List every tracked individual with all the project knows about it.
+
+        Writes ``analytics_{m}/track_inventory.csv`` and ``.json``: frames,
+        capture times, start and end positions (project CRS and WGS84),
+        species / sex / age with the votes behind them, occlusion counts,
+        the cross-camera partner, the labelling tool's annotations and the
+        flight-route distance. See :mod:`core.track_inventory`.
+
+        :param config: ``inventory_camera`` ("T"|"W"), ``target_epsg``.
+        """
+        from .core import store as _store_module
+        from .core import track_inventory
+
+        camera_sel = config.get("inventory_camera", "T")
+        suffix = "t" if camera_sel == "T" else "w"
+        camera_name = _modality_label(suffix)
+        target_folder = config["target_folder"]
+        epsg = config.get("target_epsg")
+
+        if log_fn:
+            log_fn(f"Listing the tracked {camera_name} individuals...")
+        if progress_fn:
+            progress_fn(10)
+
+        self._require_store(target_folder, _store_module.TRACKS,
+                            suffix, "Track Animals")
+        species_ids = config.get("analytics_species_ids")
+        inventory = track_inventory.build_inventory(
+            target_folder, suffix, epsg=int(epsg) if epsg else None,
+            species_ids=species_ids)
+        if log_fn and species_ids is not None:
+            log_fn(f"Species filter: {len(inventory)} track(s) of the "
+                   f"{len(list(species_ids))} selected species listed")
+        if progress_fn:
+            progress_fn(70)
+
+        analytics_folder = os.path.join(target_folder, f"analytics_{suffix}")
+        os.makedirs(analytics_folder, exist_ok=True)
+        csv_path = track_inventory.write_csv(
+            inventory, os.path.join(analytics_folder, "track_inventory.csv"))
+        track_inventory.write_json(
+            inventory, os.path.join(analytics_folder, "track_inventory.json"))
+
+        if log_fn:
+            for line in track_inventory.summarise(inventory):
+                log_fn(line)
+            log_fn(f"Track inventory written to {csv_path}")
+
+        _record_stage(config, "track_inventory", suffix,
+                      row_count=len(inventory), log_fn=log_fn)
+        if progress_fn:
+            progress_fn(100)
 
     def run_coverage_map(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Build a survey coverage map from the exported frame GeoTIFFs.
@@ -5355,7 +5474,7 @@ class BambiProcessor:
             "x1": row["x1"], "y1": row["y1"],
             "x2": row["x2"], "y2": row["y2"],
             "confidence": row["confidence"],
-            "class_id": int(row["source_class"] or 0),
+            "class_id": _store_class_id(row),
         } for row in track_store.load_detections(target_folder, camera_suffix)]
 
         if not detections:
@@ -5489,6 +5608,9 @@ class BambiProcessor:
                 if progress_fn and idx % 50 == 0:
                     progress = 30 + int((idx / total_dets) * 60)
                     progress_fn(min(progress, 95))
+                if log_fn and total_dets >= 10 and (idx + 1) % max(1, total_dets // 10) == 0:
+                    log_fn(f"Geo-referenced {idx + 1} / {total_dets} detections "
+                           f"({len(georeferenced)} placed, up to frame {frame_idx})")
 
         finally:
             if ctx:
@@ -6831,7 +6953,7 @@ class BambiProcessor:
                 'x1': row["x1"], 'y1': row["y1"],
                 'x2': row["x2"], 'y2': row["y2"],
                 'conf': row["confidence"] if row["confidence"] is not None else 1.0,
-                'cls': int(row["source_class"] or 0),
+                'cls': _store_class_id(row),
             })
 
         if log_fn:

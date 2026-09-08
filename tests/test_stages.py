@@ -439,3 +439,18 @@ def test_record_stage_without_a_target_folder():
     from bambi_wildlife_detection.bambi_processing import _record_stage
 
     _record_stage({}, "detection", "t")   # must not raise
+
+
+def test_rerunning_one_camera_outdates_the_cross_modal_match(project):
+    """The match is recorded once, under CROSS_MODAL; re-running either
+    camera's tracking must reach it (2026-09-07: matches kept pointing at a
+    superseded thermal run while showing complete)."""
+    stages.mark_complete(project, "tracking", "t")
+    stages.mark_complete(project, "tracking", "w")
+    stages.mark_complete(project, "track_matching", stages.CROSS_MODAL)
+
+    affected = stages.mark_complete(project, "tracking", "t")
+    assert "track_matching" in affected
+    assert stages.states(project, stages.CROSS_MODAL)["track_matching"]["state"] == stages.STALE
+    # The other camera's row is untouched.
+    assert stages.states(project, "w")["tracking"]["state"] == stages.COMPLETE

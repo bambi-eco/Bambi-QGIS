@@ -21,7 +21,9 @@ from qgis.PyQt.QtWidgets import (
 from .core import hf_access, label_store
 
 #: Species the published sex classifier was fitted on.
-DEFAULT_SPECIES = "red deer"
+#: Kept as an alias: the value lives with the head registry so the run
+#: and this dialog agree on it.
+DEFAULT_SPECIES = hf_access.DEFAULT_HEAD_SPECIES
 
 _SOURCES = (("Off", "off"), ("Default", "default"), ("Custom…", "custom"))
 
@@ -145,21 +147,12 @@ class BambiClassificationModelDialog(QDialog):
             item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.table.setItem(row, 0, item)
 
+            # Nothing saved yet takes the same default the run applies
+            # (core.hf_access.default_species_source); a saved selection
+            # that leaves a species out means it was switched off.
+            source = hf_access.per_species_sources(
+                self.spec, self.task, [name])[name].get("model", "off")
             entry = per_species.get(name) or {}
-            source = entry.get("model")
-            if source is None:
-                # Nothing saved yet: offer the published model for the one
-                # species it was fitted on, and leave the rest alone.
-                fitted = name == DEFAULT_SPECIES
-                published = hf_access.has_default_head(self.task)
-                if fitted and published:
-                    source = "default"
-                elif self.task == "life_stage":
-                    # No life-stage model exists, and size needs none - so it
-                    # is the useful default rather than "off".
-                    source = "size"
-                else:
-                    source = "off"
 
             combo = QComboBox()
             for label, value in sources_for(self.task):
@@ -235,8 +228,9 @@ class BambiClassificationModelDialog(QDialog):
             name = self.table.item(row, 0).text()
             combo = self.table.cellWidget(row, 1)
             source = combo.currentData() if combo else "off"
-            if source == "off":
-                continue      # absent means "not called", which is the default
+            # "Off" is written out too: an absent species means "never
+            # configured" and takes the default, so leaving it out would
+            # switch it back on.
             entry = {"model": source}
             if source == "custom":
                 entry["path"] = (self.table.item(row, 2).text() or "").strip()

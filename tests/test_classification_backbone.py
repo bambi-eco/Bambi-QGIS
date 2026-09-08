@@ -299,3 +299,222 @@ class TestEmbed:
         vectors = backbone.embed(crops)
         assert backbone.dim == 768
         assert vectors.shape == (3, 768)
+
+
+class TestTransformersImportMessage:
+    """The loader must say what actually broke: transformers imports lazily and
+    a failure deep in its tail (2026-09-07: a user-site pyarrow whose DLL could
+    not load inside QGIS) was reported as "transformers is not installed"."""
+
+    def _message(self, exc):
+        from bambi_wildlife_detection.core import classification
+        return classification._transformers_import_message(exc)
+
+    def test_missing_transformers_says_not_installed(self):
+        exc = ModuleNotFoundError("No module named 'transformers'",
+                                  name="transformers")
+        assert "not installed" in self._message(exc)
+
+    def test_broken_dependency_names_the_culprit(self):
+        root = ImportError("DLL load failed while importing lib: The specified "
+                           "procedure could not be found.", name="pyarrow.lib")
+        try:
+            try:
+                raise root
+            except ImportError as inner:
+                raise ImportError("could not import module") from inner
+        except ImportError as outer:
+            message = self._message(outer)
+        assert "not installed" not in message
+        assert "pyarrow.lib" in message
+        assert "procedure could not be found" in message
+        assert "shadows" in message
+        assert "Dependency Manager" in message
+
+    def test_other_import_errors_keep_their_text(self):
+        exc = ImportError("numpy.core.multiarray failed to import")
+        message = self._message(exc)
+        assert "could not be imported" in message
+        assert "multiarray" in message
+        assert "shadows" not in message
+
+
+class TestLoadProgressLogging:
+    """Between "Loading ..." and "Backbone ready" a first run downloads
+    gigabytes in silence (2026-09-07). The load now says whether it is
+    downloading or loading, and how far the download is."""
+
+    def test_repo_folder_follows_the_hub_naming(self, tmp_path):
+        folder = cl.repo_cache_folder(str(tmp_path), "facebook/dinov3-vith16plus")
+        assert os.path.basename(folder) == "models--facebook--dinov3-vith16plus"
+        assert cl.repo_cache_folder("", "facebook/x") == ""
+
+    def test_cached_bytes_counts_partial_downloads(self, tmp_path):
+        folder = tmp_path / "models--a--b"
+        (folder / "blobs").mkdir(parents=True)
+        (folder / "blobs" / "abc").write_bytes(b"x" * 100)
+        (folder / "blobs" / "def.incomplete").write_bytes(b"y" * 50)
+        assert cl.cached_bytes(str(folder)) == 150
+        # On Windows the finished file lives under snapshots/ instead.
+        (folder / "snapshots" / "rev").mkdir(parents=True)
+        (folder / "snapshots" / "rev" / "model.safetensors").write_bytes(b"z" * 30)
+        assert cl.cached_bytes(str(folder)) == 180
+        assert cl.cached_bytes(str(tmp_path / "missing")) == 0
+        assert cl.cached_bytes("") == 0
+
+    def test_reporter_logs_growth_with_a_percentage(self, tmp_path):
+        folder = tmp_path / "models--a--b" / "blobs"
+        folder.mkdir(parents=True)
+        logs = []
+        reporter = cl.DownloadReporter(str(tmp_path), "a/b", 4 * 1024 * 1024,
+                                       log_fn=logs.append, interval=0.01)
+        reporter.report()                              # nothing on disk yet
+        assert logs == []
+        (folder / "w.incomplete").write_bytes(b"0" * (1024 * 1024))
+        reporter.report()
+        reporter.report()                              # unchanged: no repeat
+        assert logs == ["Downloading weights: 1 MB of 4 MB (25%)"]
+        (folder / "w.incomplete").write_bytes(b"0" * (4 * 1024 * 1024))
+        reporter.report()
+        assert logs[-1] == "Downloading weights: 4 MB of 4 MB (100%)"
+
+    def test_reporter_is_silent_when_the_cache_is_warm(self, tmp_path):
+        logs = []
+        with cl.DownloadReporter(str(tmp_path), "a/b", None, log_fn=logs.append,
+                                 active=False, interval=0.01) as reporter:
+            assert reporter._thread is None
+        assert logs == []
+
+    def test_reporter_thread_samples_while_loading(self, tmp_path):
+        import time as _time
+        folder = tmp_path / "models--a--b" / "blobs"
+        folder.mkdir(parents=True)
+        logs = []
+        with cl.DownloadReporter(str(tmp_path), "a/b", None, log_fn=logs.append,
+                                 interval=0.02):
+            (folder / "w.incomplete").write_bytes(b"0" * (2 * 1024 * 1024))
+            deadline = _time.time() + 2.0
+            while not logs and _time.time() < deadline:
+                _time.sleep(0.02)
+        assert logs and logs[0].startswith("Downloading weights: 2 MB")
+
+    def test_describe_cache_without_the_hub_says_downloading(self, monkeypatch,
+                                                              tmp_path):
+        monkeypatch.setitem(sys.modules, "huggingface_hub", None)
+        logs = []
+        state = cl.describe_cache("a/b", str(tmp_path), "", None,
+                                  log_fn=logs.append)
+        assert state.complete is False
+        assert len(logs) == 1 and "not in the local cache" in logs[0]
+        assert "several GB" in logs[0]
+
+    def test_load_logs_the_phases(self, monkeypatch, tmp_path):
+        logs = []
+        _install_fakes(monkeypatch)
+        monkeypatch.setitem(sys.modules, "huggingface_hub", None)
+        cl.Backbone(models_dir=str(tmp_path), device="cpu",
+                    log_fn=logs.append).load()
+        text = "\n".join(logs)
+        assert "not in the local cache" in text
+        assert "Image processor ready" in text
+        assert "Weights loaded in" in text
+        assert "Backbone ready" in text and "on cpu" in text
+
+
+# ---------------------------------------------------------------------------
+# Precision: bf16 over fp16, and no NaN leaves the backbone
+# ---------------------------------------------------------------------------
+
+class PrecisionModel(FakeModel):
+    """A model whose output the test controls per call, and which records
+    every dtype it is cast to."""
+
+    def __init__(self, outputs, hidden_size=4):
+        super().__init__(hidden_size=hidden_size)
+        self._outputs = list(outputs)
+        self.casts = []
+        self.floated = 0
+        self.raise_on_float = False
+
+    def to(self, target):
+        self.casts.append(target)
+        if isinstance(target, str):
+            self.moved_to = target
+        return self
+
+    def float(self):
+        # Out of memory only on the GPU; the CPU copy always fits.
+        if self.raise_on_float and self.moved_to != "cpu":
+            raise RuntimeError("CUDA out of memory")
+        self.floated += 1
+        return self
+
+    def __call__(self, **inputs):
+        rows = self._outputs.pop(0)
+        return types.SimpleNamespace(pooler_output=FakeTensor(np.asarray(rows)))
+
+
+def _with_bf16(monkeypatch, supported):
+    import sys as _sys
+    torch = _sys.modules["torch"]
+    torch.cuda.is_bf16_supported = lambda: supported
+    torch.bfloat16 = "bfloat16"
+    torch.cuda.empty_cache = lambda: None
+
+
+class TestPrecision:
+
+    def test_bf16_is_preferred_where_the_gpu_supports_it(self, monkeypatch, tmp_path):
+        model = PrecisionModel([np.ones((2, 4))])
+        _install_fakes(monkeypatch, model=model, cuda=True)
+        _with_bf16(monkeypatch, True)
+        backbone = cl.Backbone(models_dir=str(tmp_path), device="cuda", fp16=True)
+        backbone.load()
+        assert "bfloat16" in model.casts and not model.halved
+        assert backbone.precision == "bf16"
+
+    def test_fp16_when_bf16_is_not_available(self, monkeypatch, tmp_path):
+        model = PrecisionModel([np.ones((2, 4))])
+        _install_fakes(monkeypatch, model=model, cuda=True)
+        _with_bf16(monkeypatch, False)
+        backbone = cl.Backbone(models_dir=str(tmp_path), device="cuda", fp16=True)
+        backbone.load()
+        assert model.halved and backbone.precision == "fp16"
+
+    def test_a_non_finite_batch_is_redone_in_fp32(self, monkeypatch, tmp_path, crops):
+        nan_rows = np.full((3, 4), np.nan)
+        nan_rows[0] = 1.0
+        model = PrecisionModel([nan_rows, np.ones((3, 4))])
+        _install_fakes(monkeypatch, model=model, cuda=True)
+        _with_bf16(monkeypatch, False)
+        logs = []
+        backbone = cl.Backbone(models_dir=str(tmp_path), device="cuda",
+                               fp16=True, log_fn=logs.append)
+        out = backbone.embed(crops)
+        assert np.isfinite(out).all() and out.shape == (3, 4)
+        assert model.floated == 1 and backbone.precision == "fp32"
+        assert any("2 of 3 feature vector(s) came out non-finite in fp16" in line
+                   and "fp32 on cuda" in line for line in logs)
+        # Later batches stay in fp32: no second demotion, no NaN.
+        model._outputs.append(np.ones((3, 4)))
+        backbone.embed(crops)
+        assert model.floated == 1
+
+    def test_fp32_moves_to_the_cpu_when_the_gpu_is_full(self, monkeypatch, tmp_path, crops):
+        model = PrecisionModel([np.full((3, 4), np.nan), np.ones((3, 4))])
+        model.raise_on_float = True
+        _install_fakes(monkeypatch, model=model, cuda=True)
+        _with_bf16(monkeypatch, True)
+        logs = []
+        backbone = cl.Backbone(models_dir=str(tmp_path), device="cuda",
+                               fp16=True, log_fn=logs.append)
+        backbone.embed(crops)
+        assert backbone.device == "cpu" and model.moved_to == "cpu"
+        assert any("do not fit on the GPU" in line for line in logs)
+
+    def test_nan_in_fp32_is_an_error_not_a_file(self, monkeypatch, tmp_path, crops):
+        model = PrecisionModel([np.full((3, 4), np.nan)])
+        _install_fakes(monkeypatch, model=model, cuda=False)
+        backbone = cl.Backbone(models_dir=str(tmp_path), device="cpu", fp16=False)
+        with pytest.raises(cl.BackboneError, match="non-finite even in fp32"):
+            backbone.embed(crops)
