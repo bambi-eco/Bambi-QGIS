@@ -39,7 +39,6 @@ from .bambi_click_tool import BambiClickTool
 # so they are importable without QGIS, e.g. by the integration tests).
 from .bambi_calibrations import THERMAL_CALIBRATIONS, RGB_CALIBRATIONS  # noqa: F401
 from .core.hf_access import DEFAULT_BACKBONE as HF_DEFAULT_BACKBONE
-from .core.sam3_local import DEFAULT_SAM3_REPO as SAM3_DEFAULT_REPO
 # Stage kinds, for asking whether a step has results rather than whether its
 # legacy text file happens to be on disk.
 from .core import store as _store_kinds
@@ -48,10 +47,11 @@ from .core import store as _store_kinds
 # dependency manager can write its own entries under the same scope without
 # importing the dock.
 from .gui_utils import PLUGIN_SCOPE, read_alfs_selection  # noqa: E402
+from . import gui_utils as gui_utils_hf
 
 # The Hugging Face token lives in the QGIS settings rather than in the project
 # configuration: it is a user credential, and a project file gets shared.
-_HF_TOKEN_SETTING = f"{PLUGIN_SCOPE}/classification/hfToken"
+_HF_TOKEN_SETTING = gui_utils_hf.HF_TOKEN_SETTING  # one key with the Segmentation tool
 
 # Combo index -> the value the processing steps use. Kept beside the combo
 # rather than derived from its label so renaming a label cannot silently
@@ -370,6 +370,7 @@ class BambiDockWidget(QDockWidget):
         self._inspector_action = None
         self._fov_inspector_action = None
         self._fov_georef_inspector_action = None
+        self._segmentation_tool_action = None
 
         # Setup UI
         self.setup_ui()
@@ -2727,148 +2728,6 @@ class BambiDockWidget(QDockWidget):
         ortho_tab_layout.addWidget(ortho_group)
         ortho_tab_layout.addStretch()
 
-        # ----- Sub-Tab 7: SAM3 Segmentation -----
-        sam3_tab = QWidget()
-        sam3_tab_layout = QVBoxLayout(sam3_tab)
-        config_sub_tabs.addTab(sam3_tab, "SAM3 Segmentation")
-
-        sam3_api_group = QGroupBox("Roboflow API Configuration")
-        sam3_api_layout = QFormLayout(sam3_api_group)
-
-        self.sam3_api_key_edit = QLineEdit()
-        self.sam3_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.sam3_api_key_edit.setPlaceholderText("Enter your Roboflow API key")
-        self.sam3_api_key_edit.setToolTip("Your Roboflow API key for SAM3 inference")
-        sam3_api_layout.addRow("API Key:", self.sam3_api_key_edit)
-
-        # Toggle to show/hide API key
-        self.show_api_key_check = QCheckBox("Show API key")
-        self.show_api_key_check.stateChanged.connect(self._toggle_api_key_visibility)
-        sam3_api_layout.addRow("", self.show_api_key_check)
-
-        sam3_tab_layout.addWidget(sam3_api_group)
-
-        # --- Local inference (Hugging Face) ---
-        sam3_local_group = QGroupBox("Local Inference (Hugging Face)")
-        sam3_local_layout = QFormLayout(sam3_local_group)
-
-        sam3_local_info = QLabel(
-            "Run SAM3 on this machine through transformers instead of the "
-            'Roboflow API. <a href="https://huggingface.co/facebook/sam3">'
-            "facebook/sam3</a> is a <b>gated</b> model like the DINOv3 "
-            "backbone: request access once, then the Hugging Face token from "
-            "the Classification tab downloads it into the shared model cache "
-            "on first use (~3.4 GB). Needs transformers 5.0 or newer."
-        )
-        sam3_local_info.setWordWrap(True)
-        sam3_local_info.setTextFormat(Qt.TextFormat.RichText)
-        sam3_local_info.setOpenExternalLinks(True)
-        sam3_local_info.setStyleSheet("color: gray; font-size: 10px;")
-        sam3_local_layout.addRow(sam3_local_info)
-
-        self.sam3_local_check = QCheckBox(
-            "Run SAM3 locally (no Roboflow key needed)")
-        self.sam3_local_check.setToolTip(
-            "Segment with the transformers SAM3 model on the device chosen "
-            "in the Classification tab. The Roboflow key is ignored while "
-            "this is ticked."
-        )
-        self.sam3_local_check.stateChanged.connect(self._on_sam3_local_toggled)
-        sam3_local_layout.addRow("", self.sam3_local_check)
-
-        self.sam3_model_edit = QLineEdit()
-        self.sam3_model_edit.setPlaceholderText(SAM3_DEFAULT_REPO)
-        self.sam3_model_edit.setToolTip(
-            "Hugging Face repository of the SAM3 checkpoint. Leave empty for "
-            "Meta's published model.\n\n"
-            "Append '@' and a commit hash to pin a revision (repo@abc123…)."
-        )
-        sam3_local_layout.addRow("Model:", self.sam3_model_edit)
-
-        sam3_check_row = QHBoxLayout()
-        self.sam3_check_access_btn = QPushButton("Check access")
-        self.sam3_check_access_btn.setToolTip(
-            "Ask Hugging Face whether the token from the Classification tab "
-            "may download this model, before a run finds out the hard way."
-        )
-        self.sam3_check_access_btn.clicked.connect(self.check_sam3_access)
-        sam3_check_row.addWidget(self.sam3_check_access_btn)
-        self.sam3_access_status = QLabel("⚪ Not checked")
-        self.sam3_access_status.setWordWrap(True)
-        sam3_check_row.addWidget(self.sam3_access_status, 1)
-        sam3_local_layout.addRow("", sam3_check_row)
-
-        sam3_tab_layout.addWidget(sam3_local_group)
-        self._sam3_api_group = sam3_api_group
-        self._on_sam3_local_toggled(self.sam3_local_check.isChecked())
-
-        sam3_prompts_group = QGroupBox("Segmentation Prompts")
-        sam3_prompts_layout = QVBoxLayout(sam3_prompts_group)
-
-        prompts_info = QLabel("Enter text prompts (one per line) for objects to segment:")
-        prompts_info.setWordWrap(True)
-        sam3_prompts_layout.addWidget(prompts_info)
-
-        self.sam3_prompts_edit = QTextEdit()
-        self.sam3_prompts_edit.setPlaceholderText("deer\nwild boar\nperson\ncar")
-        self.sam3_prompts_edit.setMaximumHeight(100)
-        _cap_vertical_growth(self.sam3_prompts_edit)
-        self.sam3_prompts_edit.setToolTip("Text prompts for SAM3 segmentation. One prompt per line.")
-        sam3_prompts_layout.addWidget(self.sam3_prompts_edit)
-
-        sam3_tab_layout.addWidget(sam3_prompts_group)
-
-        sam3_params_group = QGroupBox("Segmentation Parameters")
-        sam3_params_layout = QFormLayout(sam3_params_group)
-
-        self.sam3_confidence_spin = QDoubleSpinBox()
-        self.sam3_confidence_spin.setRange(0.0, 1.0)
-        self.sam3_confidence_spin.setSingleStep(0.05)
-        self.sam3_confidence_spin.setValue(0.5)
-        self.sam3_confidence_spin.setDecimals(2)
-        self.sam3_confidence_spin.setToolTip("Minimum confidence threshold for segmentation masks")
-        sam3_params_layout.addRow("Confidence Threshold:", self.sam3_confidence_spin)
-
-        # SAM3 frame filters
-        sam3_filter_label = QLabel("Frame Range:")
-        sam3_filter_label.setStyleSheet("font-weight: bold; margin-top: 8px;")
-        sam3_params_layout.addRow(sam3_filter_label)
-
-        self.sam3_all_frames_check = QCheckBox("Use all frames")
-        self.sam3_all_frames_check.setChecked(True)
-        self.sam3_all_frames_check.stateChanged.connect(self.toggle_sam3_frame_range)
-        sam3_params_layout.addRow("", self.sam3_all_frames_check)
-
-        self.sam3_frame_range_widget = QWidget()
-        sam3_frame_range_layout = QHBoxLayout(self.sam3_frame_range_widget)
-        sam3_frame_range_layout.setContentsMargins(0, 0, 0, 0)
-
-        self.sam3_start_frame_spin = QSpinBox()
-        self.sam3_start_frame_spin.setRange(0, 999999)
-        self.sam3_start_frame_spin.setValue(0)
-        self.sam3_start_frame_spin.setToolTip("First frame to include (inclusive)")
-        sam3_frame_range_layout.addWidget(QLabel("Start:"))
-        sam3_frame_range_layout.addWidget(self.sam3_start_frame_spin)
-
-        self.sam3_end_frame_spin = QSpinBox()
-        self.sam3_end_frame_spin.setRange(0, 999999)
-        self.sam3_end_frame_spin.setValue(999999)
-        self.sam3_end_frame_spin.setToolTip("Last frame to include (inclusive)")
-        sam3_frame_range_layout.addWidget(QLabel("End:"))
-        sam3_frame_range_layout.addWidget(self.sam3_end_frame_spin)
-
-        self.sam3_frame_range_widget.setEnabled(False)
-        sam3_params_layout.addRow("", self.sam3_frame_range_widget)
-
-        self.sam3_step_spin = QSpinBox()
-        self.sam3_step_spin.setRange(1, 100)
-        self.sam3_step_spin.setValue(1)
-        self.sam3_step_spin.setToolTip("Process every Nth frame (1 = all frames, 2 = every 2nd frame, etc.)")
-        sam3_params_layout.addRow("Frame Step:", self.sam3_step_spin)
-
-        sam3_tab_layout.addWidget(sam3_params_group)
-        sam3_tab_layout.addStretch()
-
         # =====================================================================
         # MAIN TAB 3: PROCESSING
         # =====================================================================
@@ -3321,7 +3180,11 @@ class BambiDockWidget(QDockWidget):
             "Uses a classifier where one is configured for the species, and "
             "otherwise body size within this flight - a juvenile cannot be "
             "told from an adult female by appearance at survey resolution, so "
-            "size is what separates them. The size estimate needs no models."
+            "size is what separates them. The size estimate needs no models.\n\n"
+            "Each camera is measured as its own cohort. Where tracks have been "
+            "matched across cameras, a juvenile found on one camera is carried "
+            "onto its partner track on the other - the thermal cohort often "
+            "cannot confirm a calf that stands out clearly among the RGB deer."
         )
         self.life_stage_status = QLabel("⚪ Not started")
         life_stage_row.addWidget(self.life_stage_btn)
@@ -3375,50 +3238,28 @@ class BambiDockWidget(QDockWidget):
         extra_info.setStyleSheet("color: gray; font-size: 10px;")
         extra_steps_layout.addWidget(extra_info)
 
-        # ----- Run SAM3 Segmentation -----
-        step9_row = QHBoxLayout()
-        self.sam3_segment_btn = QPushButton("S1. Run SAM3 Segmentation")
-        self.sam3_segment_btn.clicked.connect(self.run_sam3_segmentation)
+        # ----- Segmentation tool -----
+        # Prompting is interactive - a click on the frame, a mask to look
+        # at, another click - so it lives in a window of its own rather than
+        # in a step button. This just opens it.
+        seg_row = QHBoxLayout()
+        self.sam3_segment_btn = QPushButton("S1. Open Segmentation Tool…")
+        self.sam3_segment_btn.clicked.connect(self.open_segmentation_tool)
         self.sam3_segment_btn.setToolTip(
-            "Run SAM3 segmentation on the extracted frames (Roboflow API, or "
-            "the local Hugging Face model when configured)")
-        self.sam3_camera_combo = QComboBox()
-        self.sam3_camera_combo.addItems(["T - Thermal", "W - RGB"])
-        self.sam3_camera_combo.setFixedWidth(100)
-        self.sam3_camera_combo.setToolTip("Select camera source for frames and poses")
+            "Segment the extracted frames with SAM3 / SAM 3.1 by text or "
+            "point prompts, on single frames or tracked across a sequence; "
+            "geo-reference the masks, add them as layers, export GeoJSON")
         self.sam3_segment_status = QLabel("⚪ Not started")
-        step9_row.addWidget(self.sam3_segment_btn)
-        step9_row.addWidget(self.sam3_camera_combo)
-        step9_row.addWidget(self.sam3_segment_status)
-        extra_steps_layout.addLayout(step9_row)
-
-        # ----- -> Geo-Reference Segmentation -----
-        step10_row = QHBoxLayout()
-        self.sam3_georef_btn = QPushButton("   → Geo-Reference Segmentation")
-        self.sam3_georef_btn.clicked.connect(self.run_sam3_georeference)
-        self.sam3_georef_btn.setToolTip("Convert pixel segmentation masks to world coordinates")
-        self.sam3_georef_status = QLabel("⚪ Not started")
-        step10_row.addWidget(self.sam3_georef_btn)
-        step10_row.addWidget(self.sam3_georef_status)
-        extra_steps_layout.addLayout(step10_row)
-
-        # -> Add SAM3 Segmentation to QGIS
-        add_sam3_row = QHBoxLayout()
-        self.add_sam3_btn = QPushButton("   → Add Segmentation to QGIS")
-        self.add_sam3_btn.clicked.connect(self.add_sam3_to_qgis)
-        self.add_sam3_btn.setToolTip("Add geo-referenced segmentation masks as QGIS layers")
-        self.add_sam3_status = QLabel("⚪")
-        add_sam3_row.addWidget(self.add_sam3_btn)
-        add_sam3_row.addWidget(self.add_sam3_status)
-        extra_steps_layout.addLayout(add_sam3_row)
+        seg_row.addWidget(self.sam3_segment_btn)
+        seg_row.addWidget(self.sam3_segment_status)
+        extra_steps_layout.addLayout(seg_row)
 
         # Re-evaluate step statuses when a camera selection changes so the
         # indicators always reflect the selected modality's outputs.
         for camera_combo in (self.extract_camera_combo, self.flight_route_camera_combo,
                              self.detection_camera_combo, self.tracking_camera_combo,
                              self.fov_camera_combo, self.alfs_camera_combo,
-                             self.geotiff_camera_combo, self.ortho_camera_combo,
-                             self.sam3_camera_combo):
+                             self.geotiff_camera_combo, self.ortho_camera_combo):
             camera_combo.currentIndexChanged.connect(self._on_step_camera_changed)
 
         processing_layout.addWidget(steps_group)
@@ -3462,6 +3303,10 @@ class BambiDockWidget(QDockWidget):
         export_form.addWidget(QLabel("Format:"))
         self.export_format_combo = QComboBox()
         for key, (label, _fn, _folder) in _exporters.EXPORTERS.items():
+            # The segmentation GeoJSON is exported from the Segmentation
+            # tool, next to the masks it belongs to.
+            if key == "geojson_segmentation":
+                continue
             self.export_format_combo.addItem(label, key)
         self.export_format_combo.currentIndexChanged.connect(
             self._on_export_format_changed)
@@ -4379,30 +4224,6 @@ class BambiDockWidget(QDockWidget):
             "fov_end_frame": self.fov_end_frame_spin.value() if hasattr(self, 'fov_end_frame_spin') else 999999,
             "fov_sample_rate": self.fov_sample_rate_spin.value() if hasattr(self, 'fov_sample_rate_spin') else 1,
 
-            # SAM3 Segmentation
-            "sam3_local": (
-                self.sam3_local_check.isChecked()
-                if hasattr(self, 'sam3_local_check') else False),
-            "sam3_model": (
-                self.sam3_model_edit.text().strip()
-                if hasattr(self, 'sam3_model_edit') else ""),
-            "sam3_api_key": self.sam3_api_key_edit.text() if hasattr(self, 'sam3_api_key_edit') else "",
-            "sam3_prompts": [p.strip() for p in self.sam3_prompts_edit.toPlainText().split("\n") if
-                             p.strip()] if hasattr(self, 'sam3_prompts_edit') else [],
-            "sam3_confidence": self.sam3_confidence_spin.value() if hasattr(self, 'sam3_confidence_spin') else 0.5,
-            "sam3_use_all_frames": (
-                self.sam3_all_frames_check.isChecked()
-                if hasattr(self, 'sam3_all_frames_check') else True),
-            "sam3_start_frame": (
-                self.sam3_start_frame_spin.value()
-                if hasattr(self, 'sam3_start_frame_spin') else 0),
-            "sam3_end_frame": (
-                self.sam3_end_frame_spin.value()
-                if hasattr(self, 'sam3_end_frame_spin') else 999999),
-            "sam3_step": (
-                self.sam3_step_spin.value()
-                if hasattr(self, 'sam3_step_spin') else 1),
-
             # Classification. The token is resolved here rather than stored in
             # the config, so it never reaches the project file; an empty field
             # falls back to the environment or the 'hf auth login' token.
@@ -4510,7 +4331,6 @@ class BambiDockWidget(QDockWidget):
             "geotiff_edge_erosion_px": (
                 self.geotiff_edge_erosion_spin.value()
                 if hasattr(self, 'geotiff_edge_erosion_spin') else 2),
-            "sam3_camera": "T" if self.sam3_camera_combo.currentIndex() == 0 else "W",
             # Orthomosaic (merge of exported frame GeoTIFFs)
             "ortho_camera": "T" if self.ortho_camera_combo.currentIndex() == 0 else "W",
             "ortho_method": self.ortho_method_combo.currentText().split(" - ")[0].lower(),
@@ -5305,12 +5125,13 @@ class BambiDockWidget(QDockWidget):
             "both cameras saw is a confirmed animal; a track only one saw is "
             "either an animal the other sensor cannot make out, or noise. The "
             "classifiers and the label sync both read the answer.<br><br>"
-            "<b>S1 - Run SAM3 Segmentation</b><br>"
-            "Segments the frames by text prompt with SAM3 - through the "
-            "Roboflow API, or locally with the gated Hugging Face model when "
-            "'Run SAM3 locally' is ticked in the configuration.<br><br>"
-            "<b>→ Geo-Reference Segmentation</b><br>"
-            "Projects the masks onto the DEM to world coordinates.<br><br>"
+            "<b>S1 - Open Segmentation Tool</b><br>"
+            "Opens the Segmentation window (also on the toolbar): prompt "
+            "SAM3 / SAM 3.1 with text or clicked points on the extracted "
+            "frames, on single frames or tracked across a sequence - through "
+            "the Roboflow API, transformers, or Meta's sam3 package. The "
+            "window also geo-references the masks onto the DEM, adds them as "
+            "QGIS layers and exports them as GeoJSON.<br><br>"
 
             "<b>Export</b><br>"
             "Writes the detections and tracks out as COCO, YOLO, MOT, TRex "
@@ -6329,7 +6150,9 @@ class BambiDockWidget(QDockWidget):
             "alfs": combo_suffix(self.alfs_camera_combo),
             "geotiff": combo_suffix(self.geotiff_camera_combo),
             "ortho": combo_suffix(self.ortho_camera_combo),
-            "sam3": combo_suffix(self.sam3_camera_combo),
+            # The Segmentation tool has its own camera choice; the panel
+            # reports the thermal results and the tool shows the rest.
+            "sam3": "_t",
             "inventory": combo_suffix(self.inventory_camera_combo),
         }
 
@@ -6384,7 +6207,7 @@ class BambiDockWidget(QDockWidget):
         # Reset all QGIS-layer statuses before re-checking.
         for step in ("add_flight_route", "add_frame_detections", "add_layers",
                      "add_fov", "add_merged_fov", "add_alfs", "add_geotiffs",
-                     "add_orthomosaic", "add_sam3", "add_perpendicular",
+                     "add_orthomosaic", "add_perpendicular",
                      "add_track_perpendicular", "add_matches"):
             self.update_status(step, "⚪")
 
@@ -6414,7 +6237,6 @@ class BambiDockWidget(QDockWidget):
             ("layer", "BAMBI ALFS", "add_alfs", self.alfs_camera_combo),
             ("group", "BAMBI Frame GeoTIFFs", "add_geotiffs", self.geotiff_camera_combo),
             ("layer", "BAMBI Orthomosaic", "add_orthomosaic", self.ortho_camera_combo),
-            ("group", "SAM3 Segmentation", "add_sam3", self.sam3_camera_combo),
             # Perpendicular groups are labeled with the camera of the
             # detections/tracks the distances were computed for.
             ("group", "BAMBI Perpendicular", "add_perpendicular", self.detection_camera_combo),
@@ -7384,6 +7206,24 @@ class BambiDockWidget(QDockWidget):
         self._fov_inspector_action = fov_inspector_action
         self._fov_georef_inspector_action = fov_georef_inspector_action
 
+    def set_hf_token(self, token: str):
+        """Take over a token entered in the Segmentation tool.
+
+        Both places download gated Meta models with the same credential, so
+        typing it in one must be typing it in both.
+        """
+        if self.hf_token_edit.text().strip() != (token or "").strip():
+            self.hf_token_edit.setText((token or "").strip())
+        self._save_hf_token()
+
+    def set_segmentation_tool_action(self, action):
+        """The toolbar action that opens the Segmentation window.
+
+        The S1 button on the Processing tab triggers it, so the panel and
+        the toolbar share one window instead of each opening their own.
+        """
+        self._segmentation_tool_action = action
+
     def _toggle_inspector(self, checked: bool):
         """Activate or deactivate the detection/track inspector map tool."""
         canvas = self.iface.mapCanvas()
@@ -7545,82 +7385,6 @@ class BambiDockWidget(QDockWidget):
         """Toggle the FoV frame range controls based on checkbox state."""
         self.fov_frame_range_widget.setEnabled(not state)
 
-    def toggle_sam3_frame_range(self, state):
-        """Toggle the SAM3 frame range controls based on checkbox state."""
-        self.sam3_frame_range_widget.setEnabled(not state)
-
-    def _toggle_api_key_visibility(self, state):
-        """Toggle visibility of SAM3 API key."""
-        if state:
-            self.sam3_api_key_edit.setEchoMode(QLineEdit.EchoMode.Normal)
-        else:
-            self.sam3_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-
-    def _on_sam3_local_toggled(self, state):
-        """Grey out the Roboflow key while the local backend is selected.
-
-        Disabled rather than hidden, so it stays visible that the key is
-        still there and simply not in use.
-        """
-        local = bool(state)
-        if hasattr(self, "_sam3_api_group"):
-            self._sam3_api_group.setEnabled(not local)
-        for widget in ("sam3_model_edit", "sam3_check_access_btn"):
-            if hasattr(self, widget):
-                getattr(self, widget).setEnabled(local)
-
-    def _sam3_model(self) -> str:
-        """The SAM3 repository to load, the default when the field is empty."""
-        return (self.sam3_model_edit.text().strip()
-                if hasattr(self, "sam3_model_edit") else "") or SAM3_DEFAULT_REPO
-
-    def check_sam3_access(self):
-        """Report whether the Classification tab's token can read the SAM3 repo.
-
-        Same shape as :meth:`check_hf_access`: the repository is gated, and a
-        refused download is better learned here than after the frames are
-        loaded.
-        """
-        from .core import hf_access
-        from .core.classification import split_revision
-
-        if hasattr(self, "hf_token_edit"):
-            self._save_hf_token()
-            token, source = hf_access.resolve_token(self.hf_token_edit.text())
-        else:
-            token, source = hf_access.resolve_token("")
-        repo, _revision = split_revision(self._sam3_model())
-
-        self.sam3_access_status.setText("🟡 Checking…")
-        self.sam3_check_access_btn.setEnabled(False)
-        try:
-            result = hf_access.check_repo_access(repo, token)
-        finally:
-            self.sam3_check_access_btn.setEnabled(True)
-
-        icons = {
-            hf_access.ACCESS_GRANTED: "🟢",
-            hf_access.ACCESS_GATED: "🔴",
-            hf_access.ACCESS_NO_TOKEN: "🔴",
-            hf_access.ACCESS_MISSING: "🔴",
-            hf_access.ACCESS_UNAVAILABLE: "🟠",
-            hf_access.ACCESS_ERROR: "🟠",
-        }
-        icon = icons.get(result["status"], "⚪")
-        if result["status"] == hf_access.ACCESS_GRANTED:
-            using = hf_access.describe_token_source(source)
-            self.sam3_access_status.setText(
-                f"{icon} Access granted (using {using})")
-        else:
-            message = result["message"]
-            if result["status"] in (hf_access.ACCESS_NO_TOKEN,
-                                    hf_access.ACCESS_GATED):
-                message += " The token is entered in the Classification tab."
-            self.sam3_access_status.setText(f"{icon} {message}")
-
-        self.log(f"Hugging Face access check for {repo}: "
-                 f"{result['status']} - {result['message']}")
-
     def _toggle_frame_marker_interval(self, state):
         """Toggle the frame marker interval spinbox based on checkbox state."""
         self.frame_marker_interval_spin.setEnabled(state)
@@ -7687,12 +7451,6 @@ class BambiDockWidget(QDockWidget):
                     self.fov_start_frame_spin.setRange(0, frame_count - 1)
                     self.fov_end_frame_spin.setRange(0, frame_count - 1)
                     self.fov_end_frame_spin.setValue(frame_count - 1)
-
-                # SAM3 Segmentation
-                if hasattr(self, 'sam3_start_frame_spin'):
-                    self.sam3_start_frame_spin.setRange(0, frame_count - 1)
-                    self.sam3_end_frame_spin.setRange(0, frame_count - 1)
-                    self.sam3_end_frame_spin.setValue(frame_count - 1)
 
             self.log(f"Detected {frame_count} frames available for processing")
 
@@ -7812,8 +7570,7 @@ class BambiDockWidget(QDockWidget):
         ``hf auth login`` - the field stays empty and those are picked up at
         run time, which is why it is a placeholder rather than a default.
         """
-        stored = QgsSettings().value(_HF_TOKEN_SETTING, "", type=str)
-        self.hf_token_edit.setText(stored)
+        self.hf_token_edit.setText(gui_utils_hf.read_hf_token())
 
     # ------------------------------------------------------------------
     # Classifier mapping table
@@ -8144,8 +7901,7 @@ class BambiDockWidget(QDockWidget):
 
     def _save_hf_token(self):
         """Persist the token to the QGIS settings (never to the project)."""
-        QgsSettings().setValue(
-            _HF_TOKEN_SETTING, self.hf_token_edit.text().strip())
+        gui_utils_hf.write_hf_token(self.hf_token_edit.text())
 
     def _toggle_hf_token_echo(self, state):
         """Show or hide the token characters."""
@@ -8824,284 +8580,24 @@ class BambiDockWidget(QDockWidget):
         return {track_id: (x / n, y / n)
                 for track_id, (x, y, n) in sums.items() if n}
 
-    def run_sam3_segmentation(self):
-        """Run SAM3 segmentation step."""
-        config = self.get_config()
-        camera = config.get("sam3_camera", "T")
-
-        # Check if frames exist for selected camera
-        target_folder = config["target_folder"]
-        poses_file = os.path.join(target_folder, f"poses_{'t' if camera == 'T' else 'w'}.json")
-        frames_folder = os.path.join(target_folder, f"frames_{'t' if camera == 'T' else 'w'}")
-
-        if not os.path.exists(poses_file) or not os.path.exists(frames_folder):
-            camera_name = "Thermal" if camera == "T" else "RGB"
-            QMessageBox.warning(
-                self,
-                "Missing Prerequisites",
-                f"{camera_name} frame extraction has not been completed.\n"
-                f"Please run Step 1 (Extract Frames) for {camera_name} first."
-            )
+    def open_segmentation_tool(self):
+        """Open the Segmentation window (the toolbar action owns it)."""
+        action = getattr(self, "_segmentation_tool_action", None)
+        if action is not None:
+            action.trigger()
             return
-
-        # Check API key - only the hosted backend needs one. The local
-        # backend resolves its token at load time and reports a gated or
-        # missing token with the Hugging Face message.
-        if not config.get("sam3_local") and not config.get("sam3_api_key"):
-            QMessageBox.warning(
-                self,
-                "Missing API Key",
-                "Please enter your Roboflow API key in the SAM3 Segmentation "
-                "configuration tab, or tick 'Run SAM3 locally' to use the "
-                "Hugging Face model instead."
-            )
-            return
-
-        # Check prompts
-        if not config.get("sam3_prompts"):
-            QMessageBox.warning(
-                self,
-                "Missing Prompts",
-                "Please enter at least one text prompt in the SAM3 Segmentation configuration tab."
-            )
-            return
-
-        self.start_worker("sam3_segmentation")
-
-    def run_sam3_georeference(self):
-        """Run SAM3 geo-referencing step."""
-        config = self.get_config()
-        sam3_suffix = "t" if config.get("sam3_camera", "T") == "T" else "w"
-
-        # Check if pixel segmentation exists (camera-specific folder)
-        segmentation_file = os.path.join(
-            config["target_folder"], f"segmentation_{sam3_suffix}", "segmentation_pixel.json"
-        )
-
-        if not os.path.exists(segmentation_file):
-            QMessageBox.warning(
-                self,
-                "Missing Prerequisites",
-                "SAM3 segmentation has not been completed.\nPlease run Step 9 (Run SAM3 Segmentation) first."
-            )
-            return
-
-        # Check DEM path
-        if not self.validate_inputs(["dem_path"]):
-            return
-
-        self.start_worker("sam3_georeference")
-
-    def add_sam3_to_qgis(self):
-        """Add SAM3 segmentation masks as QGIS layers.
-
-        Creates a group per frame, with one layer per prompt within each frame.
-        This allows enabling/disabling individual frames.
-        """
-        config = self.get_config()
-        sam3_camera = config.get("sam3_camera", "T")
-        sam3_suffix = "t" if sam3_camera == "T" else "w"
-        camera_label = "Thermal" if sam3_camera == "T" else "RGB"
-        segmentation_folder = os.path.join(config["target_folder"], f"segmentation_{sam3_suffix}")
-        georef_file = os.path.join(segmentation_folder, "segmentation_georef.json")
-
-        if not os.path.exists(georef_file):
-            QMessageBox.warning(
-                self,
-                "Missing Prerequisites",
-                f"{camera_label} SAM3 geo-referencing has not been completed.\n"
-                f"Please run Geo-Reference Segmentation (under step A4) first."
-            )
-            return
-
-        try:
-            self.log(f"Adding {camera_label} SAM3 segmentation to QGIS...")
-            self.update_status("add_sam3", "🟡 Loading...")
-
-            with open(georef_file, 'r', encoding='utf-8') as f:
-                georef_results = json.load(f)
-
-            if not georef_results:
-                QMessageBox.warning(self, "No Results", "No geo-referenced segmentation found.")
-                self.update_status("add_sam3", "🔴 No data")
-                return
-
-            frame_indices = sorted(
-                r.get('frame_idx', 0) for r in georef_results
-            )
-            dlg = FrameRangeDialog(
-                self, frame_indices[0], frame_indices[-1], len(frame_indices), "frames"
-            )
-            if dlg.exec() != QDialog.DialogCode.Accepted:
-                self.update_status("add_sam3", "⚪ Cancelled")
-                return
-
-            start, end = dlg.selected_range()
-            georef_results = [r for r in georef_results if start <= r.get('frame_idx', 0) <= end]
-
-            if not georef_results:
-                QMessageBox.warning(self, "No Results", "No segmentation in selected range.")
-                self.update_status("add_sam3", "🔴 No data")
-                return
-
-            target_crs = QgsCoordinateReferenceSystem(f"EPSG:{config['target_epsg']}")
-
-            all_prompts = set()
-            for frame_result in georef_results:
-                for prompt_data in frame_result.get('prompts', []):
-                    all_prompts.add(prompt_data.get('prompt', 'unknown'))
-
-            prompt_colors = {}
-            colors = [
-                (255, 0, 0),
-                (0, 150, 0),
-                (0, 100, 255),
-                (255, 165, 0),
-                (128, 0, 128),
-                (0, 200, 200),
-                (255, 105, 180),
-                (139, 69, 19),
-            ]
-            for idx, prompt in enumerate(sorted(all_prompts)):
-                prompt_colors[prompt] = colors[idx % len(colors)]
-
-            if len(georef_results) > 50:
-                reply = QMessageBox.question(
-                    self,
-                    "Many Frames",
-                    f"Selected range contains {len(georef_results)} frames with segmentation.\n"
-                    "Creating individual layer groups for each may slow down QGIS.\n\n"
-                    "Continue with individual frame groups?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.Yes
-                )
-                if reply == QMessageBox.StandardButton.No:
-                    self.update_status("add_sam3", "⚪ Cancelled")
-                    return
-
-            main_group = self._create_layer_group(f"SAM3 Segmentation ({camera_label})")
-
-            total_polygons = 0
-            total_frames_added = 0
-
-            # Process each frame
-            for frame_result in georef_results:
-                frame_idx = frame_result.get('frame_idx', 0)
-                prompts_data = frame_result.get('prompts', [])
-
-                if not prompts_data:
-                    continue
-
-                # Create subgroup for this frame
-                frame_group = main_group.addGroup(f"Frame {frame_idx:04d}")
-
-                # Create a layer for each prompt in this frame
-                for prompt_data in prompts_data:
-                    prompt = prompt_data.get('prompt', 'unknown')
-                    predictions = prompt_data.get('predictions', [])
-
-                    if not predictions:
-                        continue
-
-                    # Create layer for this prompt
-                    layer = QgsVectorLayer(
-                        "Polygon?crs=" + target_crs.authid(),
-                        prompt,
-                        "memory"
-                    )
-                    provider = layer.dataProvider()
-                    provider.addAttributes([
-                        QgsField("prompt", QVariant.String),
-                        QgsField("frame", QVariant.Int),
-                        QgsField("confidence", QVariant.Double),
-                        QgsField("polygon_idx", QVariant.Int)
-                    ])
-                    layer.updateFields()
-
-                    features = []
-
-                    for pred_idx, pred in enumerate(predictions):
-                        confidence = pred.get('confidence', 0)
-
-                        for poly_idx, world_polygon in enumerate(pred.get('world_polygons', [])):
-                            if len(world_polygon) < 3:
-                                continue
-
-                            # Create polygon points (use only x, y)
-                            points = [QgsPointXY(pt[0], pt[1]) for pt in world_polygon]
-
-                            # Close the polygon if not closed
-                            if points[0] != points[-1]:
-                                points.append(points[0])
-
-                            feat = QgsFeature()
-                            feat.setGeometry(QgsGeometry.fromPolygonXY([points]))
-                            feat.setAttributes([
-                                prompt,
-                                frame_idx,
-                                round(confidence, 4),
-                                poly_idx
-                            ])
-                            features.append(feat)
-                            total_polygons += 1
-
-                    if features:
-                        provider.addFeatures(features)
-                        layer.updateExtents()
-
-                        # Style the layer
-                        color = prompt_colors.get(prompt, (100, 100, 100))
-                        self._style_sam3_layer(layer, color)
-
-                        # Persist the layer to GeoPackage (use unique name with frame index)
-                        layer_filename = f"SAM3_Frame{frame_idx:04d}_{prompt}"
-                        layer = self._persist_memory_layer(layer, layer_filename, "sam3_layers")
-
-                        # Re-apply style after persistence (style is lost when saving)
-                        self._style_sam3_layer(layer, color)
-
-                        # Add to project and frame group
-                        QgsProject.instance().addMapLayer(layer, False)
-                        frame_group.addLayer(layer)
-
-                # Collapse frame group by default
-                frame_group.setExpanded(False)
-                total_frames_added += 1
-
-            # Keep main group expanded
-            main_group.setExpanded(True)
-
-            self.log(f"Added SAM3 segmentation to QGIS: {total_frames_added} frames, {total_polygons} polygons")
-            self.update_status("add_sam3", "🟢 Completed")
-
-            # Refresh canvas
-            if total_polygons > 0:
-                self.iface.mapCanvas().refresh()
-
-        except Exception as e:
-            self.log(f"Error adding SAM3 layers: {str(e)}")
-            self.update_status("add_sam3", "🔴 Error")
-            QMessageBox.critical(self, "Error", f"Failed to add SAM3 segmentation: {str(e)}")
-
-    def _style_sam3_layer(self, layer, color: tuple):
-        """Apply styling to a SAM3 segmentation layer.
-
-        :param layer: Polygon layer to style
-        :param color: RGB tuple like (255, 0, 0)
-        """
-        from qgis.core import QgsFillSymbol, QgsSingleSymbolRenderer
-
-        try:
-            color_str = f"{color[0]},{color[1]},{color[2]}"
-            symbol = QgsFillSymbol.createSimple({
-                'color': f"{color_str},80",  # Semi-transparent fill
-                'outline_color': f"{color_str},255",
-                'outline_width': '0.8'
-            })
-            layer.setRenderer(QgsSingleSymbolRenderer(symbol))
-            layer.triggerRepaint()
-        except Exception:  # nosec B110
-            pass
+        from .bambi_segmentation_tool import SegmentationToolDialog
+        dlg = getattr(self, "_segmentation_tool_dlg", None)
+        if dlg is None:
+            dlg = SegmentationToolDialog(self.iface, dock_widget=self, parent=self)
+            dlg.finished.connect(
+                lambda _: setattr(self, "_segmentation_tool_dlg", None))
+            self._segmentation_tool_dlg = dlg
+        else:
+            dlg.apply_dock_defaults()
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
 
     def run_flight_route(self):
         """Run flight route generation step."""
@@ -10564,8 +10060,6 @@ class BambiDockWidget(QDockWidget):
             "life_stage": self.life_stage_status,
             "sync_labels": self.sync_labels_status,
             "sam3_segmentation": self.sam3_segment_status,
-            "sam3_georeference": self.sam3_georef_status,
-            "add_sam3": self.add_sam3_status,
             # TRex import runs under the "Track Animals Or Import" step, so its
             # progress is reported on the tracking status label.
             "trex_import": self.track_status,
@@ -10607,8 +10101,6 @@ class BambiDockWidget(QDockWidget):
         self.add_track_perpendicular_btn.setEnabled(enabled)
         self.refresh_status_btn.setEnabled(enabled)
         self.sam3_segment_btn.setEnabled(enabled)
-        self.sam3_georef_btn.setEnabled(enabled)
-        self.add_sam3_btn.setEnabled(enabled)
         if hasattr(self, 'density_btn'):
             self.density_btn.setEnabled(enabled)
             self.add_density_btn.setEnabled(enabled)
@@ -13047,8 +12539,8 @@ class BambiDockWidget(QDockWidget):
                            str(getattr(self, "_active_flight_index", 0)))
 
         # Additional corrections are bound to a list widget, not a value
-        # widget, so they are saved separately. The SAM3 API key is
-        # intentionally never saved.
+        # widget, so they are saved separately. Credentials are never
+        # saved here.
         corrections_data = []
         for i in range(self.additional_corrections_list.count()):
             item = self.additional_corrections_list.item(i)

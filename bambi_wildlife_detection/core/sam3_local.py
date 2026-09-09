@@ -78,24 +78,55 @@ def mask_to_polygons(mask, min_area: float = 1.0) -> List[List[List[float]]]:
 # Model
 # ---------------------------------------------------------------------------
 
-def _sam3_classes():
-    """``(Sam3Model, Sam3Processor)``, or a clear error about why not."""
+def transformers_classes(*names: str):
+    """The named ``transformers`` classes, or a clear error about why not.
+
+    ``transformers_classes("Sam3Model", "Sam3Processor")`` returns the two
+    classes; a missing one names the release that first shipped SAM3, because
+    an old-but-installed transformers is the common failure here.
+    """
     try:
         import transformers
     except ImportError as exc:
         from .classification import _transformers_import_message
         raise Sam3LocalError(_transformers_import_message(exc)) from exc
 
-    model_cls = getattr(transformers, "Sam3Model", None)
-    processor_cls = getattr(transformers, "Sam3Processor", None)
-    if model_cls is None or processor_cls is None:
+    classes = tuple(getattr(transformers, name, None) for name in names)
+    if any(cls is None for cls in classes):
         installed = getattr(transformers, "__version__", "unknown")
+        missing = ", ".join(n for n, c in zip(names, classes) if c is None)
         raise Sam3LocalError(
-            f"transformers {installed} has no SAM3 support; local SAM3 needs "
+            f"transformers {installed} has no {missing}; local SAM3 needs "
             f"transformers >= {SAM3_TRANSFORMERS_MIN}. Re-install the "
             "Classification dependencies from the Dependency Manager to "
-            "upgrade, or untick 'Run SAM3 locally' to use Roboflow.")
-    return model_cls, processor_cls
+            "upgrade, or switch the backend to Roboflow.")
+    return classes
+
+
+def _sam3_classes():
+    """``(Sam3Model, Sam3Processor)``, or a clear error about why not."""
+    return transformers_classes("Sam3Model", "Sam3Processor")
+
+
+def pretrained_kwargs(models_dir: str = "",
+                      # "no token supplied" is a state, not a credential.
+                      token: str = "",  # nosec B107
+                      revision: str = "") -> Dict:
+    """Keyword arguments for ``from_pretrained`` shared by every SAM3 class.
+
+    The checkpoint lands in the same Hugging Face cache the DINOv3 backbone
+    uses (*models_dir*), so one download serves every project and every
+    SAM3 head - image, tracker and video all read ``facebook/sam3``.
+    """
+    cache_dir = hf_access.backbone_cache_dir(models_dir) if models_dir else None
+    if cache_dir:
+        os.makedirs(cache_dir, exist_ok=True)
+    kwargs = {"token": token or None}
+    if cache_dir:
+        kwargs["cache_dir"] = cache_dir
+    if revision:
+        kwargs["revision"] = revision
+    return kwargs
 
 
 class LocalSam3:
@@ -134,16 +165,7 @@ class LocalSam3:
         model_cls, processor_cls = _sam3_classes()
         self.device = resolve_device(self.device_preference)
 
-        cache_dir = (hf_access.backbone_cache_dir(self.models_dir)
-                     if self.models_dir else None)
-        if cache_dir:
-            os.makedirs(cache_dir, exist_ok=True)
-
-        kwargs = {"token": self.token or None}
-        if cache_dir:
-            kwargs["cache_dir"] = cache_dir
-        if self.revision:
-            kwargs["revision"] = self.revision
+        kwargs = pretrained_kwargs(self.models_dir, self.token, self.revision)
 
         if self._log:
             self._log(f"Loading {self.model_id} on {self.device}… (the "

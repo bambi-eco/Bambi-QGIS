@@ -103,10 +103,16 @@ def test_syncing_labels_is_a_sub_step(dock):
     assert dock.sync_labels_btn.text().strip().startswith("→")
 
 
-def test_segmentation_geo_referencing_is_a_sub_step(dock):
-    """It follows SAM3 segmentation exactly as geo-referencing follows A1."""
-    assert dock.sam3_georef_btn.text().strip().startswith("→")
-    assert dock.sam3_georef_btn.parent() is dock.sam3_segment_btn.parent()
+def test_segmentation_is_one_button_that_opens_the_tool(dock):
+    """Prompting is interactive, so S1 opens the Segmentation window.
+
+    Geo-referencing, the QGIS layers and the GeoJSON export of the masks
+    live in that window too; the panel carries no sub-steps for them.
+    """
+    assert "Segmentation Tool" in dock.sam3_segment_btn.text()
+    assert not hasattr(dock, "sam3_georef_btn")
+    assert not hasattr(dock, "add_sam3_btn")
+    assert hasattr(dock, "open_segmentation_tool")
 
 
 def test_pre_processing_steps_share_a_parent(dock):

@@ -29,6 +29,48 @@ class TestDialogsConstruct:
         assert isinstance(dlg, QDialog)
         _close(dlg)
 
+    def test_segmentation_tool(self, iface, dock):
+        from bambi_wildlife_detection.bambi_segmentation_tool import (
+            SegmentationToolDialog)
+        dlg = SegmentationToolDialog(iface, dock)
+        assert isinstance(dlg, QDialog)
+        # Every backend can be selected without a model installed.
+        for index in range(dlg.backend_combo.count()):
+            dlg.backend_combo.setCurrentIndex(index)
+        _close(dlg)
+
+    def test_segmentation_tool_shares_the_hf_token_with_the_dock(self, iface, dock):
+        """One gated-model credential, typed once, in either place."""
+        from bambi_wildlife_detection.bambi_segmentation_tool import (
+            SegmentationToolDialog)
+        from bambi_wildlife_detection.gui_utils import read_hf_token
+
+        before = read_hf_token()
+        try:
+            dock.hf_token_edit.setText("hf_from_dock")
+            dock._save_hf_token()
+            dlg = SegmentationToolDialog(iface, dock)
+            assert dlg.hf_token_edit.text() == "hf_from_dock"
+
+            dlg.hf_token_edit.setText("hf_from_tool")
+            dlg._on_hf_token_edited()
+            assert dock.hf_token_edit.text() == "hf_from_tool"
+            assert read_hf_token() == "hf_from_tool"
+            assert dlg._hf_token() == "hf_from_tool"
+
+            # The token field is a local-backend affair; Roboflow has its own key.
+            from bambi_wildlife_detection.core import segmentation as seg
+            dlg.backend_combo.setCurrentIndex(
+                dlg.backend_combo.findData(seg.BACKEND_ROBOFLOW))
+            assert dlg.hf_token_row_widget.isHidden()
+            dlg.backend_combo.setCurrentIndex(
+                dlg.backend_combo.findData(seg.BACKEND_TRANSFORMERS))
+            assert not dlg.hf_token_row_widget.isHidden()
+            _close(dlg)
+        finally:
+            dock.hf_token_edit.setText(before)
+            dock._save_hf_token()
+
     def test_video_creator(self, iface, dock):
         from bambi_wildlife_detection.bambi_video_creator import VideoCreatorDialog
         dlg = VideoCreatorDialog(iface, dock)

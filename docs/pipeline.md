@@ -62,7 +62,6 @@ Before starting processing, configure per-step settings in the **Configuration**
 - **Extraction**: Frame skip, limit, sampling rate, and thermal visualisation (see below)
 - **Detection**: Confidence threshold, thermal/RGB model paths
 - **Tracking**: Backend selection, IoU threshold, interpolation, TRex tracklet import
-- **SAM3**: Roboflow API key for segmentation
 - **ALFS**: Resolution, tile size
 - **Correction factors**: Translation and rotation offsets for geo-referencing
 - **Flight route**: Frame marker interval, distance marker interval
@@ -104,7 +103,7 @@ The steps live on two tabs, split by what they depend on:
 | Tab | Steps | Depends on |
 |---|---|---|
 | **Pre-Processing** | P1 Extract Frames, P2 Generate Flight Route, P3 Calculate Field of View, P4 Generate ALFS, P5 Export Frames as GeoTIFF, P6 Generate Orthomosaic | the drone poses and the DEM - **no animals involved** |
-| **Processing** | Three sections: *Detection and Tracking* (A1 Detect Animals with geo-referencing and perpendicular distances, A2 Track Animals Or Import), *Classification* (C1–C7), and *Segmentation* (S1 SAM3 with its geo-referencing) | the detections |
+| **Processing** | Three sections: *Detection and Tracking* (A1 Detect Animals with geo-referencing and perpendicular distances, A2 Track Animals Or Import), *Classification* (C1–C7), and *Segmentation* (S1 opens the [Segmentation Tool](tools.md#segmentation-tool)) | the detections |
 
 The numbering is prefixed so a bare number cannot mean two different steps.
 They are *not* one sequence: only P1 is a prerequisite for the Processing tab.
@@ -398,6 +397,8 @@ Areas come from the **geo-referenced** boxes where geo-referencing has run, whic
 
 On a flight with only a handful of animals the test declines to call one, because the candidate sits in the lower half of the distribution and so widens the very spread it is measured against. The log says so rather than reporting a bare "no juvenile found": a cautious answer and an empty one look identical otherwise.
 
+Each camera is measured as **its own cohort** - a thermal sensor and an RGB sensor frame the same animal differently, so their areas are never pooled. Where tracks have been matched across cameras (A3), a juvenile found on one camera is **carried onto its partner track** on the other. The thermal cohort is often the one that cannot confirm a calf: it holds every warm blob the detector tracked, species-less and frequently one frame long, which pads out the lower end of the distribution until an animal at half the median is nothing special - while among the RGB deer the same animal is a clear outlier. Only size verdicts move: an animal a classifier called keeps that answer, *adult* is never carried because it is the absence of an outlier rather than a finding, and a camera the stage did not measure receives nothing. The carried verdict records which partner it came from, and the track inventory shows it as `matched RGB track N` in the `age_source` column.
+
 **Outputs:**
 ```
 bambi_t/classification.gpkg
@@ -405,26 +406,15 @@ bambi_t/classification.gpkg
 └── track_predictions    # per animal: the call, and the vote behind it
 ```
 
-### S1. Run SAM3 Segmentation
+### S1. Open Segmentation Tool
 
-Segments individual detected objects from aerial images using Roboflow's SAM3 API. Recommended for RGB imagery.
-
-> **Requires a Roboflow API key**: enter it in the **Configuration → SAM3** tab (Roboflow API Configuration group). The key is masked by default; use the "Show API key" checkbox to verify it.
+Segmentation is interactive - a prompt, a look at the mask, another click - so it is a window of its own rather than a step: the [Segmentation Tool](tools.md#segmentation-tool), also on the toolbar. It prompts SAM3 / SAM 3.1 with **text** ("deer") or **clicked points** on the extracted frames of either camera, on single frames or **tracked across a sequence**, through the Roboflow API, `transformers`, or Meta's official `sam3` package. The window also geo-references the masks onto the DEM, adds them as QGIS layers and exports them as GeoJSON.
 
 **Outputs:**
 ```
-segmentation_t/    # or segmentation_w/ depending on camera selection
-└── segmentation_pixel.json    # Pixel-space segmentation masks
-```
-
-#### → Geo-Reference Segmentation
-
-Projects SAM3 pixel-space segmentation masks to world coordinates using the DEM.
-
-**Outputs:**
-```
-segmentation_t/    # or segmentation_w/ depending on camera selection
-└── segmentation_georef.json    # UTM-coordinate segmentation polygons
+segmentation_t/    # or segmentation_w/ depending on the camera
+├── segmentation_pixel.json     # Pixel-space mask polygons per frame and prompt
+└── segmentation_georef.json    # The same polygons in UTM coordinates (after geo-referencing)
 ```
 
 ![Segmentation Output](../images/segmentations.png)

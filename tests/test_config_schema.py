@@ -245,14 +245,21 @@ class TestExpectedContent:
     def test_known_sections_present(self):
         prefixes = {k.split("/")[0] for k in cs.CONFIG_KEYS}
         assert {"Input", "Detection", "Tracking", "FoV", "ALFS",
-                "Ortho", "SAM3", "FlightRoute", "Correction",
+                "Ortho", "FlightRoute", "Correction",
                 "Extraction", "TRex", "Config"} <= prefixes
+
+    def test_segmentation_settings_left_the_project(self):
+        # The Segmentation tool keeps backend/model/prompts in QSettings:
+        # they describe the user's machine, not the flight.
+        assert not any(k.startswith("SAM3/") for k in cs.CONFIG_KEYS)
+        assert not any(attr.startswith("sam3_")
+                       for attr, _role in cs.WIDGET_BINDINGS.values())
 
     def test_target_crs_binds_to_crs_role(self):
         # the CRS default-fallback behaviour lives in the dock's crs role
         assert cs.WIDGET_BINDINGS["Input/TargetCrs"] == ("target_crs_edit", "crs")
 
     def test_api_key_not_in_schema(self):
-        # SAM3 API key is intentionally never persisted
+        # Credentials (Roboflow key, Hugging Face token) are never persisted
         assert not any("apikey" in k.lower() or "api_key" in k.lower()
                        for k in cs.CONFIG_KEYS)

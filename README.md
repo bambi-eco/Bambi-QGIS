@@ -13,6 +13,7 @@ Detect, track, and geo-reference wildlife in aerial drone recordings, directly i
 
 - **Detect & track animals**: YOLO-based detection (model auto-downloaded from HuggingFace) and multi-object tracking with built-in, BoxMOT, or geo-referenced backends; pre-computed [TRex](https://trex.run) tracklets can be imported instead of running a tracker
 - **Geo-reference everything**: detections, tracks, and SAM3 segmentations are projected onto a DEM to real-world UTM coordinates
+- **Segment by prompt**: a Segmentation tool runs SAM3 / SAM 3.1 on the extracted frames (thermal or RGB) with text or clicked point prompts, per frame or tracked across a sequence - locally through `transformers` or Meta's `sam3` package, or through the Roboflow API - and exports the masks as GeoJSON
 - **Label manually**: key-frame based labelling tool to review results on the extracted frames (thermal or RGB) and to create or correct MOT-style track annotations with species/sex/age/occlusion classes, interpolation between key frames, geo-referenced box propagation, and export back into the detection pipeline
 - **Survey analytics**: perpendicular distance sampling from detections/tracks to the flight route, per-frame camera field-of-view footprints, coverage areas, kernel-density heatmaps of animal locations, and line-transect distance-sampling density/abundance estimation with confidence intervals
 - **Map products**: georeferenced per-frame GeoTIFFs, true orthomosaics, and Airborne Light Field Sampling (ALFS) mosaics
@@ -39,7 +40,7 @@ Optional capabilities (GPU inference, BoxMOT trackers, camera calibration via Sf
 3. Adjust per-step settings in the **Configuration** tab (detection confidence, tracker backend, thermal colormaps, …)
 4. Run the steps in the **Pre-Processing** tab (**P1. Extract Frames** to
    **P6. Generate Orthomosaic**) and the **Processing** tab (**A1. Detect
-   Animals** to **A3. Run SAM3 Segmentation**). Pre-Processing derives
+   Animals** to **C5**, plus **S1. Open Segmentation Tool**). Pre-Processing derives
    from the drone poses and the DEM and is independent of any animal;
    Processing depends on the detections, so the two can be run separately
 5. Use the **→ Add … to QGIS** buttons after each step to load the results as styled layers, grouped under the flight's name

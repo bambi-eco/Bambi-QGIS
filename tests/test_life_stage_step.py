@@ -18,15 +18,18 @@ from bambi_wildlife_detection.core import (
 HERD = [400, 1000, 1010, 1020, 1030, 1040, 1050]
 
 
-@pytest.fixture
-def flight(tmp_path):
-    root = str(tmp_path)
-    store.open_store(store.project_path(root), store.PROJECT).close()
+# The same herd as a camera without a size outlier sees it: nobody stands
+# out, so the size test alone calls everyone adult.
+FLAT_HERD = [980, 1000, 1010, 1020, 1030, 1040, 1050]
 
+
+def _populate(root, modality, herd):
+    """One track per herd entry, three boxes each, on *modality*."""
     conn = store.open_store(
-        store.stage_path(root, store.DETECTIONS, "t"), store.DETECTIONS, "t")
+        store.stage_path(root, store.DETECTIONS, modality),
+        store.DETECTIONS, modality)
     with store.transaction(conn):
-        for index, area in enumerate(HERD):
+        for index, area in enumerate(herd):
             side = area ** 0.5
             # Three detections per track, so the median is well defined.
             for _ in range(3):
@@ -39,12 +42,40 @@ def flight(tmp_path):
 
     members = []
     detection_id = 1
-    for index in range(len(HERD)):
+    for index in range(len(herd)):
         for _ in range(3):
             members.append({"track_id": index + 1,
                             "detection_id": detection_id})
             detection_id += 1
-    track_store.record_tracks(root, "t", members)
+    track_store.record_tracks(root, modality, members)
+
+
+@pytest.fixture
+def flight(tmp_path):
+    root = str(tmp_path)
+    store.open_store(store.project_path(root), store.PROJECT).close()
+    _populate(root, "t", HERD)
+    return root
+
+
+@pytest.fixture
+def pair(tmp_path):
+    """Both cameras tracked and matched track-for-track.
+
+    The RGB herd has the juvenile at track 1; the thermal herd is the same
+    animals seen without a size outlier, as a thermal cohort padded with warm
+    blobs tends to be.
+    """
+    from bambi_wildlife_detection.core import match_store
+
+    root = str(tmp_path)
+    store.open_store(store.project_path(root), store.PROJECT).close()
+    _populate(root, "t", FLAT_HERD)
+    _populate(root, "w", HERD)
+    match_store.record_matches(root, [
+        {"track_id_t": index + 1, "track_id_w": index + 1, "shared": 3,
+         "median_dist": 0.2, "conf_t": 0.9, "conf_w": 0.9}
+        for index in range(len(HERD))])
     return root
 
 
@@ -71,10 +102,19 @@ def _run(root, **overrides):
     return logs
 
 
-def _labels(root):
+def _labels(root, modality="t"):
     return {row["track_id"]: row["label"] for row in
             classification_store.track_predictions(
-                root, "t", classification_store.LIFE_STAGE)}
+                root, modality, classification_store.LIFE_STAGE)}
+
+
+def _rows(root, modality):
+    return {row["track_id"]: row for row in
+            classification_store.track_predictions(
+                root, modality, classification_store.LIFE_STAGE)}
+
+
+MATCHED = {"life_stage": {"modality": "matched"}}
 
 
 # ---------------------------------------------------------------------------
@@ -384,3 +424,93 @@ def test_a_never_configured_selection_measures_by_default(flight):
     assert not any("nothing to measure" in line for line in logs)
     called = _labels(flight)
     assert 1 in called and 2 in called
+
+
+# ---------------------------------------------------------------------------
+# One animal, two cameras
+# ---------------------------------------------------------------------------
+
+def test_a_juvenile_found_on_one_camera_reaches_its_matched_track(pair):
+    """Matching says the two tracks are one animal, so an outlier on the RGB
+    side is evidence about the thermal track too."""
+    logs = _run(pair, classification_models=MATCHED)
+
+    assert _labels(pair, "w")[1] == life_stage.JUVENILE
+    thermal = _labels(pair, "t")
+    assert thermal[1] == life_stage.JUVENILE
+    assert all(label == life_stage.ADULT
+               for track_id, label in thermal.items() if track_id != 1)
+    assert any("takes the juvenile call" in line for line in logs)
+
+
+def test_the_carried_call_names_its_source(pair):
+    _run(pair, classification_models=MATCHED)
+
+    row = _rows(pair, "t")[1]
+    # Still a size verdict, so a re-run recomputes rather than protects it.
+    assert row["model"] == classification_store.SIZE_MODEL
+    assert row["evidence"]["partner_track"] == 1
+    assert row["evidence"]["partner_camera"] == "RGB"
+    assert row["evidence"]["own_label"] == life_stage.ADULT
+    assert row["evidence"]["source"] == "matched RGB track 1"
+    # The other thermal animals keep the measurement as their source.
+    assert _rows(pair, "t")[2]["evidence"]["source"] == life_stage.AREA_PIXEL
+
+
+def test_the_carried_call_reaches_the_track_age_field(pair):
+    import json as _json
+    from bambi_wildlife_detection.core import label_store
+
+    _run(pair, classification_models=MATCHED)
+    juvenile = label_store.vocabulary(pair)["enum_ids"]["age"]["juvenile"]
+
+    conn = store.open_store(
+        store.stage_path(pair, store.TRACKS, "t"), store.TRACKS, "t")
+    try:
+        attributes = conn.execute(
+            "SELECT attributes FROM tracks WHERE track_id = 1").fetchone()[0]
+    finally:
+        conn.close()
+    assert _json.loads(attributes)["age"] == juvenile
+
+
+def test_a_rerun_carries_the_call_again_rather_than_stacking_it(pair):
+    _run(pair, classification_models=MATCHED)
+    _run(pair, classification_models=MATCHED)
+
+    rows = _rows(pair, "t")
+    assert len(rows) == len(FLAT_HERD)
+    assert rows[1]["label"] == life_stage.JUVENILE
+    assert rows[1]["evidence"]["own_label"] == life_stage.ADULT
+
+
+def test_a_classifier_call_beats_a_carried_size_call(pair):
+    classification_store.record_track_predictions(
+        pair, "t", classification_store.LIFE_STAGE, [
+            {"track_id": 1, "label": "adult", "votes": 9, "n": 10,
+             "fraction": 0.9, "model": "life_stage_matched.pt"}])
+    _run(pair, classification_models=MATCHED)
+
+    row = _rows(pair, "t")[1]
+    assert row["label"] == life_stage.ADULT
+    assert row["model"] == "life_stage_matched.pt"
+
+
+def test_without_matches_nothing_is_carried(tmp_path):
+    root = str(tmp_path)
+    store.open_store(store.project_path(root), store.PROJECT).close()
+    _populate(root, "t", FLAT_HERD)
+    _populate(root, "w", HERD)
+    _run(root, classification_models=MATCHED)
+
+    assert _labels(root, "w")[1] == life_stage.JUVENILE
+    assert _labels(root, "t")[1] == life_stage.ADULT
+
+
+def test_an_unmeasured_camera_receives_nothing(pair):
+    """The stage set to RGB only measures RGB; the thermal tracks were never
+    assessed, so there is no size verdict to amend."""
+    _run(pair, classification_models={"life_stage": {"modality": "rgb"}})
+
+    assert _labels(pair, "w")[1] == life_stage.JUVENILE
+    assert _labels(pair, "t") == {}

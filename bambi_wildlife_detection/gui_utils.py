@@ -39,6 +39,23 @@ PLUGIN_SCOPE = "BambiWildlifeDetection"
 _ALFS_ENGINE_ENTRY = "Processing/AlfsEngine"
 _ALFS_RAYCASTER_ENTRY = "Processing/AlfsRaycaster"
 
+#: The Hugging Face token, in the user's QGIS settings - never in a project
+#: file, which gets shared. One key serves the Classification tab and the
+#: Segmentation tool: both download gated Meta models with it.
+HF_TOKEN_SETTING = f"{PLUGIN_SCOPE}/classification/hfToken"
+
+
+def read_hf_token() -> str:
+    """The stored token, or ``""`` (the environment / ``hf auth login`` are
+    consulted at run time by ``core.hf_access.resolve_token``)."""
+    from qgis.core import QgsSettings
+    return QgsSettings().value(HF_TOKEN_SETTING, "", type=str) or ""
+
+
+def write_hf_token(token: str) -> None:
+    from qgis.core import QgsSettings
+    QgsSettings().setValue(HF_TOKEN_SETTING, (token or "").strip())
+
 
 def read_alfs_selection():
     """The project's ``(engine, raycaster)``, falling back to the defaults.

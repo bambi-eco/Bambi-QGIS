@@ -200,8 +200,8 @@ class DependencyManagerDialog(QDialog):
                 label='Transformers + Hugging Face Hub',
                 desc=(
                     'DINOv3 feature extraction for the occlusion, species and '
-                    'sex classifiers, and local SAM3 segmentation (transformers '
-                    '>= 5.0). Both models are gated on Hugging Face - request '
+                    "sex classifiers, and the Segmentation tool's local SAM3 "
+                    '(transformers >= 5.0). Both models are gated on Hugging Face - request '
                     'access and enter a token in the Classification '
                     'configuration tab.'
                 ),
@@ -682,10 +682,12 @@ class DependencyManagerDialog(QDialog):
             log_fn('then enter a read token in the Classification tab and press')
             log_fn('"Check access". The backbone (~3.3 GB) downloads on first use.')
             log_fn('')
-            log_fn('The same token serves local SAM3 segmentation (facebook/sam3,')
+            log_fn('The same token serves the Segmentation tool (facebook/sam3,')
             log_fn('also gated, ~3.4 GB): request access at')
             log_fn('  https://huggingface.co/facebook/sam3')
-            log_fn('and tick "Run SAM3 locally" in the SAM3 Segmentation tab.')
+            log_fn('and choose the transformers backend in the Segmentation tool.')
+            log_fn("SAM 3.1 needs Meta's own sam3 package instead:")
+            log_fn('  pip install git+https://github.com/facebookresearch/sam3.git')
         self._start_worker('classification', _do)
 
     def _install_gpu(self):

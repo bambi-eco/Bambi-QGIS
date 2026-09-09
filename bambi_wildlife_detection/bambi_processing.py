@@ -2623,8 +2623,86 @@ class BambiProcessor:
                 config, suffix,
                 progress_fn=_slice_progress(progress_fn, index, len(targets)),
                 log_fn=log_fn, cancel_check=cancel_check)
+        self._share_life_stage_across_cameras(config, log_fn=log_fn)
         if progress_fn:
             progress_fn(100)
+
+    def _share_life_stage_across_cameras(self, config: Dict[str, Any],
+                                         log_fn=None) -> None:
+        """Carry a juvenile call onto the matched track of the other camera.
+
+        Track matching says the two tracks are one animal, and a size outlier
+        on one sensor is evidence about the animal, not about the sensor. The
+        thermal cohort is usually the one that cannot confirm it: it holds
+        every warm blob the detector tracked - species-less, often one frame
+        long - which pads out the lower end of the distribution until a calf
+        at half the median is nothing special, while among the RGB deer the
+        same animal is a clear outlier.
+
+        Only size verdicts move. An animal a life-stage classifier called
+        keeps that answer, and *adult* is never carried, because an adult
+        call is the absence of an outlier rather than a finding. A track that
+        was not measured on its own camera is left alone too, so the
+        per-species choice of what to measure still holds.
+        """
+        from .core import classification_store, life_stage, match_store
+
+        target_folder = config["target_folder"]
+        if not match_store.has_store(target_folder):
+            return
+        partners = {suffix: match_store.partner_tracks(target_folder, suffix)
+                    for suffix in ("t", "w")}
+        if not any(partners.values()):
+            return
+
+        # One snapshot before anything is rewritten, so a call carried onto
+        # one camera is not read back as fresh evidence for the other.
+        calls = {suffix: classification_store.track_predictions(
+                     target_folder, suffix, classification_store.LIFE_STAGE)
+                 for suffix in ("t", "w")}
+
+        for suffix, other in (("t", "w"), ("w", "t")):
+            juveniles_there = {
+                int(row["track_id"]) for row in calls[other]
+                if row["label"] == life_stage.JUVENILE}
+            if not juveniles_there or not calls[suffix]:
+                continue
+            carried = 0
+            for row in calls[suffix]:
+                if row.get("model") != classification_store.SIZE_MODEL:
+                    continue
+                if row["label"] == life_stage.JUVENILE:
+                    continue
+                partner = partners[suffix].get(int(row["track_id"]))
+                if partner not in juveniles_there:
+                    continue
+                evidence = dict(row.get("evidence") or {})
+                evidence.update({
+                    "own_label": row["label"],
+                    "own_source": evidence.get("source"),
+                    "partner_track": int(partner),
+                    "partner_camera": _modality_label(other),
+                    "source": (f"matched {_modality_label(other)} track "
+                               f"{int(partner)}"),
+                })
+                row["label"] = life_stage.JUVENILE
+                row["evidence"] = evidence
+                carried += 1
+                if log_fn:
+                    log_fn(f"Life stage: {_modality_label(suffix)} track "
+                           f"{int(row['track_id'])} takes the juvenile call "
+                           f"of its matched {_modality_label(other)} track "
+                           f"{int(partner)} - its own {evidence['own_source']} "
+                           "size did not stand out from the "
+                           f"{_modality_label(suffix)} cohort")
+            if not carried:
+                continue
+            classification_store.record_track_predictions(
+                target_folder, suffix, classification_store.LIFE_STAGE,
+                calls[suffix], log_fn=log_fn)
+            self._apply_classification_results(
+                config, suffix, [classification_store.LIFE_STAGE],
+                log_fn=log_fn)
 
     def _life_stage_modality(self, config: Dict[str, Any], suffix: str,
                              progress_fn=None, log_fn=None, cancel_check=None):
@@ -9264,14 +9342,12 @@ class BambiProcessor:
     # =========================================================================
 
     def run_sam3_segmentation(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
-        """Run SAM3 concept segmentation on the extracted frames.
+        """Run SAM3 text-prompt segmentation on the extracted frames.
 
-        Two backends write the same ``segmentation_pixel.json``:
-
-        * Roboflow's hosted endpoint (the default) - needs ``sam3_api_key``.
-        * A local ``transformers`` model (``sam3_local``) - the gated
-          ``facebook/sam3`` checkpoint, fetched with ``hf_token`` into the
-          shared model cache, exactly like the DINOv3 backbone.
+        A thin, config-driven wrapper around :mod:`core.segmentation`, kept
+        for scripts and tests that drive the pipeline by step name. The
+        Segmentation tool in the toolbar is the interactive front end and
+        adds point prompts and sequence tracking on top of the same core.
 
         Expects:
           config["target_folder"]
@@ -9281,259 +9357,52 @@ class BambiProcessor:
               (local backend; the model defaults to facebook/sam3)
           config["sam3_prompts"] (list[str])
           config["sam3_confidence"] (float, default 0.5)
-          config["sam3_format"] (str: "polygon" | "rle" | "json", default "polygon")
 
           Optional frame filters:
             sam3_use_all_frames, sam3_start_frame, sam3_end_frame, sam3_step
         """
-        import os
-        import json
-        import base64
+        from .core import segmentation as seg
 
         camera = config.get("sam3_camera", "T")
-        camera_suffix = "t" if camera == "T" else "w"
-        camera_name = "Thermal" if camera == "T" else "RGB"
-
+        modality = "t" if camera == "T" else "w"
         target_folder = config["target_folder"]
         use_local = bool(config.get("sam3_local", False))
         api_key = config.get("sam3_api_key", "")
-        prompts = config.get("sam3_prompts", [])
-        confidence = float(config.get("sam3_confidence", 0.5))
-        output_format = config.get("sam3_format", "polygon")  # FIX: was undefined in your code
-
-        # Frame filter options (use start/end frame like alfs)
-        use_all_frames = config.get("sam3_use_all_frames", True)
-        start_frame = int(config.get("sam3_start_frame", 0))
-        end_frame = int(config.get("sam3_end_frame", 999999))
-        frame_step = int(config.get("sam3_step", 1))
-
-        # Set frames folder based on camera selection
-        frames_folder = os.path.join(target_folder, f"frames_{camera_suffix}")
+        prompts = [p for p in config.get("sam3_prompts", []) if p]
 
         if not use_local and not api_key:
             raise ValueError("Roboflow API key is required for SAM3 segmentation")
         if not prompts:
             raise ValueError("At least one text prompt is required for SAM3 segmentation")
-        if frame_step < 1:
+        if int(config.get("sam3_step", 1)) < 1:
             raise ValueError("sam3_step must be >= 1")
 
+        images = seg.pose_images(target_folder, modality)
+        frames = seg.select_frames(
+            len(images), bool(config.get("sam3_use_all_frames", True)),
+            int(config.get("sam3_start_frame", 0)),
+            int(config.get("sam3_end_frame", 999999)),
+            int(config.get("sam3_step", 1)))
+        request = seg.SegmentationRequest(
+            target_folder=target_folder, modality=modality,
+            backend=seg.BACKEND_TRANSFORMERS if use_local else seg.BACKEND_ROBOFLOW,
+            mode=seg.MODE_IMAGE, frames=frames, texts=prompts,
+            confidence=float(config.get("sam3_confidence", 0.5)),
+            model=config.get("sam3_model", ""), api_key=api_key,
+            hf_token=config.get("hf_token", ""),
+            device=config.get("classification_device", "auto"),
+            models_dir=self._get_default_model_dir())
+
+        try:
+            results = seg.run_segmentation(
+                request, progress_fn=progress_fn, log_fn=log_fn,
+                cancel_check=cancel_check)
+        except seg.CancelledError as exc:
+            raise CancelledException(str(exc)) from exc
+
+        output_file = seg.SegmentationStore(target_folder, modality).save_pixel(results)
         if log_fn:
-            log_fn(
-                f"Starting SAM3 segmentation on {camera_name} frames "
-                f"({'local transformers model' if use_local else 'Roboflow serverless'})"
-                f" with {len(prompts)} prompts: {prompts}"
-            )
-            log_fn(f"Confidence threshold: {confidence}")
-            log_fn(f"Output format: {output_format}")
-
-        if progress_fn:
-            progress_fn(5)
-
-        # Load poses for selected camera
-        poses_file = os.path.join(target_folder, f"poses_{camera_suffix}.json")
-        if not os.path.exists(poses_file):
-            raise FileNotFoundError(f"poses_{camera_suffix}.json not found - run frame extraction first")
-
-        with open(poses_file, "r", encoding="utf-8") as f:
-            poses = json.load(f)
-
-        images = poses.get("images", [])
-        if not images:
-            raise ValueError(f"No frames found in poses_{camera_suffix}.json")
-
-        # Create output folder (camera-specific)
-        segmentation_folder = os.path.join(target_folder, f"segmentation_{camera_suffix}")
-        os.makedirs(segmentation_folder, exist_ok=True)
-
-        # Hosted SAM3 concept segmentation endpoint (serverless)
-        # Docs show: https://serverless.roboflow.com/sam3/concept_segment?api_key=...
-        # :contentReference[oaicite:3]{index=3}
-        endpoint = "https://serverless.roboflow.com/sam3/concept_segment"
-
-        # The local model is loaded before the frame loop, so a missing
-        # token, an old transformers or a gated repo fails here - in one
-        # message - rather than once per frame in the warnings below.
-        local_model = None
-        if use_local:
-            from .core.sam3_local import LocalSam3
-
-            local_model = LocalSam3(
-                model_id=config.get("sam3_model", ""),
-                models_dir=self._get_default_model_dir(),
-                token=config.get("hf_token", ""),
-                device=config.get("classification_device", "auto"),
-                log_fn=log_fn)
-            local_model.load()
-
-        # Build list of frame indices to process (start/end frame, then step)
-        total_frames = len(images)
-
-        if use_all_frames:
-            frame_indices = list(range(total_frames))
-            if log_fn:
-                log_fn("Frame range: All frames")
-        else:
-            # Clamp end_frame to valid range
-            end_frame_clamped = min(end_frame, total_frames - 1)
-            frame_indices = list(range(start_frame, end_frame_clamped + 1))
-            if log_fn:
-                log_fn(f"Frame range: {start_frame} to {end_frame_clamped}")
-
-        if frame_step > 1:
-            frame_indices = frame_indices[::frame_step]
-            if log_fn:
-                log_fn(f"Frame step: every {frame_step} frames")
-
-        frames_to_process = frame_indices
-
-        if log_fn:
-            log_fn(f"Processing {len(frames_to_process)} {camera_name} frames after filtering...")
-
-        if progress_fn:
-            progress_fn(10)
-
-        def _encode_image_b64(path: str) -> str:
-            # Standard base64 (no data: prefix) is accepted in Roboflow Inference
-            # request image schema. :contentReference[oaicite:4]{index=4}
-            with open(path, "rb") as fimg:
-                return base64.b64encode(fimg.read()).decode("utf-8")
-
-        def _make_payload(image_b64: str) -> Dict[str, Any]:
-            # Matches the SAM3 concept_segment JSON structure from Roboflow docs.
-            # :contentReference[oaicite:5]{index=5}
-            return {
-                "format": output_format,
-                "output_prob_thresh": confidence,
-                # supported by the SAM3 request model :contentReference[oaicite:6]{index=6}
-                "image": {
-                    "type": "base64",
-                    "value": image_b64,
-                },
-                "prompts": [{"type": "text", "text": p} for p in prompts],
-            }
-
-        def _prompt_results_roboflow(image_path: str) -> List[Dict[str, Any]]:
-            """Ask the hosted endpoint; normalise into the shared structure."""
-            payload = _make_payload(_encode_image_b64(image_path))
-            # API key can be passed as query param (as shown in SAM3 serverless
-            # example). :contentReference[oaicite:7]{index=7}
-            resp = session.post(
-                endpoint,
-                params={"api_key": api_key},
-                headers=headers,
-                json=payload,
-                timeout=(10, 120),  # connect/read timeouts
-            )
-            resp.raise_for_status()
-            resp_json = resp.json()
-
-            normalised = []
-            for prompt_result in resp_json.get("prompt_results", []):
-                echo = prompt_result.get("echo", {}) or {}
-                prompt_text = (echo.get("text") or prompt_result.get("prompt") or prompt_result.get("text") or "")
-
-                prompt_data = {
-                    "prompt": prompt_text,
-                    "predictions": [],
-                }
-
-                for prediction in prompt_result.get("predictions", []):
-                    pred_data = {
-                        "confidence": float(prediction.get("confidence", 0.0)),
-                    }
-
-                    masks = prediction.get("masks", None)
-
-                    # For "polygon" format, masks is typically a list of polygons
-                    # (list[list[points]]). :contentReference[oaicite:8]{index=8}
-                    if output_format == "polygon" and masks is not None:
-                        pred_data["polygons"] = masks
-                    else:
-                        # Keep raw masks for other formats (e.g., rle/json)
-                        if masks is not None:
-                            pred_data["masks"] = masks
-
-                    prompt_data["predictions"].append(pred_data)
-
-                normalised.append(prompt_data)
-            return normalised
-
-        def _prompt_results_local(image_path: str) -> List[Dict[str, Any]]:
-            return local_model.segment_path(image_path, prompts, confidence)
-
-        prompt_results_of = (_prompt_results_local if use_local
-                             else _prompt_results_roboflow)
-
-        all_results = []
-
-        # Use a session for connection pooling
-        session = headers = None
-        if not use_local:
-            import requests
-            session = requests.Session()
-            headers = {"Content-Type": "application/json"}
-
-        for idx, frame_idx in enumerate(frames_to_process):
-            # Check for cancellation
-            if cancel_check and cancel_check():
-                if log_fn:
-                    log_fn("SAM3 segmentation cancelled by user")
-                raise CancelledException("SAM3 segmentation cancelled")
-
-            if frame_idx >= len(images):
-                continue
-
-            image_info = images[frame_idx]
-            imagefile = image_info.get("imagefile", "")
-            if not imagefile:
-                continue
-
-            image_path = os.path.join(frames_folder, imagefile)
-            if not os.path.exists(image_path):
-                if log_fn:
-                    log_fn(f"Warning: Frame not found: {image_path}")
-                continue
-
-            try:
-                # Both backends hand back the same structure, so the file
-                # written below does not depend on which one ran.
-                frame_results = {
-                    "frame_idx": frame_idx,
-                    "imagefile": imagefile,
-                    "prompts": prompt_results_of(image_path),
-                }
-                all_results.append(frame_results)
-
-            except Exception as e:
-                if log_fn:
-                    log_fn(f"Warning: Failed to process frame {frame_idx}: {str(e)}")
-                continue
-
-            if progress_fn:
-                # 10..95 range
-                progress = 10 + int(((idx + 1) / max(1, len(frames_to_process))) * 85)
-                progress_fn(min(progress, 95))
-
-            if log_fn and (idx + 1) % 10 == 0:
-                log_fn(f"Processed {idx + 1}/{len(frames_to_process)} frames")
-
-        # Save results
-        output_file = os.path.join(segmentation_folder, "segmentation_pixel.json")
-        with open(output_file, "w", encoding="utf-8") as f:
-            json.dump(all_results, f, indent=2)
-
-        total_predictions = sum(
-            len(p.get("predictions", []))
-            for r in all_results
-            for p in r.get("prompts", [])
-        )
-
-        if log_fn:
-            log_fn(f"SAM3 segmentation complete: {len(all_results)} frames, {total_predictions} predictions")
             log_fn(f"Results saved to: {output_file}")
-
-        if progress_fn:
-            progress_fn(100)
 
     def run_sam3_georeference(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Geo-reference SAM3 segmentation masks.
@@ -9629,6 +9498,7 @@ class BambiProcessor:
         texture_data = None
         tri_mesh = None
         georef_results = []
+        failed_count = 0
 
         try:
             mesh_data, texture_data = read_gltf(dem_path)
@@ -9636,7 +9506,6 @@ class BambiProcessor:
             mesh_data, texture_data = process_render_data(mesh_data, texture_data)
 
             total_frames = len(pixel_results)
-            failed_count = 0
 
             for idx, frame_result in enumerate(pixel_results):
                 # Check for cancellation
@@ -9675,12 +9544,21 @@ class BambiProcessor:
                         'prompt': prompt_data.get('prompt', ''),
                         'predictions': []
                     }
+                    # The Segmentation tool tags each entry with its prompt
+                    # kind and, for clicked or tracked objects, an id; both
+                    # travel with the polygons so the layers can group by
+                    # object rather than by frame.
+                    for key in ('prompt_type', 'object_id'):
+                        if key in prompt_data:
+                            georef_prompt[key] = prompt_data[key]
 
                     for pred in prompt_data.get('predictions', []):
                         georef_pred = {
                             'confidence': pred.get('confidence', 0),
                             'world_polygons': []
                         }
+                        if 'object_id' in pred:
+                            georef_pred['object_id'] = pred['object_id']
 
                         # Process each polygon
                         for polygon in pred.get('polygons', []):

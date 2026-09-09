@@ -53,10 +53,12 @@ def quiet(monkeypatch):
 # The widget
 # ---------------------------------------------------------------------------
 
-def test_every_format_is_offered(dock):
+def test_every_animal_format_is_offered(dock):
+    """The segmentation GeoJSON is exported from the Segmentation tool,
+    next to the masks it belongs to; everything else is offered here."""
     keys = {dock.export_format_combo.itemData(i)
             for i in range(dock.export_format_combo.count())}
-    assert keys == set(exporters.EXPORTERS)
+    assert keys == set(exporters.EXPORTERS) - {"geojson_segmentation"}
 
 
 def test_the_export_button_lives_with_the_animal_steps(dock):

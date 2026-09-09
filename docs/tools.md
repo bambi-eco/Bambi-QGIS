@@ -5,6 +5,7 @@ Besides the main processing pipeline, the plugin ships several companion tools a
 - [Video Creator](#video-creator)
 - [Thermal Image Viewer](#thermal-image-viewer)
 - [Labelling Tool](#labelling-tool)
+- [Segmentation Tool](#segmentation-tool)
 - [Classifier configuration](#classifier-configuration)
 - [Interactive selection tools](#interactive-selection-tools)
 
@@ -138,6 +139,44 @@ Label tracks are also written as **real tracks**, so labelled animals reach the 
 | `S`                     | Toggle stop frame (pause interpolation)    |
 | `Delete`                | Delete the key frame at the current frame  |
 | `Esc`                   | Cancel drawing mode                        |
+
+## Segmentation Tool
+
+The Segmentation Tool prompts Meta's **SAM3** (or **SAM 3.1**) on the extracted frames and turns the masks into geo-referenced polygons. Open it via the **Segmentation Tool** toolbar button, the plugin menu, or **S1** on the Processing tab. Point it at a processing **target folder** (the one with `frames_t/` / `frames_w/`); opened from a configured plugin panel the folder and the DEM are picked up. The **Camera** selector switches between thermal and RGB frames; each keeps its own results in `segmentation_t/` or `segmentation_w/`.
+
+### Backends
+
+| Backend | Prompts | Sequence tracking | Needs |
+|---|---|---|---|
+| **Local - transformers** (`facebook/sam3`) | text, points | yes (`Sam3VideoModel` / `Sam3TrackerVideoModel`) | `transformers >= 5.0`, a Hugging Face read token with access to the gated repository (the **HF token** field - one token shared with the Classification tab, entering it in either place fills both); CPU works, a GPU is much faster |
+| **Local - Meta sam3 package** | text, points | yes - **SAM 3.1** with object multiplexing (~7x faster with many objects) | `pip install git+https://github.com/facebookresearch/sam3.git` (Python >= 3.12, PyTorch >= 2.7, CUDA >= 12.6) and the same token; the SAM 3.1 checkpoint exists only as a bare checkpoint on Hugging Face, so this is the only way to run it |
+| **Remote - Roboflow API** | text | no | a Roboflow API key (kept in QSettings, never in the project) |
+
+**Check access** asks Hugging Face whether the HF token may read the chosen checkpoint before anything is downloaded (~3.4 GB, shared with the classifiers' model cache).
+
+### Prompts
+
+- **Text**: one concept per line (`deer`, `wild boar`). SAM3 finds every instance of each concept; the result is one prompt entry per line.
+- **Points**: left click *on* the object, right click *beside* it (a negative click). Every click belongs to the current **object**; press **New object** for the next animal, and name it if you like. One prompt entry per object is written, named after it.
+
+The two kinds run separately - a text prompt finds all instances of a concept, a point prompt defines one object, and different heads of the model answer them.
+
+### Frames
+
+- **Current frame** segments the frame on the canvas.
+- **Frame range** (from / to / step) segments every selected frame. With **Track across the sequence** ticked the frames are handed to the video tracker as one clip: an object found - or clicked on one frame - keeps its identity on the others and carries an `object_id`. Without it every frame is segmented on its own. For clips the frames are shrunk to SAM3's 1008 px working size in memory and the polygons scaled back, so a few hundred 4K frames stay feasible.
+
+A run **merges** into the existing results: re-running `deer` replaces the deer masks on the frames it processed and leaves `boar` alone; the same holds for a clicked object run again with more points. **Delete results of this camera…** starts over.
+
+### Results
+
+The masks are drawn over the frame, coloured per prompt, with the object id and confidence. Three follow-ups sit below:
+
+- **Geo-reference onto the DEM** projects every polygon through the camera pose onto the DEM mesh (with the flight's correction factors), writing `segmentation_georef.json`. After a new run the geo file is marked *stale* until this is repeated.
+- **Add to QGIS as layers** creates `SAM3 Segmentation (Thermal|RGB)` under the flight's group, one sub-group per frame and one polygon layer per prompt, with `prompt`, `prompt_type`, `object_id`, `frame` and `confidence` attributes.
+- **Export GeoJSON…** writes WGS84 polygons (one feature per object and frame, `MultiPolygon` when a mask fell into several regions) with the same properties.
+
+Backend, model, prompts, confidence and the Roboflow key are remembered in QSettings across sessions; they describe your machine rather than one flight, so they are not written into the project.
 
 ## Classifier configuration
 

@@ -28,8 +28,8 @@ Storage kinds (matching the pre-refactor QgsProject entry usage):
     ``writeEntryBool`` / ``readBoolEntry`` with a typed default.
 
 ``Correction/AdditionalCorrections`` (a JSON list) is intentionally not in
-the table - it is bound to a list widget, not a value widget - and the SAM3
-API key is intentionally never saved.
+the table - it is bound to a list widget, not a value widget. Credentials
+(the Hugging Face token, the Roboflow key) are never saved here.
 """
 
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple
@@ -182,17 +182,11 @@ CONFIG_ENTRIES: List[ConfigEntry] = [
     ConfigEntry("Ortho/AllFrames", "bool", True),
     ConfigEntry("Ortho/StartFrame", "int_double", 0),
     ConfigEntry("Ortho/EndFrame", "int_double", 999999),
-    # ===== SAM3 Settings (API key intentionally NOT saved) =====
-    # Local inference: a gated Hugging Face model, fetched with the token from
-    # the Classification tab (which, being a credential, is not saved here).
-    ConfigEntry("SAM3/Local", "bool", False),
-    ConfigEntry("SAM3/Model", "str", ""),
-    ConfigEntry("SAM3/Prompts", "str"),
-    ConfigEntry("SAM3/Confidence", "double", 0.5),
-    ConfigEntry("SAM3/AllFrames", "bool", True),
-    ConfigEntry("SAM3/StartFrame", "int_double", 0),
-    ConfigEntry("SAM3/EndFrame", "int_double", 999999),
-    ConfigEntry("SAM3/FrameStep", "int_double", 1),
+    # ===== SAM3 =====
+    # Nothing: the Segmentation tool keeps its own settings (backend, model,
+    # prompts) in QSettings, because they belong to the user's machine and
+    # models rather than to one flight. Older projects may still carry
+    # ``SAM3/*`` entries; they are simply no longer read.
     # ===== Classification Settings =====
     # The Hugging Face token is intentionally NOT here: it is a user
     # credential, and this table is written into a project file that gets
@@ -345,14 +339,6 @@ WIDGET_BINDINGS: Dict[str, Tuple[str, str]] = {
     "Ortho/AllFrames": ("ortho_all_frames_check", "check"),
     "Ortho/StartFrame": ("ortho_start_frame_spin", "spin"),
     "Ortho/EndFrame": ("ortho_end_frame_spin", "spin"),
-    "SAM3/Local": ("sam3_local_check", "check"),
-    "SAM3/Model": ("sam3_model_edit", "text"),
-    "SAM3/Prompts": ("sam3_prompts_edit", "text"),
-    "SAM3/Confidence": ("sam3_confidence_spin", "spin"),
-    "SAM3/AllFrames": ("sam3_all_frames_check", "check"),
-    "SAM3/StartFrame": ("sam3_start_frame_spin", "spin"),
-    "SAM3/EndFrame": ("sam3_end_frame_spin", "spin"),
-    "SAM3/FrameStep": ("sam3_step_spin", "spin"),
     "Classification/Backbone": ("classification_backbone_edit", "line"),
     "Classification/Device": ("classification_device_combo", "combo_index"),
     "Classification/BatchSize": ("classification_batch_spin", "spin"),
