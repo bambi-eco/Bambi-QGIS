@@ -160,26 +160,37 @@ class LocalSam3:
         if self._model is not None:
             return
         from .classification import (
-            _load_failure_message, describe_device, resolve_device)
+            DownloadReporter, _load_failure_message, describe_cache,
+            describe_device, resolve_device)
 
         model_cls, processor_cls = _sam3_classes()
         self.device = resolve_device(self.device_preference)
 
         kwargs = pretrained_kwargs(self.models_dir, self.token, self.revision)
+        cache_dir = kwargs.get("cache_dir")
 
         if self._log:
-            self._log(f"Loading {self.model_id} on {self.device}… (the "
-                      "checkpoint is ~3.4 GB, so a first run downloads for "
-                      "a while)")
+            self._log(f"Loading {self.model_id} on {self.device}…")
+        # Minutes can pass between "Loading" and "ready" on a first run, so
+        # say whether that is a download and how far it has got - the same
+        # cache-folder sampling the DINOv3 backbone reports with.
+        with hf_access.token_environment(self.token):
+            cached = describe_cache(self.model_id, cache_dir, self.revision,
+                                    self.token or None, log_fn=self._log)
         started = time.monotonic()
         try:
             # nosec B615 - the revision is optional on purpose: the model id
             # is user-configurable, so a hardcoded pin would be wrong for a
             # fine-tuned SAM3. A user pins one with 'repo@commit'.
-            self._processor = processor_cls.from_pretrained(
-                self.model_id, **kwargs)  # nosec B615
-            self._model = model_cls.from_pretrained(
-                self.model_id, **kwargs)  # nosec B615
+            with hf_access.token_environment(self.token), DownloadReporter(
+                    cache_dir, self.model_id, cached.expected_bytes,
+                    log_fn=self._log, active=not cached.complete):
+                self._processor = processor_cls.from_pretrained(
+                    self.model_id, **kwargs)  # nosec B615
+                if self._log:
+                    self._log("Processor ready; loading the weights…")
+                self._model = model_cls.from_pretrained(
+                    self.model_id, **kwargs)  # nosec B615
         except Exception as exc:
             raise Sam3LocalError(
                 _load_failure_message(self.model_id, exc)) from exc

@@ -25,6 +25,7 @@ Two boundaries are deliberate here:
 so a project that never classifies anything does not need it installed.
 """
 
+import contextlib
 import os
 from typing import Dict, List, Optional, Tuple
 
@@ -123,6 +124,37 @@ def resolve_token(stored: str = "") -> Tuple[str, str]:
     except Exception:
         return "", ""
     return (value, "huggingface-cli") if value else ("", "")
+
+
+@contextlib.contextmanager
+def token_environment(token: str = ""):  # nosec B107 - "" means none
+    """Make *token* visible to every Hugging Face call made inside.
+
+    ``from_pretrained(token=…)`` is not enough: a processor that bundles a
+    tokenizer and an image processor fans out into nested loaders, and not
+    every one of them is handed the keyword on, so the request for
+    ``config.json`` goes out unauthenticated and a gated repository answers
+    "please log in" - to a user whose token just passed the access check.
+    ``huggingface_hub`` reads ``HF_TOKEN`` from the environment on every
+    request, so setting it for the duration of the load reaches all of
+    them. Restored afterwards: the token is the user's, not the process's.
+    """
+    token = (token or "").strip()
+    if not token:
+        yield
+        return
+    previous = {name: os.environ.get(name)
+                for name in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN")}
+    os.environ["HF_TOKEN"] = token
+    os.environ["HUGGING_FACE_HUB_TOKEN"] = token
+    try:
+        yield
+    finally:
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
 
 def describe_token_source(source: str) -> str:

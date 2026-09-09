@@ -14,7 +14,7 @@ The numbers come from :mod:`core.agl_profile`; this module only draws.
 import os
 from typing import List, Optional
 
-from qgis.PyQt.QtCore import QPointF, QRectF, Qt
+from qgis.PyQt.QtCore import QPointF, QRectF, Qt, QThread, pyqtSignal
 from qgis.PyQt.QtGui import (QBrush, QColor, QFont, QFontMetrics, QPainter,
                              QPainterPath, QPen, QPolygonF)
 from qgis.PyQt.QtWidgets import (
@@ -39,6 +39,7 @@ class ProfileCanvas(QWidget):
         self._axis = "distance_m"
         self._hover: Optional[int] = None
         self._on_hover = None
+        self._message = ""
         self.setMouseTracking(True)
         self.setMinimumHeight(240)
         self.setSizePolicy(QSizePolicy.Policy.Expanding,
@@ -51,6 +52,11 @@ class ProfileCanvas(QWidget):
                         if p.get(self._axis) is not None] if points else []
         self._all_points = list(points or [])
         self._hover = None
+        self.update()
+
+    def set_message(self, message: str):
+        """Text shown instead of the empty-state hint while there is no profile."""
+        self._message = message
         self.update()
 
     def set_axis(self, axis: str):
@@ -124,9 +130,10 @@ class ProfileCanvas(QWidget):
 
         if not self._points:
             painter.setPen(QColor(120, 120, 120))
+            hint = ("No profile loaded - choose a target folder with "
+                    "extracted frames and a DEM, then press Load.")
             painter.drawText(rect, Qt.AlignmentFlag.AlignCenter,
-                             "No profile loaded - choose a target folder with "
-                             "extracted frames and a DEM, then press Load.")
+                             self._message or hint)
             return
 
         xr, yr = self._ranges()
@@ -275,6 +282,33 @@ def math_log10(value):
     return math.log10(value) if value > 0 else 0.0
 
 
+class _ProfileWorker(QThread):
+    """Builds the profile off the GUI thread.
+
+    Reading the DEM mesh and casting a ray per pose takes seconds on a
+    large flight, and the window used to do that inside its constructor - so
+    nothing appeared until it was done. The window now opens at once, says
+    it is loading, and fills in when this finishes.
+    """
+
+    finished_ok = pyqtSignal(dict)
+    failed = pyqtSignal(str)
+
+    def __init__(self, folder, modality, dem_mesh, dem_json, parent=None):
+        super().__init__(parent)
+        self.args = (folder, modality, dem_mesh, dem_json)
+
+    def run(self):
+        folder, modality, dem_mesh, dem_json = self.args
+        try:
+            profile = agl_profile.build_profile(
+                folder, modality, dem_path=dem_mesh, dem_json_path=dem_json)
+        except Exception as exc:  # noqa: BLE001 - surfaced to the user
+            self.failed.emit(str(exc))
+            return
+        self.finished_ok.emit(profile)
+
+
 class AglToolDialog(QDialog):
     """Non-modal window with the AGL profile of the loaded flight."""
 
@@ -283,6 +317,8 @@ class AglToolDialog(QDialog):
         self.iface = iface
         self._dock_widget = dock_widget
         self._profile: Optional[dict] = None
+        self._worker: Optional[_ProfileWorker] = None
+        self._pending: Optional[tuple] = None
         self.setWindowTitle("AGL - altitude above ground along the flight")
         self.setMinimumSize(900, 520)
         self.setWindowFlags(self.windowFlags()
@@ -400,8 +436,15 @@ class AglToolDialog(QDialog):
                 "this flight - re-extract the frames with SRT files present.")
 
     def load(self):
+        """Start building the profile; the window stays responsive meanwhile.
+
+        A request that arrives while one is running (the camera switched, a
+        new folder picked) is kept and started when the current one ends,
+        so the profile shown is always the one last asked for.
+        """
         folder = self.folder_edit.text().strip()
         if not folder or not os.path.isdir(folder):
+            self.canvas.set_message("")
             self.canvas.set_points([])
             self.status_label.setText("Choose a target folder first.")
             return
@@ -410,14 +453,50 @@ class AglToolDialog(QDialog):
         dem_json = getattr(self, "_dem_json", "") or (
             dem if dem.lower().endswith(".json") else "")
         dem_mesh = "" if dem.lower().endswith(".json") else dem
-        try:
-            self._profile = agl_profile.build_profile(
-                folder, modality, dem_path=dem_mesh, dem_json_path=dem_json)
-        except Exception as exc:  # noqa: BLE001 - surfaced to the user
-            self._profile = None
-            self.canvas.set_points([])
-            self.status_label.setText(f"Could not build the profile: {exc}")
+        args = (folder, modality, dem_mesh, dem_json)
+        if self._worker is not None:
+            self._pending = args
             return
+        self._start_worker(args)
+
+    def _start_worker(self, args):
+        self._pending = None
+        camera = self.camera_combo.currentText()
+        self.load_btn.setEnabled(False)
+        self.canvas.set_points([])
+        self.canvas.set_message(
+            f"Loading the {camera} profile - reading the DEM mesh and "
+            "casting a ray for every pose…")
+        self.status_label.setText(f"Loading {camera} profile from {args[0]}…")
+        self._worker = _ProfileWorker(*args, parent=self)
+        self._worker.finished_ok.connect(self._on_profile_ready)
+        self._worker.failed.connect(self._on_profile_failed)
+        self._worker.finished.connect(self._on_worker_done)
+        self._worker.start()
+
+    def _on_worker_done(self):
+        worker = self._worker
+        self._worker = None
+        if worker is not None:
+            worker.deleteLater()
+        self.load_btn.setEnabled(True)
+        if self._pending is not None:
+            self._start_worker(self._pending)
+
+    def _on_profile_failed(self, message: str):
+        if self._pending is not None:
+            return  # superseded; the next run reports its own outcome
+        self._profile = None
+        self.canvas.set_message("")
+        self.canvas.set_points([])
+        self.status_label.setText(f"Could not build the profile: {message}")
+
+    def _on_profile_ready(self, profile: dict):
+        if self._pending is not None:
+            return  # superseded by a newer request
+        self._profile = profile
+        folder = self.folder_edit.text().strip()
+        self.canvas.set_message("")
         self.canvas.set_axis(self._axis())
         self.canvas.set_points(self._profile["points"])
         camera = self.camera_combo.currentText()
@@ -428,6 +507,15 @@ class AglToolDialog(QDialog):
         self.status_label.setText(f"{camera}: " + " | ".join(lines))
         self.hover_label.setText(
             "Hover over the profile to read the altitude above ground.")
+
+    def closeEvent(self, event):
+        worker = self._worker
+        if worker is not None:
+            self._pending = None
+            # The mesh read cannot be interrupted; it is short and the
+            # thread is daemon-like to Qt, so a bounded wait is enough.
+            worker.wait(3000)
+        super().closeEvent(event)
 
     def _on_hover(self, point: Optional[dict]):
         if point is None:

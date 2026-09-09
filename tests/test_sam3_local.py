@@ -135,6 +135,7 @@ class _FakeProcessor:
     def from_pretrained(cls, model_id, **kwargs):
         cls.kwargs = kwargs
         cls.model_id = model_id
+        cls.seen_env = os.environ.get("HF_TOKEN")
         return cls()
 
     def __call__(self, images, text, return_tensors):
@@ -174,6 +175,14 @@ def fake_transformers(monkeypatch):
     monkeypatch.setattr(
         "bambi_wildlife_detection.core.classification.resolve_device",
         lambda preference="auto": "cpu")
+    # No hub metadata call from a unit test; the reporter is exercised in
+    # test_classification_backbone with the same class.
+    from bambi_wildlife_detection.core import classification
+    monkeypatch.setattr(
+        classification, "describe_cache",
+        lambda model_id, cache_dir, revision, token, log_fn=None: (
+            log_fn and log_fn("Weights are in the local cache (stub)"),
+            classification.CacheState(True, None))[1])
     return _FakeProcessor
 
 
@@ -189,6 +198,8 @@ def test_the_model_is_asked_once_per_prompt(fake_transformers, tmp_path):
     assert results[0]["predictions"][0]["confidence"] == pytest.approx(0.8)
     assert "polygons" in results[0]["predictions"][0]
     assert any("ready" in line for line in logs)
+    # A user watching the log learns whether a download is happening.
+    assert any("local cache" in line for line in logs)
 
 
 def test_the_token_and_shared_cache_reach_from_pretrained(fake_transformers,
@@ -198,6 +209,12 @@ def test_the_token_and_shared_cache_reach_from_pretrained(fake_transformers,
     model.load()
     assert fake_transformers.model_id == sam3_local.DEFAULT_SAM3_REPO
     assert fake_transformers.kwargs["token"] == "hf_secret"
+    # The keyword alone is dropped by transformers' nested loaders (the
+    # gated config.json came back "please log in" to a token that had just
+    # passed the access check), so the token is also in the environment
+    # while loading - and gone again afterwards.
+    assert fake_transformers.seen_env == "hf_secret"
+    assert "HF_TOKEN" not in os.environ
     # Same cache the DINOv3 backbone uses, so one download serves everything.
     assert fake_transformers.kwargs["cache_dir"] == os.path.join(
         str(tmp_path), "hf_cache")

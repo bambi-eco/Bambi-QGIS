@@ -78,7 +78,7 @@ class FakeBackend(seg.SegmentationBackend):
         results = {}
         for local_idx in range(len(image_paths)):
             if progress_fn:
-                progress_fn(local_idx + 1, len(image_paths))
+                progress_fn((local_idx + 1) / len(image_paths))
             if texts:
                 results[local_idx] = [seg.text_entry(
                     t, [{"confidence": 0.8, "polygons": [_square()],
@@ -437,3 +437,196 @@ class TestGeoJson:
         with pytest.raises(ExportError):
             seg.export_geojson([_georef(0)], out, None, "t")
         assert not os.path.exists(out)
+
+
+# ---------------------------------------------------------------------------
+# Where the checkpoints land
+# ---------------------------------------------------------------------------
+
+class TestCheckpointLocation:
+    def test_meta_checkpoint_downloads_into_the_shared_model_cache(
+            self, tmp_path, monkeypatch):
+        import sys
+        import types
+
+        calls = []
+
+        def fake_download(repo_id, filename, **kwargs):
+            calls.append((repo_id, filename, kwargs))
+            return str(tmp_path / filename)
+
+        monkeypatch.setitem(sys.modules, "huggingface_hub",
+                            types.SimpleNamespace(hf_hub_download=fake_download))
+        backend = seg.MetaSam3Backend(version="sam3.1", token="hf_x",
+                                      models_dir=str(tmp_path / "models"))
+        path = backend.resolve_checkpoint()
+
+        assert path.endswith("sam3.1_multiplex.pt")
+        repo_id, filename, kwargs = calls[0]
+        assert (repo_id, filename) == ("facebook/sam3.1", "sam3.1_multiplex.pt")
+        assert kwargs["token"] == "hf_x"
+        # The very folder the DINOv3 backbone and the transformers SAM3 use.
+        from bambi_wildlife_detection.core import hf_access
+        assert kwargs["cache_dir"] == hf_access.backbone_cache_dir(
+            str(tmp_path / "models"))
+        assert os.path.isdir(kwargs["cache_dir"])
+
+    def test_a_chosen_checkpoint_file_is_used_as_is(self, tmp_path):
+        chosen = tmp_path / "mine.pt"
+        chosen.write_bytes(b"x")
+        backend = seg.MetaSam3Backend(checkpoint_path=str(chosen))
+        assert backend.resolve_checkpoint() == str(chosen)
+        with pytest.raises(seg.SegmentationError, match="not found"):
+            seg.MetaSam3Backend(checkpoint_path=str(tmp_path / "gone.pt")
+                                ).resolve_checkpoint()
+
+    def test_sam3_version_reads_its_own_file(self, tmp_path, monkeypatch):
+        import sys
+        import types
+        seen = {}
+        monkeypatch.setitem(sys.modules, "huggingface_hub", types.SimpleNamespace(
+            hf_hub_download=lambda repo_id, filename, **kw: seen.update(
+                repo=repo_id, file=filename) or "p"))
+        seg.MetaSam3Backend(version="sam3", models_dir=str(tmp_path)).resolve_checkpoint()
+        assert seen == {"repo": "facebook/sam3", "file": "sam3.pt"}
+
+
+# ---------------------------------------------------------------------------
+# The token reaches every nested Hugging Face call
+# ---------------------------------------------------------------------------
+
+class TestTokenEnvironment:
+    def test_set_for_the_duration_and_restored(self, monkeypatch):
+        from bambi_wildlife_detection.core import hf_access
+        monkeypatch.delenv("HF_TOKEN", raising=False)
+        monkeypatch.setenv("HUGGING_FACE_HUB_TOKEN", "old")
+        with hf_access.token_environment("hf_new"):
+            assert os.environ["HF_TOKEN"] == "hf_new"
+            assert os.environ["HUGGING_FACE_HUB_TOKEN"] == "hf_new"
+        assert "HF_TOKEN" not in os.environ
+        assert os.environ["HUGGING_FACE_HUB_TOKEN"] == "old"
+
+    def test_no_token_touches_nothing(self, monkeypatch):
+        from bambi_wildlife_detection.core import hf_access
+        monkeypatch.setenv("HF_TOKEN", "keep")
+        with hf_access.token_environment(""):
+            assert os.environ["HF_TOKEN"] == "keep"
+
+    def test_the_meta_download_runs_under_the_token(self, tmp_path, monkeypatch):
+        import sys
+        import types
+        monkeypatch.delenv("HF_TOKEN", raising=False)
+        seen = {}
+        monkeypatch.setitem(sys.modules, "huggingface_hub", types.SimpleNamespace(
+            hf_hub_download=lambda **kw: seen.update(
+                env=os.environ.get("HF_TOKEN")) or "p"))
+        seg.MetaSam3Backend(token="hf_t", models_dir=str(tmp_path)).resolve_checkpoint()
+        assert seen["env"] == "hf_t"
+        assert "HF_TOKEN" not in os.environ
+
+
+# ---------------------------------------------------------------------------
+# Download progress for the Meta checkpoint
+# ---------------------------------------------------------------------------
+
+class TestMetaCheckpointProgress:
+    def _hub(self, monkeypatch, tmp_path, cached=None, size=None, download=None):
+        import sys
+        import types
+
+        class _Sibling:
+            def __init__(self, name, size):
+                self.rfilename = name
+                self.size = size
+
+        class _Api:
+            def model_info(self, repo_id, token=None, files_metadata=False):
+                return types.SimpleNamespace(
+                    siblings=[_Sibling("config.json", 10),
+                              _Sibling("sam3.1_multiplex.pt", size)])
+
+        hub = types.SimpleNamespace(
+            try_to_load_from_cache=lambda repo, filename, cache_dir=None: cached,
+            HfApi=_Api,
+            hf_hub_download=download or (lambda **kw: str(tmp_path / "dl.pt")))
+        monkeypatch.setitem(sys.modules, "huggingface_hub", hub)
+        return hub
+
+    def test_a_cached_checkpoint_is_reported_and_not_downloaded(
+            self, tmp_path, monkeypatch):
+        cached = tmp_path / "sam3.1_multiplex.pt"
+        cached.write_bytes(b"x" * 2048)
+        calls = []
+        self._hub(monkeypatch, tmp_path, cached=str(cached),
+                  download=lambda **kw: calls.append(kw))
+        logs = []
+        backend = seg.MetaSam3Backend(models_dir=str(tmp_path), log_fn=logs.append)
+        assert backend.resolve_checkpoint() == str(cached)
+        assert calls == []
+        assert any("in the local cache" in line for line in logs)
+
+    def test_a_download_names_its_size(self, tmp_path, monkeypatch):
+        self._hub(monkeypatch, tmp_path, cached=None, size=3 * 1024 * 1024 * 1024)
+        logs = []
+        seg.MetaSam3Backend(models_dir=str(tmp_path),
+                            log_fn=logs.append).resolve_checkpoint()
+        assert any("about 3,072 MB" in line for line in logs)
+
+    def test_state_lookup_survives_a_bare_hub(self, tmp_path, monkeypatch):
+        import sys
+        import types
+        monkeypatch.setitem(sys.modules, "huggingface_hub",
+                            types.SimpleNamespace(hf_hub_download=lambda **kw: "p"))
+        backend = seg.MetaSam3Backend(models_dir=str(tmp_path))
+        assert backend._checkpoint_state("sam3.1_multiplex.pt", None) == ("", None)
+        assert backend.resolve_checkpoint() == "p"
+
+
+# ---------------------------------------------------------------------------
+# The bar moves while the clip is loaded and prepared, not only per frame
+# ---------------------------------------------------------------------------
+
+class TestSequencePace:
+    def test_every_stretch_moves_the_bar(self):
+        fractions = []
+        pace = seg.SequencePace(4, fractions.append, None)
+        pace.loading(2)
+        pace.loading(4)
+        pace.preparing()
+        pace.propagating()
+        for _ in range(4):
+            pace.frame()
+        assert fractions[0] == pytest.approx(0.075)
+        assert fractions[1] == pytest.approx(0.15)
+        assert fractions[2] == pytest.approx(0.15)
+        assert fractions[3] == pytest.approx(0.20)
+        assert fractions == sorted(fractions)
+        assert fractions[-1] == pytest.approx(1.0)
+
+    def test_the_log_states_rate_and_time_left(self):
+        # The clock is read at the start and at every logged line: 30 s per
+        # ten frames, i.e. 3 s per frame.
+        ticks = iter([0, 30, 60, 90])
+        logs = []
+        pace = seg.SequencePace(30, None, logs.append, every=10,
+                                clock=lambda: next(ticks))
+        pace.propagating("go")
+        for _ in range(30):
+            pace.frame()
+        assert logs[0] == "go"
+        assert logs[1].startswith("Tracked 10/30 frames, 3.0 s/frame, ~60 s left")
+        assert logs[-1].startswith("Tracked 30/30 frames")
+        assert len(logs) == 4
+
+    def test_the_run_maps_fractions_onto_the_bar(self, tmp_path):
+        root = _project(tmp_path)
+        progress = []
+        seg.run_segmentation(
+            seg.SegmentationRequest(root, "t", mode=seg.MODE_SEQUENCE,
+                                    frames=[0, 1, 2, 3], texts=["deer"]),
+            progress_fn=progress.append, backend=FakeBackend())
+        # 5 (start), 10 (loaded), then the sequence fractions, then 100.
+        assert progress[:2] == [5, 10]
+        assert progress[-1] == 100
+        inner = progress[2:-1]
+        assert inner == sorted(inner) and inner[-1] == 95

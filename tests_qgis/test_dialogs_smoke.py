@@ -29,6 +29,28 @@ class TestDialogsConstruct:
         assert isinstance(dlg, QDialog)
         _close(dlg)
 
+    def test_agl_tool_opens_before_the_profile_is_built(self, iface, dock, tmp_path):
+        """The mesh read happens on a worker; the constructor returns at once."""
+        from bambi_wildlife_detection.bambi_agl_tool import AglToolDialog
+        dlg = AglToolDialog(iface, dock)
+        assert isinstance(dlg, QDialog)
+        # A folder with poses but no DEM: the load starts and the window
+        # reports it rather than blocking on it.
+        import json
+        (tmp_path / "poses_t.json").write_text(json.dumps({"images": [
+            {"imagefile": "f.jpg", "location": [0, 0, 100], "rotation": [0, 0, 0]}]}))
+        dlg.folder_edit.setText(str(tmp_path))
+        dlg.load()
+        assert dlg._worker is not None
+        assert not dlg.load_btn.isEnabled()
+        assert "Loading" in dlg.status_label.text()
+        dlg._worker.wait(10000)
+        from qgis.PyQt.QtWidgets import QApplication
+        QApplication.processEvents()
+        assert dlg._worker is None
+        assert dlg.load_btn.isEnabled()
+        _close(dlg)
+
     def test_segmentation_tool(self, iface, dock):
         from bambi_wildlife_detection.bambi_segmentation_tool import (
             SegmentationToolDialog)

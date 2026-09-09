@@ -1146,7 +1146,9 @@ class SegmentationToolDialog(QDialog):
                 "a CUDA GPU, Python >= 3.12 and PyTorch >= 2.7: "
                 "<code>pip install git+https://github.com/facebookresearch/sam3.git</code>. "
                 "Both checkpoints are gated; the token above (shared with "
-                "the Classification tab) is used for the download.")
+                "the Classification tab) is used for the download, which "
+                "lands in the plugin's shared model cache like every other "
+                "model.")
         else:
             self.model_info.setText(
                 "Roboflow's hosted SAM3 endpoint: text prompts on single "
@@ -1262,6 +1264,12 @@ class SegmentationToolDialog(QDialog):
         self._worker.cancelled.connect(self._on_run_cancelled)
         self._worker.finished.connect(self._on_worker_done)
         self._run_prompt_names = request.prompt_names()
+        if request.backend != seg.BACKEND_ROBOFLOW:
+            from .core import hf_access
+            _token, source = hf_access.resolve_token(self.hf_token_edit.text())
+            self._log("Hugging Face token: "
+                      + (hf_access.describe_token_source(source)
+                         if source else "none - a gated download will fail"))
         self._log(f"Running on {len(request.frames)} frame(s)…")
         self._worker.start()
 

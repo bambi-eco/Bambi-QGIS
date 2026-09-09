@@ -46,7 +46,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-from . import sam3_local
+from . import hf_access, sam3_local
 
 # ---------------------------------------------------------------------------
 # Vocabulary
@@ -76,8 +76,10 @@ BACKENDS: List[Tuple[str, str, frozenset]] = [
      frozenset({CAP_TEXT})),
 ]
 
-#: Versions the official package can build (``build_sam3_predictor``).
+#: Versions the official package can build (``build_sam3_predictor``), and
+#: the checkpoint file each one reads from its Hugging Face repository.
 META_VERSIONS = ("sam3.1", "sam3")
+META_CHECKPOINTS = {"sam3": "sam3.pt", "sam3.1": "sam3.1_multiplex.pt"}
 
 #: SAM3 works at 1008 px; a 4K RGB frame gains nothing above that and a clip
 #: of them would not fit in memory, so sequence frames are shrunk to this
@@ -286,6 +288,82 @@ def count_predictions(results: Iterable[dict]) -> int:
                for r in results for p in r.get("prompts", []))
 
 
+class SequencePace:
+    """Progress and pace of a sequence run, for the bar and the log.
+
+    A clip goes through three stretches the user cannot see into: reading
+    the frames, handing them to the tracker (which resizes and normalises
+    every one), and propagating. The bar used to sit at the start of that
+    until the first tracked frame came back - minutes on a CPU - so each
+    stretch now moves it: loading fills the first *load_share*, preparation
+    a sliver after it, propagation the rest. Every *every* frames a log line
+    states the rate and the time left, because "31 of 300, 4.2 s/frame,
+    ~19 min left" is what makes a slow run tolerable.
+
+    *progress_fn* receives a fraction 0..1 of the whole run.
+    """
+
+    def __init__(self, total: int, progress_fn=None, log_fn=None,
+                 load_share: float = 0.15, prepare_share: float = 0.05,
+                 every: int = 10, clock=None):
+        import time
+        self.total = max(1, int(total))
+        self._progress = progress_fn
+        self._log = log_fn
+        self._load_share = load_share
+        self._prepare_share = prepare_share
+        self._every = max(1, every)
+        self._clock = clock or time.monotonic
+        self._started = None
+        self._done = 0
+
+    def _emit(self, fraction: float) -> None:
+        if self._progress:
+            self._progress(max(0.0, min(1.0, fraction)))
+
+    def loading(self, done: int, total: Optional[int] = None) -> None:
+        """*done* of *total* frames read from disk."""
+        total = total or self.total
+        self._emit(self._load_share * done / max(1, total))
+
+    def preparing(self, message: str = "") -> None:
+        """The tracker is ingesting the clip; nothing to count yet."""
+        if message and self._log:
+            self._log(message)
+        self._emit(self._load_share)
+
+    def propagating(self, message: str = "") -> None:
+        """Propagation starts now; the frame clock starts with it."""
+        if message and self._log:
+            self._log(message)
+        self._started = self._clock()
+        self._done = 0
+        self._emit(self._load_share + self._prepare_share)
+
+    def frame(self) -> None:
+        """One more frame tracked."""
+        if self._started is None:
+            self.propagating()
+        self._done += 1
+        rest = 1.0 - self._load_share - self._prepare_share
+        self._emit(self._load_share + self._prepare_share
+                   + rest * self._done / self.total)
+        if self._log and (self._done % self._every == 0
+                          or self._done == self.total):
+            elapsed = max(1e-6, self._clock() - self._started)
+            rate = elapsed / self._done
+            left = rate * max(0, self.total - self._done)
+            self._log(f"Tracked {self._done}/{self.total} frames, "
+                      f"{rate:.1f} s/frame, ~{_minutes(left)} left")
+
+
+def _minutes(seconds: float) -> str:
+    seconds = max(0.0, seconds)
+    if seconds < 90:
+        return f"{seconds:.0f} s"
+    return f"{seconds / 60:.0f} min"
+
+
 # ---------------------------------------------------------------------------
 # Backends
 # ---------------------------------------------------------------------------
@@ -331,7 +409,9 @@ class SegmentationBackend:
         """Prompt entries per *local* frame index (position in *image_paths*).
 
         Point prompts arrive with ``frame_idx`` already translated to that
-        local index.
+        local index. *progress_fn* takes the fraction 0..1 of the run done -
+        loading and preparing the clip included, not only tracked frames -
+        because the bar must move while the tracker ingests the clip.
         """
         raise NotImplementedError
 
@@ -510,20 +590,33 @@ class TransformersBackend(SegmentationBackend):
         if name in self._heads:
             return self._heads[name]
         import time
-        from .classification import _load_failure_message, describe_device
+        from .classification import (
+            DownloadReporter, _load_failure_message, describe_cache,
+            describe_device)
 
         self.load()
         model_cls, processor_cls = sam3_local.transformers_classes(
             f"{name}Model", f"{name}Processor")
         kwargs = sam3_local.pretrained_kwargs(
             self.models_dir, self.token, self.revision)
+        cache_dir = kwargs.get("cache_dir")
         self.log(f"Loading {name} from {self.model_id} on {self.device}…")
+        # All heads read one repository, so after the first head the cache
+        # is complete and this only says so; on a first run it reports the
+        # download as the cache folder grows.
+        with hf_access.token_environment(self.token):
+            cached = describe_cache(self.model_id, cache_dir, self.revision,
+                                    self.token or None, log_fn=self._log)
         started = time.monotonic()
         try:
             # nosec B615 - the revision is user-configurable ('repo@commit').
-            processor = processor_cls.from_pretrained(
-                self.model_id, **kwargs)  # nosec B615
-            model = model_cls.from_pretrained(self.model_id, **kwargs)  # nosec B615
+            with hf_access.token_environment(self.token), DownloadReporter(
+                    cache_dir, self.model_id, cached.expected_bytes,
+                    log_fn=self._log, active=not cached.complete):
+                processor = processor_cls.from_pretrained(
+                    self.model_id, **kwargs)  # nosec B615
+                model = model_cls.from_pretrained(
+                    self.model_id, **kwargs)  # nosec B615
         except Exception as exc:
             raise sam3_local.Sam3LocalError(
                 _load_failure_message(self.model_id, exc)) from exc
@@ -581,22 +674,27 @@ class TransformersBackend(SegmentationBackend):
 
     def segment_sequence(self, image_paths, texts, points, names, confidence,
                          progress_fn=None, cancel_check=None):
-        frames, scale = self._load_clip(image_paths)
+        pace = SequencePace(len(image_paths), progress_fn, self._log)
+        frames, scale = self._load_clip(image_paths, pace, cancel_check)
         if texts:
             return self._text_sequence(frames, scale, list(texts), confidence,
-                                       progress_fn, cancel_check)
+                                       pace, cancel_check)
         return self._points_sequence(frames, scale, points, names,
-                                     progress_fn, cancel_check)
+                                     pace, cancel_check)
 
-    def _load_clip(self, image_paths):
+    def _load_clip(self, image_paths, pace: SequencePace, cancel_check=None):
         frames = []
         scale = 1.0
-        for path in image_paths:
+        for index, path in enumerate(image_paths):
+            if cancel_check and cancel_check():
+                raise CancelledError("Segmentation cancelled")
             image, scale = _load_image(path, SEQUENCE_MAX_SIDE)
             frames.append(image)
-        if scale != 1.0:
-            self.log(f"Sequence frames shrunk to {SEQUENCE_MAX_SIDE} px "
-                     f"(x{scale:.2f} on export) - SAM3 works at that size.")
+            pace.loading(index + 1, len(image_paths))
+        self.log(f"Loaded {len(frames)} frames"
+                 + (f", shrunk to {SEQUENCE_MAX_SIDE} px (x{scale:.2f} back "
+                    "on export) - SAM3 works at that size" if scale != 1.0
+                    else ""))
         return frames, scale
 
     def _init_clip_session(self, processor, frames):
@@ -609,15 +707,20 @@ class TransformersBackend(SegmentationBackend):
             return processor.init_video_session(**kwargs)
 
     def _text_sequence(self, frames, scale, texts, confidence,
-                       progress_fn, cancel_check) -> Dict[int, List[dict]]:
+                       pace: SequencePace, cancel_check) -> Dict[int, List[dict]]:
         import torch
 
         model, processor = self._head("Sam3Video")
+        pace.preparing(f"Handing {len(frames)} frames to the video tracker "
+                       "(each is resized and normalised first)…")
         session = self._init_clip_session(processor, frames)
         processor.add_text_prompt(inference_session=session, text=texts)
+        pace.propagating(
+            f"Tracking {texts} across {len(frames)} frames on {self.device}. "
+            "The tracker holds its first results back for a few frames to "
+            "weed out duplicates, so the first update takes a moment.")
 
         results: Dict[int, List[dict]] = {}
-        total = len(frames)
         with torch.no_grad():
             for output in model.propagate_in_video_iterator(
                     inference_session=session):
@@ -627,8 +730,7 @@ class TransformersBackend(SegmentationBackend):
                 local_idx = int(output.frame_idx)
                 results[local_idx] = self._video_entries(
                     processed, texts, scale, confidence)
-                if progress_fn:
-                    progress_fn(local_idx + 1, total)
+                pace.frame()
         return results
 
     @staticmethod
@@ -663,10 +765,12 @@ class TransformersBackend(SegmentationBackend):
         return [text_entry(prompt, preds) for prompt, preds in by_prompt.items()]
 
     def _points_sequence(self, frames, scale, points, names,
-                         progress_fn, cancel_check) -> Dict[int, List[dict]]:
+                         pace: SequencePace, cancel_check) -> Dict[int, List[dict]]:
         import torch
 
         model, processor = self._head("Sam3TrackerVideo")
+        pace.preparing(f"Handing {len(frames)} frames to the video tracker "
+                       "(each is resized and normalised first)…")
         session = self._init_clip_session(processor, frames)
         height, width = frames[0].size[1], frames[0].size[0]
 
@@ -687,11 +791,11 @@ class TransformersBackend(SegmentationBackend):
 
         first = min(by_frame)
         results: Dict[int, List[dict]] = {}
-        total = len(frames)
-        done = 0
+        pace.propagating(
+            f"Tracking {len(session.obj_ids)} clicked object(s) across "
+            f"{len(frames)} frames on {self.device}…")
 
         def consume(output):
-            nonlocal done
             if cancel_check and cancel_check():
                 raise CancelledError("Segmentation cancelled")
             masks = processor.post_process_masks(
@@ -717,9 +821,7 @@ class TransformersBackend(SegmentationBackend):
                 entries.append(point_entry(
                     int(object_id), names, [prediction] if prediction else []))
             results[int(output.frame_idx)] = entries
-            done += 1
-            if progress_fn:
-                progress_fn(min(done, total), total)
+            pace.frame()
 
         with torch.no_grad():
             for output in model.propagate_in_video_iterator(
@@ -750,12 +852,64 @@ class MetaSam3Backend(SegmentationBackend):
     def __init__(self, version: str = "sam3.1", checkpoint_path: str = "",
                  # "no token supplied" is a state, not a credential.
                  token: str = "",  # nosec B107
-                 log_fn=None):
+                 models_dir: str = "", log_fn=None):
         super().__init__(log_fn)
         self.version = version if version in META_VERSIONS else "sam3.1"
         self.checkpoint_path = checkpoint_path or ""
         self.token = token
+        self.models_dir = models_dir
         self._predictor = None
+
+    @property
+    def repo_id(self) -> str:
+        return f"facebook/{self.version}"
+
+    def resolve_checkpoint(self) -> str:
+        """The checkpoint file to load - downloaded on first use.
+
+        A user-chosen file wins. Otherwise the checkpoint is fetched from
+        the gated repository into the plugin's shared model cache - the
+        same ``hf_cache`` the DINOv3 backbone and the transformers SAM3 use
+        - rather than the package's default of ``~/.cache/huggingface``, so
+        every model the plugin downloads lives in one place, and one
+        download serves every project.
+        """
+        if self.checkpoint_path:
+            if not os.path.isfile(self.checkpoint_path):
+                raise SegmentationError(
+                    f"Checkpoint not found: {self.checkpoint_path}")
+            return self.checkpoint_path
+        try:
+            from huggingface_hub import hf_hub_download
+        except ImportError as exc:
+            raise SegmentationError(
+                "huggingface_hub is not installed. Install the Classification "
+                "dependencies from the Dependency Manager.") from exc
+        from .classification import DownloadReporter, _mb
+
+        filename = META_CHECKPOINTS[self.version]
+        kwargs = sam3_local.pretrained_kwargs(self.models_dir, self.token)
+        cache_dir = kwargs.get("cache_dir")
+        with hf_access.token_environment(self.token):
+            cached_path, expected = self._checkpoint_state(filename, cache_dir)
+        if cached_path:
+            self.log(f"{self.repo_id}/{filename} is in the local cache "
+                     f"({_mb(os.path.getsize(cached_path))} MB); no download needed")
+            return cached_path
+        self.log(f"Fetching {self.repo_id}/{filename} into the shared model "
+                 f"cache ({'about ' + _mb(expected) + ' MB' if expected else 'several GB'}, "
+                 "once; later runs load from disk)…")
+        try:
+            # nosec B615 - unpinned like the backbone: the repository moves
+            # only when Meta publishes a new checkpoint, and that is wanted.
+            with hf_access.token_environment(self.token), DownloadReporter(
+                    cache_dir, self.repo_id, expected, log_fn=self._log):
+                return hf_hub_download(  # nosec B615
+                    repo_id=self.repo_id, filename=filename, **kwargs)
+        except Exception as exc:
+            from .classification import _load_failure_message
+            raise SegmentationError(
+                _load_failure_message(self.repo_id, exc)) from exc
 
     def load(self) -> None:
         if self._predictor is not None:
@@ -781,21 +935,45 @@ class MetaSam3Backend(SegmentationBackend):
                 "git+https://github.com/facebookresearch/sam3.git\n\n"
                 f"Original error: {exc}") from exc
 
-        # The package downloads the checkpoint through huggingface_hub, which
-        # reads the token from the environment; both repositories are gated.
-        if self.token and not os.environ.get("HF_TOKEN"):
-            os.environ["HF_TOKEN"] = self.token
-        source = ("local checkpoint" if self.checkpoint_path
-                  else f"facebook/{self.version}")
-        self.log(f"Building the {self.version} predictor ({source})…")
+        checkpoint = self.resolve_checkpoint()
+        self.log(f"Building the {self.version} predictor from {checkpoint}…")
         try:
             self._predictor = build_sam3_predictor(
-                checkpoint_path=self.checkpoint_path or None,
-                version=self.version)
+                checkpoint_path=checkpoint, version=self.version)
         except Exception as exc:
             from .classification import _load_failure_message
-            raise SegmentationError(_load_failure_message(
-                f"facebook/{self.version}", exc)) from exc
+            raise SegmentationError(
+                _load_failure_message(self.repo_id, exc)) from exc
+
+    def _checkpoint_state(self, filename: str, cache_dir: Optional[str]):
+        """``(cached_path_or_"", expected_bytes_or_None)`` - both best effort.
+
+        The cache holds a whole snapshot per repository, and ``config.json``
+        being present says nothing about a 3 GB checkpoint beside it, so the
+        checkpoint file itself is looked up; its size comes from one
+        metadata call and is only for the progress percentage.
+        """
+        cached = ""
+        expected = None
+        try:
+            from huggingface_hub import try_to_load_from_cache
+            found = try_to_load_from_cache(
+                self.repo_id, filename, cache_dir=cache_dir or None)
+            if isinstance(found, str) and os.path.isfile(found):
+                cached = found
+        except Exception:  # nosec B110 - offline or old hub: download anyway
+            cached = ""
+        if not cached:
+            try:
+                from huggingface_hub import HfApi
+                info = HfApi().model_info(self.repo_id, token=self.token or None,
+                                          files_metadata=True)
+                for sibling in info.siblings or []:
+                    if getattr(sibling, "rfilename", "") == filename:
+                        expected = getattr(sibling, "size", None)
+            except Exception:  # nosec B110 - size is a nicety
+                expected = None
+        return cached, expected
 
     def close(self) -> None:
         predictor = self._predictor
@@ -819,14 +997,21 @@ class MetaSam3Backend(SegmentationBackend):
     def segment_sequence(self, image_paths, texts, points, names, confidence,
                          progress_fn=None, cancel_check=None):
         self.load()
+        pace = SequencePace(len(image_paths), progress_fn, self._log)
         frames = []
         scale = 1.0
         max_side = SEQUENCE_MAX_SIDE if len(image_paths) > 1 else None
-        for path in image_paths:
+        for index, path in enumerate(image_paths):
+            if cancel_check and cancel_check():
+                raise CancelledError("Segmentation cancelled")
             image, scale = _load_image(path, max_side)
             frames.append(image)
+            pace.loading(index + 1)
         width, height = frames[0].size
 
+        if len(frames) > 1:
+            pace.preparing(f"Handing {len(frames)} frames to the "
+                           f"{self.version} predictor…")
         session_id = self._predictor.handle_request(
             request={"type": "start_session", "resource_path": frames}
         )["session_id"]
@@ -839,8 +1024,8 @@ class MetaSam3Backend(SegmentationBackend):
                         "frame_index": 0, "text": text,
                         "output_prob_thresh": confidence})
                     per_frame = self._propagate(
-                        session_id, len(frames), confidence, progress_fn,
-                        cancel_check)
+                        session_id, len(frames), confidence, pace,
+                        cancel_check, what=repr(text))
                     for local_idx, outputs in per_frame.items():
                         results.setdefault(local_idx, []).append(text_entry(
                             text, self._predictions(outputs, scale,
@@ -860,8 +1045,8 @@ class MetaSam3Backend(SegmentationBackend):
                             "point_labels": [p.label() for p in pts],
                             "rel_coordinates": True})
                 per_frame = self._propagate(
-                    session_id, len(frames), confidence, progress_fn,
-                    cancel_check)
+                    session_id, len(frames), confidence, pace,
+                    cancel_check, what="the clicked objects")
                 for local_idx, outputs in per_frame.items():
                     results[local_idx] = self._point_entries(
                         outputs, scale, names)
@@ -873,19 +1058,21 @@ class MetaSam3Backend(SegmentationBackend):
                 pass
         return results
 
-    def _propagate(self, session_id, total, confidence, progress_fn,
-                   cancel_check) -> Dict[int, dict]:
+    def _propagate(self, session_id, total, confidence, pace: SequencePace,
+                   cancel_check, what: str = "") -> Dict[int, dict]:
         per_frame: Dict[int, dict] = {}
         request = {"type": "propagate_in_video", "session_id": session_id,
                    "output_prob_thresh": confidence}
         if total == 1:
             request["propagation_direction"] = "forward"
+        if total > 1:
+            pace.propagating(f"Tracking {what} across {total} frames…")
         for response in self._predictor.handle_stream_request(request=request):
             if cancel_check and cancel_check():
                 raise CancelledError("Segmentation cancelled")
             per_frame[int(response["frame_index"])] = response["outputs"]
-            if progress_fn:
-                progress_fn(len(per_frame), total)
+            if total > 1:
+                pace.frame()
         return per_frame
 
     @staticmethod
@@ -936,7 +1123,7 @@ def make_backend(request: SegmentationRequest, log_fn=None) -> SegmentationBacke
         return MetaSam3Backend(
             version=request.model or "sam3.1",
             checkpoint_path=request.checkpoint_path, token=request.hf_token,
-            log_fn=log_fn)
+            models_dir=request.models_dir, log_fn=log_fn)
     raise SegmentationError(f"Unknown segmentation backend {request.backend!r}")
 
 
@@ -1056,9 +1243,10 @@ def _run_sequence(request, backend, frames, progress_fn, log_fn, cancel_check):
         raise SegmentationError(
             "None of the clicked frames are among the frames on disk.")
 
-    def _progress(done, total):
+    def _progress(fraction):
+        """Backends report 0..1 of their run; the bar shows 10..95."""
         if progress_fn:
-            progress_fn(min(95, 10 + int(done / max(1, total) * 85)))
+            progress_fn(min(95, 10 + int(max(0.0, fraction) * 85)))
 
     if log_fn:
         log_fn(f"Tracking across {len(frames)} frames as one sequence…")
