@@ -370,12 +370,19 @@ def test_only_red_deer_defaults_to_the_published_model(project_folder):
         assert chosen == ("default" if species == DEFAULT_SPECIES else "off")
 
 
-def test_species_left_off_are_absent_from_the_result(project_folder):
-    """Absent means 'not sexed', which is the honest answer for a species with
-    no classifier."""
+def test_species_left_off_are_written_out_as_off(project_folder):
+    """Every species is listed, "Off" included: an absent species means
+    "never configured" and takes the default, so dropping it would silently
+    switch a species the user turned off back on."""
     dialog = BambiClassificationModelDialog({}, project_folder)
     per_species = dialog.result_spec()["species"]
-    assert set(per_species) == {DEFAULT_SPECIES}
+    names = [dialog.table.item(r, 0).text()
+             for r in range(dialog.table.rowCount())]
+    assert set(per_species) == set(names)
+    assert per_species[DEFAULT_SPECIES] == {"model": "default"}
+    for name in names:
+        if name != DEFAULT_SPECIES:
+            assert per_species[name] == {"model": "off"}
 
 
 def test_a_custom_model_per_species_round_trips(project_folder):

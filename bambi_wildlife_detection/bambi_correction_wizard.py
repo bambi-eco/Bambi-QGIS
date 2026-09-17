@@ -892,7 +892,7 @@ class _ProbeWorker(QThread):
     """
 
     status = pyqtSignal(str)   # live progress text for the UI label
-    finished = pyqtSignal(dict)  # resulting correction dict
+    finished = pyqtSignal(list)  # candidate solutions, best residual first
     error = pyqtSignal(str)
 
     def __init__(self, ray_caster, side_params, correction, max_steps,
@@ -917,11 +917,9 @@ class _ProbeWorker(QThread):
                 max_steps=self._max_steps, status_fn=self.status.emit)
 
             self.status.emit("Solving z-offset + yaw analytically…")
-            solved = solver.solve_tz_rz(corr)
-            if solved is not None:
-                corr['translation']['z'] = solved[0]
-                corr['rotation']['z'] = solved[1]
-                self.finished.emit(corr)
+            candidates = solver.solve_tz_rz_candidates(corr)
+            if candidates:
+                self.finished.emit(candidates)
                 return
 
             # Fallback: legacy incremental probe + brute-force yaw sweep
@@ -936,8 +934,17 @@ class _ProbeWorker(QThread):
             )
             new_rz = solver.find_best_rz(corr)
             corr['rotation']['z'] = new_rz
-
-            self.finished.emit(corr)
+            p1 = self._geo_ref(0, corr)
+            p2 = self._geo_ref(1, corr)
+            residual = (math.hypot(p1[0] - p2[0], p1[1] - p2[1])
+                        if p1 is not None and p2 is not None
+                        else float('nan'))
+            self.finished.emit([{
+                'tz': new_tz, 'rz': new_rz, 'residual': residual,
+                'dtz': new_tz - self._correction['translation']['z'],
+                'drz': _wrap_rad(new_rz - self._correction['rotation']['z']),
+                'branch': 0, 'source': 'fallback',
+            }])
         except Exception as exc:
             import traceback
             self.error.emit(f"{exc}\n\n{traceback.format_exc()}")
@@ -1207,6 +1214,7 @@ class BambiCorrectionWizard(QDialog):
 
     def __init__(self, iface, config: Dict[str, Any], parent=None):
         super().__init__(parent)
+        self._candidates: List[dict] = []
         self.iface = iface
         self._config = config
 
@@ -1603,6 +1611,26 @@ class BambiCorrectionWizard(QDialog):
         self._probe_status = QLabel()
         self._probe_status.setWordWrap(True)
         pg_layout.addWidget(self._probe_status, stretch=1)
+
+        # One point pair has several exact (tz, rz) solutions in general
+        # (mirror branch, multiple roots); list them all so the user can
+        # inspect each in the circle plot / light field and pick the
+        # physically plausible one.
+        pg_layout.addWidget(QLabel("Solution:"))
+        self._cand_combo = QComboBox()
+        self._cand_combo.setToolTip(
+            "All (tz, rz) pairs the solver found for the clicked point pair,\n"
+            "best overlap first.  A single point pair does not pin down a\n"
+            "unique solution: with cameras at different heights or over\n"
+            "terrain relief a second root can fit equally well.  Select a\n"
+            "solution to load it into the spinboxes and inspect the circle\n"
+            "plot and light-field preview; the one with the smallest yaw / z\n"
+            "change is usually the physically correct one."
+        )
+        self._cand_combo.setMinimumWidth(320)
+        self._cand_combo.setEnabled(False)
+        self._cand_combo.currentIndexChanged.connect(self._on_candidate_selected)
+        pg_layout.addWidget(self._cand_combo, stretch=1)
         layout.addWidget(probe_grp)
 
         # Three-panel splitter: circle plot | form | light field
@@ -2049,29 +2077,75 @@ class BambiCorrectionWizard(QDialog):
         self._probe_worker.error.connect(self._on_probe_error)
         self._probe_worker.start()
 
-    def _on_probe_done(self, correction: dict) -> None:
-        self._correction = correction
+    def _on_probe_done(self, candidates: list) -> None:
+        self._candidates = list(candidates)
+        self._fill_candidate_combo()
+        self._probe_btn.setEnabled(True)
+        if not self._candidates:
+            self._probe_status.setText("Done. No solution found.")
+            return
+        # Selecting index 0 loads the best candidate; if the combo already
+        # sits at 0 the signal does not fire, so apply it explicitly.
+        self._cand_combo.setCurrentIndex(0)
+        self._apply_candidate(0)
+
+    def _candidate_label(self, idx: int, cand: dict) -> str:
+        rz = cand['rz']
+        drz = cand['drz']
+        if self._is_degrees():
+            rz_txt = f"{math.degrees(rz):+.2f}°"
+        else:
+            rz_txt = f"{rz:+.4f} rad"
+        res = cand['residual']
+        res_txt = f"{res:.2f} m" if math.isfinite(res) else "n/a"
+        src = {'start': 'near start', 'fallback': 'fallback probe'}.get(
+            cand['source'], f"branch {cand['branch']:+d}")
+        return (
+            f"#{idx + 1}  tz {cand['tz']:+.2f} m, rz {rz_txt}   "
+            f"|  Δ {cand['dtz']:+.1f} m / {math.degrees(drz):+.1f}°   "
+            f"|  overlap {res_txt}   ({src})"
+        )
+
+    def _fill_candidate_combo(self) -> None:
+        self._cand_combo.blockSignals(True)
+        self._cand_combo.clear()
+        for i, cand in enumerate(self._candidates):
+            self._cand_combo.addItem(self._candidate_label(i, cand), i)
+        self._cand_combo.setEnabled(bool(self._candidates))
+        self._cand_combo.blockSignals(False)
+
+    def _on_candidate_selected(self, idx: int) -> None:
+        if 0 <= idx < len(self._candidates):
+            self._apply_candidate(idx)
+
+    def _apply_candidate(self, idx: int) -> None:
+        cand = self._candidates[idx]
+        corr = self._read_corr_from_spins()
+        corr['translation']['z'] = cand['tz']
+        corr['rotation']['z'] = cand['rz']
+        self._correction = corr
         self._load_corr_into_spins()
         self._update_circle_plot()
 
+        n = len(self._candidates)
+        multi = (f"{n} solutions found - compare them in the dropdown.  "
+                 if n > 1 else "")
         circles = self._compute_circles(self._correction)
         if circles:
             (c1, r1, p1), (c2, r2, p2) = circles
             ok = _circles_intersect(c1, r1, c2, r2)
             dist = math.hypot(p1[0] - p2[0], p1[1] - p2[1])
-            tz = correction['translation']['z']
-            rz = correction['rotation']['z']
             verdict = "intersect ✓" if ok else "do NOT intersect"
             self._probe_status.setText(
-                f"Done.  tz = {tz:.3f},  rz = {rz:.5f} rad  →  "
+                f"{multi}Solution #{idx + 1}:  tz = {cand['tz']:.3f},  "
+                f"rz = {cand['rz']:.5f} rad  →  "
                 f"point distance {dist:.2f} m,  circles {verdict}"
             )
         else:
             self._probe_status.setText(
-                "Done. (Could not verify circles - check DEM coverage)"
+                f"{multi}Solution #{idx + 1} applied. "
+                "(Could not verify circles - check DEM coverage)"
             )
-
-        self._probe_btn.setEnabled(True)
 
     def _on_probe_error(self, msg: str) -> None:
         self._probe_status.setText(f"Error: {msg[:200]}")
@@ -2161,6 +2235,14 @@ class BambiCorrectionWizard(QDialog):
         self._rx_label.setText(f"Rotation X  (pitch, {unit_str}):")
         self._ry_label.setText(f"Rotation Y  (roll, {unit_str}):")
         self._rz_label.setText(f"Rotation Z  (yaw, {unit_str}):")
+
+        # Relabel the solution dropdown in the new unit (selection unchanged)
+        if self._candidates:
+            cur = self._cand_combo.currentIndex()
+            self._fill_candidate_combo()
+            self._cand_combo.blockSignals(True)
+            self._cand_combo.setCurrentIndex(max(0, cur))
+            self._cand_combo.blockSignals(False)
 
     # ------------------------------------------------------------------
     # Correction spinbox <-> dict synchronisation
@@ -2483,7 +2565,15 @@ class BambiCorrectionWizard(QDialog):
             "the intersection of both circles, reached with the same yaw delta "
             "from both cameras. The wizard solves this analytically and then "
             "refines the result with true DEM ray-casting until the two "
-            "geo-referenced points coincide.<br><br>"
+            "geo-referenced points coincide.<br>"
+            "A single point pair does not always give a <i>unique</i> answer: "
+            "the point mirrored across the camera baseline, or a second root, "
+            "can fit just as well. All solutions found are listed in the "
+            "<b>Solution</b> dropdown, best overlap first. Select each one and "
+            "check the circle plot and light-field preview; the physically "
+            "correct solution is normally the one with the smallest yaw and "
+            "z change. Frames with a long baseline and different headings "
+            "(e.g. opposite flight lines) make the answer unambiguous.<br><br>"
             "All six correction components (translation X/Y/Z, rotation X/Y/Z) "
             "can be fine-tuned manually with the spinboxes or by clicking and "
             "dragging in the circle plot. Rotations can be entered in radians or "

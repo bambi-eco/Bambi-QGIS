@@ -159,11 +159,42 @@ class CorrectionSolver:
             prev = (delta, g)
         return roots
 
+    # Two candidates closer than this are the same solution
+    _DEDUP_TZ_M = 0.1
+    _DEDUP_RZ_RAD = math.radians(0.2)
+
     def solve_tz_rz(self, corr: dict):
         """Solve for (tz, rz) giving perfect point overlap.
 
-        Returns ``(tz, rz)`` or None when the geometry cannot be set up
-        (ray misses, degenerate camera placement, …).
+        Returns the best-fitting ``(tz, rz)`` or None when the geometry
+        cannot be set up (ray misses, degenerate camera placement, ...).
+        See :meth:`solve_tz_rz_candidates` for all solutions.
+        """
+        cands = self.solve_tz_rz_candidates(corr)
+        if not cands:
+            return None
+        return (cands[0]['tz'], cands[0]['rz'])
+
+    def solve_tz_rz_candidates(self, corr: dict) -> list:
+        """Return every distinct (tz, rz) solution, best residual first.
+
+        One point pair gives two equations in two unknowns, but the yaw
+        enters non-linearly: each circle-intersection branch (the overlap
+        point mirrored across the camera baseline) can carry its own root,
+        and a branch can cross zero more than once.  All of them fit the
+        pair equally well on flat ground, so instead of silently keeping
+        the lowest residual every seed is Gauss-Newton refined and the
+        distinct results are returned for the user to judge.
+
+        Each candidate is a dict::
+
+            {'tz': float, 'rz': float,      # refined correction (rad)
+             'residual': float,             # horizontal |p1 - p2| in m
+             'dtz': float, 'drz': float,    # change w.r.t. the start values
+             'branch': +1 | -1 | 0,         # intersection branch (0 = start)
+             'source': 'analytic' | 'start'}
+
+        Returns an empty list when the geometry cannot be set up.
         """
         tz0 = corr['translation']['z']
         rz0 = corr['rotation']['z']
@@ -175,20 +206,20 @@ class CorrectionSolver:
         p1 = self._geo_ref(0, corr)
         p2 = self._geo_ref(1, corr)
         if any(v is None for v in (c1, c2, z1, z2, p1, p2)):
-            return None
+            return []
 
         r1 = math.hypot(p1[0] - c1[0], p1[1] - c1[1])
         r2 = math.hypot(p2[0] - c2[0], p2[1] - c2[1])
         h1 = z1 - p1[2]
         h2 = z2 - p2[2]
         if min(r1, r2) < 1e-6 or min(h1, h2) < 1e-3:
-            return None
+            return []
 
         dx = c2[0] - c1[0]
         dy = c2[1] - c1[1]
         d = math.hypot(dx, dy)
         if d < 1e-6:
-            return None   # coincident cameras - yaw is unconstrained
+            return []   # coincident cameras - yaw is unconstrained
 
         geom = {
             'c1': c1, 'c2': c2, 'd': d,
@@ -201,40 +232,54 @@ class CorrectionSolver:
 
         # Candidate seeds from both intersection branches; the yaw delta is
         # also tried sign-flipped so the seed survives either camera-yaw
-        # convention.  Each candidate costs two ray-casts to evaluate.
-        seeds = [(0.0, 0.0)]
-        for branch in (1.0, -1.0):
+        # convention.  Each seed is refined with true DEM ray-casting.
+        seeds = [(0.0, 0.0, 0)]
+        for branch in (1, -1):
             for droot, yaw in self._branch_roots(geom, branch):
-                seeds.append((droot, yaw))
-                seeds.append((droot, -yaw))
+                seeds.append((droot, yaw, branch))
+                seeds.append((droot, -yaw, branch))
 
-        best_err = None
-        best = None
-        for i, (dtz, drz) in enumerate(seeds):
+        candidates = []
+        for i, (dtz, drz, branch) in enumerate(seeds):
             self._status(
-                f"Evaluating candidate {i + 1} / {len(seeds)}…"
+                f"Refining candidate {i + 1} / {len(seeds)}…"
             )
-            cand_tz = tz0 + dtz
-            cand_rz = wrap_rad(rz0 + drz)
-            err, _, _ = self._pair_error(
-                self._with_tz_rz(corr, cand_tz, cand_rz))
-            if err is not None and (best_err is None or err < best_err):
-                best_err = err
-                best = (cand_tz, cand_rz)
-        if best is None:
-            return None
+            refined = self._refine(corr, tz0 + dtz, wrap_rad(rz0 + drz))
+            if refined is None:
+                continue
+            tz, rz, err = refined
+            cand = {
+                'tz': tz, 'rz': rz, 'residual': err,
+                'dtz': tz - tz0, 'drz': wrap_rad(rz - rz0),
+                'branch': branch,
+                'source': 'start' if branch == 0 else 'analytic',
+            }
+            # Merge with an existing candidate that converged to the same
+            # solution, keeping the better residual.
+            for j, other in enumerate(candidates):
+                if (abs(other['tz'] - tz) <= self._DEDUP_TZ_M
+                        and abs(wrap_rad(other['rz'] - rz))
+                        <= self._DEDUP_RZ_RAD):
+                    if err < other['residual']:
+                        candidates[j] = cand
+                    break
+            else:
+                candidates.append(cand)
 
-        # Gauss-Newton refinement on F(tz, rz) = p1 − p2 with true DEM
-        # ray-casting and a numeric Jacobian.
-        tz, rz = best
+        candidates.sort(key=lambda c: c['residual'])
+        return candidates
+
+    def _refine(self, corr: dict, tz: float, rz: float):
+        """Gauss-Newton refinement of F(tz, rz) = p1 - p2 with true DEM
+        ray-casting and a numeric Jacobian.  Returns ``(tz, rz, residual)``
+        or None when the start point cannot be evaluated."""
+        err, _, _ = self._pair_error(self._with_tz_rz(corr, tz, rz))
+        if err is None:
+            return None
         for it in range(self._GN_MAX_ITER):
             err, bp1, bp2 = self._pair_error(self._with_tz_rz(corr, tz, rz))
             if err is None:
                 break
-            self._status(
-                f"Refining…  iteration {it + 1} / {self._GN_MAX_ITER},  "
-                f"point distance = {err:.3f} m"
-            )
             if err < self._GN_TOL_M:
                 break
             fx = bp1[0] - bp2[0]
@@ -267,13 +312,17 @@ class CorrectionSolver:
                 if ne is not None and ne < err:
                     tz += lam * dtz
                     rz += lam * drz
+                    err = ne
                     improved = True
                     break
                 lam *= 0.5
             if not improved:
                 break
 
-        return (tz, wrap_rad(rz))
+        final, _, _ = self._pair_error(self._with_tz_rz(corr, tz, rz))
+        if final is None:
+            return None
+        return (tz, wrap_rad(rz), final)
 
     # ------------------------------------------------------------------
 

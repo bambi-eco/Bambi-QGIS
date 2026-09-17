@@ -139,7 +139,7 @@ class TestSolveTzRz:
             model.geo_ref, model.camera_xy, model.camera_z,
             status_fn=messages.append)
         solver.solve_tz_rz(_corr(TZ_TRUE + 7.0, RZ_TRUE + 0.15))
-        assert any("Evaluating candidate" in m for m in messages)
+        assert any("Refining candidate" in m for m in messages)
 
 
 class TestProbeZ:
@@ -189,3 +189,74 @@ class TestComputeCircles:
         solver = CorrectionSolver(
             lambda side, corr: None, model.camera_xy, model.camera_z)
         assert solver.compute_circles(_corr(0.0, 0.0)) is None
+
+
+class TestCandidates:
+    """solve_tz_rz_candidates lists every distinct solution."""
+
+    def test_truth_is_a_candidate_and_list_is_sorted(self, solver, model):
+        cands = solver.solve_tz_rz_candidates(_corr(TZ_TRUE + 7.0, RZ_TRUE + 0.15))
+        assert cands
+        residuals = [c["residual"] for c in cands]
+        assert residuals == sorted(residuals)
+        best = cands[0]
+        assert best["residual"] < 0.05
+        assert best["tz"] == pytest.approx(TZ_TRUE, abs=0.1)
+        assert wrap_rad(best["rz"] - RZ_TRUE) == pytest.approx(0.0, abs=0.01)
+        for c in cands:
+            assert set(c) >= {"tz", "rz", "residual", "dtz", "drz", "branch", "source"}
+            assert c["dtz"] == pytest.approx(c["tz"] - (TZ_TRUE + 7.0))
+
+    def test_candidates_are_distinct(self, solver):
+        cands = solver.solve_tz_rz_candidates(_corr(TZ_TRUE + 7.0, RZ_TRUE + 0.15))
+        for i, a in enumerate(cands):
+            for b in cands[i + 1:]:
+                assert (abs(a["tz"] - b["tz"]) > CorrectionSolver._DEDUP_TZ_M
+                        or abs(wrap_rad(a["rz"] - b["rz"])) > CorrectionSolver._DEDUP_RZ_RAD)
+
+    def test_solve_tz_rz_returns_best_candidate(self, solver):
+        start = _corr(TZ_TRUE + 3.0, RZ_TRUE - 0.05)
+        cands = solver.solve_tz_rz_candidates(start)
+        tz, rz = solver.solve_tz_rz(start)
+        assert (tz, rz) == (cands[0]["tz"], cands[0]["rz"])
+
+    def test_second_root_is_listed(self):
+        """Cameras at different heights above the feature: the overlap
+        condition is a quadratic in tz, so a second exact solution exists
+        (here tz ≈ +37 m with a ~20° different yaw).  Both must be listed
+        with near-zero residual so the user can compare them."""
+        cams = [(0.0, 0.0), (100.0, 0.0)]
+        z_cam = [100.0, 30.0]
+        q_true = (150.0, 40.0)
+        tz_true, rz_true = 0.0, 0.0
+        az, tan_elev = [], []
+        for i, c in enumerate(cams):
+            dx, dy = q_true[0] - c[0], q_true[1] - c[1]
+            az.append(math.atan2(dy, dx))
+            tan_elev.append(math.hypot(dx, dy) / (z_cam[i] + tz_true))
+
+        def geo_ref(side, corr):
+            h = z_cam[side] + corr["translation"]["z"]
+            if h <= 0:
+                return None
+            dist = h * tan_elev[side]
+            a = az[side] + (corr["rotation"]["z"] - rz_true)
+            c = cams[side]
+            return (c[0] + dist * math.cos(a), c[1] + dist * math.sin(a), 0.0)
+
+        def camera_xy(side, corr):
+            return cams[side]
+
+        def camera_z(side, corr):
+            return z_cam[side] + corr["translation"]["z"]
+
+        s = CorrectionSolver(geo_ref, camera_xy, camera_z)
+        cands = s.solve_tz_rz_candidates(_corr(tz_true + 5.0, rz_true + 0.1))
+        good = [c for c in cands if c["residual"] < 0.05]
+        tzs = sorted(c["tz"] for c in good)
+        assert len(good) >= 2, [(c["tz"], c["rz"], c["residual"]) for c in cands]
+        assert any(abs(t - tz_true) < 0.2 for t in tzs)
+        assert any(abs(t - 37.0) < 1.5 for t in tzs), tzs
+        # the two solutions differ clearly in yaw as well
+        yaws = [wrap_rad(c["rz"]) for c in good]
+        assert max(yaws) - min(yaws) > math.radians(10.0)
