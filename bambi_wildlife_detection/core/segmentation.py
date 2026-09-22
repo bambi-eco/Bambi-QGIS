@@ -66,6 +66,11 @@ PROMPT_POINT = "point"
 MODE_IMAGE = "image"
 MODE_SEQUENCE = "sequence"
 
+#: What is segmented: the extracted frames, or the orthomosaic of step P6
+#: (tiled and merged, see :mod:`ortho_segmentation`).
+SOURCE_FRAMES = "frames"
+SOURCE_ORTHO = "orthomosaic"
+
 #: ``(key, label, capabilities)`` in the order the tool lists them.
 BACKENDS: List[Tuple[str, str, frozenset]] = [
     (BACKEND_TRANSFORMERS, "Local - transformers (facebook/sam3)",
@@ -88,6 +93,8 @@ SEQUENCE_MAX_SIDE = 1008
 
 PIXEL_FILE = "segmentation_pixel.json"
 GEOREF_FILE = "segmentation_georef.json"
+ORTHO_PIXEL_FILE = "ortho_segmentation_pixel.json"
+ORTHO_GEOREF_FILE = "ortho_segmentation_georef.json"
 
 ROBOFLOW_ENDPOINT = "https://serverless.roboflow.com/sam3/concept_segment"
 
@@ -149,6 +156,9 @@ class SegmentationRequest:
     hf_token: str = ""                  # gated downloads
     device: str = "auto"
     models_dir: str = ""
+    source: str = SOURCE_FRAMES         # frames | orthomosaic
+    tile_size: int = 1024               # orthomosaic: tile edge in mosaic px
+    tile_overlap: int = 128             # orthomosaic: overlap between tiles
 
     def prompt_names(self) -> List[str]:
         """Every prompt entry name this run will write (for the merge)."""
@@ -161,7 +171,19 @@ class SegmentationRequest:
         caps = backend_capabilities(self.backend)
         if self.modality not in ("t", "w"):
             raise SegmentationError(f"Unknown camera {self.modality!r}")
-        if not self.frames:
+        if self.source not in (SOURCE_FRAMES, SOURCE_ORTHO):
+            raise SegmentationError(f"Unknown source {self.source!r}")
+        if self.source == SOURCE_ORTHO:
+            if self.mode == MODE_SEQUENCE:
+                raise SegmentationError(
+                    "The orthomosaic is one image; there is no sequence to "
+                    "track across. Its tiles are merged instead.")
+            if self.tile_size < 256:
+                raise SegmentationError("Tiles must be at least 256 px.")
+            if not 0 <= self.tile_overlap < self.tile_size:
+                raise SegmentationError(
+                    "The tile overlap must be smaller than the tile.")
+        elif not self.frames:
             raise SegmentationError("No frames selected.")
         if not self.texts and not self.points:
             raise SegmentationError(
@@ -184,7 +206,7 @@ class SegmentationRequest:
         if self.backend == BACKEND_ROBOFLOW and not self.api_key:
             raise SegmentationError(
                 "Roboflow API key is required for SAM3 segmentation")
-        if self.points:
+        if self.points and self.source == SOURCE_FRAMES:
             outside = sorted({p.frame_idx for p in self.points}
                              - set(self.frames))
             if outside:
@@ -1141,6 +1163,9 @@ def run_segmentation(request: SegmentationRequest, progress_fn=None,
     default :func:`make_backend` builds it and it is closed at the end.
     """
     request.validate()
+    if request.source == SOURCE_ORTHO:
+        return _run_on_orthomosaic(request, progress_fn, log_fn, cancel_check,
+                                   backend)
     images = pose_images(request.target_folder, request.modality)
     camera_name = "Thermal" if request.modality == "t" else "RGB"
 
@@ -1198,6 +1223,46 @@ def run_segmentation(request: SegmentationRequest, progress_fn=None,
     if log_fn:
         log_fn(f"SAM3 segmentation complete: {len(results)} frames, "
                f"{count_predictions(results)} predictions")
+    if progress_fn:
+        progress_fn(100)
+    return results
+
+
+def _run_on_orthomosaic(request, progress_fn, log_fn, cancel_check,
+                        backend) -> List[dict]:
+    """The orthomosaic route: tiles instead of frames, one entry back."""
+    from . import ortho_segmentation as ortho
+
+    owns_backend = backend is None
+    if backend is None:
+        backend = make_backend(request, log_fn)
+    if log_fn:
+        what = (f"{len(request.texts)} text prompt(s): {request.texts}"
+                if request.texts else
+                f"{len(request.points)} point(s) on "
+                f"{len({p.object_id for p in request.points})} object(s)")
+        log_fn(f"Starting SAM3 segmentation on the "
+               f"{'Thermal' if request.modality == 't' else 'RGB'} orthomosaic "
+               f"({backend_label(request.backend)}), {what}")
+        log_fn(f"Confidence threshold: {request.confidence}")
+    if progress_fn:
+        progress_fn(5)
+
+    def _progress(fraction):
+        if progress_fn:
+            progress_fn(min(95, 10 + int(max(0.0, fraction) * 85)))
+
+    try:
+        backend.load()
+        backend.prepare(request.texts, request.points, MODE_IMAGE)
+        if progress_fn:
+            progress_fn(10)
+        results = ortho.run_orthomosaic(
+            request, backend, progress_fn=_progress, log_fn=log_fn,
+            cancel_check=cancel_check)
+    finally:
+        if owns_backend:
+            backend.close()
     if progress_fn:
         progress_fn(100)
     return results
@@ -1266,14 +1331,30 @@ def _run_sequence(request, backend, frames, progress_fn, log_fn, cancel_check):
 # ---------------------------------------------------------------------------
 
 class SegmentationStore:
-    """``segmentation_{modality}/`` - the pixel results and their geo twin."""
+    """``segmentation_{modality}/`` - the pixel results and their geo twin.
 
-    def __init__(self, target_folder: str, modality: str):
+    The frame results and the orthomosaic results of one camera share the
+    folder but not the files: ``segmentation_*.json`` for the frames,
+    ``ortho_segmentation_*.json`` for the mosaic.
+    """
+
+    def __init__(self, target_folder: str, modality: str,
+                 source: str = SOURCE_FRAMES):
         self.target_folder = target_folder
         self.modality = modality
+        self.source = source
         self.folder = os.path.join(target_folder, f"segmentation_{modality}")
-        self.pixel_path = os.path.join(self.folder, PIXEL_FILE)
-        self.georef_path = os.path.join(self.folder, GEOREF_FILE)
+        ortho = source == SOURCE_ORTHO
+        self.pixel_path = os.path.join(
+            self.folder, ORTHO_PIXEL_FILE if ortho else PIXEL_FILE)
+        self.georef_path = os.path.join(
+            self.folder, ORTHO_GEOREF_FILE if ortho else GEOREF_FILE)
+
+    def save_georef(self, results: List[dict]) -> str:
+        os.makedirs(self.folder, exist_ok=True)
+        with open(self.georef_path, "w", encoding="utf-8") as handle:
+            json.dump(results, handle, indent=2)
+        return self.georef_path
 
     def load_pixel(self) -> List[dict]:
         return self._read(self.pixel_path)
@@ -1418,6 +1499,7 @@ def export_geojson(georef_results: List[dict], output_path: str,
                     "prediction_idx": pred_idx,
                     "confidence": round(float(prediction.get("confidence", 0.0)), 4),
                     "camera": "thermal" if modality == "t" else "rgb",
+                    "source": entry.get("source", SOURCE_FRAMES),
                 }
                 features.append({"type": "Feature", "geometry": geometry,
                                  "properties": properties})

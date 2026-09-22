@@ -16,6 +16,10 @@ masks over the frame:
 * **Backends** - Roboflow's API (text on images), ``facebook/sam3`` through
   transformers (everything, CPU or GPU), or Meta's official package (SAM 3
   and SAM 3.1, GPU only).
+* **Source** - the extracted frames, or the **orthomosaic** of step P6: the
+  mosaic is cut into overlapping tiles, each tile is segmented, and the
+  masks are merged back into one map, so a canopy seen in ten frames is one
+  polygon rather than ten (:mod:`core.ortho_segmentation`).
 
 Results are written to ``segmentation_{t|w}/segmentation_pixel.json`` - the
 same file the pipeline always wrote, so geo-referencing, the QGIS layers and
@@ -29,8 +33,8 @@ import os
 from typing import Dict, List, Optional
 
 from qgis.PyQt.QtCore import QPointF, QRectF, QSettings, Qt, QThread, pyqtSignal
-from qgis.PyQt.QtGui import (QBrush, QColor, QFont, QPainter, QPen, QPixmap,
-                             QPolygonF)
+from qgis.PyQt.QtGui import (QBrush, QColor, QFont, QImage, QPainter, QPen,
+                             QPixmap, QPolygonF)
 from qgis.PyQt.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog,
     QFormLayout, QGraphicsEllipseItem, QGraphicsItem, QGraphicsPixmapItem,
@@ -41,6 +45,7 @@ from qgis.PyQt.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
+from .core import ortho_segmentation as ortho
 from .core import segmentation as seg
 from .gui_utils import fit_to_screen, read_hf_token, write_hf_token
 
@@ -253,6 +258,33 @@ class _SegmentationWorker(QThread):
         self.finished_ok.emit(results)
 
 
+class _OrthoPreviewWorker(QThread):
+    """Reads the mosaic's header and a decimated preview off the GUI thread.
+
+    Even with overviews a large GeoTIFF takes seconds to decimate, and the
+    window must not freeze for it.
+    """
+
+    ready = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+    def __init__(self, path: str, parent=None):
+        super().__init__(parent)
+        self.path = path
+
+    def run(self):
+        try:
+            with ortho.OrthoReader(self.path) as reader:
+                rgb, scale = reader.preview()
+                info = reader.info
+            height, width = rgb.shape[:2]
+            self.ready.emit({"info": info, "bytes": rgb.tobytes(),
+                             "width": int(width), "height": int(height),
+                             "scale": float(scale)})
+        except Exception as exc:  # noqa: BLE001 - surfaced to the user
+            self.failed.emit(str(exc))
+
+
 class _GeoRefWorker(QThread):
     progress = pyqtSignal(int)
     log = pyqtSignal(str)
@@ -302,9 +334,15 @@ class SegmentationToolDialog(QDialog):
         self._next_object_id = 1
         self._worker = None
         self._georef_worker = None
+        self._preview_worker = None
         self._updating_ui = False
+        self._source = seg.SOURCE_FRAMES
+        self._ortho_info: Optional[ortho.OrthoInfo] = None
+        self._ortho_pixmap: Optional[QPixmap] = None
+        self._ortho_scale = 1.0
 
-        self.setWindowTitle("Segmentation - SAM3 / SAM 3.1 on the extracted frames")
+        self.setWindowTitle(
+            "Segmentation - SAM3 / SAM 3.1 on the frames or the orthomosaic")
         self.setWindowFlags(Qt.WindowType.Window
                             | Qt.WindowType.WindowCloseButtonHint
                             | Qt.WindowType.WindowMinimizeButtonHint
@@ -315,6 +353,7 @@ class SegmentationToolDialog(QDialog):
         self._on_backend_changed()
         self._on_prompt_kind_changed()
         self._on_scope_changed()
+        self._apply_source()
         self.apply_dock_defaults()
 
     # ------------------------------------------------------------------ UI --
@@ -332,6 +371,17 @@ class SegmentationToolDialog(QDialog):
         browse.setFixedWidth(30)
         browse.clicked.connect(self._on_browse_folder)
         folder_row.addWidget(browse)
+        folder_row.addSpacing(8)
+        folder_row.addWidget(QLabel("Source:"))
+        self.source_combo = QComboBox()
+        self.source_combo.addItem("Extracted frames", seg.SOURCE_FRAMES)
+        self.source_combo.addItem("Orthomosaic", seg.SOURCE_ORTHO)
+        self.source_combo.setToolTip(
+            "Frames: every frame on its own, or tracked as a sequence. "
+            "Orthomosaic: the P6 mosaic, tiled and merged, so each object "
+            "on the ground is one polygon instead of one per sighting.")
+        self.source_combo.currentIndexChanged.connect(self._on_source_changed)
+        folder_row.addWidget(self.source_combo)
         folder_row.addSpacing(8)
         folder_row.addWidget(QLabel("Camera:"))
         self.camera_combo = QComboBox()
@@ -597,7 +647,12 @@ class SegmentationToolDialog(QDialog):
 
     def _build_scope_group(self) -> QGroupBox:
         group = QGroupBox("Frames")
+        self.scope_group = group
         layout = QVBoxLayout(group)
+
+        self.frames_scope_widget = QWidget()
+        frames_layout = QVBoxLayout(self.frames_scope_widget)
+        frames_layout.setContentsMargins(0, 0, 0, 0)
         scope_row = QHBoxLayout()
         self.current_radio = QRadioButton("Current frame")
         self.current_radio.setChecked(True)
@@ -606,7 +661,7 @@ class SegmentationToolDialog(QDialog):
         scope_row.addWidget(self.current_radio)
         scope_row.addWidget(self.range_radio)
         scope_row.addStretch()
-        layout.addLayout(scope_row)
+        frames_layout.addLayout(scope_row)
 
         self.range_widget = QWidget()
         range_form = QFormLayout(self.range_widget)
@@ -632,7 +687,44 @@ class SegmentationToolDialog(QDialog):
             "their identity between frames, and a clicked object is followed "
             "onto the other frames. Off: every frame is segmented on its own.")
         range_form.addRow(self.sequence_check)
-        layout.addWidget(self.range_widget)
+        frames_layout.addWidget(self.range_widget)
+        layout.addWidget(self.frames_scope_widget)
+
+        self.tiling_widget = QWidget()
+        tiling_form = QFormLayout(self.tiling_widget)
+        tiling_form.setContentsMargins(0, 0, 0, 0)
+        tile_row = QHBoxLayout()
+        self.tile_spin = QSpinBox()
+        self.tile_spin.setRange(256, 4096)
+        self.tile_spin.setSingleStep(128)
+        self.tile_spin.setValue(ortho.DEFAULT_TILE)
+        self.tile_spin.setToolTip(
+            "Tile edge in mosaic pixels. SAM3 works at 1008 px, so a larger "
+            "tile is downscaled inside the model and small objects get "
+            "smaller; a smaller tile cuts more objects at its borders.")
+        self.overlap_spin = QSpinBox()
+        self.overlap_spin.setRange(0, 2048)
+        self.overlap_spin.setSingleStep(32)
+        self.overlap_spin.setValue(ortho.DEFAULT_OVERLAP)
+        self.overlap_spin.setToolTip(
+            "Overlap between neighbouring tiles. An object cut by one tile's "
+            "border is whole in the next tile when the overlap exceeds its "
+            "size; the merge then joins the two masks.")
+        tile_row.addWidget(QLabel("tile"))
+        tile_row.addWidget(self.tile_spin)
+        tile_row.addWidget(QLabel("px, overlap"))
+        tile_row.addWidget(self.overlap_spin)
+        tile_row.addWidget(QLabel("px"))
+        tile_row.addStretch()
+        tiling_form.addRow(tile_row)
+        self.tiles_label = QLabel("")
+        self.tiles_label.setWordWrap(True)
+        self.tiles_label.setStyleSheet("color: gray; font-size: 10px;")
+        tiling_form.addRow(self.tiles_label)
+        self.tile_spin.valueChanged.connect(lambda _v: self._update_tiles_label())
+        self.overlap_spin.valueChanged.connect(lambda _v: self._update_tiles_label())
+        self.tiling_widget.setVisible(False)
+        layout.addWidget(self.tiling_widget)
 
         conf_row = QHBoxLayout()
         conf_row.addWidget(QLabel("Confidence threshold:"))
@@ -727,6 +819,18 @@ class SegmentationToolDialog(QDialog):
             settings.value(_SETTINGS_PREFIX + "confidence", 0.5, type=float))
         self.sequence_check.setChecked(
             settings.value(_SETTINGS_PREFIX + "sequence", True, type=bool))
+        self.tile_spin.setValue(
+            settings.value(_SETTINGS_PREFIX + "tile_size", ortho.DEFAULT_TILE, type=int))
+        self.overlap_spin.setValue(
+            settings.value(_SETTINGS_PREFIX + "tile_overlap", ortho.DEFAULT_OVERLAP,
+                           type=int))
+        source = settings.value(_SETTINGS_PREFIX + "source", "", type=str)
+        idx = self.source_combo.findData(source)
+        if idx >= 0:
+            self.source_combo.blockSignals(True)
+            self.source_combo.setCurrentIndex(idx)
+            self.source_combo.blockSignals(False)
+            self._source = source
 
     def _save_settings(self):
         settings = QSettings()
@@ -747,6 +851,11 @@ class SegmentationToolDialog(QDialog):
                           self.confidence_spin.value())
         settings.setValue(_SETTINGS_PREFIX + "sequence",
                           self.sequence_check.isChecked())
+        settings.setValue(_SETTINGS_PREFIX + "tile_size", self.tile_spin.value())
+        settings.setValue(_SETTINGS_PREFIX + "tile_overlap",
+                          self.overlap_spin.value())
+        settings.setValue(_SETTINGS_PREFIX + "source",
+                          self.source_combo.currentData())
 
     # ----------------------------------------------------------------- dock --
 
@@ -854,6 +963,48 @@ class SegmentationToolDialog(QDialog):
         if self._target_folder:
             self.load()
 
+    def _on_source_changed(self, _index):
+        self._source = self.source_combo.currentData() or seg.SOURCE_FRAMES
+        self._apply_source()
+        self._clear_points()
+        if self._target_folder:
+            self.load()
+
+    def _is_ortho(self) -> bool:
+        return self._source == seg.SOURCE_ORTHO
+
+    def _apply_source(self):
+        """Show the controls of the chosen source, hide the other's."""
+        is_ortho = self._is_ortho()
+        self.scope_group.setTitle("Tiles" if is_ortho else "Frames")
+        self.frames_scope_widget.setVisible(not is_ortho)
+        self.tiling_widget.setVisible(is_ortho)
+        for widget in (self.prev_btn, self.next_btn, self.frame_spin,
+                       self.frame_slider):
+            widget.setEnabled(not is_ortho)
+        self.georef_btn.setVisible(not is_ortho)
+        self.dem_edit.setEnabled(not is_ortho)
+        self.sequence_check.setEnabled(
+            not is_ortho and seg.CAP_SEQUENCE in seg.backend_capabilities(
+                self.backend_combo.currentData() or seg.BACKEND_TRANSFORMERS))
+        self.show_masks_check.setText(
+            "Show masks on the mosaic" if is_ortho else "Show masks on the frame")
+        self._update_tiles_label()
+
+    def _update_tiles_label(self):
+        info = self._ortho_info
+        if info is None:
+            self.tiles_label.setText(
+                "Load a target folder whose P6 orthomosaic exists.")
+            return
+        count = ortho.tile_count(info.width, info.height,
+                                 self.tile_spin.value(), self.overlap_spin.value())
+        metres = self.tile_spin.value() * info.gsd
+        self.tiles_label.setText(
+            f"{count} tile(s) of {self.tile_spin.value()} px "
+            f"(~{metres:.0f} m on the ground) over "
+            f"{info.width} x {info.height} px at {info.gsd * 100:.1f} cm/px.")
+
     def load(self):
         folder = self.folder_edit.text().strip()
         if not folder or not os.path.isdir(folder):
@@ -861,6 +1012,64 @@ class SegmentationToolDialog(QDialog):
             return
         self._target_folder = folder
         self._modality = self.camera_combo.currentData() or "t"
+        if self._is_ortho():
+            self._load_ortho()
+            return
+        self._load_frames()
+
+    def _load_ortho(self):
+        camera = self.camera_combo.currentText()
+        path = ortho.orthomosaic_path(self._target_folder, self._modality)
+        self._ortho_info = None
+        self._ortho_pixmap = None
+        self.canvas.clear_overlay()
+        self._clear_points()
+        self._reload_results()
+        if not os.path.isfile(path):
+            self.frame_label.setText("No orthomosaic.")
+            self.status_label.setText(
+                f"No {camera} orthomosaic at {path} - run P6 Generate "
+                "Orthomosaic first.")
+            self._update_tiles_label()
+            return
+        if self._preview_worker is not None:
+            return
+        self.load_btn.setEnabled(False)
+        self.frame_label.setText("Reading the orthomosaic…")
+        self.status_label.setText(f"Reading {camera} orthomosaic {path}…")
+        self._preview_worker = _OrthoPreviewWorker(path, self)
+        self._preview_worker.ready.connect(self._on_ortho_preview)
+        self._preview_worker.failed.connect(self._on_ortho_failed)
+        self._preview_worker.finished.connect(self._on_preview_done)
+        self._preview_worker.start()
+
+    def _on_preview_done(self):
+        worker = self._preview_worker
+        self._preview_worker = None
+        if worker is not None:
+            worker.deleteLater()
+        self.load_btn.setEnabled(True)
+
+    def _on_ortho_failed(self, message: str):
+        self.frame_label.setText("No orthomosaic.")
+        self.status_label.setText(f"Could not read the orthomosaic: {message}")
+
+    def _on_ortho_preview(self, preview: dict):
+        info = preview["info"]
+        image = QImage(preview["bytes"], preview["width"], preview["height"],
+                       3 * preview["width"], QImage.Format.Format_RGB888)
+        self._ortho_pixmap = QPixmap.fromImage(image.copy())
+        self._ortho_scale = float(preview["scale"])
+        self._ortho_info = info
+        self._update_tiles_label()
+        self._render_frame()
+        camera = self.camera_combo.currentText()
+        self.status_label.setText(
+            f"{camera} orthomosaic: {info.width} x {info.height} px, "
+            f"{info.gsd * 100:.1f} cm/px, EPSG:{info.epsg or '?'}")
+
+    def _load_frames(self):
+        folder = self._target_folder
         camera = self.camera_combo.currentText()
         try:
             self._images = seg.pose_images(folder, self._modality)
@@ -901,19 +1110,31 @@ class SegmentationToolDialog(QDialog):
     def _store(self) -> Optional[seg.SegmentationStore]:
         if not self._target_folder:
             return None
-        return seg.SegmentationStore(self._target_folder, self._modality)
+        return seg.SegmentationStore(self._target_folder, self._modality,
+                                     self._source)
 
     def _update_results_label(self):
         store = self._store()
+        is_ortho = self._is_ortho()
         if not self._results:
-            self.results_label.setText("No results for this camera yet.")
+            self.results_label.setText(
+                "No results for this camera's "
+                f"{'orthomosaic' if is_ortho else 'frames'} yet.")
         else:
             summary = seg.prompt_summary(self._results)
-            lines = [f"{len(self._results)} frame(s), "
-                     f"{seg.count_predictions(self._results)} mask(s):"]
-            for name, (frames, count) in sorted(summary.items()):
-                lines.append(f"  • {name}: {count} mask(s) on {frames} frame(s)")
-            if store and store.has_georef():
+            if is_ortho:
+                lines = [f"{seg.count_predictions(self._results)} object(s) "
+                         "on the orthomosaic:"]
+                for name, (_frames, count) in sorted(summary.items()):
+                    lines.append(f"  • {name}: {count} object(s)")
+            else:
+                lines = [f"{len(self._results)} frame(s), "
+                         f"{seg.count_predictions(self._results)} mask(s):"]
+                for name, (frames, count) in sorted(summary.items()):
+                    lines.append(f"  • {name}: {count} mask(s) on {frames} frame(s)")
+            if is_ortho:
+                lines.append("Geo-referenced through the mosaic's own transform")
+            elif store and store.has_georef():
                 lines.append("Geo-referenced" + (
                     " (stale - re-run the geo-referencing)"
                     if store.georef_is_stale() else ""))
@@ -930,7 +1151,7 @@ class SegmentationToolDialog(QDialog):
     # ---------------------------------------------------------------- frames --
 
     def _goto_frame(self, frame: int, force: bool = False):
-        if not self._images:
+        if not self._images or self._is_ortho():
             return
         frame = max(0, min(frame, len(self._images) - 1))
         if frame == self._frame and not force:
@@ -973,6 +1194,9 @@ class SegmentationToolDialog(QDialog):
         return path if os.path.isfile(path) else ""
 
     def _render_frame(self):
+        if self._is_ortho():
+            self._render_ortho()
+            return
         self.canvas.clear_overlay()
         if not self._images:
             return
@@ -1018,6 +1242,44 @@ class SegmentationToolDialog(QDialog):
             + ("" if path else "  |  image file missing"))
         self._refresh_points_list()
 
+    def _render_ortho(self):
+        """The mosaic preview with its masks and clicks, scaled to fit."""
+        self.canvas.clear_overlay()
+        if self._ortho_pixmap is None or self._ortho_info is None:
+            return
+        self.canvas.set_frame(self._ortho_pixmap)
+        inv = 1.0 / self._ortho_scale
+        masks = 0
+        entry = self._by_frame.get(ortho.ORTHO_FRAME)
+        if entry and self.show_masks_check.isChecked():
+            for prompt in entry.get("prompts", []):
+                name = prompt.get("prompt", "")
+                color = self._colors.get(name, (200, 200, 200))
+                for prediction in prompt.get("predictions", []):
+                    object_id = prediction.get("object_id", prompt.get("object_id"))
+                    label = name
+                    if object_id is not None and prompt.get(
+                            "prompt_type") != seg.PROMPT_POINT:
+                        label = f"{name} #{object_id}"
+                    label += f" {prediction.get('confidence', 0):.2f}"
+                    for index, ring in enumerate(prediction.get("polygons", [])):
+                        if len(ring) < 3:
+                            continue
+                        self.canvas.add_polygon(
+                            [[x * inv, y * inv] for x, y in ring], color,
+                            label if index == 0 else "")
+                        masks += 1
+        for point in self._points:
+            self.canvas.add_point(
+                point.x * inv, point.y * inv, point.positive,
+                seg.object_name(point.object_id, self._object_names))
+        info = self._ortho_info
+        self.frame_label.setText(
+            f"orthomosaic {info.width} x {info.height} px  "
+            f"{info.gsd * 100:.1f} cm/px  (preview 1:{self._ortho_scale:.0f})"
+            f"  |  {masks} mask(s) shown")
+        self._refresh_points_list()
+
     # ---------------------------------------------------------------- points --
 
     def _on_prompt_kind_changed(self, *_args):
@@ -1060,6 +1322,16 @@ class SegmentationToolDialog(QDialog):
         self._render_frame()
 
     def _on_canvas_point(self, x: float, y: float, positive: bool):
+        if self._is_ortho():
+            if self._ortho_info is None:
+                return
+            # The canvas holds the decimated preview; clicks are stored in
+            # full mosaic pixels so they survive a preview at another scale.
+            self._points.append(seg.PointPrompt(
+                self._current_object_id(), ortho.ORTHO_FRAME,
+                x * self._ortho_scale, y * self._ortho_scale, positive))
+            self._render_frame()
+            return
         if not self._images:
             return
         self._points.append(seg.PointPrompt(
@@ -1069,9 +1341,11 @@ class SegmentationToolDialog(QDialog):
     def _refresh_points_list(self):
         self.points_list.clear()
         for index, point in enumerate(self._points):
+            where = ("mosaic" if point.frame_idx == ortho.ORTHO_FRAME
+                     else f"frame {point.frame_idx}")
             item = QListWidgetItem(
                 f"{seg.object_name(point.object_id, self._object_names)}  "
-                f"frame {point.frame_idx}  ({point.x:.0f}, {point.y:.0f})  "
+                f"{where}  ({point.x:.0f}, {point.y:.0f})  "
                 f"{'+' if point.positive else '−'}")
             item.setData(Qt.ItemDataRole.UserRole, index)
             self.points_list.addItem(item)
@@ -1125,7 +1399,8 @@ class SegmentationToolDialog(QDialog):
         self.point_radio.setEnabled(seg.CAP_POINTS in caps)
         if seg.CAP_POINTS not in caps and self.point_radio.isChecked():
             self.text_radio.setChecked(True)
-        self.sequence_check.setEnabled(seg.CAP_SEQUENCE in caps)
+        self.sequence_check.setEnabled(
+            seg.CAP_SEQUENCE in caps and not self._is_ortho())
         if transformers:
             self.model_info.setText(
                 'Meta\'s <a href="https://huggingface.co/facebook/sam3">'
@@ -1190,7 +1465,7 @@ class SegmentationToolDialog(QDialog):
         self.range_widget.setEnabled(self.range_radio.isChecked())
 
     def _selected_frames(self) -> List[int]:
-        if not self._images:
+        if self._is_ortho() or not self._images:
             return []
         if self.current_radio.isChecked():
             frames = [self._frame]
@@ -1215,7 +1490,8 @@ class SegmentationToolDialog(QDialog):
             points = list(self._points)
         mode = (seg.MODE_SEQUENCE
                 if self.range_radio.isChecked() and self.sequence_check.isChecked()
-                and self.sequence_check.isEnabled() else seg.MODE_IMAGE)
+                and self.sequence_check.isEnabled() and not self._is_ortho()
+                else seg.MODE_IMAGE)
         model = (self.version_combo.currentData() if key == seg.BACKEND_META
                  else self.model_edit.text().strip())
         return seg.SegmentationRequest(
@@ -1227,12 +1503,21 @@ class SegmentationToolDialog(QDialog):
             api_key=self.api_key_edit.text().strip(),
             hf_token=self._hf_token(),
             device=self.device_combo.currentData() or "auto",
-            models_dir=self._models_dir())
+            models_dir=self._models_dir(), source=self._source,
+            tile_size=self.tile_spin.value(),
+            tile_overlap=self.overlap_spin.value())
 
     def _run(self):
         if self._worker is not None:
             return
-        if not self._images:
+        if self._is_ortho():
+            if self._ortho_info is None:
+                QMessageBox.warning(
+                    self, "Segmentation",
+                    "Load a target folder whose orthomosaic exists first "
+                    "(P6 Generate Orthomosaic).")
+                return
+        elif not self._images:
             QMessageBox.warning(self, "Segmentation",
                                 "Load a target folder with extracted frames first.")
             return
@@ -1270,7 +1555,13 @@ class SegmentationToolDialog(QDialog):
             self._log("Hugging Face token: "
                       + (hf_access.describe_token_source(source)
                          if source else "none - a gated download will fail"))
-        self._log(f"Running on {len(request.frames)} frame(s)…")
+        if self._is_ortho():
+            info = self._ortho_info
+            self._log(f"Running on the orthomosaic: "
+                      f"{ortho.tile_count(info.width, info.height, request.tile_size, request.tile_overlap)} "
+                      f"tile(s) of {request.tile_size} px…")
+        else:
+            self._log(f"Running on {len(request.frames)} frame(s)…")
         self._worker.start()
 
     def _cancel(self):
@@ -1282,8 +1573,8 @@ class SegmentationToolDialog(QDialog):
 
     def _set_running(self, running: bool):
         for widget in (self.run_btn, self.load_btn, self.camera_combo,
-                       self.georef_btn, self.add_qgis_btn, self.export_btn,
-                       self.delete_btn, self.backend_combo):
+                       self.source_combo, self.georef_btn, self.add_qgis_btn,
+                       self.export_btn, self.delete_btn, self.backend_combo):
             widget.setEnabled(not running)
         self.cancel_btn.setEnabled(running)
         if running:
@@ -1298,7 +1589,10 @@ class SegmentationToolDialog(QDialog):
         merged = seg.merge_results(store.load_pixel(), results,
                                    self._run_prompt_names)
         store.save_pixel(merged)
-        if store.has_georef():
+        if self._is_ortho():
+            # The mosaic is a map already: its geo file is derived, not run.
+            store.save_georef(ortho.georeference(merged))
+        elif store.has_georef():
             self._log("The geo-referenced file is now older than the masks - "
                       "re-run 'Geo-reference onto the DEM'.")
         self._reload_results()
@@ -1307,9 +1601,10 @@ class SegmentationToolDialog(QDialog):
             self._clear_points()
         self._render_frame()
         found = seg.count_predictions(results)
+        where = ("on the orthomosaic" if self._is_ortho()
+                 else f"on {len(results)} frame(s)")
         self.status_label.setText(
-            f"Done: {found} mask(s) on {len(results)} frame(s), saved to "
-            f"{store.pixel_path}")
+            f"Done: {found} mask(s) {where}, saved to {store.pixel_path}")
 
     def _on_run_failed(self, message: str):
         self._log(f"Error: {message}")
@@ -1383,8 +1678,9 @@ class SegmentationToolDialog(QDialog):
                 "must be set in the plugin panel before exporting.")
             return
         camera = "thermal" if self._modality == "t" else "rgb"
-        suggested = os.path.join(self._target_folder,
-                                 f"segmentations_{camera}.geojson")
+        suggested = os.path.join(
+            self._target_folder,
+            f"segmentations_{'ortho_' if self._is_ortho() else ''}{camera}.geojson")
         output, _filter = QFileDialog.getSaveFileName(
             self, "Export segmentation GeoJSON", suggested, "GeoJSON (*.geojson)")
         if not output:
@@ -1409,7 +1705,8 @@ class SegmentationToolDialog(QDialog):
             return
         reply = QMessageBox.question(
             self, "Delete results",
-            f"Delete the {self.camera_combo.currentText()} segmentation "
+            f"Delete the {self.camera_combo.currentText()} "
+            f"{'orthomosaic' if self._is_ortho() else 'frame'} segmentation "
             f"results in\n{store.folder}\n(the pixel masks and the "
             "geo-referenced file)?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -1449,7 +1746,8 @@ class SegmentationToolDialog(QDialog):
         if not georef:
             QMessageBox.warning(self, "Add to QGIS", "No geo-referenced masks.")
             return
-        frames = sorted(int(r.get("frame_idx", 0)) for r in georef)
+        frames = sorted(int(r.get("frame_idx", 0)) for r in georef
+                        if int(r.get("frame_idx", 0)) != ortho.ORTHO_FRAME)
         if len(frames) > 50:
             reply = QMessageBox.question(
                 self, "Many frames",
@@ -1461,7 +1759,9 @@ class SegmentationToolDialog(QDialog):
                 return
 
         camera_label = "Thermal" if self._modality == "t" else "RGB"
-        group_name = f"SAM3 Segmentation ({camera_label})"
+        group_name = (f"SAM3 Segmentation Orthomosaic ({camera_label})"
+                      if self._is_ortho() else
+                      f"SAM3 Segmentation ({camera_label})")
         colors = _prompt_colors(p.get("prompt", "") for r in georef
                                 for p in r.get("prompts", []))
         crs = QgsCoordinateReferenceSystem(f"EPSG:{epsg}")
@@ -1491,7 +1791,11 @@ class SegmentationToolDialog(QDialog):
                            if p.get("predictions")]
                 if not prompts:
                     continue
-                frame_group = main_group.addGroup(f"Frame {frame_idx:04d}")
+                # Frame results get a sub-group per frame; the mosaic is one
+                # map, so its layers sit directly in the group.
+                is_mosaic = frame_idx == ortho.ORTHO_FRAME
+                frame_group = (main_group if is_mosaic
+                               else main_group.addGroup(f"Frame {frame_idx:04d}"))
                 for prompt in prompts:
                     name = prompt.get("prompt", "unknown")
                     layer = QgsVectorLayer(f"Polygon?crs={crs.authid()}",
@@ -1533,14 +1837,16 @@ class SegmentationToolDialog(QDialog):
                     color = colors.get(name, (120, 120, 120))
                     style(layer, color)
                     if dock is not None and hasattr(dock, "_persist_memory_layer"):
+                        stem = ("Ortho" if is_mosaic else f"Frame{frame_idx:04d}")
                         layer = dock._persist_memory_layer(
-                            layer, f"SAM3_{camera_label}_Frame{frame_idx:04d}_{name}",
+                            layer, f"SAM3_{camera_label}_{stem}_{name}",
                             "sam3_layers")
                         style(layer, color)
                     QgsProject.instance().addMapLayer(layer, False)
                     frame_group.addLayer(layer)
                     total += len(features)
-                frame_group.setExpanded(False)
+                if not is_mosaic:
+                    frame_group.setExpanded(False)
             main_group.setExpanded(True)
         finally:
             QApplication.restoreOverrideCursor()
@@ -1564,6 +1870,8 @@ class SegmentationToolDialog(QDialog):
         super().showEvent(event)
 
     def closeEvent(self, event):
+        if self._preview_worker is not None:
+            self._preview_worker.wait(5000)
         if self._worker is not None or self._georef_worker is not None:
             reply = QMessageBox.question(
                 self, "Segmentation running",

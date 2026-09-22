@@ -61,6 +61,43 @@ class TestDialogsConstruct:
             dlg.backend_combo.setCurrentIndex(index)
         _close(dlg)
 
+    def test_segmentation_tool_switches_to_the_orthomosaic(self, iface, dock, tmp_path):
+        """The mosaic source loads a preview off-thread and swaps the controls."""
+        pytest.importorskip("rasterio")
+        import numpy as np
+        import rasterio
+        from rasterio.transform import from_origin
+        from qgis.PyQt.QtWidgets import QApplication
+        from bambi_wildlife_detection.bambi_segmentation_tool import (
+            SegmentationToolDialog)
+        from bambi_wildlife_detection.core import segmentation as seg
+
+        folder = tmp_path / "orthomosaic_w"
+        folder.mkdir()
+        with rasterio.open(str(folder / "orthomosaic.tif"), "w", driver="GTiff",
+                           width=64, height=48, count=3, dtype="uint8",
+                           crs="EPSG:32633",
+                           transform=from_origin(500000, 5200000, 0.1, 0.1),
+                           nodata=0) as dst:
+            dst.write(np.full((3, 48, 64), 120, dtype=np.uint8))
+
+        dlg = SegmentationToolDialog(iface, dock)
+        dlg.folder_edit.setText(str(tmp_path))
+        dlg.camera_combo.setCurrentIndex(dlg.camera_combo.findData("w"))
+        dlg.source_combo.setCurrentIndex(dlg.source_combo.findData(seg.SOURCE_ORTHO))
+        assert dlg.tiling_widget.isVisibleTo(dlg)
+        assert not dlg.frames_scope_widget.isVisibleTo(dlg)
+        assert not dlg.georef_btn.isVisibleTo(dlg)
+        if dlg._preview_worker is not None:
+            dlg._preview_worker.wait(10000)
+        QApplication.processEvents()
+        assert dlg._ortho_info is not None
+        assert (dlg._ortho_info.width, dlg._ortho_info.height) == (64, 48)
+        assert "tile(s)" in dlg.tiles_label.text()
+        request = dlg._build_request()
+        assert request.source == seg.SOURCE_ORTHO and request.frames == []
+        _close(dlg)
+
     def test_segmentation_tool_shares_the_hf_token_with_the_dock(self, iface, dock):
         """One gated-model credential, typed once, in either place."""
         from bambi_wildlife_detection.bambi_segmentation_tool import (

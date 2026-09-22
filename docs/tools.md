@@ -142,7 +142,7 @@ Label tracks are also written as **real tracks**, so labelled animals reach the 
 
 ## Segmentation Tool
 
-The Segmentation Tool prompts Meta's **SAM3** (or **SAM 3.1**) on the extracted frames and turns the masks into geo-referenced polygons. Open it via the **Segmentation Tool** toolbar button, the plugin menu, or **S1** on the Processing tab. Point it at a processing **target folder** (the one with `frames_t/` / `frames_w/`); opened from a configured plugin panel the folder and the DEM are picked up. The **Camera** selector switches between thermal and RGB frames; each keeps its own results in `segmentation_t/` or `segmentation_w/`.
+The Segmentation Tool prompts Meta's **SAM3** (or **SAM 3.1**) on the extracted frames and turns the masks into geo-referenced polygons. Open it via the **Segmentation Tool** toolbar button, the plugin menu, or **S1** on the Processing tab. Point it at a processing **target folder** (the one with `frames_t/` / `frames_w/`); opened from a configured plugin panel the folder and the DEM are picked up. The **Camera** selector switches between thermal and RGB; the **Source** selector between the extracted frames and the P6 **orthomosaic** (see below). Each camera keeps its own results in `segmentation_t/` or `segmentation_w/`; frame and orthomosaic results sit side by side there.
 
 ### Backends
 
@@ -167,6 +167,12 @@ The two kinds run separately - a text prompt finds all instances of a concept, a
 - **Frame range** (from / to / step) segments every selected frame. With **Track across the sequence** ticked the frames are handed to the video tracker as one clip: an object found - or clicked on one frame - keeps its identity on the others and carries an `object_id`. Without it every frame is segmented on its own. For clips the frames are shrunk to SAM3's 1008 px working size in memory and the polygons scaled back, so a few hundred 4K frames stay feasible.
 
 A run **merges** into the existing results: re-running `deer` replaces the deer masks on the frames it processed and leaves `boar` alone; the same holds for a clicked object run again with more points. **Delete results of this camera…** starts over.
+
+### Orthomosaic
+
+A canopy visible in ten frames is ten masks on the frames - and one on the orthomosaic, which shows every point on the ground once. With **Source: Orthomosaic** the tool reads `orthomosaic_{t|w}/orthomosaic.tif` (step P6), shows a decimated preview, and segments the mosaic in overlapping **tiles** (default 1024 px with 128 px overlap; the *Tiles* box shows how many, and how many metres a tile covers). Text-prompt masks from all tiles are then **merged**: a prompt's masks are painted into one raster at mosaic resolution (reduced to at most 8192 px a side) and its connected regions become the objects, so a tree cut by a tile border is one polygon with an `object_id`. Point prompts are answered on a tile centred on the clicks, one object each. Thermal mosaics are stretched between their 2nd and 98th percentile and shown as grey.
+
+The mosaic is a GeoTIFF, so its pixels map to world coordinates by its own transform: there is no geo-referencing step, the geo file is written with the masks, and **Add to QGIS** puts one layer per prompt into `SAM3 Segmentation Orthomosaic (Thermal|RGB)`. The GeoJSON export marks these features with `source: orthomosaic` and `frame: -1`. Sequence mode does not apply; the frame range controls give way to the tile settings.
 
 ### Results
 
