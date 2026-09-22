@@ -122,6 +122,22 @@ class TestGeoreference:
         assert preds[0]["world_polygons"][0][2] == [500005.0, 5199995.0, 0.0]
         assert "polygons" not in preds[0]
 
+    def test_the_merge_keeps_the_transform_so_the_geo_file_is_not_empty(self):
+        """Regression: 'Add to QGIS' said 'No geo-referenced masks' because
+        the per-prompt merge rebuilt the entry without its transform."""
+        run = [{"frame_idx": ortho.ORTHO_FRAME, "imagefile": "orthomosaic.tif",
+                "source": seg.SOURCE_ORTHO, "width": 10, "height": 10,
+                "transform": self.TRANSFORM, "epsg": 32633,
+                "prompts": [seg.text_entry("tree", [
+                    {"confidence": 0.8, "object_id": 1,
+                     "polygons": [_square(0, 0, 100)]}])]}]
+        merged = seg.merge_results([], run, ["tree"])
+        assert merged[0]["transform"] == self.TRANSFORM
+        rerun = seg.merge_results(merged, run, ["tree"])
+        assert rerun[0]["epsg"] == 32633
+        geo = ortho.georeference(rerun)
+        assert geo and geo[0]["prompts"][0]["predictions"]
+
     def test_geojson_names_the_source(self, tmp_path):
         pytest.importorskip("pyproj")
         geo = ortho.georeference([{

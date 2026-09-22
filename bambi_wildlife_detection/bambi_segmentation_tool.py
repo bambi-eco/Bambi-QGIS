@@ -1061,12 +1061,39 @@ class SegmentationToolDialog(QDialog):
         self._ortho_pixmap = QPixmap.fromImage(image.copy())
         self._ortho_scale = float(preview["scale"])
         self._ortho_info = info
+        self._repair_ortho_results(info)
         self._update_tiles_label()
         self._render_frame()
         camera = self.camera_combo.currentText()
         self.status_label.setText(
             f"{camera} orthomosaic: {info.width} x {info.height} px, "
             f"{info.gsd * 100:.1f} cm/px, EPSG:{info.epsg or '?'}")
+
+    def _repair_ortho_results(self, info):
+        """Give mosaic results written without their transform one from the
+        mosaic itself, and rebuild the geo file from them.
+
+        Early versions of the merge dropped the transform, which left an
+        empty geo file and 'No geo-referenced masks' on Add to QGIS.
+        """
+        store = self._store()
+        if store is None or not store.has_pixel():
+            return
+        results = store.load_pixel()
+        header = {"source": seg.SOURCE_ORTHO, "width": info.width,
+                  "height": info.height, "transform": list(info.transform),
+                  "epsg": info.epsg}
+        changed = False
+        for entry in results:
+            if int(entry.get("frame_idx", 0)) == ortho.ORTHO_FRAME and not entry.get("transform"):
+                entry.update(header)
+                changed = True
+        if changed or (not store.has_georef() and results):
+            store.save_pixel(results)
+            store.save_georef(ortho.georeference(results))
+            self._log("Rebuilt the geo-referenced file of the orthomosaic "
+                      "masks from the mosaic's transform.")
+            self._reload_results()
 
     def _load_frames(self):
         folder = self._target_folder

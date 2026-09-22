@@ -1405,22 +1405,24 @@ def merge_results(existing: List[dict], new: List[dict],
     names = set(replace_prompts)
     by_frame: Dict[int, dict] = {}
     for entry in existing:
-        by_frame[int(entry.get("frame_idx", 0))] = {
-            "frame_idx": int(entry.get("frame_idx", 0)),
-            "imagefile": entry.get("imagefile", ""),
-            "prompts": list(entry.get("prompts", []) or []),
-        }
+        # Every other key travels along: the orthomosaic entry carries its
+        # transform and size, which the geo file is derived from.
+        merged_entry = dict(entry)
+        merged_entry["frame_idx"] = int(entry.get("frame_idx", 0))
+        merged_entry["prompts"] = list(entry.get("prompts", []) or [])
+        by_frame[merged_entry["frame_idx"]] = merged_entry
     for entry in new:
         frame_idx = int(entry.get("frame_idx", 0))
-        current = by_frame.get(frame_idx)
-        kept = [p for p in (current["prompts"] if current else [])
+        current = by_frame.get(frame_idx) or {}
+        kept = [p for p in current.get("prompts", [])
                 if p.get("prompt") not in names]
-        by_frame[frame_idx] = {
-            "frame_idx": frame_idx,
-            "imagefile": entry.get("imagefile", "")
-            or (current["imagefile"] if current else ""),
-            "prompts": kept + list(entry.get("prompts", []) or []),
-        }
+        merged_entry = dict(current)
+        merged_entry.update({k: v for k, v in entry.items() if k != "prompts"})
+        merged_entry["frame_idx"] = frame_idx
+        merged_entry["imagefile"] = (entry.get("imagefile", "")
+                                     or current.get("imagefile", ""))
+        merged_entry["prompts"] = kept + list(entry.get("prompts", []) or [])
+        by_frame[frame_idx] = merged_entry
     return [by_frame[k] for k in sorted(by_frame)]
 
 
