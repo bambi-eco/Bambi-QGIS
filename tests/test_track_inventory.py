@@ -262,3 +262,37 @@ class TestSpeciesFilter:
 
     def test_none_means_every_track(self, flight):
         assert len(track_inventory.build_inventory(flight, "t", species_ids=None)) == 3
+
+
+class TestOneTrack:
+
+    def test_track_ids_narrow_the_inventory(self, flight):
+        rows = track_inventory.build_inventory(flight, "t", track_ids=[3])
+        assert [row["track_id"] for row in rows] == [3]
+        assert track_inventory.build_inventory(flight, "t", track_ids=[42]) == []
+
+    def test_describe_track_reads_like_a_details_panel(self, flight):
+        row = _by_track(track_inventory.build_inventory(flight, "t", epsg=32633))[1]
+        facts = dict(track_inventory.describe_track(row))
+        assert facts["Track"] == "1 (thermal)"
+        assert facts["Approved"] == "no"
+        assert facts["Species"] == "red deer (2/3 votes, 67 %) - species_matched.pt"
+        assert facts["Sex"] == "male (100 %) - sex_matched.pt"
+        assert facts["Age"] == "adult (size)"
+        assert facts["Boxes"] == "3 box(es), 3 geo-referenced"
+        assert facts["Occlusion"] == "1 occluded, 1 clear, 1 unknown"
+        assert facts["Confidence"] == "mean 0.80, min 0.70, max 0.90"
+        assert facts["Frames"] == "0 - 4 (3 frame(s), span 5)"
+        assert facts["Time"].endswith("(4.0 s)")
+        assert facts["Matched"] == "rgb track 7"
+        assert facts["Annotated"] == "label track(s) 11, species red deer, sex female"
+        assert facts["Flight line"] == "12.5 m away"
+        assert facts["Movement"] == "path 10.0 m, displacement 10.0 m"
+
+    def test_describe_track_leaves_out_what_is_unknown(self, flight):
+        row = _by_track(track_inventory.build_inventory(flight, "t"))[2]
+        facts = dict(track_inventory.describe_track(row))
+        assert "Sex" not in facts and "Matched" not in facts
+        assert "Start" not in facts and "Movement" not in facts
+        assert facts["Species"] == "animal"
+        assert facts["Boxes"] == "1 box(es), 0 geo-referenced"

@@ -54,7 +54,8 @@ FOV_TYPE = "fov"
 def open_track_in_viewer(main_window, target_folder: str, modality: str,
                          track_id: int, dem_path: str = "",
                          correction_path: str = "",
-                         frame: Optional[int] = None) -> bool:
+                         frame: Optional[int] = None,
+                         epsg: Optional[int] = None) -> bool:
     """Show a track in the inspector, as a click on its layer would.
 
     Shared by the map tool and the track inventory report, whose start and
@@ -63,14 +64,9 @@ def open_track_in_viewer(main_window, target_folder: str, modality: str,
 
     :param frame: the frame to open on; the first frame when ``None`` or
         not part of the track
+    :param epsg: the project CRS, for the positions in the viewer's details
     """
-    all_tracks = inspection.load_pixel_tracks(target_folder, modality)
-    members = sorted(all_tracks.get(track_id, []), key=lambda d: d["frame"])
-    if not members:
-        return False
-    frames = inspection.build_frames_from_pixel_tracks(
-        members, all_tracks, track_id, target_folder, modality)
-    inspection.fill_interpolated_boxes(frames)
+    frames = inspection.track_frames(target_folder, modality, track_id)
     if not frames:
         return False
     frame_list = [f["frame_idx"] for f in frames]
@@ -79,8 +75,18 @@ def open_track_in_viewer(main_window, target_folder: str, modality: str,
     viewer.show_track(
         f"Track {track_id}   |   {len(frames)} frame(s)", frames, start_idx,
         target_folder=target_folder, dem_path=dem_path,
-        correction_path=correction_path)
+        correction_path=correction_path, track_id=track_id,
+        modality=modality, epsg=epsg)
     return True
+
+
+def _layer_epsg(layer) -> Optional[int]:
+    """The layer's EPSG code, or ``None`` for a CRS without one."""
+    try:
+        code = layer.crs().postgisSrid()
+        return int(code) if code else None
+    except Exception:  # nosec B110 - no CRS is no code
+        return None
 
 
 class BambiClickTool(QgsMapToolIdentify):
@@ -203,17 +209,19 @@ class BambiClickTool(QgsMapToolIdentify):
         if not target_folder:
             return
 
+        epsg = _layer_epsg(layer)
         if layer_type == DETECTION_TYPE:
             self._handle_detection_click(
-                feature, target_folder, boxes_modality, dem_path, correction_path)
+                feature, target_folder, boxes_modality, dem_path, correction_path,
+                epsg=epsg)
         elif layer_type == "track_final":
             self._handle_track_click(
                 feature, target_folder, boxes_modality, dem_path, correction_path,
-                start_at_last=True)
+                start_at_last=True, epsg=epsg)
         elif layer_type == "track_path":
             self._handle_track_click(
                 feature, target_folder, boxes_modality, dem_path, correction_path,
-                start_at_last=False)
+                start_at_last=False, epsg=epsg)
 
     def deactivate(self):
         super().deactivate()
@@ -225,7 +233,8 @@ class BambiClickTool(QgsMapToolIdentify):
 
     def _handle_detection_click(self, feature, target_folder: str,
                                 boxes_modality: str, dem_path: str,
-                                correction_path: str):
+                                correction_path: str,
+                                epsg: Optional[int] = None):
         """Show the frame for a clicked detection bounding box."""
         frame_idx = feature["frame"]
         det_conf = float(feature["confidence"])
@@ -259,10 +268,22 @@ class BambiClickTool(QgsMapToolIdentify):
             f"   |   cls: {det_class}"
         )
 
+        clicked_ids = [d["detection_id"] for d in clicked]
         other_green, other_blue = inspection.other_camera_boxes(
             target_folder, boxes_modality,
             found["frame_idx_w" if boxes_modality == "t" else "frame_idx_t"],
-            [d["detection_id"] for d in clicked])
+            clicked_ids)
+
+        # The track the box belongs to, so the viewer can show what the
+        # project knows about the animal and offer to delete it as a whole.
+        track_id = None
+        if clicked_ids:
+            from .core import review
+            try:
+                track_id = review.track_of_detection(
+                    target_folder, boxes_modality, clicked_ids[0])
+            except Exception:  # nosec B110 - no track store is no track
+                track_id = None
 
         viewer = FeatureViewerDialog.get_instance(self.iface.mainWindow())
         viewer.show_detection(
@@ -276,6 +297,7 @@ class BambiClickTool(QgsMapToolIdentify):
             frame_idx_t=found["frame_idx_t"],
             frame_idx_w=found["frame_idx_w"],
             other_green=other_green, other_blue=other_blue,
+            detection_ids=clicked_ids, track_id=track_id, epsg=epsg,
         )
 
     def _handle_fov_click(self, fov_results, click_xy: Optional[Tuple[float, float]] = None):
@@ -403,7 +425,8 @@ class BambiClickTool(QgsMapToolIdentify):
         )
 
     def _handle_track_click(self, feature, target_folder: str, boxes_modality: str,
-                            dem_path: str, correction_path: str, start_at_last: bool):
+                            dem_path: str, correction_path: str, start_at_last: bool,
+                            epsg: Optional[int] = None):
         """Show the navigable frame sequence for a clicked track."""
         # GeoPackage may store integers as LongLong; cast explicitly.
         try:
@@ -465,6 +488,7 @@ class BambiClickTool(QgsMapToolIdentify):
             title, frames, start_idx,
             target_folder=target_folder, dem_path=dem_path,
             correction_path=correction_path,
+            track_id=track_id, modality=boxes_modality, epsg=epsg,
         )
 
     # ------------------------------------------------------------------

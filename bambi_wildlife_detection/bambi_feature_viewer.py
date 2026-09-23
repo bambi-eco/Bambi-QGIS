@@ -13,14 +13,26 @@ user switch between the two views without losing the current frame position.
 When viewing the modality that was *not* used for detection the user can press
 "Project bounding boxes" to re-project the geo-referenced world-space boxes
 back into that modality's pixel space via camera projection math.
+
+The viewer is also where a result is reviewed. Below the image a details
+panel lists what the project knows about the track being shown - the same
+facts as a row of the track inventory: species, sex and age with their
+votes, box counts, times, positions, the match on the other camera and the
+annotator's verdict - with the inventory's "Approved" checkmark beside it.
+And a wrong result can be removed from the project here: the box on the
+current frame, or the whole track, which takes it out of every store and
+off the map (see ``core.review`` and ``bambi_layer_sync``).
 """
 
+import html
+from typing import List, Optional, Tuple
+
 from qgis.PyQt.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QSizePolicy, QWidget, QProgressBar
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QCheckBox,
+    QSizePolicy, QWidget, QProgressBar, QMessageBox, QApplication,
 )
 from qgis.PyQt.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QFont
-from qgis.PyQt.QtCore import Qt
+from qgis.PyQt.QtCore import Qt, pyqtSignal
 
 
 class FeatureViewerDialog(QDialog):
@@ -36,31 +48,46 @@ class FeatureViewerDialog(QDialog):
                               image_path_t=..., image_path_w=...,
                               boxes_modality="t",
                               target_folder=..., dem_path=...,
-                              correction_path=...)
+                              correction_path=...,
+                              detection_ids=[...], track_id=...)
 
     Track (multiple navigable frames)::
 
         viewer = FeatureViewerDialog.get_instance(parent)
         viewer.show_track(title, frames_list, start_idx,
                           target_folder=..., dem_path=...,
-                          correction_path=...)
+                          correction_path=..., track_id=..., modality="t")
 
     Box format: (x1, y1, x2, y2) or (x1, y1, x2, y2, confidence, class_id)
     in pixel coordinates of the source frame image.
 
     Frame dict keys
     ---------------
-    ``frame_idx``       : int or None
-    ``image_path_t``    : str - path to thermal frame (empty if not extracted)
-    ``image_path_w``    : str - path to RGB frame (empty if not extracted)
-    ``boxes_modality``  : str - "t" or "w", pixel space of the boxes
-    ``boxes_green``     : list of box tuples (highlighted detection)
-    ``boxes_blue``      : list of box tuples (other detections)
-    ``boxes_green_proj``: list of box tuples projected to the other modality (optional)
-    ``boxes_blue_proj`` : list of box tuples projected to the other modality (optional)
+    ``frame_idx``          : int or None
+    ``image_path_t``       : str - path to thermal frame (empty if not extracted)
+    ``image_path_w``       : str - path to RGB frame (empty if not extracted)
+    ``boxes_modality``     : str - "t" or "w", pixel space of the boxes
+    ``boxes_green``        : list of box tuples (highlighted detection)
+    ``boxes_blue``         : list of box tuples (other detections)
+    ``boxes_green_proj``   : list of box tuples projected to the other modality (optional)
+    ``boxes_blue_proj``    : list of box tuples projected to the other modality (optional)
+    ``detection_ids_green``: store ids behind the green boxes (optional; what
+                             "Delete detection" removes)
+
+    Signals
+    -------
+    ``trackDeleted(target_folder, modality, track_id)``,
+    ``detectionDeleted(target_folder, modality, detection_id, track_id)``
+    (``track_id`` is -1 for a detection outside any track) and
+    ``trackApproved(target_folder, modality, track_id, approved)`` tell the
+    dock widget what the reviewer did, so an open inventory report follows.
     """
 
     _instance = None
+
+    trackDeleted = pyqtSignal(str, str, int)
+    detectionDeleted = pyqtSignal(str, str, int, int)
+    trackApproved = pyqtSignal(str, str, int, bool)
 
     @classmethod
     def get_instance(cls, parent=None):
@@ -78,7 +105,7 @@ class FeatureViewerDialog(QDialog):
         )
         # Keep the Python object alive even when the user closes the window
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
-        self.resize(800, 660)
+        self.resize(800, 760)
 
         self._frames = []       # list of frame-data dicts
         self._current_idx = 0   # index into self._frames
@@ -89,6 +116,14 @@ class FeatureViewerDialog(QDialog):
         self._dem_path = ""
         self._correction_path = ""
         self._projection_worker = None
+
+        # Review context: which store the boxes come from, and which track
+        # (if any) the view is about.
+        self._modality: Optional[str] = None
+        self._track_id: Optional[int] = None
+        self._epsg: Optional[int] = None
+        self._details_row: Optional[dict] = None
+        self._details_open = True
 
         self._setup_ui()
 
@@ -110,7 +145,7 @@ class FeatureViewerDialog(QDialog):
         self.image_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.image_label.setMinimumSize(400, 300)
         self.image_label.setStyleSheet("background-color: #1e1e1e; color: #aaa;")
-        layout.addWidget(self.image_label)
+        layout.addWidget(self.image_label, 1)
 
         # Navigation row (hidden for single-frame detections)
         nav_layout = QHBoxLayout()
@@ -181,6 +216,63 @@ class FeatureViewerDialog(QDialog):
         self.info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.info_label)
 
+        # Track details: what the inventory knows about this animal.
+        details_layout = QVBoxLayout()
+        details_layout.setContentsMargins(0, 0, 0, 0)
+        header = QHBoxLayout()
+        self.details_toggle_btn = QPushButton("Track details")
+        self.details_toggle_btn.setFlat(True)
+        self.details_toggle_btn.setToolTip(
+            "Show or hide what the project knows about this track - the "
+            "same facts as its row in the track inventory.")
+        self.details_toggle_btn.clicked.connect(self._toggle_details)
+        header.addWidget(self.details_toggle_btn)
+        header.addStretch()
+        self.approved_check = QCheckBox("Approved")
+        self.approved_check.setToolTip(
+            "Your own checkmark: this track has been checked and is correct. "
+            "Written to the track, so it shows up in the inventory and the "
+            "exports.")
+        self.approved_check.toggled.connect(self._on_approved_toggled)
+        header.addWidget(self.approved_check)
+        details_layout.addLayout(header)
+        self.details_label = QLabel()
+        self.details_label.setWordWrap(True)
+        self.details_label.setTextFormat(Qt.TextFormat.RichText)
+        self.details_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.details_label.setStyleSheet(
+            "background: #2a2a2a; color: #ddd; border-radius: 4px; "
+            "padding: 4px 8px;")
+        details_layout.addWidget(self.details_label)
+        self.details_widget = QWidget()
+        self.details_widget.setLayout(details_layout)
+        self.details_widget.setVisible(False)
+        layout.addWidget(self.details_widget)
+
+        # Review row: remove a wrong result from the project.
+        review_layout = QHBoxLayout()
+        self.delete_detection_btn = QPushButton("Delete detection")
+        self.delete_detection_btn.setToolTip(
+            "Remove the highlighted box on this frame from the project: the "
+            "detection, its ground position, its place in the track, its "
+            "classifier results and its match. The map layers follow. "
+            "This cannot be undone.")
+        self.delete_detection_btn.clicked.connect(self._delete_current_detection)
+        self.delete_track_btn = QPushButton("Delete track")
+        self.delete_track_btn.setToolTip(
+            "Remove this track with every one of its detections from the "
+            "project and from the map. This cannot be undone.")
+        self.delete_track_btn.clicked.connect(self._delete_current_track)
+        review_layout.addStretch()
+        review_layout.addWidget(self.delete_detection_btn)
+        review_layout.addWidget(self.delete_track_btn)
+        review_layout.addStretch()
+        self.review_widget = QWidget()
+        self.review_widget.setLayout(review_layout)
+        self.review_widget.setVisible(False)
+        layout.addWidget(self.review_widget)
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -189,7 +281,8 @@ class FeatureViewerDialog(QDialog):
                        image_path_t="", image_path_w="", boxes_modality="t",
                        target_folder="", dem_path="", correction_path="",
                        frame_idx=None, frame_idx_t=None, frame_idx_w=None,
-                       other_green=(), other_blue=()):
+                       other_green=(), other_blue=(), detection_ids=(),
+                       track_id=None, epsg=None):
         """Show a single detection frame.
 
         :param title: String shown in the title label.
@@ -212,11 +305,18 @@ class FeatureViewerDialog(QDialog):
                             this moment that are matched to the highlighted
                             detection, in that camera's pixel space.
         :param other_blue: The other camera's remaining boxes on that frame.
+        :param detection_ids: Store ids of the green boxes, for deletion.
+        :param track_id: The track the highlighted detection belongs to, if
+                         any - its details are shown and it can be deleted.
+        :param epsg: The project CRS, for the WGS84 positions in the details.
         """
         self._stop_projection_worker()
         self._target_folder = target_folder
         self._dem_path = dem_path
         self._correction_path = correction_path
+        self._modality = boxes_modality if target_folder else None
+        self._track_id = None if track_id is None else int(track_id)
+        self._epsg = epsg
 
         if boxes_modality == "t" and frame_idx_t is None:
             frame_idx_t = frame_idx
@@ -233,6 +333,7 @@ class FeatureViewerDialog(QDialog):
             "boxes_blue": list(blue_boxes),
             "boxes_green_other": list(other_green),
             "boxes_blue_other": list(other_blue),
+            "detection_ids_green": [int(i) for i in detection_ids],
         }]
         self._current_idx = 0
         self.title_label.setText(title)
@@ -241,10 +342,12 @@ class FeatureViewerDialog(QDialog):
         self._update_toggle_btn()
         self._update_proj_btn()
         self._render_current_frame()
+        self._load_details()
         self._show_and_raise()
 
     def show_track(self, title, frames, start_idx=0,
-                   target_folder="", dem_path="", correction_path=""):
+                   target_folder="", dem_path="", correction_path="",
+                   track_id=None, modality=None, epsg=None):
         """Show a track with navigable frames.
 
         :param title: String shown in the title label.
@@ -259,11 +362,21 @@ class FeatureViewerDialog(QDialog):
         :param target_folder: Root output folder for geo-referenced data.
         :param dem_path: Path to the DEM GLTF/GLB (needed for box projection).
         :param correction_path: Explicit correction.json path (may be empty).
+        :param track_id: The store id of the track shown; ``None`` for a
+                         frame sequence that is not one track (FoV views).
+        :param modality: The store the boxes come from (``"t"`` / ``"w"``);
+                         defaults to the frames' ``boxes_modality``.
+        :param epsg: The project CRS, for the WGS84 positions in the details.
         """
         self._stop_projection_worker()
         self._target_folder = target_folder
         self._dem_path = dem_path
         self._correction_path = correction_path
+        self._track_id = None if track_id is None else int(track_id)
+        if modality is None and frames:
+            modality = frames[0].get("boxes_modality")
+        self._modality = modality if target_folder else None
+        self._epsg = epsg
 
         self._frames = list(frames)
         self._current_idx = max(0, min(start_idx, len(frames) - 1))
@@ -273,6 +386,7 @@ class FeatureViewerDialog(QDialog):
         self._update_toggle_btn()
         self._update_proj_btn()
         self._render_current_frame()
+        self._load_details()
         self._show_and_raise()
 
     # ------------------------------------------------------------------
@@ -413,10 +527,334 @@ class FeatureViewerDialog(QDialog):
         self._render_current_frame()
 
     def _on_proj_error(self, msg: str):
-        from qgis.PyQt.QtWidgets import QMessageBox
         self.proj_btn.setEnabled(True)
         self.proj_progress.setVisible(False)
         QMessageBox.warning(self, "Box Projection Failed", msg)
+
+    # ------------------------------------------------------------------
+    # Track details and approval
+    # ------------------------------------------------------------------
+
+    def _is_fov_view(self) -> bool:
+        """FoV navigation stores its context per frame; there is no single
+        track or store behind such a view."""
+        return any("target_folder" in f for f in self._frames)
+
+    def _load_details(self):
+        """Fetch the inventory row of the shown track and render it."""
+        self._details_row = None
+        reviewable = bool(self._target_folder and self._modality) \
+            and not self._is_fov_view()
+        has_track = reviewable and self._track_id is not None
+        self.details_widget.setVisible(has_track)
+        self._update_review_buttons()
+        if not has_track:
+            return
+
+        from .core import track_inventory
+
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            rows = track_inventory.build_inventory(
+                self._target_folder, self._modality, epsg=self._epsg,
+                track_ids=[self._track_id])
+            self._details_row = rows[0] if rows else None
+        except Exception as exc:  # noqa: BLE001 - shown in the panel
+            self.details_label.setText(
+                f"<i>Track details unavailable: {html.escape(str(exc))}</i>")
+            self._set_approved_silently(False, enabled=False)
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+        self._render_details()
+
+    def _render_details(self):
+        row = self._details_row
+        if row is None:
+            self.details_label.setText(
+                f"<i>Track {self._track_id} is not in the store any more.</i>")
+            self._set_approved_silently(False, enabled=False)
+            self.details_label.setVisible(self._details_open)
+            return
+
+        from .core import track_inventory
+
+        facts = [(label, text) for label, text in
+                 track_inventory.describe_track(row) if label != "Approved"]
+        self.details_label.setText(self._facts_html(facts))
+        self._set_approved_silently(bool(row.get("approved")), enabled=True)
+        self.details_label.setVisible(self._details_open)
+        self.details_toggle_btn.setText(
+            "Track details ▾" if self._details_open else "Track details ▸")
+
+    @staticmethod
+    def _facts_html(facts: List[Tuple[str, str]]) -> str:
+        """Two facts per row, label in grey, value beside it."""
+        cells = []
+        for label, text in facts:
+            cells.append(
+                f"<td style='color:#999; padding-right:4px; white-space:nowrap'>"
+                f"{html.escape(label)}</td>"
+                f"<td style='padding-right:14px'>{html.escape(text)}</td>")
+        rows = []
+        for i in range(0, len(cells), 2):
+            rows.append("<tr>" + "".join(cells[i:i + 2]) + "</tr>")
+        return "<table cellspacing='0' cellpadding='1'>" + "".join(rows) + "</table>"
+
+    def _toggle_details(self):
+        self._details_open = not self._details_open
+        self.details_label.setVisible(self._details_open)
+        self.details_toggle_btn.setText(
+            "Track details ▾" if self._details_open else "Track details ▸")
+
+    def _set_approved_silently(self, checked: bool, enabled: bool):
+        self.approved_check.blockSignals(True)
+        try:
+            self.approved_check.setChecked(checked)
+            self.approved_check.setEnabled(enabled)
+        finally:
+            self.approved_check.blockSignals(False)
+
+    def _on_approved_toggled(self, checked: bool):
+        """Record the verdict on the track, as the inventory report does."""
+        if self._track_id is None or not self._target_folder or not self._modality:
+            return
+        from .core import track_store
+
+        try:
+            track_store.set_track_attribute(
+                self._target_folder, self._modality, self._track_id,
+                "approved", True if checked else None)
+        except Exception as exc:  # noqa: BLE001 - surfaced to the user
+            QMessageBox.warning(self, "BAMBI Feature Viewer",
+                                f"Could not record the verdict: {exc}")
+            self._set_approved_silently(not checked, enabled=True)
+            return
+        if self._details_row is not None:
+            self._details_row["approved"] = checked
+        self.trackApproved.emit(self._target_folder, self._modality,
+                                self._track_id, checked)
+
+    # ------------------------------------------------------------------
+    # Deleting
+    # ------------------------------------------------------------------
+
+    def _current_detection_ids(self) -> List[int]:
+        if not self._frames:
+            return []
+        return list(self._frames[self._current_idx].get("detection_ids_green") or [])
+
+    def _update_review_buttons(self):
+        reviewable = bool(self._target_folder and self._modality) \
+            and not self._is_fov_view() and bool(self._frames)
+        self.review_widget.setVisible(reviewable)
+        if not reviewable:
+            return
+        ids = self._current_detection_ids()
+        camera = "thermal" if self._modality == "t" else "RGB"
+        self.delete_detection_btn.setEnabled(bool(ids))
+        self.delete_detection_btn.setText(
+            f"Delete {camera} detection" if len(ids) < 2
+            else f"Delete {len(ids)} {camera} detections")
+        self.delete_track_btn.setVisible(self._track_id is not None)
+        if self._track_id is not None:
+            self.delete_track_btn.setText(f"Delete track {self._track_id}")
+
+    def _delete_current_detection(self):
+        """Remove the highlighted box(es) on the current frame from the project."""
+        from .core import review
+
+        ids = self._current_detection_ids()
+        if not ids or not self._target_folder or not self._modality:
+            return
+        frame = self._frames[self._current_idx]
+        frame_idx = frame.get("frame_idx")
+        camera = "thermal" if self._modality == "t" else "RGB"
+        what = (f"{camera} detection {ids[0]}" if len(ids) == 1
+                else f"{len(ids)} {camera} detections")
+        lines = [f"Delete {what} on frame {frame_idx} from the project?", ""]
+        if self._track_id is not None:
+            members = review.track_members(
+                self._target_folder, self._modality, self._track_id)
+            remaining = len([m for m in members if m not in ids])
+            if remaining == 0:
+                lines.append(f"It is the last box of track {self._track_id}, "
+                             "so the track is removed with it.")
+            else:
+                lines.append(f"Track {self._track_id} keeps its other "
+                             f"{remaining} box(es).")
+        lines += ["The box, its ground position, its classifier results and "
+                  "its match on the other camera are removed from the store "
+                  "and from the map layers.", "", "This cannot be undone."]
+        reply = QMessageBox.question(
+            self, "Delete detection", "\n".join(lines),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        boxes = list(frame.get("boxes_green") or [])
+        try:
+            result = review.delete_detections(
+                self._target_folder, self._modality, ids)
+        except review.ReviewError as exc:
+            QMessageBox.information(self, "Delete detection", str(exc))
+            return
+        except Exception as exc:  # noqa: BLE001 - surfaced to the user
+            QMessageBox.critical(self, "Delete detection",
+                                 f"Could not delete: {exc}")
+            return
+
+        # The map: the polygon(s) go; a track that lost a member is redrawn.
+        try:
+            from . import bambi_layer_sync
+            for detection_id, box in zip(ids, boxes):
+                if frame_idx is not None and len(box) >= 6:
+                    bambi_layer_sync.remove_detection(
+                        self._target_folder, self._modality, detection_id,
+                        int(frame_idx), float(box[4]), int(box[5]))
+            for track_id in result.get("tracks_removed", []):
+                bambi_layer_sync.remove_track(
+                    self._target_folder, self._modality, track_id)
+            for track_id in result.get("tracks_kept", []):
+                bambi_layer_sync.redraw_track(
+                    self._target_folder, self._modality, track_id)
+        except Exception as exc:  # noqa: BLE001 - the store is done, say so
+            QMessageBox.warning(
+                self, "Delete detection",
+                "Deleted from the project, but the map layers could not be "
+                f"updated: {exc}\nRe-add the detection and track layers.")
+
+        track_for_signal = self._track_id if self._track_id is not None else -1
+        for detection_id in ids:
+            self.detectionDeleted.emit(self._target_folder, self._modality,
+                                       int(detection_id), int(track_for_signal))
+        for track_id in result.get("tracks_removed", []):
+            self.trackDeleted.emit(self._target_folder, self._modality,
+                                   int(track_id))
+
+        self._after_detection_deleted(result)
+
+    def _after_detection_deleted(self, result: dict):
+        """Show what is left: the track's remaining frames, or the frame
+        without its box."""
+        if self._track_id is not None:
+            if self._track_id in result.get("tracks_removed", []):
+                QMessageBox.information(
+                    self, "Delete detection",
+                    f"Track {self._track_id} had no other box and was removed.")
+                self._track_id = None
+                self._frames = []
+                self.close()
+                return
+            from .core import inspection
+            try:
+                frames = inspection.track_frames(
+                    self._target_folder, self._modality, self._track_id)
+            except Exception:  # noqa: BLE001 - keep what is shown
+                frames = []
+            if frames:
+                self._frames = frames
+                self._current_idx = min(self._current_idx, len(frames) - 1)
+                self.title_label.setText(
+                    f"Track {self._track_id}   |   {len(frames)} frame(s)")
+                self.nav_widget.setVisible(len(frames) > 1)
+                self._update_toggle_btn()
+                self._update_proj_btn()
+                self._render_current_frame()
+                self._load_details()
+                return
+        # A single detection view: keep the frame, drop the box.
+        frame = self._frames[self._current_idx]
+        frame["boxes_green"] = []
+        frame["detection_ids_green"] = []
+        frame["boxes_green_other"] = []
+        frame["boxes_green_proj"] = None
+        self.title_label.setText(self.title_label.text() + "   (deleted)")
+        self._render_current_frame()
+        self._update_review_buttons()
+
+    def _delete_current_track(self):
+        """Remove the shown track with all its detections from the project."""
+        from .core import review
+
+        if self._track_id is None or not self._target_folder or not self._modality:
+            return
+        track_id = self._track_id
+        facts = review.describe_track_deletion(
+            self._target_folder, self._modality, track_id)
+        if not facts["exists"]:
+            QMessageBox.information(
+                self, "Delete track",
+                f"Track {track_id} is not in the store any more.")
+            return
+        camera = "thermal" if self._modality == "t" else "RGB"
+        lines = [f"Delete {camera} track {track_id} with its "
+                 f"{facts['detections']} detection(s) from the project?", ""]
+        if facts["matched"]:
+            lines.append("Its match with the other camera is removed; the "
+                         "partner track stays.")
+        if facts["label_track_ids"]:
+            ids = ", ".join(str(i) for i in facts["label_track_ids"])
+            lines.append(f"It was drawn in the labelling tool (label track "
+                         f"{ids}); that annotation is deleted with it.")
+        lines += ["The track, its boxes, their ground positions and "
+                  "classifier results are removed from the store and from "
+                  "the map layers.", "", "This cannot be undone."]
+        reply = QMessageBox.question(
+            self, "Delete track", "\n".join(lines),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        # Every box of the track, read before they go: the per-frame
+        # detection layers hold them too, whichever frame is shown here.
+        from .core import track_store
+        try:
+            boxes = [m for m in track_store.load_pixel_tracks(
+                self._target_folder, self._modality)
+                if int(m["track_id"]) == track_id]
+        except Exception:  # noqa: BLE001 - then only the shown frames are known
+            boxes = [{
+                "detection_id": detection_id, "frame": frame.get("frame_idx"),
+                "confidence": box[4], "species_id": box[5]}
+                for frame in self._frames
+                for detection_id, box in zip(
+                    frame.get("detection_ids_green") or [],
+                    frame.get("boxes_green") or [])
+                if frame.get("frame_idx") is not None and len(box) >= 6]
+
+        try:
+            review.delete_tracks(self._target_folder, self._modality, [track_id])
+        except Exception as exc:  # noqa: BLE001 - surfaced to the user
+            QMessageBox.critical(self, "Delete track",
+                                 f"Could not delete: {exc}")
+            return
+
+        try:
+            from . import bambi_layer_sync
+            bambi_layer_sync.remove_track(
+                self._target_folder, self._modality, track_id)
+            for box in boxes:
+                if box.get("frame") is None:
+                    continue
+                confidence = box.get("confidence")
+                bambi_layer_sync.remove_detection(
+                    self._target_folder, self._modality,
+                    int(box["detection_id"]), int(box["frame"]),
+                    1.0 if confidence is None else float(confidence),
+                    int(box.get("species_id") or 0))
+        except Exception as exc:  # noqa: BLE001 - the store is done, say so
+            QMessageBox.warning(
+                self, "Delete track",
+                "Deleted from the project, but the map layers could not be "
+                f"updated: {exc}\nRe-add the detection and track layers.")
+
+        self.trackDeleted.emit(self._target_folder, self._modality, int(track_id))
+        self._track_id = None
+        self._frames = []
+        self.close()
 
     # ------------------------------------------------------------------
     # Rendering
@@ -479,6 +917,7 @@ class FeatureViewerDialog(QDialog):
             self.frame_label.setText(label)
         self.prev_btn.setEnabled(self._current_idx > 0)
         self.next_btn.setEnabled(self._current_idx < total - 1)
+        self._update_review_buttons()
 
         # Load image
         if not image_path:
@@ -531,6 +970,9 @@ class FeatureViewerDialog(QDialog):
                 info_parts.append(f"Class: {int(b[5])}")
             if len(b) >= 7 and b[6]:
                 info_parts.append("interpolated")
+            ids = data.get("detection_ids_green") or []
+            if ids:
+                info_parts.append(f"Detection: {ids[0]}")
         self.info_label.setText("   |   ".join(info_parts))
 
     def _draw_boxes(self, img, green_boxes, blue_boxes, projected=False):

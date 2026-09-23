@@ -102,6 +102,14 @@ def _no_store_message(path: str, kind: str) -> str:
             "re-run the step.")
 
 
+def geo_track_points(target_folder: str, modality: str,
+                     track_id: int) -> list:
+    """The geo-referenced points of one track of the active run, in frame
+    order - what a track's map layers are drawn from. Empty when the track
+    is gone or was never placed on the ground."""
+    return _geo_tracks_from_store(target_folder, modality).get(int(track_id), [])
+
+
 def _geo_tracks_from_store(target_folder: str, modality: str) -> Dict[int, list]:
     """Geo-referenced track points of the active run, keyed by track id."""
     import os

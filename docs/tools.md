@@ -240,6 +240,17 @@ Click the **Select Detection or Track** tool in the toolbar, then click anywhere
 
 ![Detection Selection Tool](../images/selection_tool_detections.png)
 
+The inspector (the *Feature Viewer* window) is also opened from the track inventory report: a click on a track's start or end frame there shows the animal at that frame.
+
+**Track details.** Below the image the viewer lists what the project knows about the track being shown - the same facts as its row in the [track inventory](pipeline.md#track-inventory): species, sex and age with their votes and the model that called them, box counts and occlusion, confidences, frames and times, start and end position, movement, the matched track on the other camera and any labelling-tool annotation. A clicked *detection* shows the details of the track it belongs to. The **Approved** checkmark beside the heading is the inventory's own verdict, written to the track; ticking it here or in the report is the same thing, and an open report follows.
+
+**Reviewing.** A wrong result can be removed from the project in the viewer:
+
+- **Delete detection** removes the highlighted box on the current frame - the detection, its ground position, its place in the track, its classifier results and its match on the other camera. The track keeps its other boxes; a track whose last box goes is removed with it.
+- **Delete track** removes the whole track with every one of its detections. A track drawn in the labelling tool is deleted together with its annotation.
+
+Both ask for confirmation and cannot be undone. The map follows: the box leaves the detection layers, a track that lost a box is redrawn from the ones it still has (its *Final Position* moves, its *Path* is shortened), and a deleted track's layers and their group are removed, as is its line in the matched-pairs layer and its point in the inventory layer. An open track inventory report drops or refreshes the row, and the written inventory, density, distance-sampling and population results are marked stale, since their counts no longer hold. Boxes of a label track are not deleted one by one here - they are defined by the key frames, so edit them in the [Labelling Tool](#labelling-tool).
+
 ### Field-of-view selection
 
 Click the **Select Field of View** tool in the toolbar, then click on the canvas to select the FoV(s) that contain the clicked point.

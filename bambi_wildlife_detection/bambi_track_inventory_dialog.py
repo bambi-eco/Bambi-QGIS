@@ -302,6 +302,12 @@ class BambiTrackInventoryDialog(QDialog):
 
     def _fill(self):
         """(Re)build the table for the current column choice."""
+        header = self.table.horizontalHeader()
+        sorted_by = None
+        if self.columns and self.table.isSortingEnabled():
+            section = header.sortIndicatorSection()
+            if 0 <= section < len(self.columns):
+                sorted_by = (self.columns[section], header.sortIndicatorOrder())
         self._filling = True
         try:
             self.table.setSortingEnabled(False)
@@ -341,10 +347,63 @@ class BambiTrackInventoryDialog(QDialog):
             for c in range(len(self.columns)):
                 self.table.setColumnWidth(c, min(self.table.columnWidth(c), 220))
             self.table.setSortingEnabled(True)
+            # A rebuild (columns changed, a row updated from the inspector)
+            # keeps the order the user sorted into.
+            if sorted_by is not None and sorted_by[0] in self.columns:
+                self.table.sortItems(self.columns.index(sorted_by[0]),
+                                     sorted_by[1])
         finally:
             self._filling = False
         self.summary.setText("\n".join(track_inventory.summarise(self.rows)))
         self._apply_filter(self.filter_edit.text())
+
+    # -- kept in step with the inspector ---------------------------------
+
+    def _row_index(self, track_id: int) -> Optional[int]:
+        for i, row in enumerate(self.rows):
+            if row.get("track_id") == track_id:
+                return i
+        return None
+
+    def remove_track(self, track_id: int) -> bool:
+        """Drop a track the reviewer deleted in the inspector."""
+        index = self._row_index(int(track_id))
+        if index is None:
+            return False
+        del self.rows[index]
+        self._fill()
+        return True
+
+    def update_track(self, row: dict) -> None:
+        """Replace a track's row with a freshly built one (a box was deleted,
+        so its counts, times and positions changed); a new track is appended."""
+        index = self._row_index(int(row.get("track_id")))
+        if index is None:
+            self.rows.append(dict(row))
+        else:
+            self.rows[index] = dict(row)
+        self._fill()
+
+    def set_track_approved(self, track_id: int, approved: bool) -> None:
+        """Show a verdict recorded elsewhere, without recording it again."""
+        index = self._row_index(int(track_id))
+        if index is None:
+            return
+        self.rows[index]["approved"] = bool(approved)
+        if "approved" not in self.columns:
+            return
+        column = self.columns.index("approved")
+        self._filling = True
+        try:
+            for r in range(self.table.rowCount()):
+                if self._track_at(r)[0] == int(track_id):
+                    item = self.table.item(r, column)
+                    if isinstance(item, _CheckItem):
+                        item.setCheckState(Qt.CheckState.Checked if approved
+                                           else Qt.CheckState.Unchecked)
+        finally:
+            self._filling = False
+        self.summary.setText("\n".join(track_inventory.summarise(self.rows)))
 
     def choose_columns(self):
         dialog = BambiInventoryColumnsDialog(self._selected, parent=self)

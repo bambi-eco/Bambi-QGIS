@@ -143,7 +143,8 @@ def _perpendicular_distances(target_folder: str,
 
 def build_inventory(target_folder: str, modality: str,
                     epsg: Optional[int] = None,
-                    species_ids: Optional[Iterable[int]] = None) -> List[dict]:
+                    species_ids: Optional[Iterable[int]] = None,
+                    track_ids: Optional[Iterable[int]] = None) -> List[dict]:
     """One dict per track of the active tracking run(s), keys as ``COLUMNS``.
 
     :param target_folder: the pipeline output root folder
@@ -152,8 +153,11 @@ def build_inventory(target_folder: str, modality: str,
         WGS84 columns; ``None`` leaves them empty
     :param species_ids: the Survey Analytics species filter - only tracks
         whose species is one of these are listed; ``None`` lists every track
+    :param track_ids: only these tracks - the inspector asks for the one it
+        is showing; ``None`` lists every track
     """
     wanted_species = None if species_ids is None else {int(s) for s in species_ids}
+    wanted_tracks = None if track_ids is None else {int(t) for t in track_ids}
     from . import (classification_store, label_store, match_store,
                    track_store)
     from .exporters import common
@@ -170,6 +174,8 @@ def build_inventory(target_folder: str, modality: str,
     by_track: Dict[int, List[dict]] = {}
     for row in rows:
         if row.get("track_id") is None:
+            continue
+        if wanted_tracks is not None and int(row["track_id"]) not in wanted_tracks:
             continue
         by_track.setdefault(int(row["track_id"]), []).append(row)
 
@@ -327,6 +333,122 @@ def build_inventory(target_folder: str, modality: str,
             "attributes": json.dumps(extra, sort_keys=True) if extra else "",
         })
     return inventory
+
+
+def _fmt(value, digits: int = 2) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        return f"{value:.{digits}f}"
+    return str(value)
+
+
+def _vote_note(fraction, votes: str = "") -> str:
+    parts = []
+    if votes:
+        parts.append(f"{votes} votes")
+    if fraction is not None:
+        parts.append(f"{float(fraction) * 100:.0f} %")
+    return f" ({', '.join(parts)})" if parts else ""
+
+
+def describe_track(row: dict) -> List[Tuple[str, str]]:
+    """One inventory row as ``(label, text)`` pairs for a details panel.
+
+    The report shows every column; the inspector has room for what a
+    reviewer checks while looking at the frames: what the animal was called
+    and how sure the caller was, how long and where it was seen, and what
+    the other camera and the annotator said. Empty facts are left out
+    rather than shown as blanks.
+    """
+    facts: List[Tuple[str, str]] = []
+    camera = {"rgb": "RGB", "thermal": "thermal"}.get(
+        row.get("camera") or "", row.get("camera") or "")
+    camera_note = f" ({camera})" if camera else ""
+    facts.append(("Track", f"{row.get('track_id')}{camera_note}"))
+    facts.append(("Approved", "yes" if row.get("approved") else "no"))
+
+    if row.get("species"):
+        text = row["species"] + _vote_note(row.get("species_vote_fraction"),
+                                           row.get("species_votes") or "")
+        if row.get("species_model"):
+            text += f" - {row['species_model']}"
+        facts.append(("Species", text))
+    if row.get("sex"):
+        text = row["sex"] + _vote_note(row.get("sex_vote_fraction"))
+        if row.get("sex_model"):
+            text += f" - {row['sex_model']}"
+        facts.append(("Sex", text))
+    if row.get("age"):
+        text = row["age"]
+        if row.get("age_source"):
+            text += f" ({row['age_source']})"
+        facts.append(("Age", text))
+
+    if row.get("n_boxes") is not None:
+        parts = [f"{row['n_boxes']} box(es)"]
+        if row.get("n_interpolated"):
+            parts.append(f"{row['n_interpolated']} interpolated")
+        if row.get("n_georeferenced") is not None:
+            parts.append(f"{row['n_georeferenced']} geo-referenced")
+        facts.append(("Boxes", ", ".join(parts)))
+    if row.get("n_occluded") or row.get("n_clear"):
+        facts.append(("Occlusion", f"{row.get('n_occluded') or 0} occluded, "
+                      f"{row.get('n_clear') or 0} clear, "
+                      f"{row.get('n_occlusion_unknown') or 0} unknown"))
+    if row.get("mean_confidence") is not None:
+        facts.append(("Confidence",
+                      f"mean {_fmt(row['mean_confidence'])}, "
+                      f"min {_fmt(row.get('min_confidence'))}, "
+                      f"max {_fmt(row.get('max_confidence'))}"))
+
+    if row.get("start_frame") is not None:
+        text = f"{row['start_frame']} - {row.get('end_frame')}"
+        if row.get("n_frames") is not None:
+            text += (f" ({row['n_frames']} frame(s), "
+                     f"span {row.get('frame_span')})")
+        facts.append(("Frames", text))
+    if row.get("start_time") or row.get("end_time"):
+        text = f"{row.get('start_time') or '?'} - {row.get('end_time') or '?'}"
+        if row.get("duration_s") is not None:
+            text += f" ({_fmt(row['duration_s'], 1)} s)"
+        facts.append(("Time", text))
+
+    if row.get("start_lat") is not None:
+        facts.append(("Start", f"{_fmt(row['start_lat'], 6)}, "
+                      f"{_fmt(row.get('start_lon'), 6)} (lat, lon)"))
+        facts.append(("End", f"{_fmt(row.get('end_lat'), 6)}, "
+                      f"{_fmt(row.get('end_lon'), 6)} (lat, lon)"))
+    elif row.get("start_x") is not None:
+        crs = f" {row['crs']}" if row.get("crs") else ""
+        facts.append(("Start", f"{_fmt(row['start_x'])}, "
+                      f"{_fmt(row.get('start_y'))}{crs}"))
+        facts.append(("End", f"{_fmt(row.get('end_x'))}, "
+                      f"{_fmt(row.get('end_y'))}{crs}"))
+    movement = []
+    if row.get("path_length_m") is not None:
+        movement.append(f"path {_fmt(row['path_length_m'], 1)} m")
+    if row.get("displacement_m") is not None:
+        movement.append(f"displacement {_fmt(row['displacement_m'], 1)} m")
+    if movement:
+        facts.append(("Movement", ", ".join(movement)))
+    if row.get("perpendicular_distance_m") is not None:
+        facts.append(("Flight line",
+                      f"{_fmt(row['perpendicular_distance_m'], 1)} m away"))
+
+    if row.get("matched_track") is not None:
+        facts.append(("Matched", f"{row.get('matched_camera') or 'other'} "
+                      f"track {row['matched_track']}"))
+    if row.get("label_track_ids"):
+        parts = [f"label track(s) {row['label_track_ids']}"]
+        for key, name in (("label_species", "species"),
+                          ("label_sex", "sex"), ("label_age", "age")):
+            if row.get(key):
+                parts.append(f"{name} {row[key]}")
+        facts.append(("Annotated", ", ".join(parts)))
+    if row.get("attributes"):
+        facts.append(("Other", str(row["attributes"])))
+    return facts
 
 
 def summarise(inventory: List[dict]) -> List[str]:

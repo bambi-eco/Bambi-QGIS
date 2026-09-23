@@ -2,7 +2,7 @@
 name=Bambi - QGIS Integration
 qgisMinimumVersion=3.22
 description=Detect and track wildlife in drone videos/photos with geo-referencing
-version=6.1.0
+version=7.0.0
 author=Christoph Praschl, Anna Maschek, David C.Schedl
 email=christoph.praschl@fh-hagenberg.at
 
@@ -29,7 +29,7 @@ about=A comprehensive QGIS plugin for detecting, tracking, and geo-referencing w
     - Built-in dependency manager to install all required and optional packages from within QGIS
     All results are automatically added as styled layers to the QGIS project, grouped per flight.
 
-changelog=Version 6.1.0
+changelog=Version 7.0.0
     A survey is more than a count: what tells you about a population is which animals are in it. This release adds the demographic step, following "When One Modality Is Not Enough: Multimodal Sex and Life-Stage Classification of Red Deer from Aerial RGB-Thermal Video". Tracked animals are classified by species and sex, juveniles are flagged by size, and the two cameras are used together rather than separately - because they fail in opposite conditions. In colour a deer under canopy blends into the ground; in thermal it is an unmistakable blob but the fur colour is gone and antlers show only while they are still growing and warm. Which sensor carries the sex cue therefore changes with the season, and reading both at once is what stays reliable across the year.
     The classifiers read features from Meta's DINOv3, which is a gated model on Hugging Face: request access once and enter a read token in the new Classification tab. Nothing else in the plugin changes if you do not use it.
     Added:
@@ -52,6 +52,8 @@ changelog=Version 6.1.0
     - Dependency Manager: a Classification group installing transformers and huggingface-hub. The same packages serve local SAM3 segmentation, which needs transformers 5.0 or newer.
     - Export: a GeoJSON exporter for the SAM3 segmentation masks, writing their outlines as polygons in WGS84 longitude/latitude, as GeoJSON requires. Masks that were never geo-referenced are skipped and reported rather than written in pixel coordinates.
     - S1 Run SAM3 Segmentation can run on your own machine. "Run SAM3 locally" in the SAM3 Segmentation tab loads Meta's facebook/sam3 through transformers instead of sending every frame to Roboflow, so no Roboflow key is needed. The model is gated on Hugging Face exactly like DINOv3: request access once, and the token from the Classification tab downloads it into the shared model cache on the first run. A "Check access" button answers before the frames are loaded, the model field accepts a fine-tuned repository or a pinned revision, and the device follows the Classification tab. The masks are written in the same structure as the Roboflow results, so geo-referencing and the exports do not care which backend produced them.
+    - Track details in the inspector: the Feature Viewer now lists what the project knows about the track it is showing - the same facts as its row in the track inventory: species, sex and age with their votes, box and occlusion counts, confidences, frames and times, positions, movement, the matched track on the other camera and the labelling-tool annotation - with the inventory's Approved checkmark beside it. A clicked detection shows the track it belongs to. Ticking Approved in the viewer or in the report is the same verdict, and an open report follows.
+    - Reviewing in the inspector: a wrong result can be deleted from the project in the Feature Viewer. "Delete detection" removes the highlighted box on the current frame - the detection, its ground position, its place in the track, its classifier results and its match; the track keeps its other boxes, and a track whose last box goes is removed with it. "Delete track" removes the track with every one of its detections; a track drawn in the labelling tool takes its annotation with it. Both ask for confirmation and cannot be undone. The map follows: the box leaves the detection layers, a track that lost a box is redrawn from the ones it still has, and a deleted track's layers, group, matched-pair line and inventory point are removed - so no orphan boxes stay behind. An open track inventory report drops or refreshes the row, and the written inventory, density, distance-sampling and population results are marked stale, since their counts no longer hold. Boxes of a label track are not deleted one by one here; they are defined by its key frames and are edited in the Labelling Tool.
     Changed:
     - The GeoJSON export is now named "GeoJSON (animals)" alongside the new "GeoJSON (segmentations)". The old name described how the file was made rather than what is in it, which is no help when choosing between two of them.
     - New projects seed the occlusion vocabulary as clear/occluded, matching what the occlusion classifier reports, so predictions and hand annotations share one vocabulary. Projects created earlier keep the values they have - enum ids are append-only and are never renumbered - and a classifier is pointed at them through its class mapping. Migrating a 5.x flight appends whatever levels it carries rather than dropping them.

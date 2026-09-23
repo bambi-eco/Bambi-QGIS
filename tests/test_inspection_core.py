@@ -399,3 +399,21 @@ class TestOtherCameraBoxes:
         assert frames[0]["frame_idx_w"] == 0
         assert [b[:4] for b in frames[0]["boxes_green_other"]] == [(10, 10, 20, 20)]
         assert len(frames[0]["boxes_blue_other"]) == 1
+
+
+class TestTrackFrames:
+
+    def test_frames_of_a_track_carry_their_detection_ids(self, tmp_path):
+        root = str(tmp_path)
+        ids = _detected(root, tracked=True)
+        # The tracker's id 7 is the store's first track id.
+        track_id = next(iter(inspection.load_pixel_tracks(root, "t")))
+        frames = inspection.track_frames(root, "t", track_id)
+        assert [f["frame_idx"] for f in frames] == [0, 1]
+        assert [f["detection_ids_green"] for f in frames] == [[ids[0]], [ids[1]]]
+        assert all(len(f["boxes_green"]) == 1 for f in frames)
+
+    def test_an_unknown_track_has_no_frames(self, tmp_path):
+        root = str(tmp_path)
+        _detected(root, tracked=True)
+        assert inspection.track_frames(root, "t", 999) == []

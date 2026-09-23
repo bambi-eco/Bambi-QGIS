@@ -8891,11 +8891,14 @@ class BambiDockWidget(QDockWidget):
         dem_path = config.get("dem_path", "")
         correction_path = config.get("correction_path", "")
 
+        epsg = config.get("target_epsg")
+        epsg = int(epsg) if epsg else None
+
         def _open_track(track_id, frame):
             return open_track_in_viewer(
                 self.iface.mainWindow(), target_folder, suffix, int(track_id),
                 dem_path=dem_path, correction_path=correction_path,
-                frame=frame)
+                frame=frame, epsg=epsg)
 
         from .core import track_store
 
@@ -8923,6 +8926,76 @@ class BambiDockWidget(QDockWidget):
         # Keep a reference: a non-modal dialog with only a local name would
         # be collected the moment this method returns.
         self._track_inventory_dialog = dialog
+        self._track_inventory_context = (target_folder, suffix, epsg)
+        # What the reviewer does in the inspector - approve, delete a box,
+        # delete a track - shows up in the open report.
+        self._connect_viewer_signals()
+
+    def _connect_viewer_signals(self):
+        """Follow the inspector's review actions; connected once, as the
+        viewer is a singleton."""
+        if getattr(self, "_viewer_signals_connected", False):
+            return
+        from .bambi_feature_viewer import FeatureViewerDialog
+
+        viewer = FeatureViewerDialog.get_instance(self.iface.mainWindow())
+        viewer.trackDeleted.connect(self._on_viewer_track_deleted)
+        viewer.detectionDeleted.connect(self._on_viewer_detection_deleted)
+        viewer.trackApproved.connect(self._on_viewer_track_approved)
+        self._viewer_signals_connected = True
+
+    def _inventory_dialog_for(self, target_folder: str, modality: str):
+        """The open report, if it shows this camera of this flight."""
+        dialog = getattr(self, "_track_inventory_dialog", None)
+        context = getattr(self, "_track_inventory_context", None)
+        if dialog is None or context is None or not dialog.isVisible():
+            return None
+        folder, suffix, _epsg = context
+        if suffix != modality or os.path.normcase(os.path.abspath(folder)) \
+                != os.path.normcase(os.path.abspath(target_folder)):
+            return None
+        return dialog
+
+    def _on_viewer_track_deleted(self, target_folder: str, modality: str,
+                                 track_id: int):
+        camera_label = "Thermal" if modality == "t" else "RGB"
+        self.log(f"Track {track_id} ({camera_label}) deleted from the project "
+                 "in the inspector")
+        dialog = self._inventory_dialog_for(target_folder, modality)
+        if dialog is not None:
+            dialog.remove_track(track_id)
+
+    def _on_viewer_detection_deleted(self, target_folder: str, modality: str,
+                                     detection_id: int, track_id: int):
+        camera_label = "Thermal" if modality == "t" else "RGB"
+        note = f" (track {track_id})" if track_id >= 0 else ""
+        self.log(f"Detection {detection_id} ({camera_label}){note} deleted "
+                 "from the project in the inspector")
+        dialog = self._inventory_dialog_for(target_folder, modality)
+        if dialog is None or track_id < 0:
+            return
+        from .core import track_inventory
+
+        _folder, _suffix, epsg = self._track_inventory_context
+        try:
+            rows = track_inventory.build_inventory(
+                target_folder, modality, epsg=epsg, track_ids=[track_id])
+        except Exception as exc:  # noqa: BLE001 - the report is a view
+            self.log(f"Could not refresh track {track_id} in the report: {exc}")
+            return
+        if rows:
+            dialog.update_track(rows[0])
+        else:
+            dialog.remove_track(track_id)
+
+    def _on_viewer_track_approved(self, target_folder: str, modality: str,
+                                  track_id: int, approved: bool):
+        camera_label = "Thermal" if modality == "t" else "RGB"
+        self.log(f"Track {track_id} ({camera_label}) "
+                 f"{'approved' if approved else 'no longer approved'}")
+        dialog = self._inventory_dialog_for(target_folder, modality)
+        if dialog is not None:
+            dialog.set_track_approved(track_id, approved)
 
     def add_track_inventory_to_qgis(self):
         """Load the inventory as a point layer at each animal's last position."""
@@ -11215,7 +11288,7 @@ class BambiDockWidget(QDockWidget):
                 ]
                 feat.setGeometry(QgsGeometry.fromPolygonXY([points]))
                 feat.setAttributes([
-                    det['idx'],
+                    det.get('detection_id', det['idx']),
                     det['frame'],
                     det['confidence'],
                     det['class_id']
@@ -11276,7 +11349,7 @@ class BambiDockWidget(QDockWidget):
                 ]
                 feat.setGeometry(QgsGeometry.fromPolygonXY([points]))
                 feat.setAttributes([
-                    det['idx'],
+                    det.get('detection_id', det['idx']),
                     det['frame'],
                     det['confidence'],
                     det['class_id']

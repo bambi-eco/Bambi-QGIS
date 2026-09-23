@@ -304,6 +304,8 @@ def build_frames_from_pixel_tracks(
             if d["frame"] == fi
         ]
         found = frame_images(target_folder, fi, boxes_modality)
+        green_ids = ([det["detection_id"]]
+                     if det.get("detection_id") is not None else [])
         frames.append(attach_other_camera_boxes({
             "frame_idx": fi,
             "frame_idx_t": found["frame_idx_t"],
@@ -316,8 +318,25 @@ def build_frames_from_pixel_tracks(
                  det["conf"], det["cls"], is_interp)
             ],
             "boxes_blue": other_on_frame,
-        }, target_folder, [det["detection_id"]] if det.get("detection_id")
-            is not None else []))
+            # The store ids behind the green boxes, so the viewer can delete
+            # exactly the box it shows.
+            "detection_ids_green": list(green_ids),
+        }, target_folder, green_ids))
+    return frames
+
+
+def track_frames(target_folder: str, modality: str,
+                 track_id: int) -> List[dict]:
+    """The viewer's frame list for one track, empty when the store holds
+    no boxes for it. Shared by the map tool, the inventory report and the
+    viewer's own reload after a deletion."""
+    all_tracks = load_pixel_tracks(target_folder, modality)
+    members = sorted(all_tracks.get(track_id, []), key=lambda d: d["frame"])
+    if not members:
+        return []
+    frames = build_frames_from_pixel_tracks(
+        members, all_tracks, track_id, target_folder, modality)
+    fill_interpolated_boxes(frames)
     return frames
 
 
