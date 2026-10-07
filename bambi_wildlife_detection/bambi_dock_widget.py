@@ -49,6 +49,12 @@ from .core import store as _store_kinds
 from .gui_utils import PLUGIN_SCOPE, read_alfs_selection  # noqa: E402
 from . import gui_utils as gui_utils_hf
 
+
+def _camera_suffix(camera_label: str) -> str:
+    """``"t"``/``"w"`` for a "Thermal"/"RGB" label: the suffix that keeps the
+    two cameras' persisted layer files apart."""
+    return "w" if camera_label == "RGB" else "t"
+
 # The Hugging Face token lives in the QGIS settings rather than in the project
 # configuration: it is a user credential, and a project file gets shared.
 _HF_TOKEN_SETTING = gui_utils_hf.HF_TOKEN_SETTING  # one key with the Segmentation tool
@@ -412,6 +418,23 @@ class BambiDockWidget(QDockWidget):
         self.setWidget(main_widget)
         main_layout = QVBoxLayout(main_widget)
         main_layout.setContentsMargins(5, 5, 5, 5)
+
+        # Progress bar with abort button - pinned above the tabs (outside the
+        # scroll area) so the running step's progress is always in view.
+        progress_layout = QHBoxLayout()
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        progress_layout.addWidget(self.progress_bar, stretch=1)
+
+        self.abort_btn = QPushButton("Abort")
+        self.abort_btn.setToolTip("Cancel the current running process")
+        self.abort_btn.setEnabled(False)
+        self.abort_btn.setFixedWidth(70)
+        self.abort_btn.clicked.connect(self._abort_current_process)
+        progress_layout.addWidget(self.abort_btn)
+
+        main_layout.addLayout(progress_layout)
 
         # Create scrollable area
         scroll_area = QScrollArea()
@@ -3349,28 +3372,12 @@ class BambiDockWidget(QDockWidget):
         animal_layout.addStretch()
 
         # ---------------------------------------------------------------------
-        # Shared run panel - below the tabs, so progress and the log are visible
-        # whichever tab a step was started from.
+        # Shared run panel - below the tabs, so the log is visible whichever
+        # tab a step was started from (the progress bar sits above the tabs).
         # ---------------------------------------------------------------------
         run_panel = QWidget()
         run_layout = QVBoxLayout(run_panel)
         run_layout.setContentsMargins(0, 0, 0, 0)
-
-        # Progress bar with abort button
-        progress_layout = QHBoxLayout()
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
-        progress_layout.addWidget(self.progress_bar, stretch=1)
-
-        self.abort_btn = QPushButton("Abort")
-        self.abort_btn.setToolTip("Cancel the current running process")
-        self.abort_btn.setEnabled(False)
-        self.abort_btn.setFixedWidth(70)
-        self.abort_btn.clicked.connect(self._abort_current_process)
-        progress_layout.addWidget(self.abort_btn)
-
-        run_layout.addLayout(progress_layout)
 
         # Refresh / Reset
         status_row = QHBoxLayout()
@@ -3399,9 +3406,16 @@ class BambiDockWidget(QDockWidget):
         self.log_text.setFont(font)
         log_layout.addWidget(self.log_text)
 
+        log_btn_row = QHBoxLayout()
         clear_log_btn = QPushButton("Clear Log")
         clear_log_btn.clicked.connect(self.log_text.clear)
-        log_layout.addWidget(clear_log_btn)
+        log_btn_row.addWidget(clear_log_btn)
+
+        self.export_log_btn = QPushButton("Export Log…")
+        self.export_log_btn.setToolTip("Save the log output to a text file")
+        self.export_log_btn.clicked.connect(self._export_log)
+        log_btn_row.addWidget(self.export_log_btn)
+        log_layout.addLayout(log_btn_row)
 
         run_layout.addWidget(log_group)
         scroll_layout.addWidget(run_panel)
@@ -3997,6 +4011,25 @@ class BambiDockWidget(QDockWidget):
         # Auto-scroll to bottom
         scrollbar = self.log_text.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
+
+    def _export_log(self):
+        """Save the log output to a text file chosen by the user."""
+        from datetime import datetime
+        folder = self.target_folder_edit.text().strip()
+        name = f"bambi_log_{datetime.now():%Y%m%d_%H%M%S}.txt"
+        default = os.path.join(folder, name) if os.path.isdir(folder) else name
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Log", default, "Text files (*.txt);;All files (*)"
+        )
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(self.log_text.toPlainText())
+        except OSError as e:
+            QMessageBox.warning(self, "Export Log", f"Could not write log:\n{e}")
+            return
+        self.log(f"Log exported to {path}")
 
     def get_config(self) -> Dict[str, Any]:
         """Get the current configuration from UI elements."""
@@ -10319,7 +10352,8 @@ class BambiDockWidget(QDockWidget):
             layer.renderer().setSymbol(symbol)
 
             # Persist and add to project
-            layer = self._persist_memory_layer(layer, "Perpendicular_Lines", "flight_route_layers")
+            layer = self._persist_memory_layer(
+                layer, f"Perpendicular_Lines_{det_suffix}", "flight_route_layers")
             symbol = QgsLineSymbol.createSimple({
                 'color': '#ff7800',
                 'width': '0.6',
@@ -10474,7 +10508,8 @@ class BambiDockWidget(QDockWidget):
             })
             layer.renderer().setSymbol(symbol)
 
-            layer = self._persist_memory_layer(layer, "Track_Perpendicular_Lines", "flight_route_layers")
+            layer = self._persist_memory_layer(
+                layer, f"Track_Perpendicular_Lines_{trk_suffix}", "flight_route_layers")
             symbol = QgsLineSymbol.createSimple({
                 'color': '#9b30ff',
                 'width': '0.8',
@@ -10708,7 +10743,7 @@ class BambiDockWidget(QDockWidget):
 
                 # Persist layers to GeoPackage (using unique file names, keeping display names)
                 bbox_layer = self._persist_memory_layer(
-                    bbox_layer, f"Track{track_id}_FinalPosition", "tracks_layers",
+                    bbox_layer, f"Track{track_id}_FinalPosition_{trk_suffix}", "tracks_layers",
                     display_name="Final Position"
                 )
                 self._style_bbox_layer(bbox_layer, color_str)
@@ -10726,7 +10761,7 @@ class BambiDockWidget(QDockWidget):
 
                 if path_layer is not None:
                     path_layer = self._persist_memory_layer(
-                        path_layer, f"Track{track_id}_Path", "tracks_layers",
+                        path_layer, f"Track{track_id}_Path_{trk_suffix}", "tracks_layers",
                         display_name="Path"
                     )
                     self._style_path_layer(path_layer, color_str)
@@ -10952,8 +10987,10 @@ class BambiDockWidget(QDockWidget):
             provider.addFeatures([feat])
             layer.updateExtents()
 
-            # Persist layer to GeoPackage
-            layer = self._persist_memory_layer(layer, layer_name, "fov_layers")
+            # Persist layer to GeoPackage (camera-suffixed, so the thermal and
+            # RGB layers live side by side instead of replacing each other)
+            layer = self._persist_memory_layer(
+                layer, f"{layer_name}_{_camera_suffix(camera_label)}", "fov_layers")
 
             # Tag layer so the FoV inspector tool can identify and handle it
             layer.setCustomProperty("bambi_layer_type", "fov")
@@ -11008,7 +11045,8 @@ class BambiDockWidget(QDockWidget):
         layer.updateExtents()
 
         # Persist layer to GeoPackage
-        layer = self._persist_memory_layer(layer, "FoV_Combined", "fov_layers")
+        layer = self._persist_memory_layer(
+            layer, f"FoV_Combined_{_camera_suffix(camera_label)}", "fov_layers")
 
         # Tag layer so the FoV inspector tool can identify and handle it
         layer.setCustomProperty("bambi_layer_type", "fov")
@@ -11131,7 +11169,8 @@ class BambiDockWidget(QDockWidget):
             symbol.symbolLayer(0).setStrokeWidth(0.5)
 
             # Persist layer to GeoPackage
-            layer = self._persist_memory_layer(layer, "FoV_Coverage_Merged", "fov_layers")
+            layer = self._persist_memory_layer(
+                layer, f"FoV_Coverage_Merged_{fov_suffix}", "fov_layers")
 
             # Re-apply style after persistence
             symbol = layer.renderer().symbol()
@@ -11299,7 +11338,8 @@ class BambiDockWidget(QDockWidget):
             layer.updateExtents()
 
             # Persist layer to GeoPackage
-            layer = self._persist_memory_layer(layer, layer_name, "detection_layers")
+            layer = self._persist_memory_layer(
+                layer, f"{layer_name}_{_camera_suffix(camera_label)}", "detection_layers")
 
             # Tag layer so the inspector tool can identify and handle it
             layer.setCustomProperty("bambi_layer_type", "detection")
@@ -11360,7 +11400,8 @@ class BambiDockWidget(QDockWidget):
         layer.updateExtents()
 
         # Persist layer to GeoPackage
-        layer = self._persist_memory_layer(layer, "Detections_AllFrames", "detection_layers")
+        layer = self._persist_memory_layer(
+            layer, f"Detections_AllFrames_{_camera_suffix(camera_label)}", "detection_layers")
 
         # Tag layer so the inspector tool can identify and handle it
         layer.setCustomProperty("bambi_layer_type", "detection")
@@ -11614,7 +11655,7 @@ class BambiDockWidget(QDockWidget):
                 if markers_layer and markers_layer.isValid():
                     # Persist the layer
                     markers_layer = self._persist_memory_layer(
-                        markers_layer, "Frame_Markers", "flight_route_layers"
+                        markers_layer, f"Frame_Markers_{fr_suffix}", "flight_route_layers"
                     )
                     # Re-apply styling after persistence (GeoPackage doesn't store QGIS styling)
                     self._style_frame_markers_layer(markers_layer)
@@ -11631,7 +11672,7 @@ class BambiDockWidget(QDockWidget):
                 if distance_layer and distance_layer.isValid():
                     # Persist the layer
                     distance_layer = self._persist_memory_layer(
-                        distance_layer, "Distance_Markers", "flight_route_layers"
+                        distance_layer, f"Distance_Markers_{fr_suffix}", "flight_route_layers"
                     )
                     # Re-apply styling after persistence (GeoPackage doesn't store QGIS styling)
                     self._style_distance_markers_layer(distance_layer)
@@ -11647,7 +11688,7 @@ class BambiDockWidget(QDockWidget):
                 )
                 if time_layer and time_layer.isValid():
                     time_layer = self._persist_memory_layer(
-                        time_layer, "Time_Markers", "flight_route_layers"
+                        time_layer, f"Time_Markers_{fr_suffix}", "flight_route_layers"
                     )
                     self._style_time_markers_layer(time_layer)
                     QgsProject.instance().addMapLayer(time_layer, False)
@@ -11662,7 +11703,7 @@ class BambiDockWidget(QDockWidget):
                 )
                 if image_labels_layer and image_labels_layer.isValid():
                     image_labels_layer = self._persist_memory_layer(
-                        image_labels_layer, "Image_Labels", "flight_route_layers"
+                        image_labels_layer, f"Image_Labels_{fr_suffix}", "flight_route_layers"
                     )
                     self._style_image_labels_layer(image_labels_layer)
                     QgsProject.instance().addMapLayer(image_labels_layer, False)

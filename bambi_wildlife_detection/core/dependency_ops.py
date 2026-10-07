@@ -48,7 +48,7 @@ _bundled_versions_cache = None
 #: bound of its ``_VERSION_RANGES`` entry below, which is what flags an
 #: out-of-date install (``tests/test_alfspy_pin.py``).
 ALFS_PY_TAG = 'v3.0.0'
-BAMBI_DETECTION_TAG = 'v1.0.0'
+BAMBI_DETECTION_TAG = 'v1.0.1'
 #: Geo-Referenced-Tracking tags its releases without the ``v`` prefix the other
 #: two repositories use.  0.1.0 is the release the plugin's tracking step was
 #: written against; 1.0.0 exists but has not been run through the plugin, hence
@@ -113,7 +113,9 @@ _VERSION_RANGES = {
     # 1.0.0 is the engine-first release: bambi.geo / tracking / survey / render /
     # io are the array-in, array-out functions the plugin's steps are built on
     # (see tests/test_engine_contract.py); 0.6.0 introduced backend neutrality.
-    'bambi-detection': ("1.0.0", None),
+    # 1.0.1 is the floor: under alfspy 3.0, 1.0.0's label_to_world_coordinates
+    # rebuilds the ray caster on every call, which stalls FoV / georeferencing.
+    'bambi-detection': ("1.0.1", None),
     # 3.0.0 is the release that merged the PyTorch fork back in: one package
     # with selectable engines and ray casters, ``make_context`` in place of the
     # per-backend factories, and an integral result that reports coverage

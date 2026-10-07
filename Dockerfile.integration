@@ -34,7 +34,7 @@ RUN pip install --no-cache-dir \
 # are extras - so the engine this image renders with has to be named
 # here, the same way the Dependency Manager names the selected one.
 RUN pip install --no-cache-dir "AlfsPy[moderngl,embree] @ git+https://github.com/bambi-eco/alfs_py.git@v3.0.0" && \
-    pip install --no-cache-dir "git+https://github.com/bambi-eco/bambi_detection.git@v1.0.0"
+    pip install --no-cache-dir "git+https://github.com/bambi-eco/bambi_detection.git@v1.0.1"
 
 RUN pip install --no-cache-dir pytest pytest-cov requests scipy
 
