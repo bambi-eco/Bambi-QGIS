@@ -37,7 +37,9 @@ from .core.dependency_ops import (  # noqa: F401 - re-exported API
     ALFS_REPO,
     BAMBI_DETECTION_TAG,
     GEOREF_TRACKER_TAG,
+    TORCH_CUDA_INDEX,
     alfs_install_spec,
+    gpu_torch_requirements,
     _DJI_SDK_URL,
     _VERSION_RANGES,
     _find_python,
@@ -262,10 +264,10 @@ class DependencyManagerDialog(QDialog):
         gpu_layout.addWidget(warn)
         gpu_layout.addLayout(self._make_row(
             key='gpu_support',
-            label='CUDA GPU Support  (PyTorch + torchvision cu121)',
+            label=f'CUDA GPU Support  (PyTorch + torchvision {TORCH_CUDA_INDEX})',
             desc=(
                 'Removes any existing CPU torch/torchvision build and installs '
-                'the CUDA 12.1 variant from pytorch.org.'
+                'the CUDA 12.6 variant from pytorch.org.'
             ),
             callback=self._install_gpu,
             dist_names=[('torch', 'torch'), ('torchvision', 'torchvision')],
@@ -414,7 +416,7 @@ class DependencyManagerDialog(QDialog):
                     '<br><small>CPU build</small></span>'
                 )
                 lbl.setToolTip('CPU-only build installed - use Install to replace it '
-                               'with the CUDA (cu121) variant for GPU support.')
+                               f'with the CUDA ({TORCH_CUDA_INDEX}) variant for GPU support.')
             elif variant_note:
                 lbl.setText(
                     f'<span style="color:green;">{pre}✔ v{ver}'
@@ -691,15 +693,16 @@ class DependencyManagerDialog(QDialog):
         self._start_worker('classification', _do)
 
     def _install_gpu(self):
-        self._log_line('─── GPU Support (CUDA 12.1) ───')
+        self._log_line('─── GPU Support (CUDA 12.6) ───')
 
         def _do(log_fn):
             log_fn('Removing existing CPU torch/torchvision …')
             _run_pip(['uninstall', 'torch', 'torchvision', '-y'], log_fn)
-            log_fn('Installing CUDA 12.1 builds from pytorch.org …')
+            log_fn('Installing CUDA 12.6 builds from pytorch.org …')
             _run_pip(
-                ['install', '--force-reinstall', 'torch', 'torchvision',
-                 '--index-url', 'https://download.pytorch.org/whl/cu121'],
+                ['install', '--force-reinstall', *gpu_torch_requirements(),
+                 '--index-url',
+                 f'https://download.pytorch.org/whl/{TORCH_CUDA_INDEX}'],
                 log_fn,
             )
         self._start_worker('gpu_support', _do)

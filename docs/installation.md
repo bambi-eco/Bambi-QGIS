@@ -55,7 +55,7 @@ Each dependency group shows the currently installed version (green ✔, orange �
 | **Extended Tracking (optional)** | BoxMOT, Geo-Referenced Tracking |
 | **Flight Route Generation (optional)** | Fiona, simplekml |
 | **DJI Thermal SDK** | Download & extract to the correct plugin subfolder |
-| **GPU Support – CUDA** | torch + torchvision (CUDA 12.1 builds) |
+| **GPU Support – CUDA** | torch + torchvision (CUDA 12.6 builds) |
 
 ### Render engine and ray caster
 
@@ -183,14 +183,14 @@ To pin a specific revision of the backbone rather than whatever its main branch 
 
 ### Optional: AI GPU support
 
-By default, AI model inference is CPU-bound. To run e.g. detection on your GPU, re-install PyTorch with bindings suitable for your GPU. For Nvidia CUDA 12.1+ (use `nvidia-smi` to check compatible CUDA versions):
+By default, AI model inference is CPU-bound. To run e.g. detection on your GPU, re-install PyTorch with bindings suitable for your GPU. For Nvidia CUDA 12.6+ (use `nvidia-smi` to check compatible CUDA versions):
 
 ```bash
 pip uninstall torch torchvision -y
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+pip install "torch>=2.6.0,<=2.11.0" "torchvision>=0.21.0,<=0.26.0" --index-url https://download.pytorch.org/whl/cu126
 ```
 
-> Tested with torch 2.5.1+cu121 and torchvision 0.20.1+cu121
+> torch 2.6 is the minimum: transformers 5.x (DINOv3 classification, SAM3) fails to import on 2.5.
 
 ### Optional: DJI Thermal SDK
 

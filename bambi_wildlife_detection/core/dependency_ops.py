@@ -48,7 +48,7 @@ _bundled_versions_cache = None
 #: bound of its ``_VERSION_RANGES`` entry below, which is what flags an
 #: out-of-date install (``tests/test_alfspy_pin.py``).
 ALFS_PY_TAG = 'v3.0.0'
-BAMBI_DETECTION_TAG = 'v1.0.1'
+BAMBI_DETECTION_TAG = 'v1.0.2'
 #: Geo-Referenced-Tracking tags its releases without the ``v`` prefix the other
 #: two repositories use.  0.1.0 is the release the plugin's tracking step was
 #: written against; 1.0.0 exists but has not been run through the plugin, hence
@@ -113,9 +113,11 @@ _VERSION_RANGES = {
     # 1.0.0 is the engine-first release: bambi.geo / tracking / survey / render /
     # io are the array-in, array-out functions the plugin's steps are built on
     # (see tests/test_engine_contract.py); 0.6.0 introduced backend neutrality.
-    # 1.0.1 is the floor: under alfspy 3.0, 1.0.0's label_to_world_coordinates
-    # rebuilds the ray caster on every call, which stalls FoV / georeferencing.
-    'bambi-detection': ("1.0.1", None),
+    # 1.0.1: under alfspy 3.0, 1.0.0's label_to_world_coordinates rebuilds the
+    # ray caster on every call, which stalls FoV / georeferencing.  1.0.2 is the
+    # floor: earlier releases pin torch==2.5.1, so installing them swaps the
+    # GPU torch build back for the CPU 2.5.1 wheel (too old for transformers 5).
+    'bambi-detection': ("1.0.2", None),
     # 3.0.0 is the release that merged the PyTorch fork back in: one package
     # with selectable engines and ray casters, ``make_context`` in place of the
     # per-backend factories, and an integral result that reports coverage
@@ -129,8 +131,11 @@ _VERSION_RANGES = {
     # only release the tracking step has been run against.  1.0.0 exists and is
     # deliberately not accepted until it has been tested here.
     'georef-tracker': ("0.1.0", "0.1.0"),
-    'torch': ("2.5.1", "2.11.0"),
-    'torchvision': ("0.20.1", "0.26.0"),
+    # 2.6.0 is the floor: transformers 5.x calls ``torch.accelerator`` (new in
+    # 2.6) while importing, yet still declares ``torch>=2.5`` - so pip happily
+    # pairs it with 2.5.1 and every classification step dies on import.
+    'torch': ("2.6.0", "2.11.0"),
+    'torchvision': ("0.21.0", "0.26.0"),
     'dji-thermal-sdk': ('1.7', '1.8'),
     'fiona': ('1.10.1', '1.10.1'),
     'simplekml': ('1.3.6', '1.3.6'),
@@ -140,6 +145,23 @@ _VERSION_RANGES = {
     # huggingface-hub is deliberately absent: it has no tested bound, and an
     # entry of (None, None) is exactly what a missing key already means.
 }
+
+#: pytorch.org wheel index the GPU install pulls from.  cu121 ends at torch
+#: 2.5.1, below the floor above; cu126 carries 2.6 onwards and runs on any
+#: driver a CUDA 12.x setup already has.
+TORCH_CUDA_INDEX = 'cu126'
+
+
+def gpu_torch_requirements():
+    """pip requirement strings for the GPU torch/torchvision install.
+
+    Bounded by ``_VERSION_RANGES`` so the CUDA index cannot hand out a release
+    the plugin has not been run against - left unbounded it installs whatever
+    is newest there.
+    """
+    return [f'{name}>={lo},<={hi}'
+            for name in ('torch', 'torchvision')
+            for lo, hi in (_VERSION_RANGES[name],)]
 
 
 def _git_available():

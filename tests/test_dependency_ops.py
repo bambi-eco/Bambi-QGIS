@@ -89,6 +89,29 @@ class TestTorchBuildVariant:
         assert ops._torch_build_variant("2.5.1") is None
 
 
+class TestGpuTorchInstall:
+    def test_requirements_follow_the_tested_ranges(self):
+        assert ops.gpu_torch_requirements() == [
+            "torch>=2.6.0,<=2.11.0", "torchvision>=0.21.0,<=0.26.0"]
+
+    def test_torch_floor_has_torch_accelerator(self):
+        """transformers 5.x calls torch.accelerator (new in 2.6) on import."""
+        packaging = pytest.importorskip("packaging.version")
+        assert packaging.Version(ops._VERSION_RANGES["torch"][0]) >= packaging.Version("2.6.0")
+
+    def test_cuda_index_carries_the_floor(self):
+        """cu121 ends at torch 2.5.1, below the floor."""
+        assert ops.TORCH_CUDA_INDEX != "cu121"
+
+    def test_cuda_local_version_is_inside_the_range(self):
+        """``<=2.11.0`` must accept the index's ``2.11.0+cu126``."""
+        specifiers = pytest.importorskip("packaging.specifiers")
+        spec = specifiers.SpecifierSet(ops.gpu_torch_requirements()[0][len("torch"):])
+        assert spec.contains("2.11.0+cu126")
+        assert not spec.contains("2.5.1+cu121")
+        assert not spec.contains("2.14.1+cu126")
+
+
 class TestFindPython:
     def test_prefers_python_next_to_executable(self, monkeypatch, tmp_path):
         exe_dir = tmp_path / "bin"

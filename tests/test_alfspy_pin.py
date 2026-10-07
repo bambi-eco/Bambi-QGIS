@@ -52,10 +52,11 @@ def test_alfspy_bound_covers_the_oblique_heading_fix():
 
 def test_bambi_detection_bound_covers_the_engine_release():
     """1.0.0 is the engine-first release the plugin's steps are built on; 1.0.1
-    is the first whose ``label_to_world_coordinates`` reuses one ray caster."""
+    is the first whose ``label_to_world_coordinates`` reuses one ray caster;
+    1.0.2 is the first that does not pin torch back to 2.5.1."""
     packaging = pytest.importorskip("packaging.version")
     min_ver, _max_ver = _VERSION_RANGES["bambi-detection"]
-    assert packaging.Version(min_ver) >= packaging.Version("1.0.1")
+    assert packaging.Version(min_ver) >= packaging.Version("1.0.2")
 
 
 def test_bambi_detection_urls_use_the_pinned_tag():
