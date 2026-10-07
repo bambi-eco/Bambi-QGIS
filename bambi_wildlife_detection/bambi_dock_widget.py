@@ -2371,7 +2371,7 @@ class BambiDockWidget(QDockWidget):
         self.life_stage_iqr_spin.setRange(0.0, 20.0)
         self.life_stage_iqr_spin.setDecimals(1)
         self.life_stage_iqr_spin.setSingleStep(0.5)
-        self.life_stage_iqr_spin.setValue(2.0)
+        self.life_stage_iqr_spin.setValue(0.5)
         self.life_stage_iqr_spin.setToolTip(
             "How wide the gap to the next-smallest animal must be, as a "
             "multiple of the flight's interquartile range.\n\n"
@@ -4311,7 +4311,7 @@ class BambiDockWidget(QDockWidget):
                 if hasattr(self, 'life_stage_z_spin') else -2.0),
             "life_stage_iqr_factor": (
                 self.life_stage_iqr_spin.value()
-                if hasattr(self, 'life_stage_iqr_spin') else 2.0),
+                if hasattr(self, 'life_stage_iqr_spin') else 0.5),
             "life_stage_min_individuals": (
                 self.life_stage_min_spin.value()
                 if hasattr(self, 'life_stage_min_spin') else 4),

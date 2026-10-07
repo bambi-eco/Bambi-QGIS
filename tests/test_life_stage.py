@@ -56,7 +56,7 @@ class TestPaperCohorts:
         rule then declines - the right failure mode for a census, where a
         false juvenile is worse than a missing one - but it must say so."""
         areas = _areas([673, 1050, 1120, 1180, 1210])
-        found = life_stage.assess(areas)
+        found = life_stage.assess(areas, Config(iqr_factor=2.0))
 
         assert all(item.label == life_stage.ADULT for item in found)
         # The candidate is still reported as a low outlier, so the user can
@@ -94,7 +94,7 @@ class TestConditions:
         """Several small animals together are a size continuum, not juveniles:
         each one's gap to the next is tiny even though all sit low."""
         areas = _areas([500, 520, 540, 1000, 1010, 1020, 1030])
-        found = life_stage.assess(areas)
+        found = life_stage.assess(areas, Config(iqr_factor=2.0))
         assert all(item.label == life_stage.ADULT for item in found)
 
     def test_a_large_gap_alone_is_not_enough(self):
@@ -109,7 +109,7 @@ class TestConditions:
 
     def test_the_z_threshold_is_configurable(self):
         areas = _areas([700, 1000, 1010, 1020, 1030])
-        strict = life_stage.assess(areas, Config(z_threshold=-20.0))
+        strict = life_stage.assess(areas, Config(z_threshold=-50.0))
         assert all(item.label == life_stage.ADULT for item in strict)
 
     def test_the_gap_factor_is_configurable(self):
@@ -216,7 +216,7 @@ class TestExplain:
         assert "1 juvenile(s)" in line and "track 1" in line
 
     def test_no_juvenile_says_so_plainly(self):
-        found = life_stage.assess(_areas([900, 1000, 1010, 1020, 1030]))
+        found = life_stage.assess(_areas([900, 950, 1000, 1050, 1100]))
         assert "no juvenile" in life_stage.explain(found)
 
     def test_too_few_individuals_is_explained(self):

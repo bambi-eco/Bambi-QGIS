@@ -48,7 +48,7 @@ class Config(NamedTuple):
     #: How far below the flight median an individual must sit.
     z_threshold: float = -2.0
     #: Multiple of the interquartile range the size gap must exceed.
-    iqr_factor: float = 2.0
+    iqr_factor: float = 0.5
     #: Fewest individuals for the test to run at all. A robust z-score over
     #: three animals is not robust.
     min_individuals: int = 4

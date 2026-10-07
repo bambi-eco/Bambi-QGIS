@@ -88,7 +88,7 @@ def _config(root, **overrides):
                                        for name in ("red deer", "roe deer",
                                                     "wild boar")}}},
         "life_stage_z": -2.0,
-        "life_stage_iqr_factor": 2.0,
+        "life_stage_iqr_factor": 0.5,
         "life_stage_min_individuals": 4,
     }
     config.update(overrides)

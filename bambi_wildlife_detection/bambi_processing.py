@@ -2816,7 +2816,7 @@ class BambiProcessor:
 
         settings = life_stage.Config(
             z_threshold=float(config.get("life_stage_z", -2.0)),
-            iqr_factor=float(config.get("life_stage_iqr_factor", 2.0)),
+            iqr_factor=float(config.get("life_stage_iqr_factor", 0.5)),
             min_individuals=int(config.get("life_stage_min_individuals", 4)))
 
         # A male was marked by his antlers, not his size, so he is an adult

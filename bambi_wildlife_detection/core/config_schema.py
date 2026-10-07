@@ -206,7 +206,7 @@ CONFIG_ENTRIES: List[ConfigEntry] = [
     ConfigEntry("Classification/OverwriteSpecies", "bool", False),
     # ===== Life stage from box area =====
     ConfigEntry("LifeStage/Z", "double", -2.0),
-    ConfigEntry("LifeStage/IqrFactor", "double", 2.0),
+    ConfigEntry("LifeStage/IqrFactor", "double", 0.5),
     ConfigEntry("LifeStage/MinIndividuals", "int_double", 4),
     # The classifier mapping table (task -> modality, model, label mapping).
     ConfigEntry("Classification/Models", "str"),
