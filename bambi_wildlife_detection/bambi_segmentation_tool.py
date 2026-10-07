@@ -896,7 +896,7 @@ class SegmentationToolDialog(QDialog):
         try:
             token = edit.text().strip() if edit is not None else read_hf_token()
         except Exception:  # nosec B110 - a torn-down dock or no QGIS settings
-            token = ""
+            token = ""  # nosec B105 - "" means no token
         if token != self.hf_token_edit.text().strip():
             self.hf_token_edit.setText(token)
 

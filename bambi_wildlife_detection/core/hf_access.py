@@ -360,7 +360,8 @@ def feature_dim(modality: str, backbone_dim: int = BACKBONE_DIM) -> int:
 
 
 def download_head(repo: str, task: str, projection: str, modality: str,
-                  destination: str, token: str = "", log_fn=None) -> str:
+                  destination: str, token: str = "",  # nosec B107
+                  log_fn=None) -> str:
     """Fetch a published head into *destination* and return that path.
 
     Shared by the classification run and the class-mapping dialog: the
