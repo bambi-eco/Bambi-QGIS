@@ -3,7 +3,9 @@
 
 A window with one plot. The ground below the route is a filled relief, the
 aircraft's altitude a line above it, both in metres above sea level; the x
-axis is the distance flown or the time since the first frame, switchable.
+axis is the distance flown, the time since the first frame or the frame
+index, switchable. Frames with animals - detections or tracks - can be
+marked along the bottom of the plot.
 Hovering shows the frame under the cursor with its altitude, the ground
 height and the height above ground level. The camera whose poses are drawn
 is selectable, because thermal and RGB were extracted separately and can
@@ -12,17 +14,26 @@ differ in frame count and timing.
 The numbers come from :mod:`core.agl_profile`; this module only draws.
 """
 import os
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from qgis.PyQt.QtCore import QPointF, QRectF, Qt, QThread, pyqtSignal
 from qgis.PyQt.QtGui import (QBrush, QColor, QFont, QFontMetrics, QPainter,
                              QPainterPath, QPen, QPolygonF)
 from qgis.PyQt.QtWidgets import (
-    QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QRadioButton, QSizePolicy, QVBoxLayout, QWidget,
+    QButtonGroup, QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel,
+    QLineEdit, QPushButton, QRadioButton, QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from .core import agl_profile
+
+#: x-axis key of the profile points -> axis title
+AXES = {
+    "distance_m": "Distance from start (m)",
+    "time_s": "Time since start (s)",
+    "frame": "Frame index",
+}
+
+MARKER_COLOR = QColor(220, 110, 0)
 
 
 class ProfileCanvas(QWidget):
@@ -40,6 +51,8 @@ class ProfileCanvas(QWidget):
         self._hover: Optional[int] = None
         self._on_hover = None
         self._message = ""
+        self._markers: Dict[int, int] = {}
+        self._marker_label = ""
         self.setMouseTracking(True)
         self.setMinimumHeight(240)
         self.setSizePolicy(QSizePolicy.Policy.Expanding,
@@ -59,8 +72,14 @@ class ProfileCanvas(QWidget):
         self._message = message
         self.update()
 
+    def set_markers(self, counts: Dict[int, int], label: str = ""):
+        """Animals per frame, drawn as ticks along the plot bottom."""
+        self._markers = dict(counts or {})
+        self._marker_label = label
+        self.update()
+
     def set_axis(self, axis: str):
-        """``"distance_m"`` or ``"time_s"``."""
+        """A key of :data:`AXES`."""
         self._axis = axis
         self.set_points(getattr(self, "_all_points", self._points))
 
@@ -186,6 +205,19 @@ class ProfileCanvas(QWidget):
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawPath(path)
 
+        # Animal markers: a tick per frame with animals, taller with more.
+        if self._markers:
+            most = max(self._markers.values())
+            painter.setPen(QPen(MARKER_COLOR, 1.5))
+            for p in self._points:
+                count = self._markers.get(p["frame"])
+                if not count:
+                    continue
+                px = self._to_pixel(p[self._axis], yr[0], rect, xr, yr).x()
+                height = 5 + 13 * count / most
+                painter.drawLine(QPointF(px, rect.bottom()),
+                                 QPointF(px, rect.bottom() - height))
+
         # Axes frame and tick labels
         painter.setPen(QPen(QColor(90, 90, 90), 1))
         painter.drawRect(rect)
@@ -194,14 +226,12 @@ class ProfileCanvas(QWidget):
             label = f"{y:,.0f}"
             painter.drawText(QPointF(rect.left() - 6 - metrics.horizontalAdvance(label),
                                      p.y() + metrics.ascent() / 2 - 1), label)
-        unit = "m" if self._axis == "distance_m" else "s"
         for x in self._ticks(xr[0], xr[1], 8):
             p = self._to_pixel(x, yr[0], rect, xr, yr)
             label = f"{x:,.0f}"
             painter.drawText(QPointF(p.x() - metrics.horizontalAdvance(label) / 2,
                                      rect.bottom() + 4 + metrics.ascent()), label)
-        axis_title = ("Distance from start (m)" if self._axis == "distance_m"
-                      else "Time since start (s)")
+        axis_title = AXES.get(self._axis, self._axis)
         painter.drawText(QPointF(rect.center().x() - metrics.horizontalAdvance(axis_title) / 2,
                                  rect.bottom() + 8 + 2 * metrics.ascent()), axis_title)
         painter.save()
@@ -224,6 +254,13 @@ class ProfileCanvas(QWidget):
         painter.setPen(QColor(60, 60, 60))
         painter.drawText(QPointF(rect.left() + 156, rect.top() + 12 + metrics.ascent() / 2 - 1),
                          "ground (DEM)")
+        if self._markers:
+            painter.setPen(QPen(MARKER_COLOR, 2))
+            painter.drawLine(QPointF(rect.left() + 250, rect.top() + 6),
+                             QPointF(rect.left() + 250, rect.top() + 18))
+            painter.setPen(QColor(60, 60, 60))
+            painter.drawText(QPointF(rect.left() + 258, rect.top() + 12 + metrics.ascent() / 2 - 1),
+                             self._marker_label or "animals")
 
         # Hover marker
         point = self.hovered_point()
@@ -342,6 +379,7 @@ class AglToolDialog(QDialog):
         dem_row.addWidget(QLabel("DEM mesh:"))
         self.dem_edit = QLineEdit()
         self.dem_edit.setPlaceholderText("dem_mesh.glb (its .json beside it gives the origin)")
+        self.dem_edit.returnPressed.connect(self.load)
         dem_row.addWidget(self.dem_edit, 1)
         browse_dem = QPushButton("…")
         browse_dem.setFixedWidth(30)
@@ -361,9 +399,21 @@ class AglToolDialog(QDialog):
         self.distance_radio = QRadioButton("Distance from start")
         self.distance_radio.setChecked(True)
         self.time_radio = QRadioButton("Time since start")
-        self.distance_radio.toggled.connect(self._on_axis_changed)
-        controls.addWidget(self.distance_radio)
-        controls.addWidget(self.time_radio)
+        self.frame_radio = QRadioButton("Frame index")
+        self._axis_group = QButtonGroup(self)
+        for radio in (self.distance_radio, self.time_radio, self.frame_radio):
+            self._axis_group.addButton(radio)
+            radio.toggled.connect(self._on_axis_changed)
+            controls.addWidget(radio)
+        controls.addSpacing(16)
+        controls.addWidget(QLabel("Animal markers:"))
+        self.marker_combo = QComboBox()
+        self.marker_combo.addItem("None", "")
+        self.marker_combo.addItem("Detections", "detections")
+        self.marker_combo.addItem("Tracks", "tracks")
+        self.marker_combo.currentIndexChanged.connect(
+            lambda _i: self._load_markers())
+        controls.addWidget(self.marker_combo)
         controls.addStretch()
         self.load_btn = QPushButton("Load")
         self.load_btn.clicked.connect(self.load)
@@ -404,6 +454,7 @@ class AglToolDialog(QDialog):
             self.dem_edit.setText(dem)
             changed = True
         self._dem_json = config.get("dem_metadata_path", "")
+        self._dock_dem = dem
         if changed and os.path.isdir(self.folder_edit.text()):
             self.load()
 
@@ -425,9 +476,15 @@ class AglToolDialog(QDialog):
     # -- behaviour -----------------------------------------------------------
 
     def _axis(self) -> str:
-        return "distance_m" if self.distance_radio.isChecked() else "time_s"
+        if self.time_radio.isChecked():
+            return "time_s"
+        if self.frame_radio.isChecked():
+            return "frame"
+        return "distance_m"
 
-    def _on_axis_changed(self, _checked):
+    def _on_axis_changed(self, checked):
+        if not checked:
+            return  # the radio being switched off; the one switched on reports
         self.canvas.set_axis(self._axis())
         if self._profile and self._axis() == "time_s" and not any(
                 p["time_s"] is not None for p in self._profile["points"]):
@@ -450,8 +507,11 @@ class AglToolDialog(QDialog):
             return
         modality = self.camera_combo.currentData()
         dem = self.dem_edit.text().strip()
-        dem_json = getattr(self, "_dem_json", "") or (
-            dem if dem.lower().endswith(".json") else "")
+        # The dock's metadata JSON only belongs to the dock's DEM; a mesh
+        # picked by hand brings its own JSON (beside it) or none.
+        dock_json = (getattr(self, "_dem_json", "")
+                     if dem == getattr(self, "_dock_dem", None) else "")
+        dem_json = (dem if dem.lower().endswith(".json") else "") or dock_json
         dem_mesh = "" if dem.lower().endswith(".json") else dem
         args = (folder, modality, dem_mesh, dem_json)
         if self._worker is not None:
@@ -504,9 +564,35 @@ class AglToolDialog(QDialog):
         if not self._profile["points"]:
             lines.insert(0, f"No {camera} poses in {folder} - extract the "
                             f"{camera} frames first.")
-        self.status_label.setText(f"{camera}: " + " | ".join(lines))
+        self._summary = f"{camera}: " + " | ".join(lines)
+        self.status_label.setText(self._summary)
         self.hover_label.setText(
             "Hover over the profile to read the altitude above ground.")
+        self._load_markers()
+
+    def _marker_status(self, message: str):
+        summary = getattr(self, "_summary", "")
+        self.status_label.setText(f"{summary} | {message}" if summary else message)
+
+    def _load_markers(self):
+        """Read the animals per frame for the marker choice and the camera."""
+        source = self.marker_combo.currentData()
+        self._marker_counts: Dict[int, int] = {}
+        folder = self.folder_edit.text().strip()
+        if getattr(self, "_summary", ""):
+            self.status_label.setText(self._summary)
+        if source and os.path.isdir(folder):
+            camera = self.camera_combo.currentText()
+            try:
+                self._marker_counts = agl_profile.animal_counts(
+                    folder, self.camera_combo.currentData(), source)
+            except Exception as exc:  # noqa: BLE001 - shown, not fatal
+                self._marker_status(f"could not read the {source}: {exc}")
+            else:
+                if not self._marker_counts:
+                    self._marker_status(f"no {camera} {source} to mark")
+        self.canvas.set_markers(self._marker_counts,
+                                self.marker_combo.currentText().lower())
 
     def closeEvent(self, event):
         worker = self._worker
@@ -527,7 +613,11 @@ class AglToolDialog(QDialog):
         ground = (f"{point['ground']:8.1f} m" if point["ground"] is not None
                   else "    n/a")
         agl = (f"{point['agl']:6.1f} m" if point["agl"] is not None else "   n/a")
+        animals = ""
+        if self.marker_combo.currentData():
+            count = getattr(self, "_marker_counts", {}).get(point["frame"], 0)
+            animals = f"  |  {count} {self.marker_combo.currentText().lower()}"
         self.hover_label.setText(
             f"frame {point['frame']:5d}  d = {point['distance_m']:8.1f} m{time_part}"
             f"  |  altitude {point['altitude']:8.1f} m ASL   ground {ground}"
-            f"   AGL {agl}  |  E {point['east']:.1f}  N {point['north']:.1f}")
+            f"   AGL {agl}  |  E {point['east']:.1f}  N {point['north']:.1f}{animals}")

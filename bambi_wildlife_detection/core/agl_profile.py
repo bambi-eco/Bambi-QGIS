@@ -78,12 +78,17 @@ _MESH_CACHE: Dict[str, object] = {}
 
 
 def ground_heights(mesh_path: str,
-                   xy: Sequence[Tuple[float, float]]) -> List[Optional[float]]:
+                   xy: Sequence[Tuple[float, float]],
+                   errors: Optional[List[str]] = None
+                   ) -> List[Optional[float]]:
     """DEM height (mesh-local z) straight below each ``(x, y)``, or ``None``.
 
     One batched vertical ray cast per call: a flight is a thousand frames
     and casting them one by one through the Python loop was what made the
     inspector's per-click cast feel slow when repeated.
+
+    :param errors: when given, why the mesh could not be read or cast
+        against is appended to it instead of only yielding ``None``s
     """
     if not mesh_path or not xy:
         return [None for _ in xy]
@@ -106,8 +111,19 @@ def ground_heights(mesh_path: str,
             z = float(location[2])
             current = result[int(ray)]
             result[int(ray)] = z if current is None else max(current, z)
+        if errors is not None and all(r is None for r in result):
+            # Outside the mesh (other DEM / origin) or over a hole in it
+            # (water, no-data) look the same from here; the extents tell.
+            (mx0, my0, _), (mx1, my1, _) = mesh.bounds
+            px, py = zip(*xy)
+            errors.append(
+                f"no ray hit the mesh; poses x {min(px):.1f}..{max(px):.1f}, "
+                f"y {min(py):.1f}..{max(py):.1f} vs mesh x {mx0:.1f}..{mx1:.1f}, "
+                f"y {my0:.1f}..{my1:.1f} (mesh-local m)")
         return result
-    except Exception:  # nosec B110 - no mesh stack, or a mesh that fails
+    except Exception as exc:  # nosec B110 - no mesh stack, or a mesh that fails
+        if errors is not None:
+            errors.append(f"{type(exc).__name__}: {exc}")
         return [None for _ in xy]
 
 
@@ -132,6 +148,10 @@ def build_profile(target_folder: str, modality: str, dem_path: str = "",
     """
     from . import inspection
 
+    if dem_path.lower().endswith(".json"):
+        # The metadata, not the mesh: its sibling .glb is the mesh.
+        dem_json_path = dem_json_path or dem_path
+        dem_path = ""
     images = inspection._pose_images(target_folder, modality)
     origin = dem_origin(dem_path, dem_json_path, target_folder)
     ox, oy, oz = origin if origin else (0.0, 0.0, 0.0)
@@ -156,10 +176,15 @@ def build_profile(target_folder: str, modality: str, dem_path: str = "",
                         or image.get("epoch")))
 
     xy = [(x, y) for _f, x, y, _z, _t in located]
+    errors: List[str] = []
     if ground_fn is not None:
         grounds = list(ground_fn(xy))
+    elif not mesh_path:
+        grounds = [None for _ in xy]
+        errors.append("no DEM mesh (.glb/.gltf) found for "
+                      f"{dem_path or dem_json_path or '(empty)'}")
     else:
-        grounds = ground_heights(mesh_path, xy)
+        grounds = ground_heights(mesh_path, xy, errors)
 
     points = []
     distance = 0.0
@@ -191,7 +216,49 @@ def build_profile(target_folder: str, modality: str, dem_path: str = "",
         "mesh_path": mesh_path,
         "modality": modality,
         "n_ground": sum(1 for p in points if p["ground"] is not None),
+        "ground_error": errors[0] if errors else "",
     }
+
+
+def animal_counts(target_folder: str, modality: str,
+                  source: str) -> Dict[int, int]:
+    """How many animals each frame shows, ``{frame: count}``.
+
+    :param source: ``"detections"`` (boxes per frame) or ``"tracks"``
+        (distinct tracks per frame, interpolated boxes included); anything
+        else gives ``{}``. Frame numbers are pose indices, the same as the
+        profile points' ``frame``.
+
+    A folder from before the GeoPackage store (``detections_{m}/
+    detections.txt``, ``tracks_pixel_{m}/tracks_pixel.csv``) that was never
+    migrated is read from those files, so its markers show without a
+    migration.
+    """
+    from . import inspection, migration
+
+    frames: List[int] = []
+    if source == "detections":
+        rows = inspection.load_pixel_detections(target_folder, modality)
+        if not rows:
+            rows, _labels = migration.read_legacy_detections(os.path.join(
+                migration.legacy_folder(target_folder, "detections", modality),
+                "detections.txt"))
+        frames = [int(row["frame"]) for row in rows]
+    elif source == "tracks":
+        tracks = {track_id: {int(box["frame"]) for box in boxes}
+                  for track_id, boxes in inspection.load_pixel_tracks(
+                      target_folder, modality).items()}
+        if not tracks:
+            for row in migration.read_legacy_pixel_tracks(os.path.join(
+                    migration.legacy_folder(target_folder, "tracks_pixel",
+                                            modality), "tracks_pixel.csv")):
+                tracks.setdefault(row["track_id"], set()).add(int(row["frame"]))
+        frames = [frame for track in tracks.values() for frame in track]
+
+    counts: Dict[int, int] = {}
+    for frame in frames:
+        counts[frame] = counts.get(frame, 0) + 1
+    return counts
 
 
 def summarise(profile: dict) -> List[str]:
@@ -208,8 +275,11 @@ def summarise(profile: dict) -> List[str]:
         lines.append(f"AGL {min(agl):.1f}-{max(agl):.1f} m, mean "
                      f"{sum(agl) / len(agl):.1f} m over {len(agl)} frame(s) "
                      "with DEM ground")
+    elif profile.get("ground_error"):
+        lines.append(f"DEM not loaded - {profile['ground_error']}")
     else:
-        lines.append("No DEM ground under the route - check the DEM mesh path")
+        lines.append("No DEM ground under the route - the mesh does not "
+                     "cover the poses (wrong DEM for this flight?)")
     if profile.get("origin") is None:
         lines.append("Warning: no DEM origin found; altitudes are mesh-local, "
                      "not above sea level")

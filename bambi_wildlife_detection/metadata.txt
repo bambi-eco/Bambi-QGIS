@@ -2,7 +2,7 @@
 name=Bambi - QGIS Integration
 qgisMinimumVersion=3.22
 description=Detect and track wildlife in drone videos/photos with geo-referencing
-version=7.0.0
+version=7.0.1
 author=Christoph Praschl, Anna Maschek, David C.Schedl
 email=christoph.praschl@fh-hagenberg.at
 
@@ -29,7 +29,12 @@ about=A comprehensive QGIS plugin for detecting, tracking, and geo-referencing w
     - Built-in dependency manager to install all required and optional packages from within QGIS
     All results are automatically added as styled layers to the QGIS project, grouped per flight.
 
-changelog=Version 7.0.0
+changelog=Version 7.0.1
+    Added:
+    - AGL Profile tool: the x axis can also show the frame index, next to distance flown and time since start. A new Animal markers selector (None, Detections, Tracks) puts a tick along the bottom of the plot at every frame that shows animals, taller where there are more of them, and the hover readout gives the count for the frame under the cursor. Tracks count distinct animals per frame, interpolated frames included. Folders from before the GeoPackage store are read from their detections.txt / tracks_pixel.csv without a migration.
+    Fixed:
+    - AGL Profile tool: a DEM mesh set by hand could come up empty with no explanation. Any failure to read the mesh or cast against it was swallowed and reported only as "No DEM ground under the route". The status line now says which case it is: the mesh could not be read (with the error), no .glb/.gltf was found for the path given, or the mesh does not cover the poses, which usually means it is a different DEM from the one the flight was processed with. When every ray misses, the message gives the pose and mesh extents side by side, so a DEM from another flight is told apart from a hole in the mesh. A metadata JSON seeded from the dock no longer overrides a DEM picked by hand, a .json entered in the DEM field is read as the metadata of the mesh beside it, and pressing Enter in the DEM field reloads the profile.
+    Version 7.0.0
     A survey is more than a count: what tells you about a population is which animals are in it. This release adds the demographic step, following "When One Modality Is Not Enough: Multimodal Sex and Life-Stage Classification of Red Deer from Aerial RGB-Thermal Video". Tracked animals are classified by species and sex, juveniles are flagged by size, and the two cameras are used together rather than separately - because they fail in opposite conditions. In colour a deer under canopy blends into the ground; in thermal it is an unmistakable blob but the fur colour is gone and antlers show only while they are still growing and warm. Which sensor carries the sex cue therefore changes with the season, and reading both at once is what stays reliable across the year.
     The classifiers read features from Meta's DINOv3, which is a gated model on Hugging Face: request access once and enter a read token in the new Classification tab. Nothing else in the plugin changes if you do not use it.
     Added:

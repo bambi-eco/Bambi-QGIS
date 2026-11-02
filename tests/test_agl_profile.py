@@ -121,3 +121,43 @@ class TestProfile:
         monkeypatch.setitem(sys.modules, "trimesh", None)
         assert agl_profile.ground_heights("x.glb", [(0.0, 0.0)]) == [None]
         assert agl_profile.ground_heights("", [(0.0, 0.0)]) == [None]
+
+    def test_a_json_as_dem_path_is_the_metadata_not_the_mesh(self, flight):
+        profile = agl_profile.build_profile(
+            flight, "t", dem_path=os.path.join(flight, "dem_mesh.json"),
+            ground_fn=lambda xy: [0.0] * len(xy))
+        assert profile["origin"] == (467047.5, 5327459.9, 404.75)
+        assert not profile["mesh_path"].endswith(".json")
+
+
+class TestAnimalCounts:
+
+    @pytest.fixture
+    def store(self, monkeypatch):
+        from bambi_wildlife_detection.core import inspection
+        monkeypatch.setattr(inspection, "load_pixel_detections", lambda f, m: [
+            {"frame": 0}, {"frame": 0}, {"frame": 3}])
+        monkeypatch.setattr(inspection, "load_pixel_tracks", lambda f, m: {
+            1: [{"frame": 0}, {"frame": 1}, {"frame": 1}],
+            2: [{"frame": 1}, {"frame": 2}]})
+
+    def test_detections_are_boxes_per_frame(self, store):
+        assert agl_profile.animal_counts("x", "t", "detections") == {0: 2, 3: 1}
+
+    def test_tracks_are_distinct_tracks_per_frame(self, store):
+        assert agl_profile.animal_counts("x", "t", "tracks") == {0: 1, 1: 2, 2: 1}
+
+    def test_none_marks_nothing(self, store):
+        assert agl_profile.animal_counts("x", "t", "") == {}
+
+    def test_an_unmigrated_folder_is_read_from_the_legacy_files(self, tmp_path):
+        root = tmp_path
+        (root / "detections_t").mkdir()
+        (root / "detections_t" / "detections.txt").write_text(
+            "# frame x1 y1 x2 y2 confidence class_id\n"
+            "0 1 1 5 5 0.9 0\n0 6 6 9 9 0.8 0\n4 1 1 5 5 0.7 0\n")
+        (root / "tracks_pixel_t").mkdir()
+        (root / "tracks_pixel_t" / "tracks_pixel.csv").write_text(
+            "0,1,1,1,5,5,0.9,0,0\n0,2,6,6,9,9,0.8,0,0\n2,1,1,1,5,5,0.9,0,1\n")
+        assert agl_profile.animal_counts(str(root), "t", "detections") == {0: 2, 4: 1}
+        assert agl_profile.animal_counts(str(root), "t", "tracks") == {0: 2, 2: 1}

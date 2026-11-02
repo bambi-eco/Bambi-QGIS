@@ -255,7 +255,7 @@ class _AnnotImageLabel(QLabel):
 
     def _draw_magnifier(self) -> None:
         """Paint a circular magnifier loupe on top of the widget contents."""
-        if (not self._magnifier_enabledm or self._mag_pos is None or self._orig_pixmap is None):
+        if (not self._magnifier_enabled or self._mag_pos is None or self._orig_pixmap is None):
             return
         ir = self._img_rect()
         if ir is None:
