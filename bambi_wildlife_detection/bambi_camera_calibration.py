@@ -29,7 +29,7 @@ try:
 except ImportError:
     _HAS_CV2 = False
 
-from qgis.PyQt.QtCore import Qt, QThread, QObject, pyqtSignal, QTimer, QRect
+from qgis.PyQt.QtCore import Qt, QThread, QObject, pyqtSignal, QTimer, QRect, QRectF, QPointF
 from qgis.PyQt.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QDialog, QFileDialog,
     QGroupBox, QHBoxLayout, QLabel, QLineEdit,
@@ -176,16 +176,10 @@ class _AnnotImageLabel(QLabel):
         if not self._accepting or event.button() != Qt.MouseButton.LeftButton:
             super().mousePressEvent(event)
             return
-        if self._orig_pixmap is None:
+        mapped = self._widget_to_image(event.pos().x(), event.pos().y())
+        if mapped is None:
             return
-        lw, lh = max(1, self.width()), max(1, self.height())
-        scale = min(lw / self._orig_w, lh / self._orig_h)
-        dw = self._orig_w * scale
-        dh = self._orig_h * scale
-        ox = (lw - dw) / 2.0
-        oy = (lh - dh) / 2.0
-        px = int((event.x() - ox) / scale)
-        py = int((event.y() - oy) / scale)
+        px, py = int(mapped[0]), int(mapped[1])
         if 0 <= px < self._orig_w and 0 <= py < self._orig_h:
             self._points.append((px, py))
             self._redraw()
@@ -210,14 +204,10 @@ class _AnnotImageLabel(QLabel):
         painter = QPainter(result)
 
         if self._orig_pixmap is not None:
-            scale = min(lw / self._orig_w, lh / self._orig_h)
-            dw = int(self._orig_w * scale)
-            dh = int(self._orig_h * scale)
+            scale, ox, oy, dw, dh = self._image_geometry()
             scaled = self._orig_pixmap.scaled(
                 dw, dh, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
             )
-            ox = (lw - dw) // 2
-            oy = (lh - dh) // 2
             painter.drawPixmap(ox, oy, scaled)
 
             font = QFont()
@@ -243,47 +233,55 @@ class _AnnotImageLabel(QLabel):
         painter.end()
         self.setPixmap(result)
 
-    def _img_rect(self) -> Optional[QRect]:
-        """Return the QRect occupied by the current pixmap inside the widget."""
-        pm = self.pixmap()
-        if pm is None or pm.isNull():
+    def _image_geometry(self) -> Tuple[float, int, int, int, int]:
+        """Return (scale, ox, oy, dw, dh) of the letterboxed image in the widget.
+
+        Single source of truth for drawing, clicking and the magnifier, so the
+        three always agree on where an image pixel sits on screen.
+        """
+        lw, lh = max(1, self.width()), max(1, self.height())
+        scale = min(lw / self._orig_w, lh / self._orig_h)
+        dw = int(self._orig_w * scale)
+        dh = int(self._orig_h * scale)
+        return scale, (lw - dw) // 2, (lh - dh) // 2, dw, dh
+
+    def _widget_to_image(self, wx: float, wy: float) -> Optional[Tuple[float, float]]:
+        """Map widget coordinates to (float) original-image coordinates."""
+        if self._orig_pixmap is None:
             return None
-        pw, ph = pm.width(), pm.height()
-        x = (self.width() - pw) // 2
-        y = (self.height() - ph) // 2
-        return QRect(x, y, pw, ph)
+        scale, ox, oy, _dw, _dh = self._image_geometry()
+        return (wx - ox) / scale, (wy - oy) / scale
 
     def _draw_magnifier(self) -> None:
         """Paint a circular magnifier loupe on top of the widget contents."""
         if (not self._magnifier_enabled or self._mag_pos is None or self._orig_pixmap is None):
             return
-        ir = self._img_rect()
-        if ir is None:
-            return
 
         mx, my = self._mag_pos.x(), self._mag_pos.y()
-        if not ir.contains(mx, my):
+        mapped = self._widget_to_image(mx, my)
+        if mapped is None:
+            return
+        fp_cx, fp_cy = mapped
+        if not (0 <= fp_cx < self._orig_w and 0 <= fp_cy < self._orig_h):
             return
 
-        # Map widget coords → original-image coords
-        rel_x = (mx - ir.x()) / ir.width()
-        rel_y = (my - ir.y()) / ir.height()
-        fp_w = self._orig_pixmap.width()
-        fp_h = self._orig_pixmap.height()
-        fp_cx = rel_x * fp_w
-        fp_cy = rel_y * fp_h
-
-        src_half = self._MAG_RADIUS / self._MAG_ZOOM
-        src_rect = QRect(
-            max(0, int(fp_cx - src_half)),
-            max(0, int(fp_cy - src_half)),
-            int(src_half * 2),
-            int(src_half * 2),
-        ).intersected(QRect(0, 0, fp_w, fp_h))
-        if src_rect.isEmpty():
-            return
-
+        # Centre the loupe exactly on the image point a click here would place.
         r = self._MAG_RADIUS
+        zoom = self._MAG_ZOOM          # screen px per original-image px
+        src_half = r / zoom
+        src = QRectF(fp_cx - src_half, fp_cy - src_half, 2 * src_half, 2 * src_half)
+        src = src.intersected(QRectF(0, 0, self._orig_w, self._orig_h))
+        if src.isEmpty():
+            return
+        # Destination rect for the (possibly edge-clipped) source, so the
+        # cursor stays on fp_cx/fp_cy instead of the content sliding.
+        dst = QRectF(
+            mx + (src.left() - fp_cx) * zoom,
+            my + (src.top() - fp_cy) * zoom,
+            src.width() * zoom,
+            src.height() * zoom,
+        )
+
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
@@ -291,11 +289,15 @@ class _AnnotImageLabel(QLabel):
         clip = QPainterPath()
         clip.addEllipse(mx - r, my - r, 2 * r, 2 * r)
         painter.setClipPath(clip)
-        painter.drawPixmap(
-            QRect(mx - r, my - r, 2 * r, 2 * r),
-            self._orig_pixmap,
-            src_rect,
-        )
+        painter.fillRect(QRect(mx - r, my - r, 2 * r, 2 * r), QColor(26, 26, 26))
+        painter.drawPixmap(dst, self._orig_pixmap, src)
+
+        # Placed points, so the user sees existing markers inside the loupe too.
+        for i, (x, y) in enumerate(self._points):
+            sx = mx + (x - fp_cx) * zoom
+            sy = my + (y - fp_cy) * zoom
+            painter.setPen(QPen(self._COLORS[i % len(self._COLORS)], 2))
+            painter.drawEllipse(QPointF(sx, sy), 6, 6)
 
         painter.setClipping(False)
         painter.setPen(QPen(QColor(255, 255, 255, 160), 1))
