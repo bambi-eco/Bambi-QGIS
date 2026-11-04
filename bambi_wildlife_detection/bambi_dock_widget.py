@@ -1173,11 +1173,51 @@ class BambiDockWidget(QDockWidget):
             "When enabled, extracted frames keep the original width/height ratio instead of being cropped to a square.")
         frame_ext_layout.addRow("Frame format:", self.preserve_aspect_ratio_check)
 
-        self.use_gimbal_heading_check = QCheckBox("Use gimbal heading (instead of compass heading)")
-        self.use_gimbal_heading_check.setChecked(False)
-        self.use_gimbal_heading_check.setToolTip(
-            "When enabled, uses the gimbal heading instead of the compass heading for the yaw rotation.")
-        frame_ext_layout.addRow("Heading source:", self.use_gimbal_heading_check)
+        from .core.heading import HEADING_SOURCE_LABELS
+        self.heading_source_combo = QComboBox()
+        for source, label in HEADING_SOURCE_LABELS.items():
+            self.heading_source_combo.addItem(label, source)
+        self.heading_source_combo.setToolTip(
+            "Where the camera yaw of every frame comes from.\n"
+            "Compass (flight log): the drone body's heading - the historic default.\n"
+            "Gimbal (flight log): use this when the gimbal holds its heading while the\n"
+            "drone yaws, e.g. on fast, agile flights; otherwise frames rotate with the body.\n"
+            "Gimbal (SRT): the gimbal yaw written for each video frame (video only).\n"
+            "Drone (SRT): only some DJI models write it; extraction stops if it is missing.\n"
+            "Flight log and SRT can disagree by a constant offset - check against a basemap.\n"
+            "Photo mode has no SRT: the SRT options fall back to the flight-log values.")
+        frame_ext_layout.addRow("Heading source:", self.heading_source_combo)
+
+        self.airdata_padding_spin = QDoubleSpinBox()
+        self.airdata_padding_spin.setRange(0.0, 30.0)
+        self.airdata_padding_spin.setSingleStep(0.5)
+        self.airdata_padding_spin.setDecimals(1)
+        self.airdata_padding_spin.setSuffix(" s")
+        self.airdata_padding_spin.setValue(0.0)
+        self.airdata_padding_spin.setToolTip(
+            "Video mode only. Flight log kept before and after the rows AirData flags as\n"
+            "recording. DJI can set that flag about 1 s after the video starts, so the first\n"
+            "frames' positions are extrapolated (metres off on fast flights). 3 s is\n"
+            "recommended; 0 keeps the poses of earlier versions. A larger margin gives\n"
+            "the same poses, it only has to cover the delay.")
+        self.airdata_padding_auto_check = QCheckBox("Auto")
+        # New projects measure the margin; projects saved without this
+        # setting load it unticked and keep their fixed value (see schema).
+        self.airdata_padding_auto_check.setChecked(True)
+        self.airdata_padding_auto_check.setToolTip(
+            "Measure the margin per camera before extraction: the time the video (SRT)\n"
+            "extends beyond the flight log rows flagged as recording, plus 1 s.\n"
+            "The value used is written to the log and to poses.json.")
+        self.airdata_padding_auto_check.toggled.connect(
+            lambda auto: self.airdata_padding_spin.setEnabled(not auto))
+        self.airdata_padding_spin.setEnabled(False)
+        airdata_padding_row = QHBoxLayout()
+        airdata_padding_row.addWidget(self.airdata_padding_spin, 1)
+        airdata_padding_row.addWidget(self.airdata_padding_auto_check)
+        self._airdata_padding_info_btn = self._make_info_button(
+            self._show_airdata_padding_info)
+        airdata_padding_row.addWidget(self._airdata_padding_info_btn)
+        frame_ext_layout.addRow("Flight log margin around recording:", airdata_padding_row)
 
         self.no_images_check = QCheckBox("Only extract poses (no images)")
         self.no_images_check.setChecked(False)
@@ -4129,7 +4169,10 @@ class BambiDockWidget(QDockWidget):
                 if self.extract_sampling_rate_check.isChecked() else None
             ),
             "preserve_aspect_ratio": self.preserve_aspect_ratio_check.isChecked(),
-            "use_gimbal_heading": self.use_gimbal_heading_check.isChecked(),
+            "heading_source": self.heading_source_combo.currentData(),
+            "airdata_video_padding_ms": int(round(
+                self.airdata_padding_spin.value() * 1000)),
+            "airdata_video_padding_auto": self.airdata_padding_auto_check.isChecked(),
             "no_images": self.no_images_check.isChecked(),
 
             # Thermal visualisation
@@ -5129,6 +5172,35 @@ class BambiDockWidget(QDockWidget):
             "group, and the Survey Analytics tools can combine them."
         )
         msg.setText(f"<b>Pre-Processing</b><br><br>{self._PIPELINE_INTRO}{body}")
+        msg.exec()
+
+    def _show_airdata_padding_info(self):
+        """Info popup for the flight log margin (video mode)."""
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Flight log margin around recording")
+        msg.setIcon(QMessageBox.Icon.Information)
+        msg.setText(
+            "<b>Flight log margin around recording</b> (video mode only)<br><br>"
+            "<b>Why it is needed</b><br>"
+            "The position and orientation of every video frame are interpolated from "
+            "the flight log (AirData). Only the part of the log marked as recording is "
+            "used. DJI often sets that mark about a second after the video has started, "
+            "so the first frames lie before the log that is kept. Their positions are "
+            "then extrapolated, which can be several metres off on fast flights. The "
+            "same can happen at the end of the video.<br><br>"
+            "<b>What it does</b><br>"
+            "The margin keeps that much extra log before and after the recording, so "
+            "every frame lies between two real log rows. It does not add frames, and a "
+            "larger margin gives the same result, so it only has to cover the delay.<br><br>"
+            "<b>Auto</b> (recommended)<br>"
+            "Before extraction, the plugin compares the video's timestamps (SRT) with "
+            "the recording mark in the flight log, and uses the delay plus 1 s. The "
+            "value used is written to the log panel.<br><br>"
+            "<b>Fixed value</b><br>"
+            "Untick Auto to set the margin yourself; 3 s covers the usual delay. "
+            "0 s gives the results of plugin versions before 7.1, which is why projects "
+            "saved with them keep it."
+        )
         msg.exec()
 
     def _show_processing_info(self):
@@ -12572,6 +12644,9 @@ class BambiDockWidget(QDockWidget):
             return widget.currentText()
         if role == "combo_index":
             return widget.currentIndex()
+        if role == "combo_data":
+            data = widget.currentData()
+            return "" if data is None else str(data)
         raise ValueError(f"Unknown config role {role!r}")
 
     def _apply_config_value(self, attr: str, role: str, value) -> None:
@@ -12610,6 +12685,12 @@ class BambiDockWidget(QDockWidget):
         elif role == "combo_index":
             if 0 <= value < widget.count():
                 widget.setCurrentIndex(value)
+        elif role == "combo_data":
+            idx = widget.findData(value) if value else -1
+            # Missing or unknown (a project from an older version): the first
+            # item is the default, so a stale choice of the previous flight
+            # does not survive a flight switch.
+            widget.setCurrentIndex(idx if idx >= 0 else 0)
         else:
             raise ValueError(f"Unknown config role {role!r}")
 
@@ -12724,6 +12805,16 @@ class BambiDockWidget(QDockWidget):
         for key, value in load_config_entries(read_str, read_double, read_bool):
             attr, role = WIDGET_BINDINGS[key]
             self._apply_config_value(attr, role, value)
+
+        # Legacy migration: before 7.1 the heading was a checkbox
+        # (Extraction/UseGimbalHeading); map it onto the heading source.
+        if not read_str("Extraction/HeadingSource", ""):
+            from .core.heading import legacy_project_heading_source
+            legacy_source = legacy_project_heading_source(
+                read_str("Extraction/UseGimbalHeading", ""))
+            idx = self.heading_source_combo.findData(legacy_source)
+            if idx >= 0:
+                self.heading_source_combo.setCurrentIndex(idx)
 
         # Legacy migration: projects saved before the model path was split
         # per modality stored a single Detection/ModelPath (thermal model).

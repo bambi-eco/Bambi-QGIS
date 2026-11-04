@@ -102,6 +102,60 @@ class TestConfigRoundTrip:
         dock.load_config_from_project()
         assert dock.target_crs_edit.text() == "EPSG:32633"
 
+    def test_heading_source_and_margin_roundtrip(self, dock, clean_project):
+        # combo_data role: the stable key is stored, not the label.
+        dock.target_folder_edit.setText("/tmp/heading_roundtrip")
+        dock.heading_source_combo.setCurrentIndex(
+            dock.heading_source_combo.findData("srt_gimbal"))
+        dock.airdata_padding_auto_check.setChecked(False)
+        dock.airdata_padding_spin.setValue(3.0)
+        dock.save_config_to_project()
+        dock.reset_config_to_defaults()
+        assert dock.heading_source_combo.currentData() == "airdata_compass"
+        assert dock.airdata_padding_spin.value() == 0.0
+        assert dock.airdata_padding_auto_check.isChecked()   # new projects: auto
+        assert not dock.airdata_padding_spin.isEnabled()
+        dock.load_config_from_project()
+        assert dock.heading_source_combo.currentData() == "srt_gimbal"
+        assert dock.airdata_padding_spin.value() == 3.0
+        assert not dock.airdata_padding_auto_check.isChecked()
+        assert dock.airdata_padding_spin.isEnabled()
+        config = dock.get_config()
+        assert config["heading_source"] == "srt_gimbal"
+        assert "use_gimbal_heading" not in config
+        assert config["airdata_video_padding_ms"] == 3000
+        assert config["airdata_video_padding_auto"] is False
+
+    def test_auto_margin_roundtrip(self, dock, clean_project):
+        dock.target_folder_edit.setText("/tmp/margin_auto")
+        assert dock.airdata_padding_auto_check.isChecked()
+        dock.save_config_to_project()
+        dock.airdata_padding_auto_check.setChecked(False)
+        dock.load_config_from_project()
+        assert dock.airdata_padding_auto_check.isChecked()
+        assert dock.get_config()["airdata_video_padding_auto"] is True
+
+    def test_project_without_auto_setting_keeps_fixed_margin(self, dock, clean_project):
+        # Saved before "Auto" existed: no Extraction/AirdataPaddingAuto entry.
+        from qgis.core import QgsProject
+        dock.target_folder_edit.setText("/tmp/margin_legacy")
+        dock.save_config_to_project()
+        QgsProject.instance().removeEntry(PLUGIN_SCOPE, "Extraction/AirdataPaddingAuto")
+        dock.load_config_from_project()
+        assert not dock.airdata_padding_auto_check.isChecked()
+        assert dock.get_config()["airdata_video_padding_ms"] == 0
+
+    def test_project_from_7_0_with_gimbal_checkbox(self, dock, clean_project):
+        # Before 7.1 the heading was a checkbox (Extraction/UseGimbalHeading).
+        from qgis.core import QgsProject
+        dock.target_folder_edit.setText("/tmp/heading_legacy")
+        dock.save_config_to_project()
+        project = QgsProject.instance()
+        project.removeEntry(PLUGIN_SCOPE, "Extraction/HeadingSource")
+        project.writeEntry(PLUGIN_SCOPE, "Extraction/UseGimbalHeading", "1")
+        dock.load_config_from_project()
+        assert dock.heading_source_combo.currentData() == "airdata_gimbal"
+
     def test_load_without_saved_config_is_noop(self, dock):
         # A fresh project (no Input/TargetFolder) must not raise or clobber.
         dock.confidence_spin.setValue(0.42)
@@ -180,3 +234,13 @@ def test_the_legacy_switch_no_longer_claims_tools_depend_on_it(dock):
     tip = dock.legacy_text_outputs_check.toolTip()
     assert "Video Creator" not in tip
     assert "Nothing in the plugin reads them" in tip
+
+
+def test_flight_log_margin_info_explains_why_and_auto(dock, monkeypatch):
+    shown = []
+    monkeypatch.setattr(QMessageBox, "exec", lambda box: shown.append(box.text()))
+    dock._airdata_padding_info_btn.click()
+    assert len(shown) == 1
+    text = shown[0]
+    assert "Why it is needed" in text and "extrapolated" in text
+    assert "Auto" in text and "plus 1 s" in text

@@ -2,7 +2,7 @@
 name=Bambi - QGIS Integration
 qgisMinimumVersion=3.22
 description=Detect and track wildlife in drone videos/photos with geo-referencing
-version=7.0.1
+version=7.1.0
 author=Christoph Praschl, Anna Maschek, David C.Schedl
 email=christoph.praschl@fh-hagenberg.at
 
@@ -29,7 +29,15 @@ about=A comprehensive QGIS plugin for detecting, tracking, and geo-referencing w
     - Built-in dependency manager to install all required and optional packages from within QGIS
     All results are automatically added as styled layers to the QGIS project, grouped per flight.
 
-changelog=Version 7.0.1
+changelog=Version 7.1.0
+    Requires BAMBI Detection Framework 1.1.0; the Dependency Manager flags older installs.
+    Added:
+    - Frame extraction: "Heading source" selector in place of the "Use gimbal heading" checkbox. The camera yaw of every frame can come from the drone's compass or the gimbal in the flight log, or from the gimbal or drone yaw written per frame in the SRT (the drone yaw only exists on some DJI models; extraction stops with a clear message if it is missing). On fast, agile flights the drone body yaws while the gimbal holds the camera steady, so the compass heading rotates every frame with the body: on a bat-following M30T flight this turned consecutive GeoTIFFs by up to 6 degrees against each other, and the gimbal heading brought that down to under 1 degree. The flight log and the SRT can disagree on the gimbal by a constant offset (2.4 degrees on that flight), so which one is right is checked against a basemap. The default stays the compass heading, and projects that ticked "Use gimbal heading" open with the flight-log gimbal, so existing results do not change.
+    - Frame extraction: after extraction the log warns when the compass heading moved a lot more than the gimbal heading during the video, and names the heading source to switch to. The check, and the source used, are written to poses_t.json / poses_w.json.
+    - Frame extraction: "Flight log margin around recording". DJI can flag the recording in the flight log about a second after the video starts, so the positions of the first frames were extrapolated from the edge of the log - 4 m off on a fast flight. A margin covering that delay keeps enough log to interpolate them (0.13 m). "Auto" (ticked in new projects) measures the delay per camera from the SRT and the flight log and adds 1 s; the value used is logged. Projects saved with earlier versions keep their fixed margin (0 s, the poses of earlier versions).
+    Fixed:
+    - Frame extraction: where the flight log has gaps, the frames filled in from the SRT pointed north. Most SRTs carry no drone yaw, and the missing value was read as 0 degrees; it is now taken from the flight log on either side of the gap (BAMBI Detection Framework 1.1.0).
+    Version 7.0.1
     Added:
     - AGL Profile tool: the x axis can also show the frame index, next to distance flown and time since start. A new Animal markers selector (None, Detections, Tracks) puts a tick along the bottom of the plot at every frame that shows animals, taller where there are more of them, and the hover readout gives the count for the frame under the cursor. Tracks count distinct animals per frame, interpolated frames included. Folders from before the GeoPackage store are read from their detections.txt / tracks_pixel.csv without a migration.
     Fixed:

@@ -17,6 +17,11 @@ from qgis.PyQt.QtCore import QObject, pyqtSignal
 from contextlib import ExitStack, contextmanager
 from typing import Callable
 
+from .core.heading import (
+    heading_check_message, make_timed_pose_extractor, photo_heading_source,
+    resolve_heading_source)
+from .core.log_margin import resolve_margin_ms
+
 # Progress callback receives a single int: percentage 0-100
 ProgressCallback = Callable[[int], None]
 
@@ -859,14 +864,14 @@ class BambiProcessor:
                         rel_transformer=rel_transformer,
                         calibration_res=calibration_res,
                         thermal_colorizer=thermal_colorizer,
-                        use_gimbal_heading=config.get("use_gimbal_heading", False),
+                        heading_source=photo_heading_source(resolve_heading_source(config)),
                     )
                 else:
                     extractor = UniqueMatchPhotoPoseExtractor(
                         rel_transformer=rel_transformer,
                         calibration_res=calibration_res,
                         thermal_colorizer=thermal_colorizer,
-                        use_gimbal_heading=config.get("use_gimbal_heading", False),
+                        heading_source=photo_heading_source(resolve_heading_source(config)),
                     )
                 if log_fn:
                     log_fn(f"Photo mode: processing images in {config['thermal_photo_dir']}")
@@ -923,11 +928,13 @@ class BambiProcessor:
             accessor = CalibratedVideoFrameAccessor(
                 calibration_res,
                 preserve_aspect_ratio=config.get("preserve_aspect_ratio", False))
-            extractor = TimedPoseExtractor(
-                accessor,
+            padding_ms = resolve_margin_ms(
+                config, TimedPoseExtractor, airdata_path, thermal_srt_paths, _video_tz,
+                "Thermal", log_fn=log_fn)
+            extractor = make_timed_pose_extractor(
+                TimedPoseExtractor, accessor, config, padding_ms=padding_ms,
                 rel_transformer=rel_transformer,
                 camera_name=Camera.from_string("T"),
-                use_gimbal_heading=config.get("use_gimbal_heading", False),
             )
 
             total_frames = count_srt_frames(thermal_srt_paths)
@@ -972,6 +979,9 @@ class BambiProcessor:
             thermal_frames = len(poses_t.get("images", []))
             if log_fn:
                 log_fn(f"Thermal extraction complete: {thermal_frames} frames")
+                _heading_msg = heading_check_message(poses_t, "Thermal")
+                if _heading_msg:
+                    log_fn(_heading_msg)
                 log_fn("Frames saved to: frames_t/")
 
     def extract_rgb_frames(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
@@ -1062,13 +1072,13 @@ class BambiProcessor:
                 extractor = OrderedPhotoPoseExtractor(
                     rel_transformer=rel_transformer,
                     calibration_res=calibration_res,
-                    use_gimbal_heading=config.get("use_gimbal_heading", False),
+                    heading_source=photo_heading_source(resolve_heading_source(config)),
                 )
             else:
                 extractor = UniqueMatchPhotoPoseExtractor(
                     rel_transformer=rel_transformer,
                     calibration_res=calibration_res,
-                    use_gimbal_heading=config.get("use_gimbal_heading", False),
+                    heading_source=photo_heading_source(resolve_heading_source(config)),
                 )
             if log_fn:
                 log_fn(f"Photo mode: processing images in {config['rgb_photo_dir']}")
@@ -1122,11 +1132,13 @@ class BambiProcessor:
             accessor = CalibratedVideoFrameAccessor(
                 calibration_res,
                 preserve_aspect_ratio=config.get("preserve_aspect_ratio", False))
-            extractor = TimedPoseExtractor(
-                accessor,
+            padding_ms = resolve_margin_ms(
+                config, TimedPoseExtractor, airdata_path, rgb_srt_paths, _video_tz,
+                "RGB", log_fn=log_fn)
+            extractor = make_timed_pose_extractor(
+                TimedPoseExtractor, accessor, config, padding_ms=padding_ms,
                 rel_transformer=rel_transformer,
                 camera_name=Camera.from_string("W"),
-                use_gimbal_heading=config.get("use_gimbal_heading", False),
             )
 
             total_frames = count_srt_frames(rgb_srt_paths)
@@ -1171,6 +1183,9 @@ class BambiProcessor:
             rgb_frames = len(poses_w.get("images", []))
             if log_fn:
                 log_fn(f"RGB extraction complete: {rgb_frames} frames")
+                _heading_msg = heading_check_message(poses_w, "RGB")
+                if _heading_msg:
+                    log_fn(_heading_msg)
                 log_fn("Frames saved to: frames_w/")
 
     def run_flight_route(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):

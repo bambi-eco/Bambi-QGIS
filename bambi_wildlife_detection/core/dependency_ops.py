@@ -48,7 +48,7 @@ _bundled_versions_cache = None
 #: bound of its ``_VERSION_RANGES`` entry below, which is what flags an
 #: out-of-date install (``tests/test_alfspy_pin.py``).
 ALFS_PY_TAG = 'v3.0.0'
-BAMBI_DETECTION_TAG = 'v1.0.2'
+BAMBI_DETECTION_TAG = 'v1.1.0'
 #: Geo-Referenced-Tracking tags its releases without the ``v`` prefix the other
 #: two repositories use.  0.1.0 is the release the plugin's tracking step was
 #: written against; 1.0.0 exists but has not been run through the plugin, hence
@@ -114,10 +114,12 @@ _VERSION_RANGES = {
     # io are the array-in, array-out functions the plugin's steps are built on
     # (see tests/test_engine_contract.py); 0.6.0 introduced backend neutrality.
     # 1.0.1: under alfspy 3.0, 1.0.0's label_to_world_coordinates rebuilds the
-    # ray caster on every call, which stalls FoV / georeferencing.  1.0.2 is the
-    # floor: earlier releases pin torch==2.5.1, so installing them swaps the
-    # GPU torch build back for the CPU 2.5.1 wheel (too old for transformers 5).
-    'bambi-detection': ("1.0.2", None),
+    # ray caster on every call, which stalls FoV / georeferencing.  1.0.2: earlier
+    # releases pin torch==2.5.1, so installing them swaps the GPU torch build
+    # back for the CPU 2.5.1 wheel (too old for transformers 5).  1.1.0 is the
+    # floor: frame extraction passes ``heading_source`` and
+    # ``airdata_video_padding_ms`` to TimedPoseExtractor, which 1.0.x rejects.
+    'bambi-detection': ("1.1.0", None),
     # 3.0.0 is the release that merged the PyTorch fork back in: one package
     # with selectable engines and ray casters, ``make_context`` in place of the
     # per-backend factories, and an integral result that reports coverage

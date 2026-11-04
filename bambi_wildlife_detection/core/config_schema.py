@@ -54,6 +54,8 @@ KINDS = frozenset({"str", "bool01", "int_str", "double", "int_double", "bool"})
 #   combo_text         QComboBox currentText(); load = findText, set if found
 #   combo_text_editable  like combo_text but falls back to setCurrentText()
 #   combo_index        QComboBox currentIndex(); load = bounds-checked setter
+#   combo_data         QComboBox currentData() (a stable key, not the label);
+#                      load = findData, the first item when not found
 #   json               a plain dock attribute holding a dict/list, serialised
 #                      to a ``str`` entry. For structured settings bound to a
 #                      table or dialog rather than to one value widget - the
@@ -63,7 +65,7 @@ KINDS = frozenset({"str", "bool01", "int_str", "double", "int_double", "bool"})
 #                      still saved by hand; this exists so the next one is not.
 ROLES = frozenset({
     "line", "crs", "text", "check", "spin",
-    "combo_text", "combo_text_editable", "combo_index", "json",
+    "combo_text", "combo_text_editable", "combo_index", "combo_data", "json",
 })
 
 # Entries in the order the pre-refactor loader applied them (widget setters
@@ -108,7 +110,13 @@ CONFIG_ENTRIES: List[ConfigEntry] = [
     ConfigEntry("Extraction/SamplingRateEnable", "bool01", False, "eq1"),
     ConfigEntry("Extraction/SamplingRate", "int_str", 5),
     ConfigEntry("Extraction/PreserveAspectRatio", "bool01", False, "eq1"),
-    ConfigEntry("Extraction/UseGimbalHeading", "bool01", False, "eq1"),
+    # Replaces Extraction/UseGimbalHeading (<= 7.0), which the dock widget
+    # still reads when this is missing (core.heading.legacy_project_heading_source).
+    ConfigEntry("Extraction/HeadingSource", "str"),
+    ConfigEntry("Extraction/AirdataPaddingSeconds", "double", 0.0),
+    # Missing in projects saved before it existed -> unticked, so they keep
+    # their fixed margin; the widget itself starts ticked for new projects.
+    ConfigEntry("Extraction/AirdataPaddingAuto", "bool", False),
     # ===== Common Inputs =====
     ConfigEntry("Input/AirdataPath", "str"),
     ConfigEntry("Input/DemPath", "str"),
@@ -276,7 +284,9 @@ WIDGET_BINDINGS: Dict[str, Tuple[str, str]] = {
     "Extraction/SamplingRateEnable": ("extract_sampling_rate_check", "check"),
     "Extraction/SamplingRate": ("extract_sampling_rate_spin", "spin"),
     "Extraction/PreserveAspectRatio": ("preserve_aspect_ratio_check", "check"),
-    "Extraction/UseGimbalHeading": ("use_gimbal_heading_check", "check"),
+    "Extraction/HeadingSource": ("heading_source_combo", "combo_data"),
+    "Extraction/AirdataPaddingSeconds": ("airdata_padding_spin", "spin"),
+    "Extraction/AirdataPaddingAuto": ("airdata_padding_auto_check", "check"),
     "Input/AirdataPath": ("airdata_path_edit", "line"),
     "Input/DemPath": ("dem_path_edit", "line"),
     "Input/DemMetadataPath": ("dem_metadata_path_edit", "line"),
