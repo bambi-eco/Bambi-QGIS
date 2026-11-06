@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Every "Add to QGIS" action puts its layers in the flight's group (§10.2).
+"""Every "Add to QGIS" action puts its layers in a group (§10.2).
+
+Flight products go into the flight's group; survey-wide products (density,
+coverage, inventory, survey area) belong to no single flight and go into the
+"BAMBI Survey" group.
 
 Layers are grouped per flight so it is obvious which outputs belong together,
 and so renaming or removing a flight takes its layers with it. A layer added
@@ -45,7 +49,8 @@ def _reaches_group(name, bodies, src, seen=None):
         return False
     seen.add(name)
     body = ast.get_source_segment(src, bodies[name]) or ""
-    markers = ("_create_layer_group", "_flight_group", "_add_layer_to_flight")
+    markers = ("_create_layer_group", "_flight_group", "_add_layer_to_flight",
+               "_add_layer_to_survey")
     if any(marker in body for marker in markers):
         return True
     for other in bodies:

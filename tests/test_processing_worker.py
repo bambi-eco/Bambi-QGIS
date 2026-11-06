@@ -46,6 +46,9 @@ STEP_TO_METHOD = {
     "density_heatmap": "run_density_heatmap",
     "coverage_map": "run_coverage_map",
     "distance_sampling": "run_distance_sampling",
+    "census_summary": "run_census_summary",
+    "track_inventory": "run_track_inventory",
+    "population_estimation": "run_population_estimation",
 }
 
 

@@ -16,12 +16,13 @@ FROM qgis/qgis:release-3_34
 # (see Dockerfile.unit for the failure that flushed this out).
 ENV PYTHONPYCACHEPREFIX=/tmp/pycache
 
-# numpy / scipy / pyproj / gdal ship with the QGIS image. Only pytest and
-# requests (imported at module load by tracker_manager) are added.
+# numpy / scipy / pyproj / gdal ship with the QGIS image. Only pytest,
+# requests (imported at module load by tracker_manager) and shapely (the
+# survey-area reader; users get it with bambi_detection, same pin) are added.
 # --break-system-packages is required on the newer (PEP 668) base; the
 # fallback covers older bases where the flag is unknown.
-RUN pip3 install --no-cache-dir --break-system-packages pytest pytest-cov requests \
-    || pip3 install --no-cache-dir pytest pytest-cov requests
+RUN pip3 install --no-cache-dir --break-system-packages pytest pytest-cov requests shapely==2.0.7 \
+    || pip3 install --no-cache-dir pytest pytest-cov requests shapely==2.0.7
 
 # Offscreen Qt platform: no X server needed.
 ENV QT_QPA_PLATFORM=offscreen

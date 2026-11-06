@@ -112,7 +112,7 @@ def _write_poses_and_transects(folder):
 
 def _configure(dock, folder):
     dock.target_folder_edit.setText(str(folder))
-    dock.pop_camera_combo.setCurrentIndex(0)          # Thermal
+    dock.survey_panel.camera_combo.setCurrentIndex(0)  # Thermal
     dock.target_crs_edit.setText("EPSG:32633")
     dock.dem_metadata_path_edit.setText(str(folder / "dem.json"))
 

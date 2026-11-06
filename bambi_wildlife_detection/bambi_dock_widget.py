@@ -7,6 +7,7 @@ This module contains the main dock widget UI for the plugin.
 """
 
 import os
+from contextlib import contextmanager
 import json
 import math
 import tempfile
@@ -35,6 +36,8 @@ from qgis.PyQt.QtCore import QVariant
 from .bambi_processing import BambiProcessor, ProcessingWorker
 from .austria_dem_downloader import DEMDownloadWorker, GeoTIFFConversionWorker
 from .bambi_click_tool import BambiClickTool
+from .bambi_survey_area import SurveyAreaPanel
+from .bambi_survey_panel import CensusTableDialog, SurveyFlightsPanel
 # Built-in calibration presets live in bambi_calibrations.py (Qt-free module
 # so they are importable without QGIS, e.g. by the integration tests).
 from .bambi_calibrations import THERMAL_CALIBRATIONS, RGB_CALIBRATIONS  # noqa: F401
@@ -396,6 +399,7 @@ class BambiDockWidget(QDockWidget):
             self.load_config_from_project()
         finally:
             self._loading_config = False
+        self._refresh_survey_area()
 
     def showEvent(self, event):
         """Handle widget show event to check for existing layers."""
@@ -3463,31 +3467,40 @@ class BambiDockWidget(QDockWidget):
         # =====================================================================
         # MAIN TAB 4: SURVEY ANALYTICS
         # =====================================================================
+        # The survey tools are not tied to the flight selected on the
+        # processing tabs: the Survey box at the top says which processed
+        # flights, which camera and which output folder (core.survey).
         analytics_tab = QWidget()
         analytics_tab_layout = QVBoxLayout(analytics_tab)
         main_tabs.addTab(analytics_tab, "Survey Analytics")
 
         analytics_info = QLabel(
-            "Population-level products derived from geo-referenced detections or "
-            "tracks. Tracks count each animal once; detections use every box. "
-            "The run log is shown below the tabs."
+            "Population-level products of the flights ticked below, pooled "
+            "into one survey. Tracks count each animal once; detections use "
+            "every box. The run log is shown below the tabs."
         )
         analytics_info.setWordWrap(True)
         analytics_info.setStyleSheet("color: gray; font-size: 10px;")
         analytics_tab_layout.addWidget(analytics_info)
 
+        # ----- Survey: flights, camera, folder -----
+        self.survey_panel = SurveyFlightsPanel(self)
+        self.survey_panel.changed.connect(self._on_survey_changed)
+        analytics_tab_layout.addWidget(self.survey_panel)
+
         # ----- Species filter -----
         # One control for the whole tab: a density map of roe deer and an
         # abundance estimate of everything are not comparable, so the filter
-        # belongs to the question rather than to one analytic.
+        # belongs to the question rather than to one analytic. Species are
+        # matched by name across the flights (ids are per flight).
         species_group = QGroupBox("Species")
         species_layout = QVBoxLayout(species_group)
 
         self.analytics_all_species_check = QCheckBox("All species")
         self.analytics_all_species_check.setChecked(True)
         self.analytics_all_species_check.setToolTip(
-            "Count every species the project defines, as before. "
-            "'not-an-animal' is never counted either way.")
+            "Count every species the flights define. 'not-an-animal' is "
+            "never counted either way.")
         self.analytics_all_species_check.toggled.connect(
             self._on_analytics_species_mode_changed)
         species_layout.addWidget(self.analytics_all_species_check)
@@ -3498,10 +3511,10 @@ class BambiDockWidget(QDockWidget):
         self.analytics_species_list.setMaximumHeight(96)
         self.analytics_species_list.setEnabled(False)
         self.analytics_species_list.setToolTip(
-            "Species to count. The density heatmap, distance sampling and "
-            "population estimation use this list and record it alongside the "
-            "result. The coverage map counts frames rather than animals, so "
-            "it is unaffected.")
+            "Species to count, from every ticked flight. All tools on this "
+            "tab use this list and record it alongside the result. The "
+            "coverage map counts frames rather than animals, so it is "
+            "unaffected.")
         self.analytics_species_list.itemChanged.connect(
             lambda _item: self._update_analytics_species_status())
         species_layout.addWidget(self.analytics_species_list)
@@ -3526,6 +3539,121 @@ class BambiDockWidget(QDockWidget):
         species_layout.addWidget(self.analytics_species_status)
 
         analytics_tab_layout.addWidget(species_group)
+
+        # ----- Survey area (plot + exclusion zones) -----
+        self.survey_area_panel = SurveyAreaPanel(self)
+        analytics_tab_layout.addWidget(self.survey_area_panel)
+
+        # ----- Census Summary -----
+        census_group = QGroupBox("Census Summary")
+        census_layout = QVBoxLayout(census_group)
+        census_desc = QLabel(
+            "Counts per species and flight - inside the survey area when one "
+            "is applied - with animals per km² of the survey plot and of the "
+            "ground the frames actually covered, and the sex and age "
+            "breakdown. Minimum counts: no detection probability is modelled."
+        )
+        census_desc.setWordWrap(True)
+        census_desc.setStyleSheet("color: gray; font-size: 10px;")
+        census_layout.addWidget(census_desc)
+
+        census_params_row = QHBoxLayout()
+        census_params_row.addWidget(QLabel("Count:"))
+        self.census_source_combo = QComboBox()
+        self.census_source_combo.addItems(["Tracks", "Detections"])
+        self.census_source_combo.setToolTip(
+            "Tracks: each tracked individual once (video surveys).\n"
+            "Detections: every box (still-photo surveys without tracking - "
+            "an animal on two photos counts twice).")
+        census_params_row.addWidget(self.census_source_combo)
+        census_params_row.addStretch()
+        census_layout.addLayout(census_params_row)
+
+        census_run_row = QHBoxLayout()
+        self.census_btn = QPushButton("→ Build Census Summary")
+        self.census_btn.clicked.connect(self.run_census_summary)
+        self.census_btn.setToolTip(
+            "Write analytics_{camera}/census_summary_{source}.csv and .json "
+            "into the survey folder and show the table.")
+        self.census_status = QLabel("⚪")
+        census_run_row.addWidget(self.census_btn)
+        census_run_row.addWidget(self.census_status)
+        census_layout.addLayout(census_run_row)
+
+        census_show_row = QHBoxLayout()
+        self.census_show_btn = QPushButton("→ Show Census Table")
+        self.census_show_btn.clicked.connect(self.show_census_table)
+        census_show_row.addWidget(self.census_show_btn)
+        census_show_row.addStretch()
+        census_layout.addLayout(census_show_row)
+
+        analytics_tab_layout.addWidget(census_group)
+
+        # ----- Track Inventory -----
+        inventory_group = QGroupBox("Track Inventory")
+        inventory_layout = QVBoxLayout(inventory_group)
+
+        inventory_desc = QLabel(
+            "One row per tracked individual of every ticked flight, with "
+            "everything the project knows about it: first and last frame and "
+            "capture time, start and end position (project CRS and WGS84), "
+            "species, sex and age with the votes behind them, occluded versus "
+            "total boxes, the matched track on the other camera, "
+            "labelling-tool annotations and the flight-route distance. "
+            "Written as CSV and JSON into the survey folder."
+        )
+        inventory_desc.setWordWrap(True)
+        inventory_desc.setStyleSheet("color: gray; font-size: 10px;")
+        inventory_layout.addWidget(inventory_desc)
+
+        inventory_params_row = QHBoxLayout()
+        self.inventory_columns_btn = QPushButton("Columns…")
+        self.inventory_columns_btn.setToolTip(
+            "Choose which columns the report shows for each animal. Saved "
+            "with the project; the written CSV and JSON keep every column.")
+        self.inventory_columns_btn.clicked.connect(self.choose_inventory_columns)
+        inventory_params_row.addWidget(self.inventory_columns_btn)
+        inventory_params_row.addStretch()
+        inventory_layout.addLayout(inventory_params_row)
+        #: Columns the report shows; empty = all (core.config_schema "json").
+        self._inventory_columns = []
+
+        inventory_run_row = QHBoxLayout()
+        self.track_inventory_btn = QPushButton("→ List Tracked Individuals")
+        self.track_inventory_btn.clicked.connect(self.run_track_inventory)
+        self.track_inventory_btn.setToolTip(
+            "Write analytics_{camera}/track_inventory.csv and .json. Runs on "
+            "whatever has been computed so far - columns for steps that have "
+            "not run stay empty.")
+        self.track_inventory_status = QLabel("⚪")
+        inventory_run_row.addWidget(self.track_inventory_btn)
+        inventory_run_row.addWidget(self.track_inventory_status)
+        inventory_layout.addLayout(inventory_run_row)
+
+        inventory_report_row = QHBoxLayout()
+        self.track_inventory_report_btn = QPushButton("→ Show Report")
+        self.track_inventory_report_btn.clicked.connect(
+            self.show_track_inventory_report)
+        self.track_inventory_report_btn.setToolTip(
+            "Open the inventory in a window: every individual with every "
+            "column, sortable and filterable, with copy and save.")
+        inventory_report_row.addWidget(self.track_inventory_report_btn)
+        inventory_report_row.addStretch()
+        inventory_layout.addLayout(inventory_report_row)
+
+        inventory_add_row = QHBoxLayout()
+        self.add_track_inventory_btn = QPushButton("→ Add Inventory to QGIS")
+        self.add_track_inventory_btn.clicked.connect(self.add_track_inventory_to_qgis)
+        self.add_track_inventory_btn.setToolTip(
+            "Load the inventory as a point layer at each animal's last "
+            "position, carrying every column of the table. Animals without a "
+            "ground position are kept as rows without geometry.")
+        self.add_track_inventory_status = QLabel("⚪")
+        inventory_add_row.addWidget(self.add_track_inventory_btn)
+        inventory_add_row.addWidget(self.add_track_inventory_status)
+        inventory_layout.addLayout(inventory_add_row)
+
+        analytics_tab_layout.addWidget(inventory_group)
 
         # ----- Density Heatmap -----
         density_group = QGroupBox("Density Heatmap")
@@ -3588,24 +3716,72 @@ class BambiDockWidget(QDockWidget):
 
         analytics_tab_layout.addWidget(density_group)
 
+        # ----- Coverage Map -----
+        coverage_group = QGroupBox("Coverage Map")
+        coverage_layout = QVBoxLayout(coverage_group)
+
+        coverage_desc = QLabel(
+            "Combines the exported frame GeoTIFFs of every ticked flight like "
+            "the orthomosaic, but counts how many frames cover each pixel "
+            "(survey effort/overlap). Requires 'Export Frames as GeoTIFF' on "
+            "the Processing tab."
+        )
+        coverage_desc.setWordWrap(True)
+        coverage_desc.setStyleSheet("color: gray; font-size: 10px;")
+        coverage_layout.addWidget(coverage_desc)
+
+        coverage_params_row = QHBoxLayout()
+        coverage_params_row.addWidget(QLabel("Cell (m):"))
+        self.coverage_cell_spin = QDoubleSpinBox()
+        self.coverage_cell_spin.setRange(0.0, 100.0)
+        self.coverage_cell_spin.setValue(1.0)
+        self.coverage_cell_spin.setSingleStep(0.5)
+        self.coverage_cell_spin.setSpecialValueText("native")
+        self.coverage_cell_spin.setToolTip(
+            "Output raster cell size in metres.\n"
+            "0 = native resolution of the exported GeoTIFFs (larger output).")
+        coverage_params_row.addWidget(self.coverage_cell_spin)
+        coverage_params_row.addStretch()
+        coverage_layout.addLayout(coverage_params_row)
+
+        coverage_run_row = QHBoxLayout()
+        self.coverage_btn = QPushButton("→ Generate Coverage Map")
+        self.coverage_btn.clicked.connect(self.run_coverage_map)
+        self.coverage_btn.setToolTip(
+            "Count, per ground pixel, the number of overlapping frame GeoTIFFs.\n"
+            "1 = seen once, N = seen in N frames, transparent = never covered."
+        )
+        self.coverage_status = QLabel("⚪")
+        coverage_run_row.addWidget(self.coverage_btn)
+        coverage_run_row.addWidget(self.coverage_status)
+        coverage_layout.addLayout(coverage_run_row)
+
+        coverage_add_row = QHBoxLayout()
+        self.add_coverage_btn = QPushButton("→ Add Coverage Map to QGIS")
+        self.add_coverage_btn.clicked.connect(self.add_coverage_map_to_qgis)
+        self.add_coverage_btn.setToolTip(
+            "Load the coverage raster with a graduated colour ramp.")
+        self.add_coverage_status = QLabel("⚪")
+        coverage_add_row.addWidget(self.add_coverage_btn)
+        coverage_add_row.addWidget(self.add_coverage_status)
+        coverage_layout.addLayout(coverage_add_row)
+
+        analytics_tab_layout.addWidget(coverage_group)
+
         # ----- Distance Sampling -----
         ds_group = QGroupBox("Distance Sampling")
         ds_layout = QVBoxLayout(ds_group)
 
         ds_desc = QLabel(
-            "Line-transect density/abundance with 95% confidence intervals, fitted "
-            "from the perpendicular distances. Run 'Calculate Perpendicular' (or "
-            "'Calculate Track Perpendicular') on the Processing tab first."
+            "Line-transect density/abundance with 95% confidence intervals, "
+            "fitted from the perpendicular distances of every ticked flight "
+            "(their route lengths summed into the effort). Run 'Calculate "
+            "Perpendicular' (or 'Calculate Track Perpendicular') on the "
+            "Processing tab first."
         )
         ds_desc.setWordWrap(True)
         ds_desc.setStyleSheet("color: gray; font-size: 10px;")
         ds_layout.addWidget(ds_desc)
-
-        ds_layout.addWidget(self._build_projects_group(
-            "ds",
-            "BAMBI target folders to pool for the distance-sampling estimate. "
-            "Their perpendicular distances are combined and the flight-route "
-            "lengths summed into the total effort L."))
 
         ds_params_row = QHBoxLayout()
         ds_params_row.addWidget(QLabel("Source:"))
@@ -3644,169 +3820,23 @@ class BambiDockWidget(QDockWidget):
 
         analytics_tab_layout.addWidget(ds_group)
 
-        # ----- Coverage Map -----
-        coverage_group = QGroupBox("Coverage Map")
-        coverage_layout = QVBoxLayout(coverage_group)
-
-        coverage_desc = QLabel(
-            "Combines the exported frame GeoTIFFs like the orthomosaic, but "
-            "counts how many frames cover each pixel (survey effort/overlap). "
-            "Requires 'Export Frames as GeoTIFF' on the Processing tab."
-        )
-        coverage_desc.setWordWrap(True)
-        coverage_desc.setStyleSheet("color: gray; font-size: 10px;")
-        coverage_layout.addWidget(coverage_desc)
-
-        coverage_params_row = QHBoxLayout()
-        coverage_params_row.addWidget(QLabel("Camera:"))
-        self.coverage_camera_combo = QComboBox()
-        self.coverage_camera_combo.addItems(["Thermal", "RGB"])
-        self.coverage_camera_combo.setToolTip(
-            "Which camera's exported frame GeoTIFFs to combine.")
-        coverage_params_row.addWidget(self.coverage_camera_combo)
-        coverage_params_row.addWidget(QLabel("Cell (m):"))
-        self.coverage_cell_spin = QDoubleSpinBox()
-        self.coverage_cell_spin.setRange(0.0, 100.0)
-        self.coverage_cell_spin.setValue(1.0)
-        self.coverage_cell_spin.setSingleStep(0.5)
-        self.coverage_cell_spin.setSpecialValueText("native")
-        self.coverage_cell_spin.setToolTip(
-            "Output raster cell size in metres.\n"
-            "0 = native resolution of the exported GeoTIFFs (larger output).")
-        coverage_params_row.addWidget(self.coverage_cell_spin)
-        coverage_params_row.addStretch()
-        coverage_layout.addLayout(coverage_params_row)
-
-        coverage_run_row = QHBoxLayout()
-        self.coverage_btn = QPushButton("→ Generate Coverage Map")
-        self.coverage_btn.clicked.connect(self.run_coverage_map)
-        self.coverage_btn.setToolTip(
-            "Count, per ground pixel, the number of overlapping frame GeoTIFFs.\n"
-            "1 = seen once, N = seen in N frames, transparent = never covered."
-        )
-        self.coverage_status = QLabel("⚪")
-        coverage_run_row.addWidget(self.coverage_btn)
-        coverage_run_row.addWidget(self.coverage_status)
-        coverage_layout.addLayout(coverage_run_row)
-
-        coverage_add_row = QHBoxLayout()
-        self.add_coverage_btn = QPushButton("→ Add Coverage Map to QGIS")
-        self.add_coverage_btn.clicked.connect(self.add_coverage_map_to_qgis)
-        self.add_coverage_btn.setToolTip(
-            "Load the coverage raster with a graduated colour ramp.")
-        self.add_coverage_status = QLabel("⚪")
-        coverage_add_row.addWidget(self.add_coverage_btn)
-        coverage_add_row.addWidget(self.add_coverage_status)
-        coverage_layout.addLayout(coverage_add_row)
-
-        analytics_tab_layout.addWidget(coverage_group)
-
-        # ----- Track Inventory -----
-        inventory_group = QGroupBox("Track Inventory")
-        inventory_layout = QVBoxLayout(inventory_group)
-
-        inventory_desc = QLabel(
-            "One row per tracked individual with everything the project "
-            "knows about it: first and last frame and capture time, start "
-            "and end position (project CRS and WGS84), species, sex and age "
-            "with the votes behind them, occluded versus total boxes, the "
-            "matched track on the other camera, labelling-tool annotations "
-            "and the flight-route distance. Written as CSV and JSON into "
-            "the camera's analytics folder."
-        )
-        inventory_desc.setWordWrap(True)
-        inventory_desc.setStyleSheet("color: gray; font-size: 10px;")
-        inventory_layout.addWidget(inventory_desc)
-
-        inventory_params_row = QHBoxLayout()
-        inventory_params_row.addWidget(QLabel("Camera:"))
-        self.inventory_camera_combo = QComboBox()
-        self.inventory_camera_combo.addItems(["Thermal", "RGB"])
-        self.inventory_camera_combo.setToolTip(
-            "Which camera's tracks to list. Each camera has its own tracks; "
-            "the row names the matched track on the other camera.")
-        inventory_params_row.addWidget(self.inventory_camera_combo)
-        self.inventory_columns_btn = QPushButton("Columns…")
-        self.inventory_columns_btn.setToolTip(
-            "Choose which columns the report shows for each animal. Saved "
-            "with the project; the written CSV and JSON keep every column.")
-        self.inventory_columns_btn.clicked.connect(self.choose_inventory_columns)
-        inventory_params_row.addWidget(self.inventory_columns_btn)
-        inventory_params_row.addStretch()
-        inventory_layout.addLayout(inventory_params_row)
-        #: Columns the report shows; empty = all (core.config_schema "json").
-        self._inventory_columns = []
-
-        inventory_run_row = QHBoxLayout()
-        self.track_inventory_btn = QPushButton("→ List Tracked Individuals")
-        self.track_inventory_btn.clicked.connect(self.run_track_inventory)
-        self.track_inventory_btn.setToolTip(
-            "Write analytics_{camera}/track_inventory.csv and .json. Runs on "
-            "whatever has been computed so far - columns for steps that have "
-            "not run stay empty.")
-        self.track_inventory_status = QLabel("⚪")
-        inventory_run_row.addWidget(self.track_inventory_btn)
-        inventory_run_row.addWidget(self.track_inventory_status)
-        inventory_layout.addLayout(inventory_run_row)
-
-        inventory_report_row = QHBoxLayout()
-        self.track_inventory_report_btn = QPushButton("→ Show Report")
-        self.track_inventory_report_btn.clicked.connect(
-            self.show_track_inventory_report)
-        self.track_inventory_report_btn.setToolTip(
-            "Open the inventory in a window: every individual with every "
-            "column, sortable and filterable, with copy and save.")
-        inventory_report_row.addWidget(self.track_inventory_report_btn)
-        inventory_report_row.addStretch()
-        inventory_layout.addLayout(inventory_report_row)
-
-        inventory_add_row = QHBoxLayout()
-        self.add_track_inventory_btn = QPushButton("→ Add Inventory to QGIS")
-        self.add_track_inventory_btn.clicked.connect(self.add_track_inventory_to_qgis)
-        self.add_track_inventory_btn.setToolTip(
-            "Load the inventory as a point layer at each animal's last "
-            "position, carrying every column of the table. Animals without a "
-            "ground position are kept as rows without geometry.")
-        self.add_track_inventory_status = QLabel("⚪")
-        inventory_add_row.addWidget(self.add_track_inventory_btn)
-        inventory_add_row.addWidget(self.add_track_inventory_status)
-        inventory_layout.addLayout(inventory_add_row)
-
-        # First tool on the tab, below the species filter it obeys: the
-        # inventory is the census itself; the other tools derive from it.
-        analytics_tab_layout.insertWidget(2, inventory_group)
-
         # ----- Population Estimation (Transects) -----
         pop_group = QGroupBox("Population Estimation (Transects)")
         pop_layout = QVBoxLayout(pop_group)
 
         pop_desc = QLabel(
-            "Density from the transects of a split flight: each track is assigned "
-            "to the transect nearest in perpendicular distance, and the monitored "
-            "area of a transect is the union of its frames' field-of-view "
-            "footprints. Requires transects (Transect Splitting Tool), "
-            "'Calculate Field of View' and 'Calculate Track Perpendicular'."
+            "Density from the transects of the ticked flights, pooled into one "
+            "count/area table: each track is assigned to the transect nearest "
+            "in perpendicular distance, and the monitored area of a transect "
+            "is the union of its frames' field-of-view footprints. Requires "
+            "transects (Transect Splitting Tool), 'Calculate Field of View', "
+            "'Calculate Track Perpendicular' and each flight's DEM."
         )
         pop_desc.setWordWrap(True)
         pop_desc.setStyleSheet("color: gray; font-size: 10px;")
         pop_layout.addWidget(pop_desc)
 
-        pop_layout.addWidget(self._build_projects_group(
-            "pop",
-            "BAMBI projects to combine. Every project's transects are pooled "
-            "into one count/area table and the estimators run on all of them "
-            "together; each added project supplies its own dem.json so its "
-            "transects are georeferenced with the right DEM origin.",
-            with_dem=True))
-
         pop_params_row = QHBoxLayout()
-        pop_params_row.addWidget(QLabel("Camera:"))
-        self.pop_camera_combo = QComboBox()
-        self.pop_camera_combo.addItems(["Thermal", "RGB"])
-        self.pop_camera_combo.setToolTip(
-            "Modality of the transects, FoV footprints and tracks. Frame indices\n"
-            "are modality-specific, so all three must be the same camera.")
-        pop_params_row.addWidget(self.pop_camera_combo)
         pop_params_row.addWidget(QLabel("Truncation (m):"))
         self.pop_truncation_spin = QDoubleSpinBox()
         self.pop_truncation_spin.setRange(0.0, 100000.0)
@@ -3839,13 +3869,20 @@ class BambiDockWidget(QDockWidget):
         pop_area_row.addWidget(self.pop_study_area_spin)
         self.pop_study_area_auto_check = QCheckBox("Use flight FoV area")
         self.pop_study_area_auto_check.setToolTip(
-            "Derive the study area from the flight's total field-of-view coverage:\n"
+            "Derive the study area from the flights' total field-of-view coverage:\n"
             "the union of every frame's footprint. Unlike the summed transect areas\n"
             "it counts ground seen by two transects only once, and it also includes\n"
             "frames that belong to no transect.")
+        self.pop_study_area_survey_check = QCheckBox("Use survey area")
+        self.pop_study_area_survey_check.setToolTip(
+            "Use the survey plot minus its exclusion zones (Survey Area box\n"
+            "above) as the study area.")
         self.pop_study_area_auto_check.toggled.connect(
-            self.pop_study_area_spin.setDisabled)
+            self._on_pop_study_area_mode_changed)
+        self.pop_study_area_survey_check.toggled.connect(
+            self._on_pop_study_area_mode_changed)
         pop_area_row.addWidget(self.pop_study_area_auto_check)
+        pop_area_row.addWidget(self.pop_study_area_survey_check)
         pop_area_row.addStretch()
         pop_layout.addLayout(pop_area_row)
 
@@ -4418,15 +4455,12 @@ class BambiDockWidget(QDockWidget):
                 self.ortho_end_frame_spin.value()
                 if not self.ortho_all_frames_check.isChecked() else None),
 
-            # Survey analytics: which species count (None = all of them).
-            # One key for every analytic on the tab, since the filter belongs
-            # to the question rather than to one product (§8.2).
-            "analytics_species_ids": (
-                self.analytics_species_ids()
-                if hasattr(self, 'analytics_all_species_check') else None),
-            "analytics_per_species": (
-                self.analytics_per_species_check.isChecked()
-                if hasattr(self, 'analytics_per_species_check') else False),
+            # Survey analytics: the flights, camera, folder, species and
+            # survey area travel as config["survey"] (core.survey), added by
+            # start_worker for the survey steps - see _survey_config().
+            "census_source": (
+                self.census_source_combo.currentText().lower()
+                if hasattr(self, 'census_source_combo') else "tracks"),
 
             # Survey analytics: density heatmap
             "density_source": (
@@ -4440,12 +4474,6 @@ class BambiDockWidget(QDockWidget):
                 if hasattr(self, 'density_bandwidth_spin') else 25.0),
 
             # Survey analytics: coverage map
-            "coverage_camera": (
-                ("T" if self.coverage_camera_combo.currentIndex() == 0 else "W")
-                if hasattr(self, 'coverage_camera_combo') else "T"),
-            "inventory_camera": (
-                ("T" if self.inventory_camera_combo.currentIndex() == 0 else "W")
-                if hasattr(self, 'inventory_camera_combo') else "T"),
             "inventory_columns": list(
                 getattr(self, '_inventory_columns', None) or []),
             "coverage_cell_size": (
@@ -4459,14 +4487,8 @@ class BambiDockWidget(QDockWidget):
             "ds_truncation": (
                 self.ds_truncation_spin.value()
                 if hasattr(self, 'ds_truncation_spin') else 0.0),
-            "ds_project_folders": (
-                [e["target"] for e in self._resolve_project_entries("ds")]
-                if hasattr(self, 'ds_projects_list') else []),
 
             # Survey analytics: transect population estimation
-            "pop_camera": (
-                ("T" if self.pop_camera_combo.currentIndex() == 0 else "W")
-                if hasattr(self, 'pop_camera_combo') else "T"),
             "pop_truncation": (
                 self.pop_truncation_spin.value()
                 if hasattr(self, 'pop_truncation_spin') else 0.0),
@@ -4476,6 +4498,9 @@ class BambiDockWidget(QDockWidget):
             "pop_study_area_auto": (
                 self.pop_study_area_auto_check.isChecked()
                 if hasattr(self, 'pop_study_area_auto_check') else False),
+            "pop_study_area_survey": (
+                self.pop_study_area_survey_check.isChecked()
+                if hasattr(self, 'pop_study_area_survey_check') else False),
             "pop_methods": self._selected_population_methods(),
             "pop_n_boot": (
                 self.pop_n_boot_spin.value()
@@ -4483,10 +4508,84 @@ class BambiDockWidget(QDockWidget):
             "pop_seed": (
                 self.pop_seed_spin.value()
                 if hasattr(self, 'pop_seed_spin') else 42),
-            "pop_project_folders": (
-                self._resolve_project_entries("pop")
-                if hasattr(self, 'pop_projects_list') else []),
         }
+
+    def _on_pop_study_area_mode_changed(self, checked: bool):
+        """'Use flight FoV area' and 'Use survey area' exclude each other."""
+        sender = self.sender()
+        if checked:
+            other = (self.pop_study_area_survey_check
+                     if sender is self.pop_study_area_auto_check
+                     else self.pop_study_area_auto_check)
+            other.blockSignals(True)
+            other.setChecked(False)
+            other.blockSignals(False)
+        derived = any(check.isChecked() for check in (
+            self.pop_study_area_auto_check, self.pop_study_area_survey_check))
+        self.pop_study_area_spin.setDisabled(derived)
+
+    def _refresh_survey_area(self):
+        """Re-read the survey area into the panel."""
+        if hasattr(self, 'survey_area_panel'):
+            self.survey_area_panel.refresh()
+
+    def _refresh_survey(self):
+        """Rebuild the survey's flight list (the flights changed)."""
+        if hasattr(self, 'survey_panel'):
+            self.survey_panel.refresh()
+            self._on_survey_changed()
+
+    def _on_survey_changed(self):
+        """Flights, camera or folder changed: species and area follow."""
+        if not hasattr(self, 'analytics_species_list'):
+            return
+        self.refresh_analytics_species()
+        self._refresh_survey_area()
+        if not getattr(self, "_loading_config", False):
+            try:
+                self.survey_panel.save(QgsProject.instance())
+            except Exception:  # nosec B110 - saved again with the project
+                pass
+
+    def current_survey(self):
+        """The :class:`core.survey.Survey` the tab describes right now."""
+        return self.survey_panel.survey(
+            species=self.analytics_species_names(),
+            per_species=self.analytics_per_species_check.isChecked(),
+            area_enabled=self.survey_area_panel.is_enabled())
+
+    def _survey_config(self) -> dict:
+        return self.current_survey().to_dict()
+
+    def _checked_survey(self, check_species: bool = True):
+        """The survey, validated - or ``None`` after telling the user why.
+
+        *check_species* is off for the coverage map: it counts frames, not
+        animals, so the species filter does not apply to it.
+        """
+        from .core.survey import SurveyError
+
+        if check_species and not self._check_analytics_species():
+            return None
+        survey = self.current_survey()
+        try:
+            return survey.validate()
+        except SurveyError as exc:
+            QMessageBox.warning(self, "Survey Analytics", str(exc))
+            return None
+
+    def _survey_prerequisites(self, survey, checks) -> bool:
+        """Run *checks(flight) -> [missing, ...]* on every flight; warn and
+        return False when anything is missing."""
+        problems = {}
+        for flight in survey.flights:
+            missing = checks(flight)
+            if missing:
+                problems[flight.name] = missing
+        if problems:
+            self._warn_missing_project_files(problems)
+            return False
+        return True
 
     def _selected_population_methods(self) -> list:
         """The population estimators ticked on the Survey Analytics tab."""
@@ -4501,280 +4600,20 @@ class BambiDockWidget(QDockWidget):
         ]
         return methods
 
-    # ------------------------------------------------------------------ #
-    # Multi-project selector (shared by distance sampling & population)
-    # ------------------------------------------------------------------ #
-
-    def _build_projects_group(self, prefix: str, tooltip: str,
-                              with_dem: bool = False) -> QGroupBox:
-        """A project list + add/remove + 'Add current project' selector.
-
-        Lets a Survey Analytics tool run over several BAMBI target folders at
-        once and combine the results. Each list entry stores its target folder
-        and (when *with_dem*) the project's DEM metadata JSON, under the item's
-        ``Qt.UserRole`` data. The widgets are stored on ``self`` under
-        ``{prefix}_projects_list`` and ``{prefix}_include_current_check`` so
-        :meth:`_resolve_project_entries` can read them back.
-
-        :param with_dem: population estimation needs each added project's
-            ``dem.json`` to place its transects, so its Add button opens a
-            two-picker dialog; distance sampling has no DEM dependency and just
-            picks a folder.
-        """
-        box = QGroupBox("Projects")
-        layout = QVBoxLayout(box)
-
-        description = (
-            "Analyse one or more BAMBI target folders together - each project "
-            "is processed on its own and the results are combined. Leave the "
-            "list empty and keep 'Add current project' ticked to analyse only "
-            "the active project (same as before)."
-        )
-        if with_dem:
-            description += (
-                " Added projects need their DEM metadata (dem.json) so their "
-                "transects can be georeferenced; the current project reuses "
-                "the DEM configured on the Processing tab."
-            )
-        desc = QLabel(description)
-        desc.setWordWrap(True)
-        desc.setStyleSheet("color: gray; font-size: 10px;")
-        layout.addWidget(desc)
-
-        lst = QListWidget()
-        lst.setToolTip(tooltip)
-        lst.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
-        lst.setMaximumHeight(90)
-        setattr(self, f"{prefix}_projects_list", lst)
-        layout.addWidget(lst)
-
-        btn_row = QHBoxLayout()
-        add_btn = QPushButton("+ Add Project…" if with_dem else "+ Add Folder…")
-        add_btn.setToolTip(
-            "Add a project (target folder + dem.json) to analyse." if with_dem
-            else "Add a BAMBI target folder to analyse.")
-        if with_dem:
-            add_btn.clicked.connect(lambda: self._add_project_with_dem(prefix))
-        else:
-            add_btn.clicked.connect(lambda: self._add_project_folder(prefix))
-        add_flight_btn = QPushButton("+ Add Flight…")
-        add_flight_btn.setToolTip(
-            "Add another flight from this QGIS project. Its target folder - "
-            "and its DEM - come from the flight itself, so there are no paths "
-            "to find.")
-        add_flight_btn.clicked.connect(
-            lambda: self._add_project_from_flight(prefix, with_dem))
-        setattr(self, f"{prefix}_add_flight_btn", add_flight_btn)
-
-        remove_btn = QPushButton("− Remove Selected")
-        remove_btn.setToolTip("Remove the selected project(s) from the list.")
-        remove_btn.clicked.connect(lambda: self._remove_project_folders(prefix))
-        btn_row.addWidget(add_btn)
-        btn_row.addWidget(add_flight_btn)
-        btn_row.addWidget(remove_btn)
-        btn_row.addStretch()
-
-        include_current = QCheckBox("Add current project")
-        include_current.setChecked(True)
-        include_current.setToolTip(
-            "Include the active project's target folder in the analysis, in "
-            "addition to any projects listed above.")
-        setattr(self, f"{prefix}_include_current_check", include_current)
-        btn_row.addWidget(include_current)
-        layout.addLayout(btn_row)
-        return box
-
-    def _project_item_role(self):
-        """Qt.UserRole, spelled for both PyQt5 and PyQt6."""
-        return Qt.ItemDataRole.UserRole
-
-    def _append_project_item(self, prefix: str, target: str, dem: str = ""):
-        """Add one project entry to a tool's list, de-duplicated by target."""
-        lst = getattr(self, f"{prefix}_projects_list", None)
-        if lst is None:
-            return
-        key = os.path.normcase(os.path.abspath(target))
-        for i in range(lst.count()):
-            data = lst.item(i).data(self._project_item_role()) or {}
-            if os.path.normcase(os.path.abspath(data.get("target", ""))) == key:
-                return
-        label = target
-        if dem:
-            label = f"{target}    -    DEM: {os.path.basename(dem)}"
-        item = QListWidgetItem(label)
-        item.setData(self._project_item_role(), {"target": target, "dem": dem})
-        item.setToolTip(f"Target: {target}" + (f"\nDEM: {dem}" if dem else ""))
-        lst.addItem(item)
-
-    def _add_project_folder(self, prefix: str):
-        """Append a chosen BAMBI target folder (no DEM) to a tool's list."""
-        folder = QFileDialog.getExistingDirectory(
-            self, "Select BAMBI Target Folder")
-        if folder:
-            self._append_project_item(prefix, folder)
-
-    def _add_project_from_flight(self, prefix: str, with_dem: bool):
-        """Add one of this project's other flights, without browsing for it.
-
-        Pointing the analytics at separate target folders has always worked and
-        still does; this is the shortcut for flights the project already knows
-        about, where the folder and the DEM can simply be looked up (§10.2).
-        """
-        from .core import flights as flights_core
-
-        current = self.target_folder_edit.text().strip()
-        entries = flights_core.analysis_entries(self._flights(), exclude=current)
-        if not entries:
-            QMessageBox.information(
-                self, "Add Flight",
-                "This project has no other flights yet. Add one on the Input "
-                "tab, or use 'Add Folder' to point at a target folder outside "
-                "this project.")
-            return
-
-        labels = [f"{entry['name']}  -  {entry['target_folder']}"
-                  for entry in entries]
-        choice, ok = QInputDialog.getItem(
-            self, "Add Flight", "Flight:", labels, 0, False)
-        if not ok:
-            return
-
-        entry = entries[labels.index(choice)]
-        if with_dem and not entry["dem"]:
-            QMessageBox.warning(
-                self, "Add Flight",
-                f"'{entry['name']}' has no DEM metadata recorded, which this "
-                "analysis needs to place its transects. Open that flight and "
-                "set its DEM, or add it with 'Add Project…' instead.")
-            return
-
-        self._append_project_item(
-            prefix, entry["target_folder"], entry["dem"] if with_dem else "")
-        self.log(f"Added flight '{entry['name']}' to the analysis")
-
-    def _add_project_with_dem(self, prefix: str):
-        """Prompt for a target folder + its dem.json, then add the project."""
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Add Project")
-        dlg.setMinimumWidth(520)
-        layout = QVBoxLayout(dlg)
-        form = QFormLayout()
-
-        target_edit = QLineEdit()
-        target_edit.setPlaceholderText("BAMBI target folder")
-        target_browse = QPushButton("Browse…")
-
-        def _pick_target():
-            folder = QFileDialog.getExistingDirectory(
-                dlg, "Select BAMBI Target Folder")
-            if folder:
-                target_edit.setText(folder)
-                # Offer the DEM sitting next to the mesh if it is obvious.
-                if not dem_edit.text():
-                    for name in ("dem.json", "dem_mesh.json"):
-                        guess = os.path.join(folder, name)
-                        if os.path.isfile(guess):
-                            dem_edit.setText(guess)
-                            break
-        target_browse.clicked.connect(_pick_target)
-        target_row = QHBoxLayout()
-        target_row.addWidget(target_edit)
-        target_row.addWidget(target_browse)
-        form.addRow("Target folder:", target_row)
-
-        dem_edit = QLineEdit()
-        dem_edit.setPlaceholderText("DEM metadata JSON (dem.json)")
-        dem_browse = QPushButton("Browse…")
-
-        def _pick_dem():
-            start = target_edit.text().strip() or ""
-            file, _ = QFileDialog.getOpenFileName(
-                dlg, "Select DEM Metadata JSON", start, "JSON files (*.json)")
-            if file:
-                dem_edit.setText(file)
-        dem_browse.clicked.connect(_pick_dem)
-        dem_row = QHBoxLayout()
-        dem_row.addWidget(dem_edit)
-        dem_row.addWidget(dem_browse)
-        form.addRow("DEM metadata:", dem_row)
-        layout.addLayout(form)
-
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(dlg.accept)
-        buttons.rejected.connect(dlg.reject)
-        layout.addWidget(buttons)
-
-        if dlg.exec() != QDialog.DialogCode.Accepted:
-            return
-        target = target_edit.text().strip()
-        dem = dem_edit.text().strip()
-        if not target:
-            QMessageBox.warning(self, "Add Project",
-                                "Please choose a target folder.")
-            return
-        if not dem or not os.path.isfile(dem):
-            QMessageBox.warning(
-                self, "Add Project",
-                "Please choose the project's DEM metadata JSON (dem.json).")
-            return
-        self._append_project_item(prefix, target, dem)
-
-    def _remove_project_folders(self, prefix: str):
-        """Remove the selected project(s) from a tool's list."""
-        lst = getattr(self, f"{prefix}_projects_list", None)
-        if lst is None:
-            return
-        for item in lst.selectedItems():
-            lst.takeItem(lst.row(item))
-
-    def _resolve_project_entries(self, prefix: str) -> List[Dict[str, str]]:
-        """Ordered, de-duplicated ``{"target", "dem"}`` entries for a tool.
-
-        The projects explicitly listed, followed by the active project (with an
-        empty DEM, so the worker reuses the configured DEM) when 'Add current
-        project' is ticked. Blank targets and duplicates (by normalised target
-        path) are dropped; existence is not checked here - the run handlers
-        report missing folders/files to the user.
-        """
-        entries: List[Dict[str, str]] = []
-        lst = getattr(self, f"{prefix}_projects_list", None)
-        if lst is not None:
-            for i in range(lst.count()):
-                data = lst.item(i).data(self._project_item_role()) or {}
-                entries.append({"target": data.get("target", ""),
-                                "dem": data.get("dem", "")})
-        check = getattr(self, f"{prefix}_include_current_check", None)
-        if check is not None and check.isChecked():
-            current = self.target_folder_edit.text().strip()
-            if current:
-                entries.append({"target": current, "dem": ""})
-
-        seen = set()
-        resolved: List[Dict[str, str]] = []
-        for entry in entries:
-            target = (entry.get("target") or "").strip()
-            if not target:
-                continue
-            key = os.path.normcase(os.path.abspath(target))
-            if key in seen:
-                continue
-            seen.add(key)
-            resolved.append({"target": target, "dem": (entry.get("dem") or "").strip()})
-        return resolved
-
     def _warn_missing_project_files(self, problems: Dict[str, List[str]]):
-        """Report which required files are missing in which project(s)."""
+        """Report which required files are missing in which flight(s).
+
+        *problems* maps a flight name to what it lacks.
+        """
         blocks = []
-        for folder, missing in problems.items():
-            name = os.path.basename(os.path.normpath(folder)) or folder
+        for name, missing in problems.items():
             bullets = "\n".join(f"      • {m}" for m in missing)
-            blocks.append(f"  {name}\n    ({folder})\n{bullets}")
+            blocks.append(f"  {name}\n{bullets}")
         body = "\n\n".join(blocks)
         QMessageBox.warning(
             self, "Missing Prerequisites",
             "The analysis was aborted - required files are missing in the "
-            "following project(s):\n\n" + body)
+            "following flight(s):\n\n" + body)
 
     def validate_inputs(self, required_fields: list) -> bool:
         """Validate that required input fields are filled."""
@@ -6258,7 +6097,9 @@ class BambiDockWidget(QDockWidget):
             # The Segmentation tool has its own camera choice; the panel
             # reports the thermal results and the tool shows the rest.
             "sam3": "_t",
-            "inventory": combo_suffix(self.inventory_camera_combo),
+            # Each flight keeps its own copy of the survey's inventory.
+            "inventory": (f"_{self.survey_panel.modality()}"
+                          if hasattr(self, "survey_panel") else "_t"),
         }
 
         completed = check_existing_outputs(target_folder, cameras)
@@ -6375,6 +6216,7 @@ class BambiDockWidget(QDockWidget):
             self._adopt_target_folder(folder)
         self._refresh_migrate_button()
         self.refresh_analytics_species()
+        self._refresh_survey_area()
 
     def _refresh_migrate_button(self):
         """Show 'Migrate 5.x…' only where there is something to migrate."""
@@ -6527,6 +6369,8 @@ class BambiDockWidget(QDockWidget):
         self.flight_combo.setEnabled(several)
         self.flight_rename_btn.setEnabled(self.flight_combo.count() > 0)
         self.flight_remove_btn.setEnabled(self.flight_combo.count() > 0)
+        # The survey's flight list is the same list, so it follows.
+        self._refresh_survey()
 
     def _adopt_target_folder(self, folder: str):
         """Keep the flight list in step with a target folder chosen by hand.
@@ -6593,6 +6437,7 @@ class BambiDockWidget(QDockWidget):
             self.log(f"Switched to flight '{flight['name']}'")
             self._check_existing_outputs(flight.get("target_folder", ""))
         self.refresh_analytics_species()
+        self._refresh_survey_area()
 
     def add_flight(self):
         """Add another flight to this project and switch to it."""
@@ -6868,60 +6713,51 @@ class BambiDockWidget(QDockWidget):
         self._update_analytics_species_status()
 
     def refresh_analytics_species(self):
-        """Fill the list from the active flight's own vocabulary.
+        """Fill the list from the vocabularies of the survey's flights.
 
-        Species live in each flight's ``project.gpkg``, so the list is rebuilt
-        per flight rather than carried across - a species id from one flight
-        means nothing in another.
+        Species are listed by name: ids are assigned per flight, so roe deer
+        may be 3 in one flight and 7 in another, and the analytics translate
+        the names into each flight's own ids.
         """
-        from .core import analytics_source
-
-        folder = self.target_folder_edit.text().strip()
-        previous = {name for name, _id in self._analytics_species_selection()}
-
+        previous = set(self._analytics_species_selection())
         self.analytics_species_list.clear()
-        options = []
-        if folder and os.path.isdir(folder):
+        names = []
+        if hasattr(self, 'survey_panel'):
             try:
-                options = analytics_source.species_options(folder)
+                names = self.survey_panel.survey().species_names()
             except Exception:  # noqa: BLE001 - an empty list is the answer
-                options = []
+                names = []
 
-        for entry in options:
-            item = QListWidgetItem(entry["name"])
-            item.setData(Qt.ItemDataRole.UserRole, entry["species_id"])
+        for name in names:
+            item = QListWidgetItem(name)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            # Keep a species ticked across a refresh, by name: the ids are
-            # stable within a flight, and the name is what was chosen.
-            item.setCheckState(Qt.CheckState.Checked
-                               if entry["name"] in previous
+            # Keep a species ticked across a refresh, by name.
+            item.setCheckState(Qt.CheckState.Checked if name in previous
                                else Qt.CheckState.Unchecked)
             self.analytics_species_list.addItem(item)
 
         self._update_analytics_species_status()
-        return len(options)
+        return len(names)
 
     def _analytics_species_selection(self):
-        """Ticked species as ``(name, species_id)`` pairs."""
+        """Names of the ticked species."""
         selection = []
         for index in range(self.analytics_species_list.count()):
             item = self.analytics_species_list.item(index)
             if item.checkState() == Qt.CheckState.Checked:
-                selection.append(
-                    (item.text(), item.data(Qt.ItemDataRole.UserRole)))
+                selection.append(item.text())
         return selection
 
-    def analytics_species_ids(self):
-        """Species ids for the analytics, or ``None`` to count everything.
+    def analytics_species_names(self):
+        """Species names for the analytics, or ``None`` to count everything.
 
-        ``None`` rather than "every id" on purpose: it is what the analytics
-        already mean by no filter, and it keeps a species added later included
+        ``None`` rather than "every name" on purpose: it is what the analytics
+        mean by no filter, and it keeps a species added later included
         without the selection having to be revisited.
         """
         if self.analytics_all_species_check.isChecked():
             return None
-        return [species_id for _name, species_id
-                in self._analytics_species_selection()]
+        return self._analytics_species_selection()
 
     def _update_analytics_species_status(self):
         separate = self.analytics_per_species_check.isChecked()
@@ -6934,26 +6770,26 @@ class BambiDockWidget(QDockWidget):
             return
         if self.analytics_species_list.count() == 0:
             self.analytics_species_status.setText(
-                "No species found - set a target folder whose project has "
-                "been through the pipeline.")
+                "No species found - tick processed flights in the Survey box "
+                "above.")
             return
         chosen = self._analytics_species_selection()
         if not chosen:
             self.analytics_species_status.setText(
                 "Tick at least one species, or choose 'All species'.")
         elif separate:
-            names = ", ".join(name for name, _id in chosen)
+            names = ", ".join(chosen)
             self.analytics_species_status.setText(
                 f"One result each for: {names}")
         else:
-            names = ", ".join(name for name, _id in chosen)
+            names = ", ".join(chosen)
             self.analytics_species_status.setText(
                 f"Counting together: {names}")
 
     def _check_analytics_species(self) -> bool:
         """False when the filter would exclude everything, with a reason."""
-        ids = self.analytics_species_ids()
-        if ids is not None and not ids:
+        names = self.analytics_species_names()
+        if names is not None and not names:
             QMessageBox.warning(
                 self, "Survey Analytics",
                 "No species are selected, so there would be nothing to "
@@ -8745,48 +8581,30 @@ class BambiDockWidget(QDockWidget):
     # ------------------------------------------------------------------ #
 
     def run_density_heatmap(self):
-        """Run the density-heatmap generation step."""
-        if not self._check_analytics_species():
+        """Run the density-heatmap generation step over the survey."""
+        survey = self._checked_survey()
+        if survey is None:
             return
+        source = self.get_config().get("density_source", "detections")
+        kind = (_store_kinds.TRACKS if source == "tracks"
+                else _store_kinds.GEOREFERENCED)
+        msg = ("Tracks (run 'Track Animals' first)" if source == "tracks"
+               else "Geo-referenced detections (run 'Geo-Reference "
+               "Detections' first)")
 
-        config = self.get_config()
-        target_folder = config.get("target_folder", "")
-        if not target_folder or not os.path.isdir(target_folder):
-            QMessageBox.warning(self, "Missing Target Folder",
-                                "Please set a valid target folder first.")
-            return
+        def checks(flight):
+            ok = self.has_stage(kind, survey.modality, flight.target_folder)
+            return [] if ok else [f"{survey.camera_label} {msg}"]
 
-        source = config.get("density_source", "detections")
-        if source == "tracks":
-            suffix = "t" if config.get("tracking_camera", "T") == "T" else "w"
-            ok = self.has_stage(_store_kinds.TRACKS, suffix, target_folder)
-            msg = "Tracks (run 'Track Animals' first)"
-        else:
-            suffix = "t" if config.get("detection_camera", "T") == "T" else "w"
-            ok = self.has_stage(_store_kinds.GEOREFERENCED, suffix,
-                                target_folder)
-            msg = "Geo-referenced detections (run 'Geo-Reference Detections' first)"
-
-        if not ok:
-            QMessageBox.warning(self, "Missing Prerequisites",
-                                f"The following are required:\n\n• {msg}")
-            return
-
-        self.start_worker("density_heatmap")
+        if self._survey_prerequisites(survey, checks):
+            self.start_worker("density_heatmap")
 
     def add_density_heatmap_to_qgis(self):
-        """Load the generated density-heatmap raster with a graduated colour ramp."""
-        config = self.get_config()
-        source = config.get("density_source", "detections")
-        if source == "tracks":
-            suffix = "t" if config.get("tracking_camera", "T") == "T" else "w"
-        else:
-            suffix = "t" if config.get("detection_camera", "T") == "T" else "w"
-        camera_label = "Thermal" if suffix == "t" else "RGB"
-
+        """Load the survey's density raster(s) with a graduated colour ramp."""
+        survey = self.current_survey()
+        source = self.get_config().get("density_source", "detections")
         rasters = self.analytics_outputs(
-            os.path.join(config["target_folder"], f"analytics_{suffix}"),
-            f"density_{source}", "tif")
+            survey.analytics_folder, f"density_{source}", "tif")
         if not rasters:
             QMessageBox.warning(
                 self, "Missing Data",
@@ -8798,16 +8616,17 @@ class BambiDockWidget(QDockWidget):
         try:
             self.update_status("add_density", "🟡 Loading...")
             for species, raster_file in rasters:
-                layer_name = (
-                    f"BAMBI Density {source.capitalize()} ({camera_label})")
+                layer_name = (f"BAMBI Density {source.capitalize()} "
+                              f"({survey.camera_label})")
                 if species:
                     layer_name = (f"BAMBI Density {species} "
-                                  f"{source.capitalize()} ({camera_label})")
+                                  f"{source.capitalize()} "
+                                  f"({survey.camera_label})")
                 layer = QgsRasterLayer(raster_file, layer_name)
                 if not layer.isValid():
                     raise RuntimeError(f"Failed to load raster: {raster_file}")
                 self._apply_density_style(layer)
-                self._add_layer_to_flight(layer)
+                self._add_layer_to_survey(layer)
                 self.log(f"Added density heatmap layer: {layer_name}")
             self.update_status("add_density", "🟢 Added")
             self.iface.mapCanvas().refresh()
@@ -8854,36 +8673,26 @@ class BambiDockWidget(QDockWidget):
             self.log(f"Warning: could not style density layer: {e}")
 
     def run_coverage_map(self):
-        """Run the coverage-map generation step."""
-        config = self.get_config()
-        target_folder = config.get("target_folder", "")
-        if not target_folder or not os.path.isdir(target_folder):
-            QMessageBox.warning(self, "Missing Target Folder",
-                                "Please set a valid target folder first.")
+        """Run the coverage-map generation step over the survey."""
+        survey = self._checked_survey(check_species=False)
+        if survey is None:
             return
 
-        suffix = "t" if config.get("coverage_camera", "T") == "T" else "w"
-        camera_label = "Thermal" if suffix == "t" else "RGB"
-        geotiff_folder = os.path.join(target_folder, f"geotiffs_{suffix}")
-        if not os.path.isdir(geotiff_folder):
-            QMessageBox.warning(
-                self, "Missing Prerequisites",
-                "The following are required:\n\n"
-                f"• {camera_label} frame GeoTIFFs "
-                "(run 'Export Frames as GeoTIFF' first)"
-            )
-            return
+        def checks(flight):
+            folder = os.path.join(flight.target_folder,
+                                  f"geotiffs_{survey.modality}")
+            if os.path.isdir(folder):
+                return []
+            return [f"{survey.camera_label} frame GeoTIFFs "
+                    "(run 'Export Frames as GeoTIFF' first)"]
 
-        self.start_worker("coverage_map")
+        if self._survey_prerequisites(survey, checks):
+            self.start_worker("coverage_map")
 
     def add_coverage_map_to_qgis(self):
-        """Load the generated coverage-map raster with a graduated colour ramp."""
-        config = self.get_config()
-        suffix = "t" if config.get("coverage_camera", "T") == "T" else "w"
-        camera_label = "Thermal" if suffix == "t" else "RGB"
-
-        raster_file = os.path.join(config["target_folder"], f"analytics_{suffix}",
-                                   "coverage_map.tif")
+        """Load the survey's coverage raster with a graduated colour ramp."""
+        survey = self.current_survey()
+        raster_file = os.path.join(survey.analytics_folder, "coverage_map.tif")
         if not os.path.exists(raster_file):
             QMessageBox.warning(
                 self, "Missing Data",
@@ -8894,12 +8703,12 @@ class BambiDockWidget(QDockWidget):
 
         try:
             self.update_status("add_coverage", "🟡 Loading...")
-            layer_name = f"BAMBI Coverage Map ({camera_label})"
+            layer_name = f"BAMBI Coverage Map ({survey.camera_label})"
             layer = QgsRasterLayer(raster_file, layer_name)
             if not layer.isValid():
                 raise RuntimeError(f"Failed to load raster: {raster_file}")
             self._apply_density_style(layer)
-            self._add_layer_to_flight(layer)
+            self._add_layer_to_survey(layer)
             self.update_status("add_coverage", "🟢 Added")
             self.iface.mapCanvas().refresh()
             self.log(f"Added coverage map layer: {layer_name}")
@@ -8908,31 +8717,67 @@ class BambiDockWidget(QDockWidget):
             self.log(f"Error adding coverage map: {e}")
             QMessageBox.critical(self, "Error", f"Failed to add coverage map: {e}")
 
+    def _tracks_check(self, survey):
+        """Prerequisite check: the flight has tracks of the survey camera."""
+        def checks(flight):
+            if self.has_stage(_store_kinds.TRACKS, survey.modality,
+                              flight.target_folder):
+                return []
+            return [f"{survey.camera_label} tracks (run 'Track Animals' for "
+                    "this camera first)"]
+        return checks
+
     def run_track_inventory(self):
-        """List every tracked individual of the selected camera."""
-        from .core import store
-
-        if not self._check_analytics_species():
+        """List every tracked individual of the survey's flights."""
+        survey = self._checked_survey()
+        if survey is None:
             return
-        config = self.get_config()
-        target_folder = config.get("target_folder", "")
-        if not target_folder or not os.path.isdir(target_folder):
-            QMessageBox.warning(self, "Missing Target Folder",
-                                "Please set a valid target folder first.")
-            return
+        if self._survey_prerequisites(survey, self._tracks_check(survey)):
+            self.start_worker("track_inventory")
 
-        suffix = "t" if config.get("inventory_camera", "T") == "T" else "w"
-        camera_label = "Thermal" if suffix == "t" else "RGB"
-        if not os.path.isfile(store.stage_path(target_folder, store.TRACKS, suffix)):
+    def run_census_summary(self):
+        """Count the animals per species and flight (core.census)."""
+        survey = self._checked_survey()
+        if survey is None:
+            return
+        source = self.get_config().get("census_source", "tracks")
+        if source == "tracks":
+            checks = self._tracks_check(survey)
+        else:
+            def checks(flight):
+                if self.has_stage(_store_kinds.DETECTIONS, survey.modality,
+                                  flight.target_folder):
+                    return []
+                return [f"{survey.camera_label} detections (run 'Detect "
+                        "Animals' first)"]
+        if self._survey_prerequisites(survey, checks):
+            self.start_worker("census_summary")
+
+    def show_census_table(self):
+        """Show the last census summary of the survey."""
+        from .core import census
+
+        survey = self.current_survey()
+        source = self.get_config().get("census_source", "tracks")
+        path = os.path.join(survey.analytics_folder,
+                            f"census_summary_{source}.json")
+        if not os.path.isfile(path):
             QMessageBox.warning(
-                self, "Missing Prerequisites",
-                f"No {camera_label} tracks yet - run 'Track Animals' for "
-                "this camera first. Everything else (geo-referencing, "
-                "classification, matching, labels) is optional and fills "
-                "in its columns when present.")
+                self, "Missing Data",
+                "The census summary has not been built yet.\n"
+                "Run 'Build Census Summary' first.")
             return
-
-        self.start_worker("track_inventory")
+        try:
+            result = census.read_json(path)
+        except (OSError, ValueError) as exc:
+            QMessageBox.critical(self, "Census Summary",
+                                 f"Could not read {path}: {exc}")
+            return
+        dialog = CensusTableDialog(
+            result, csv_path=path[:-len(".json")] + ".csv", parent=self)
+        dialog.setModal(False)
+        dialog.show()
+        self._census_dialog = dialog
 
     def choose_inventory_columns(self):
         """Choose the report's columns; saved with the project."""
@@ -8951,35 +8796,38 @@ class BambiDockWidget(QDockWidget):
                     if self._inventory_columns else "all"))
 
     def show_track_inventory_report(self):
-        """Open the live inventory in a report window."""
-        from .bambi_track_inventory_dialog import BambiTrackInventoryDialog
-        from .core import track_inventory
-
-        config = self.get_config()
-        suffix = "t" if config.get("inventory_camera", "T") == "T" else "w"
-        camera_label = "Thermal" if suffix == "t" else "RGB"
+        """Open the live inventory of the survey's flights in a report."""
         from qgis.PyQt.QtWidgets import QApplication
-        from .core import store
+        from .bambi_click_tool import open_track_in_viewer
+        from .bambi_track_inventory_dialog import BambiTrackInventoryDialog
+        from .core import track_inventory, track_store
 
-        target_folder = config.get("target_folder", "")
-        folder = os.path.join(target_folder, f"analytics_{suffix}")
-        if not os.path.isfile(store.stage_path(target_folder, store.TRACKS, suffix)):
-            QMessageBox.warning(
-                self, "Missing Data",
-                f"No {camera_label} tracks yet - run 'Track Animals' for "
-                "this camera first.")
+        survey = self._checked_survey()
+        if survey is None:
             return
-        # Built from the store as it stands now, not from the files of the
+        if not self._survey_prerequisites(survey, self._tracks_check(survey)):
+            return
+        suffix = survey.modality
+        camera_label = survey.camera_label
+        epsg = survey.epsg
+        by_name = {f.name: f for f in survey.flights}
+
+        # Built from the stores as they stand now, not from the files of the
         # last run: a classification applied since would otherwise be
         # missing from the report while present everywhere else.
-        if not self._check_analytics_species():
-            return
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            epsg = config.get("target_epsg")
-            rows = track_inventory.build_inventory(
-                target_folder, suffix, epsg=int(epsg) if epsg else None,
-                species_ids=config.get("analytics_species_ids"))
+            rows = []
+            for flight in survey.flights:
+                ids = survey.species_ids(flight)
+                if ids is not None and not ids:
+                    continue
+                for row in track_inventory.build_inventory(
+                        flight.target_folder, suffix, epsg=epsg,
+                        species_ids=ids):
+                    if survey.several:
+                        row = dict(row, flight=flight.name)
+                    rows.append(row)
         except Exception as exc:  # noqa: BLE001 - surfaced to the user
             QApplication.restoreOverrideCursor()
             QMessageBox.critical(self, "Track Inventory",
@@ -8987,32 +8835,29 @@ class BambiDockWidget(QDockWidget):
             return
         finally:
             QApplication.restoreOverrideCursor()
-        csv_path = os.path.join(folder, "track_inventory.csv")
+        csv_path = os.path.join(survey.analytics_folder, "track_inventory.csv")
+        single = survey.flights[0]
+
+        def _flight(name):
+            return by_name.get(name, single) if name else single
 
         # A start or end frame in the report opens the animal in the
         # inspector, exactly as clicking its track on the map does.
-        from .bambi_click_tool import open_track_in_viewer
-        target_folder = config.get("target_folder", "")
-        dem_path = config.get("dem_path", "")
-        correction_path = config.get("correction_path", "")
-
-        epsg = config.get("target_epsg")
-        epsg = int(epsg) if epsg else None
-
-        def _open_track(track_id, frame):
+        def _open_track(track_id, frame, flight_name=None):
+            flight = _flight(flight_name)
             return open_track_in_viewer(
-                self.iface.mainWindow(), target_folder, suffix, int(track_id),
-                dem_path=dem_path, correction_path=correction_path,
-                frame=frame, epsg=epsg)
+                self.iface.mainWindow(), flight.target_folder, suffix,
+                int(track_id), dem_path=flight.dem_path,
+                correction_path=flight.correction_path, frame=frame,
+                epsg=epsg)
 
-        from .core import track_store
-
-        def _set_approved(track_id, approved):
+        def _set_approved(track_id, approved, flight_name=None):
+            flight = _flight(flight_name)
             changed = track_store.set_track_attribute(
-                target_folder, suffix, int(track_id), "approved",
+                flight.target_folder, suffix, int(track_id), "approved",
                 True if approved else None)
             if changed:
-                self.log(f"Track {track_id} ({camera_label}) "
+                self.log(f"Track {track_id} ({flight.name}, {camera_label}) "
                          f"{'approved' if approved else 'no longer approved'}")
 
         def _columns_changed(columns):
@@ -9031,7 +8876,9 @@ class BambiDockWidget(QDockWidget):
         # Keep a reference: a non-modal dialog with only a local name would
         # be collected the moment this method returns.
         self._track_inventory_dialog = dialog
-        self._track_inventory_context = (target_folder, suffix, epsg)
+        self._track_inventory_context = (
+            {f.key: f.name for f in survey.flights}, suffix, epsg,
+            survey.several)
         # What the reviewer does in the inspector - approve, delete a box,
         # delete a track - shows up in the open report.
         self._connect_viewer_signals()
@@ -9050,25 +8897,26 @@ class BambiDockWidget(QDockWidget):
         self._viewer_signals_connected = True
 
     def _inventory_dialog_for(self, target_folder: str, modality: str):
-        """The open report, if it shows this camera of this flight."""
+        """``(dialog, flight name)`` when the open report shows this camera
+        of this flight, else ``(None, None)``."""
         dialog = getattr(self, "_track_inventory_dialog", None)
         context = getattr(self, "_track_inventory_context", None)
         if dialog is None or context is None or not dialog.isVisible():
-            return None
-        folder, suffix, _epsg = context
-        if suffix != modality or os.path.normcase(os.path.abspath(folder)) \
-                != os.path.normcase(os.path.abspath(target_folder)):
-            return None
-        return dialog
+            return None, None
+        flights, suffix, _epsg, several = context
+        name = flights.get(os.path.normcase(os.path.abspath(target_folder)))
+        if suffix != modality or name is None:
+            return None, None
+        return dialog, (name if several else None)
 
     def _on_viewer_track_deleted(self, target_folder: str, modality: str,
                                  track_id: int):
         camera_label = "Thermal" if modality == "t" else "RGB"
         self.log(f"Track {track_id} ({camera_label}) deleted from the project "
                  "in the inspector")
-        dialog = self._inventory_dialog_for(target_folder, modality)
+        dialog, flight = self._inventory_dialog_for(target_folder, modality)
         if dialog is not None:
-            dialog.remove_track(track_id)
+            dialog.remove_track(track_id, flight)
 
     def _on_viewer_detection_deleted(self, target_folder: str, modality: str,
                                      detection_id: int, track_id: int):
@@ -9076,12 +8924,12 @@ class BambiDockWidget(QDockWidget):
         note = f" (track {track_id})" if track_id >= 0 else ""
         self.log(f"Detection {detection_id} ({camera_label}){note} deleted "
                  "from the project in the inspector")
-        dialog = self._inventory_dialog_for(target_folder, modality)
+        dialog, flight = self._inventory_dialog_for(target_folder, modality)
         if dialog is None or track_id < 0:
             return
         from .core import track_inventory
 
-        _folder, _suffix, epsg = self._track_inventory_context
+        epsg = self._track_inventory_context[2]
         try:
             rows = track_inventory.build_inventory(
                 target_folder, modality, epsg=epsg, track_ids=[track_id])
@@ -9089,27 +8937,27 @@ class BambiDockWidget(QDockWidget):
             self.log(f"Could not refresh track {track_id} in the report: {exc}")
             return
         if rows:
-            dialog.update_track(rows[0])
+            row = dict(rows[0], flight=flight) if flight else rows[0]
+            dialog.update_track(row)
         else:
-            dialog.remove_track(track_id)
+            dialog.remove_track(track_id, flight)
 
     def _on_viewer_track_approved(self, target_folder: str, modality: str,
                                   track_id: int, approved: bool):
         camera_label = "Thermal" if modality == "t" else "RGB"
         self.log(f"Track {track_id} ({camera_label}) "
                  f"{'approved' if approved else 'no longer approved'}")
-        dialog = self._inventory_dialog_for(target_folder, modality)
+        dialog, flight = self._inventory_dialog_for(target_folder, modality)
         if dialog is not None:
-            dialog.set_track_approved(track_id, approved)
+            dialog.set_track_approved(track_id, approved, flight)
 
     def add_track_inventory_to_qgis(self):
-        """Load the inventory as a point layer at each animal's last position."""
+        """Load the survey inventory as a point layer at each animal's last
+        position, with a ``flight`` column."""
         from .core import track_inventory
 
-        config = self.get_config()
-        suffix = "t" if config.get("inventory_camera", "T") == "T" else "w"
-        camera_label = "Thermal" if suffix == "t" else "RGB"
-        json_path = os.path.join(config["target_folder"], f"analytics_{suffix}",
+        survey = self.current_survey()
+        json_path = os.path.join(survey.analytics_folder,
                                  "track_inventory.json")
         if not os.path.isfile(json_path):
             QMessageBox.warning(
@@ -9118,10 +8966,12 @@ class BambiDockWidget(QDockWidget):
                 "Run 'List Tracked Individuals' first.")
             return
 
+        camera_label = survey.camera_label
+        columns = ["flight"] + list(track_inventory.COLUMNS)
         try:
             self.update_status("add_track_inventory", "🟡 Loading...")
             rows = track_inventory.read_json(json_path)
-            epsg = config.get("target_epsg", 32633)
+            epsg = survey.epsg or self.get_config().get("target_epsg", 32633)
             layer = QgsVectorLayer(
                 f"Point?crs=EPSG:{epsg}",
                 f"BAMBI Track Inventory ({camera_label})", "memory")
@@ -9138,8 +8988,7 @@ class BambiDockWidget(QDockWidget):
                     return QgsField(name, QVariant.Double)
                 return QgsField(name, QVariant.String)
 
-            provider.addAttributes([_field(name)
-                                    for name in track_inventory.COLUMNS])
+            provider.addAttributes([_field(name) for name in columns])
             layer.updateFields()
 
             features = []
@@ -9152,17 +9001,17 @@ class BambiDockWidget(QDockWidget):
                     feature.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(x, y)))
                 feature.setAttributes([
                     row.get(name) if row.get(name) is not None else None
-                    for name in track_inventory.COLUMNS])
+                    for name in columns])
                 features.append(feature)
             provider.addFeatures(features)
             layer.updateExtents()
 
             layer = self._persist_memory_layer(
-                layer, f"Track_Inventory_{suffix}", "analytics_layers",
-                display_name=f"BAMBI Track Inventory ({camera_label})")
+                layer, f"Track_Inventory_{survey.modality}", "analytics_layers",
+                display_name=f"BAMBI Track Inventory ({camera_label})",
+                base_folder=survey.folder)
             layer.setCustomProperty("bambi_layer_type", "track_inventory")
-            layer.setCustomProperty("bambi_target_folder", config["target_folder"])
-            self._add_layer_to_flight(layer)
+            self._add_layer_to_survey(layer)
             self.update_status("add_track_inventory", "🟢 Added")
             self.iface.mapCanvas().refresh()
             self.log(f"Added track inventory layer with {len(features)} "
@@ -9174,63 +9023,39 @@ class BambiDockWidget(QDockWidget):
                                  f"Failed to add the track inventory: {e}")
 
     def run_distance_sampling(self):
-        """Run the distance-sampling estimation step (one or more projects)."""
-        if not self._check_analytics_species():
-            return
+        """Run the distance-sampling estimation over the survey's flights."""
+        from .core.survey import route_suffix
 
-        config = self.get_config()
-        folders = config.get("ds_project_folders", [])
-        if not folders:
-            QMessageBox.warning(
-                self, "No Projects",
-                "At least one project must be available. Add one or more BAMBI "
-                "target folders, or tick 'Add current project'.")
+        survey = self._checked_survey()
+        if survey is None:
             return
-
-        source = config.get("ds_source", "detections")
-        fr_suffix = "t" if config.get("flight_route_camera", "T") == "T" else "w"
+        source = self.get_config().get("ds_source", "detections")
+        m = survey.modality
         if source == "tracks":
-            trk_suffix = "t" if config.get("tracking_camera", "T") == "T" else "w"
-            perp_name = f"perpendicular_tracks_{trk_suffix}.json"
+            perp_name = f"perpendicular_tracks_{m}.json"
             perp_msg = ("Track perpendicular distances "
                         "(run 'Calculate Track Perpendicular')")
         else:
-            det_suffix = "t" if config.get("detection_camera", "T") == "T" else "w"
-            perp_name = f"perpendicular_{det_suffix}.json"
+            perp_name = f"perpendicular_{m}.json"
             perp_msg = "Perpendicular distances (run 'Calculate Perpendicular')"
 
-        problems: Dict[str, List[str]] = {}
-        for folder in folders:
+        def checks(flight):
             missing = []
-            if not os.path.isdir(folder):
-                problems[folder] = ["The project folder does not exist."]
-                continue
-            fr_dir = os.path.join(folder, f"flight_route_{fr_suffix}")
-            if not os.path.exists(os.path.join(fr_dir, perp_name)):
-                missing.append(perp_msg)
-            if not os.path.exists(os.path.join(fr_dir, "flight_route.geojson")):
+            if route_suffix(flight.target_folder, m, perp_name) is None:
+                missing.append(f"{survey.camera_label} {perp_msg}")
+            if route_suffix(flight.target_folder, m) is None:
                 missing.append("Flight route (run 'Generate Flight Route')")
-            if missing:
-                problems[folder] = missing
+            return missing
 
-        if problems:
-            self._warn_missing_project_files(problems)
-            return
-
-        self.start_worker("distance_sampling")
+        if self._survey_prerequisites(survey, checks):
+            self.start_worker("distance_sampling")
 
     def _show_distance_sampling_results(self):
         """Read the distance-sampling JSON(s) and show a summary dialog."""
-        config = self.get_config()
-        source = config.get("ds_source", "detections")
-        if source == "tracks":
-            suffix = "t" if config.get("tracking_camera", "T") == "T" else "w"
-        else:
-            suffix = "t" if config.get("detection_camera", "T") == "T" else "w"
-
+        survey = self.current_survey()
+        source = self.get_config().get("ds_source", "detections")
         results = self.analytics_outputs(
-            os.path.join(config["target_folder"], f"analytics_{suffix}"),
-            f"distance_sampling_{source}", "json")
+            survey.analytics_folder, f"distance_sampling_{source}", "json")
         if not results:
             return
 
@@ -9281,15 +9106,15 @@ class BambiDockWidget(QDockWidget):
         projects_section = ""
         if len(projects) > 1:
             proj_rows = "".join(
-                f"<tr><td>{os.path.basename(os.path.normpath(p['target_folder']))}</td>"
+                f"<tr><td>{p.get('name') or os.path.basename(os.path.normpath(p['target_folder']))}</td>"
                 f"<td align='right'>{p.get('n', 0)}</td>"
                 f"<td align='right'>{p.get('transect_length_m', 0):.0f}</td></tr>"
                 for p in projects
             )
             projects_section = f"""
-        <h4>Projects pooled ({len(projects)})</h4>
+        <h4>Flights pooled ({len(projects)})</h4>
         <table cellpadding='4'>
-          <tr><th align='left'>Project</th><th align='right'>Observations</th>
+          <tr><th align='left'>Flight</th><th align='right'>Observations</th>
               <th align='right'>Route length (m)</th></tr>
           {proj_rows}
         </table>
@@ -9331,87 +9156,52 @@ class BambiDockWidget(QDockWidget):
         return html
 
     def run_population_estimation(self):
-        """Run the transect-based population estimation (one or more projects)."""
-        if not self._check_analytics_species():
-            return
+        """Run the transect population estimation over the survey's flights."""
+        from .core.survey import route_suffix
 
-        config = self.get_config()
-        entries = config.get("pop_project_folders", [])
-        if not entries:
-            QMessageBox.warning(
-                self, "No Projects",
-                "At least one project must be available. Add one or more BAMBI "
-                "projects, or tick 'Add current project'.")
+        survey = self._checked_survey()
+        if survey is None:
             return
-
-        if not config.get("pop_methods"):
+        if not self.get_config().get("pop_methods"):
             QMessageBox.warning(
                 self, "No Method Selected",
                 "Please tick at least one estimation method "
                 "(Naive, Bootstrap or ZINB).")
             return
 
-        suffix = "t" if config.get("pop_camera", "T") == "T" else "w"
-        camera_label = "Thermal" if suffix == "t" else "RGB"
-        fr_suffix = "t" if config.get("flight_route_camera", "T") == "T" else "w"
+        m = survey.modality
+        label = survey.camera_label
 
-        current = self.target_folder_edit.text().strip()
-        current_key = (os.path.normcase(os.path.abspath(current))
-                       if current else None)
-
-        problems: Dict[str, List[str]] = {}
-        for entry in entries:
-            folder = entry.get("target", "")
-            dem = entry.get("dem", "")
-            if not os.path.isdir(folder):
-                problems[folder] = ["The project folder does not exist."]
-                continue
+        def checks(flight):
+            folder = flight.target_folder
             missing = []
             if not os.path.exists(os.path.join(
-                    folder, f"transects_{suffix}", "transects.json")):
-                missing.append(
-                    f"{camera_label} transect definitions "
-                    "(define them with the Transect Splitting Tool)")
-            if not self.has_stage(_store_kinds.FOV, suffix, folder):
-                missing.append(
-                    f"{camera_label} FoV footprints "
-                    "(run 'Calculate Field of View')")
-            if not os.path.exists(os.path.join(
-                    folder, f"flight_route_{fr_suffix}",
-                    f"perpendicular_tracks_{suffix}.json")):
-                missing.append(
-                    f"{camera_label} track perpendicular distances "
-                    "(run 'Calculate Track Perpendicular')")
-            if not os.path.exists(os.path.join(folder, f"poses_{suffix}.json")):
-                missing.append(
-                    f"{camera_label} camera poses (poses_{suffix}.json - "
-                    "run frame extraction)")
-            # The active project uses the DEM configured on the Processing tab;
-            # every added project must supply its own dem.json.
-            folder_key = os.path.normcase(os.path.abspath(folder))
-            is_current = current_key is not None and folder_key == current_key
-            if not is_current:
-                if not dem:
-                    missing.append("DEM metadata (dem.json) - add it for this project")
-                elif not os.path.isfile(dem):
-                    missing.append(f"DEM metadata not found: {dem}")
-            if missing:
-                problems[folder] = missing
+                    folder, f"transects_{m}", "transects.json")):
+                missing.append(f"{label} transect definitions "
+                               "(define them with the Transect Splitting Tool)")
+            if not self.has_stage(_store_kinds.FOV, m, folder):
+                missing.append(f"{label} FoV footprints "
+                               "(run 'Calculate Field of View')")
+            if route_suffix(folder, m,
+                            f"perpendicular_tracks_{m}.json") is None:
+                missing.append(f"{label} track perpendicular distances "
+                               "(run 'Calculate Track Perpendicular')")
+            if not os.path.exists(os.path.join(folder, f"poses_{m}.json")):
+                missing.append(f"{label} camera poses (poses_{m}.json - run "
+                               "frame extraction)")
+            if not flight.dem and not flight.dem_path:
+                missing.append("DEM metadata (dem.json) - set the DEM on the "
+                               "flight's Processing tab")
+            return missing
 
-        if problems:
-            self._warn_missing_project_files(problems)
-            return
-
-        self.start_worker("population_estimation")
+        if self._survey_prerequisites(survey, checks):
+            self.start_worker("population_estimation")
 
     def _show_population_results(self):
         """Read the population-estimate JSON(s) and show a summary dialog."""
-        config = self.get_config()
-        suffix = "t" if config.get("pop_camera", "T") == "T" else "w"
-
+        survey = self.current_survey()
         results = self.analytics_outputs(
-            os.path.join(config["target_folder"], f"analytics_{suffix}"),
-            "population_estimate", "json")
+            survey.analytics_folder, "population_estimate", "json")
         if not results:
             return
 
@@ -9467,7 +9257,8 @@ class BambiDockWidget(QDockWidget):
         )
 
         source_labels = {
-            "flight_fov": "from the flight's FoV coverage",
+            "flight_fov": "from the flights' FoV coverage",
+            "survey_area": "the survey plot minus exclusion zones",
             "manual": "entered manually",
         }
         source = source_labels.get(r.get("study_area_source", ""), "")
@@ -9499,16 +9290,16 @@ class BambiDockWidget(QDockWidget):
                 for p in projects
             )
             projects_section = f"""
-        <h4>Projects pooled ({len(projects)})</h4>
+        <h4>Flights pooled ({len(projects)})</h4>
         <table cellpadding='4'>
-          <tr><th align='left'>Project</th><th align='right'>Transects</th>
+          <tr><th align='left'>Flight</th><th align='right'>Transects</th>
               <th align='right'>Counted</th><th align='right'>Area (ha)</th>
               <th align='right'>DEM origin</th></tr>
           {proj_rows}
         </table>
-        <p style='color:gray;font-size:11px'>DEM origin: "config" = the active
-        project's configured DEM; "provided" = the dem.json supplied when the
-        project was added.</p>
+        <p style='color:gray;font-size:11px'>DEM origin: where each flight's
+        mesh-to-world origin was read from (its dem.json, or the JSON beside
+        its DEM mesh).</p>
         """
 
         html = f"""
@@ -9555,6 +9346,42 @@ class BambiDockWidget(QDockWidget):
         return html
 
     def add_transect_areas_to_qgis(self):
+        """Add each survey flight's transect areas into that flight's group.
+
+        Transects belong to one flight - their frame ranges index its poses -
+        so each flight gets its own 'BAMBI Transect Areas' group, written by
+        the population estimation into the flight's own analytics folder.
+        """
+        from .core.survey import route_suffix
+
+        survey = self.current_survey()
+        base = self.get_config()
+        m = survey.modality
+        missing, added = [], 0
+        for flight in survey.flights:
+            fr = route_suffix(flight.target_folder, m,
+                              f"perpendicular_tracks_{m}.json") or m
+            config = dict(
+                base, target_folder=flight.target_folder,
+                dem_path=flight.dem_path,
+                alfs_dem_metadata_path=flight.dem or None,
+                flight_route_camera="T" if fr == "t" else "W",
+                pop_camera="T" if m == "t" else "W",
+                target_epsg=survey.epsg or base.get("target_epsg"))
+            with self._layers_for_flight(flight.target_folder):
+                if self._add_transect_areas_for(config, flight.name):
+                    added += 1
+                else:
+                    missing.append(flight.name)
+        if not added:
+            QMessageBox.warning(
+                self, "Missing Data",
+                "The transect areas have not been generated.\n"
+                "Please run 'Estimate Population (Transects)' first.")
+        elif missing:
+            self.log("No transect areas yet for: " + ", ".join(missing))
+
+    def _add_transect_areas_for(self, config: dict, flight_name: str) -> bool:
         """Add one layer group per transect, holding its route and its FoV area.
 
         Layer tree::
@@ -9569,7 +9396,6 @@ class BambiDockWidget(QDockWidget):
         Each transect keeps the colour the Transect Splitting Tool gives it, so
         the map and the tool's overview agree.
         """
-        config = self.get_config()
         suffix = "t" if config.get("pop_camera", "T") == "T" else "w"
         camera_label = "Thermal" if suffix == "t" else "RGB"
         analytics = os.path.join(config["target_folder"], f"analytics_{suffix}")
@@ -9577,12 +9403,7 @@ class BambiDockWidget(QDockWidget):
         areas_file = os.path.join(analytics, "transect_areas.geojson")
         routes_file = os.path.join(analytics, "transect_routes.geojson")
         if not os.path.exists(areas_file):
-            QMessageBox.warning(
-                self, "Missing Data",
-                "The transect areas have not been generated.\n"
-                "Please run 'Estimate Population (Transects)' first."
-            )
-            return
+            return False
 
         try:
             self.update_status("add_transect_areas", "🟡 Loading...")
@@ -9664,8 +9485,8 @@ class BambiDockWidget(QDockWidget):
             main_group.setExpanded(True)
             self.update_status("add_transect_areas", "🟢 Added")
             self.iface.mapCanvas().refresh()
-            self.log(f"Added {n_added} transect group(s) under "
-                     f"'BAMBI Transect Areas ({camera_label})'")
+            self.log(f"{flight_name}: added {n_added} transect group(s) "
+                     f"under 'BAMBI Transect Areas ({camera_label})'")
             if not routes:
                 self.log("Warning: no sub-flight routes could be built - check "
                          f"that poses_{suffix}.json and transects_{suffix}/"
@@ -9673,8 +9494,11 @@ class BambiDockWidget(QDockWidget):
                          "were added.")
         except Exception as e:
             self.update_status("add_transect_areas", "🔴 Error")
-            self.log(f"Error adding transect areas: {e}")
-            QMessageBox.critical(self, "Error", f"Failed to add transect areas: {e}")
+            self.log(f"Error adding transect areas of {flight_name}: {e}")
+            QMessageBox.critical(
+                self, "Error",
+                f"Failed to add the transect areas of {flight_name}: {e}")
+        return True
 
     @staticmethod
     def _read_geojson_features(path: str) -> list:
@@ -10093,6 +9917,11 @@ class BambiDockWidget(QDockWidget):
         except Exception as e:  # nosec B110
             self.log(f"Warning: could not label transect layer: {e}")
 
+    #: Survey Analytics steps: they run on config["survey"] (core.survey).
+    _SURVEY_STEPS = frozenset({
+        "census_summary", "track_inventory", "density_heatmap",
+        "coverage_map", "distance_sampling", "population_estimation"})
+
     def start_worker(self, step: str):
         """Start a background worker for the given step."""
         if self.worker is not None:
@@ -10100,6 +9929,11 @@ class BambiDockWidget(QDockWidget):
             return
 
         config = self.get_config()
+        if step in self._SURVEY_STEPS:
+            if self.survey_area_panel.is_enabled() and \
+                    not self.survey_area_panel.flush_edits():
+                return
+            config["survey"] = self._survey_config()
 
         self.worker_thread = QThread()
         self.worker = ProcessingWorker(self.processor, step, config)
@@ -10144,6 +9978,9 @@ class BambiDockWidget(QDockWidget):
             # Show the population-estimation summary dialog on completion.
             if step == "population_estimation":
                 self._show_population_results()
+
+            if step == "census_summary":
+                self.show_census_table()
 
             # In photo mode, warn if 0 images were matched (likely a timezone issue)
             if step in ("extract_thermal_frames", "extract_rgb_frames"):
@@ -10247,6 +10084,7 @@ class BambiDockWidget(QDockWidget):
             "coverage_map": self.coverage_status,
             "add_coverage": self.add_coverage_status,
             "track_inventory": self.track_inventory_status,
+            "census_summary": self.census_status,
             "add_track_inventory": self.add_track_inventory_status,
             "population_estimation": self.population_status,
             "add_transect_areas": self.add_transect_areas_status,
@@ -12621,6 +12459,8 @@ class BambiDockWidget(QDockWidget):
         # credential in QSettings, not part of this project's configuration.
         self._classification_models = {}
         self._inventory_columns = []
+        if hasattr(self, 'survey_panel'):
+            self.survey_panel.reset()
 
         self.log("Configuration reset to defaults")
 
@@ -12730,6 +12570,8 @@ class BambiDockWidget(QDockWidget):
 
         project.writeEntry(PLUGIN_SCOPE, "Flights/List",
                            json.dumps(self._flights()))
+        if hasattr(self, 'survey_panel'):
+            self.survey_panel.save(project)
         project.writeEntry(PLUGIN_SCOPE, "Flights/Active",
                            str(getattr(self, "_active_flight_index", 0)))
 
@@ -12771,6 +12613,10 @@ class BambiDockWidget(QDockWidget):
         # (§10.2), so the list has to be settled first.
         if restore_flights:
             self._restore_flights(project)
+            # The survey selection is a project-level setting beside the
+            # flight list, not part of any one flight's configuration.
+            if hasattr(self, 'survey_panel'):
+                self.survey_panel.load(project)
 
         # Prefer the active flight's own store; fall back to the QGIS project,
         # which is where projects written before 6.0 keep everything.
@@ -12872,6 +12718,12 @@ class BambiDockWidget(QDockWidget):
 
         root = QgsProject.instance().layerTreeRoot()
         flight = self._active_flight()
+        # A survey tool adding one flight's layers (see _layers_for_flight).
+        override = getattr(self, "_layer_folder_override", None)
+        if override:
+            index = flights.find_by_folder(self._flights(), override)
+            if index is not None:
+                flight = self._flights()[index]
         if not flight:
             return root
 
@@ -12880,6 +12732,38 @@ class BambiDockWidget(QDockWidget):
         if group is None and create:
             group = root.insertGroup(0, name)
         return group or root
+
+    @contextmanager
+    def _layers_for_flight(self, folder: str):
+        """Place layers in *folder*'s flight group and files, not the active
+        flight's - for survey tools that add per-flight layers."""
+        previous = getattr(self, "_layer_folder_override", None)
+        self._layer_folder_override = folder
+        try:
+            yield
+        finally:
+            self._layer_folder_override = previous
+
+    #: Root layer group of the Survey Analytics products.
+    SURVEY_GROUP = "BAMBI Survey"
+
+    def _survey_group(self):
+        root = QgsProject.instance().layerTreeRoot()
+        group = root.findGroup(self.SURVEY_GROUP)
+        if group is None:
+            group = root.insertGroup(0, self.SURVEY_GROUP)
+        return group
+
+    def _add_layer_to_survey(self, layer, at_top: bool = True):
+        """Add a survey-wide layer (density, coverage, inventory, survey
+        area) to the survey group - it belongs to no single flight."""
+        QgsProject.instance().addMapLayer(layer, False)
+        group = self._survey_group()
+        if at_top:
+            group.insertLayer(0, layer)
+        else:
+            group.addLayer(layer)
+        return layer
 
     def _add_layer_to_flight(self, layer, at_top: bool = True):
         """Add a single layer to the active flight's group.
@@ -12935,7 +12819,8 @@ class BambiDockWidget(QDockWidget):
 
     def _persist_memory_layer(self, mem_layer: QgsVectorLayer, file_name: str,
                               subfolder: str = "qgis_layers",
-                              display_name: Optional[str] = None) -> QgsVectorLayer:
+                              display_name: Optional[str] = None,
+                              base_folder: Optional[str] = None) -> QgsVectorLayer:
         """Save a memory layer to GeoPackage file and return the file-based layer.
 
         If no target folder is set, returns the original memory layer unchanged.
@@ -12944,6 +12829,8 @@ class BambiDockWidget(QDockWidget):
         :param file_name: Unique name for the GeoPackage file (without extension)
         :param subfolder: Subfolder within target folder for storing layers
         :param display_name: Display name for the layer in QGIS (defaults to mem_layer's name)
+        :param base_folder: folder to save under instead of the active
+            flight's target folder (a survey folder, another flight)
         :return: File-based QgsVectorLayer if saved successfully, otherwise original memory layer
         """
         from qgis.core import QgsVectorFileWriter, QgsCoordinateTransformContext
@@ -12953,7 +12840,12 @@ class BambiDockWidget(QDockWidget):
             display_name = mem_layer.name()
 
         # Check if target folder is set
-        target_folder = self.target_folder_edit.text().strip()
+        candidates = (base_folder,
+                      getattr(self, "_layer_folder_override", None),
+                      self.target_folder_edit.text().strip())
+        target_folder = next((c for c in candidates if c), "")
+        if target_folder and base_folder:
+            os.makedirs(target_folder, exist_ok=True)
         if not target_folder or not os.path.isdir(target_folder):
             # No target folder, return memory layer as-is
             self.log(f"Warning: No target folder set, layer '{display_name}' will be temporary")

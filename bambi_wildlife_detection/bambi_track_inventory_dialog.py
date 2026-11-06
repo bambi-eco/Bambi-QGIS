@@ -36,6 +36,7 @@ ALWAYS_SHOWN = ("approved", "track_id")
 COLUMN_HINTS = {
     "approved": "Your own checkmark: the row has been checked and is correct",
     "track_id": "Track number of the pipeline",
+    "flight": "The survey flight the track belongs to",
     "camera": "Which camera the track comes from",
     "species": "Species on the track (classifier, annotation or label sync)",
     "species_vote_fraction": "Share of the voting frames that agreed",
@@ -83,17 +84,22 @@ COLUMN_HINTS = {
 }
 
 
-def report_columns(selected: Optional[Sequence[str]] = None) -> List[str]:
+def report_columns(selected: Optional[Sequence[str]] = None,
+                   with_flight: bool = False) -> List[str]:
     """The inventory's columns, the most-asked ones first.
 
     *selected* narrows them to a user's choice; the verdict and the track id
-    are kept regardless, and unknown names are ignored.
+    (and, for a survey of several flights, the flight) are kept regardless,
+    and unknown names are ignored.
     """
     rest = [c for c in track_inventory.COLUMNS if c not in _LEAD]
     ordered = [c for c in _LEAD if c in track_inventory.COLUMNS] + rest
+    if with_flight:
+        ordered.insert(1, "flight")
     if not selected:
         return ordered
-    wanted = set(selected) | set(ALWAYS_SHOWN)
+    wanted = set(selected) | set(ALWAYS_SHOWN) | (
+        {"flight"} if with_flight else set())
     return [c for c in ordered if c in wanted]
 
 
@@ -216,15 +222,21 @@ class BambiTrackInventoryDialog(QDialog):
         :param open_track: ``callable(track_id, frame) -> bool`` that shows
             the animal in the Detection/Track inspector at *frame*; a click
             on a start or end frame cell, or a double-click on the row,
-            calls it. ``None`` leaves the cells plain.
+            calls it. ``None`` leaves the cells plain. When the rows carry a
+            ``flight`` (a survey of several flights) it is called as
+            ``callable(track_id, frame, flight)`` - track ids repeat across
+            flights.
         :param set_approved: ``callable(track_id, bool)`` that records the
-            verdict; ``None`` makes the checkmarks read-only.
+            verdict (``callable(track_id, bool, flight)`` with flights);
+            ``None`` makes the checkmarks read-only.
         :param columns: the columns to show (``None`` = all).
         :param on_columns_changed: ``callable(list)`` told the new choice
             when the user changes it here, so it can be saved.
         """
         super().__init__(parent)
         self.rows = list(rows)
+        #: Rows from several flights: identified by (flight, track_id).
+        self.with_flight = any("flight" in row for row in self.rows)
         self.csv_path = csv_path
         self._open_track = open_track
         self._set_approved = set_approved
@@ -311,7 +323,7 @@ class BambiTrackInventoryDialog(QDialog):
         self._filling = True
         try:
             self.table.setSortingEnabled(False)
-            self.columns = report_columns(self._selected)
+            self.columns = report_columns(self._selected, self.with_flight)
             self.table.clear()
             self.table.setRowCount(len(self.rows))
             self.table.setColumnCount(len(self.columns))
@@ -359,15 +371,21 @@ class BambiTrackInventoryDialog(QDialog):
 
     # -- kept in step with the inspector ---------------------------------
 
-    def _row_index(self, track_id: int) -> Optional[int]:
+    def _matches(self, row: dict, track_id, flight) -> bool:
+        if row.get("track_id") != track_id:
+            return False
+        return flight is None or not self.with_flight or \
+            row.get("flight") == flight
+
+    def _row_index(self, track_id: int, flight=None) -> Optional[int]:
         for i, row in enumerate(self.rows):
-            if row.get("track_id") == track_id:
+            if self._matches(row, track_id, flight):
                 return i
         return None
 
-    def remove_track(self, track_id: int) -> bool:
+    def remove_track(self, track_id: int, flight=None) -> bool:
         """Drop a track the reviewer deleted in the inspector."""
-        index = self._row_index(int(track_id))
+        index = self._row_index(int(track_id), flight)
         if index is None:
             return False
         del self.rows[index]
@@ -377,16 +395,17 @@ class BambiTrackInventoryDialog(QDialog):
     def update_track(self, row: dict) -> None:
         """Replace a track's row with a freshly built one (a box was deleted,
         so its counts, times and positions changed); a new track is appended."""
-        index = self._row_index(int(row.get("track_id")))
+        index = self._row_index(int(row.get("track_id")), row.get("flight"))
         if index is None:
             self.rows.append(dict(row))
         else:
             self.rows[index] = dict(row)
         self._fill()
 
-    def set_track_approved(self, track_id: int, approved: bool) -> None:
+    def set_track_approved(self, track_id: int, approved: bool,
+                           flight=None) -> None:
         """Show a verdict recorded elsewhere, without recording it again."""
-        index = self._row_index(int(track_id))
+        index = self._row_index(int(track_id), flight)
         if index is None:
             return
         self.rows[index]["approved"] = bool(approved)
@@ -396,7 +415,9 @@ class BambiTrackInventoryDialog(QDialog):
         self._filling = True
         try:
             for r in range(self.table.rowCount()):
-                if self._track_at(r)[0] == int(track_id):
+                shown_id, _s, _e = self._track_at(r)
+                if shown_id == int(track_id) and (
+                        flight is None or self._flight_at(r) == flight):
                     item = self.table.item(r, column)
                     if isinstance(item, _CheckItem):
                         item.setCheckState(Qt.CheckState.Checked if approved
@@ -431,11 +452,21 @@ class BambiTrackInventoryDialog(QDialog):
                 return None
         return _int("track_id"), _int("start_frame"), _int("end_frame")
 
-    def _show(self, track_id, frame):
+    def _flight_at(self, row: int):
+        """The flight of a table row (``None`` for a single-flight report)."""
+        if not self.with_flight or "flight" not in self.columns:
+            return None
+        item = self.table.item(row, self.columns.index("flight"))
+        return item.text() if item else None
+
+    def _show(self, track_id, frame, flight=None):
         if track_id is None or self._open_track is None:
             return
         try:
-            shown = self._open_track(track_id, frame)
+            if self.with_flight:
+                shown = self._open_track(track_id, frame, flight)
+            else:
+                shown = self._open_track(track_id, frame)
         except Exception as exc:  # noqa: BLE001 - surfaced to the user
             QMessageBox.warning(self, "Track Inventory",
                                 f"Could not open track {track_id}: {exc}")
@@ -450,13 +481,14 @@ class BambiTrackInventoryDialog(QDialog):
         if name not in self.LINK_COLUMNS:
             return
         track_id, start, end = self._track_at(row)
-        self._show(track_id, start if name == "start_frame" else end)
+        self._show(track_id, start if name == "start_frame" else end,
+                   self._flight_at(row))
 
     def _on_cell_double_clicked(self, row: int, column: int):
         if self.columns[column] == "approved":
             return
         track_id, start, _end = self._track_at(row)
-        self._show(track_id, start)
+        self._show(track_id, start, self._flight_at(row))
 
     def _on_item_changed(self, item: QTableWidgetItem):
         """A checkmark toggled: record the verdict and keep the rows in step."""
@@ -466,12 +498,16 @@ class BambiTrackInventoryDialog(QDialog):
         if track_id is None:
             return
         approved = item.checkState() == Qt.CheckState.Checked
+        flight = self._flight_at(item.row())
         for row in self.rows:
-            if row.get("track_id") == track_id:
+            if self._matches(row, track_id, flight):
                 row["approved"] = approved
         if self._set_approved is not None:
             try:
-                self._set_approved(track_id, approved)
+                if self.with_flight:
+                    self._set_approved(track_id, approved, flight)
+                else:
+                    self._set_approved(track_id, approved)
             except Exception as exc:  # noqa: BLE001 - surfaced to the user
                 QMessageBox.warning(
                     self, "Track Inventory",

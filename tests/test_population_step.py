@@ -12,6 +12,7 @@ import os
 import pytest
 
 from bambi_wildlife_detection.core import fov_store, store
+from bambi_wildlife_detection.core.survey import Survey, SurveyFlight
 
 
 def _square(cx, cy, half=10.0):
@@ -81,16 +82,25 @@ def flight(tmp_path):
         json.dumps({"crs": "EPSG:32633", "total_tracks": len(tracks),
                     "tracks": tracks}))
 
+    survey_folder = tmp_path / "survey"
+    survey = Survey(folder=str(survey_folder), modality="t", flights=[
+        SurveyFlight(name="target", target_folder=str(folder), epsg=32633,
+                     dem_path=str(folder / "dem.gltf"))])
     return {
         "target_folder": str(folder),
+        "survey_folder": str(survey_folder),
+        "survey": survey.to_dict(),
         "target_epsg": 32633,
-        "dem_path": str(folder / "dem.gltf"),
-        "pop_camera": "T",
-        "flight_route_camera": "T",
         "pop_methods": ["naive", "bootstrap"],
         "pop_n_boot": 100,
         "pop_seed": 42,
     }
+
+
+def _estimate(config):
+    """The pooled estimate - written into the survey folder."""
+    return _read_json(os.path.join(config["survey_folder"], "analytics_t",
+                                   "population_estimate.json"))
 
 
 def _read_json(path):
@@ -106,9 +116,7 @@ def _read_csv(path):
 class TestRunPopulationEstimation:
     def test_assigns_tracks_and_measures_areas(self, processor, flight):
         processor.run_population_estimation(flight)
-
-        analytics = os.path.join(flight["target_folder"], "analytics_t")
-        result = _read_json(os.path.join(analytics, "population_estimate.json"))
+        result = _estimate(flight)
 
         assert result["n_transects"] == 2
         assert result["n_tracks"] == 5
@@ -162,7 +170,7 @@ class TestRunPopulationEstimation:
         processor.run_population_estimation(flight)
 
         analytics = os.path.join(flight["target_folder"], "analytics_t")
-        result = _read_json(os.path.join(analytics, "population_estimate.json"))
+        result = _estimate(flight)
 
         assert result["n_tracks_truncated"] == 1
         assert result["n_tracks_outside_fov"] == 1     # the far track
@@ -176,8 +184,7 @@ class TestRunPopulationEstimation:
 
     def test_naive_density_is_count_over_area(self, processor, flight):
         processor.run_population_estimation(flight)
-        result = _read_json(os.path.join(
-            flight["target_folder"], "analytics_t", "population_estimate.json"))
+        result = _estimate(flight)
 
         # 4 counted animals on 2 x 0.42 ha = 0.84 ha -> 4 / 0.84 * 100
         assert result["total_ha"] == pytest.approx(0.84, rel=1e-6)
@@ -187,8 +194,7 @@ class TestRunPopulationEstimation:
     def test_study_area_yields_an_abundance(self, processor, flight):
         flight["pop_study_area_ha"] = 200.0
         processor.run_population_estimation(flight)
-        result = _read_json(os.path.join(
-            flight["target_folder"], "analytics_t", "population_estimate.json"))
+        result = _estimate(flight)
 
         naive = result["estimates"]["naive"]
         assert result["study_area_source"] == "manual"
@@ -201,8 +207,7 @@ class TestStudyArea:
 
     def test_flight_fov_coverage_is_always_reported(self, processor, flight):
         processor.run_population_estimation(flight)
-        result = _read_json(os.path.join(
-            flight["target_folder"], "analytics_t", "population_estimate.json"))
+        result = _estimate(flight)
 
         # Two transects, 4200 m² each, 100 m apart: their footprints (y in
         # [-10, 10] and [90, 110]) do not touch, so the union equals the sum.
@@ -216,8 +221,7 @@ class TestStudyArea:
         flight["pop_study_area_auto"] = True
         flight["pop_study_area_ha"] = 999.0      # ignored when auto is on
         processor.run_population_estimation(flight)
-        result = _read_json(os.path.join(
-            flight["target_folder"], "analytics_t", "population_estimate.json"))
+        result = _estimate(flight)
 
         assert result["study_area_source"] == "flight_fov"
         assert result["study_area_ha"] == pytest.approx(
@@ -248,8 +252,7 @@ class TestStudyArea:
             for idx, img in enumerate(poses["images"])})
 
         processor.run_population_estimation(flight)
-        result = _read_json(os.path.join(
-            folder, "analytics_t", "population_estimate.json"))
+        result = _estimate(flight)
 
         # Both transects now cover the same 4200 m² strip.
         assert result["total_ha"] == pytest.approx(0.84, rel=1e-6)
@@ -404,14 +407,13 @@ class TestMultiProject:
         dem2 = _write_second_flight(str(folder2), origin=(600000.0, 5100000.0))
 
         config = dict(flight)
-        config["pop_project_folders"] = [
-            {"target": flight["target_folder"], "dem": ""},
-            {"target": str(folder2), "dem": dem2},
-        ]
+        config["survey"] = dict(flight["survey"])
+        config["survey"]["flights"] = list(flight["survey"]["flights"]) + [
+            {"name": "target2", "target_folder": str(folder2),
+             "epsg": 32633, "dem": dem2}]
         processor.run_population_estimation(config)
 
-        result = _read_json(os.path.join(
-            flight["target_folder"], "analytics_t", "population_estimate.json"))
+        result = _estimate(flight)
 
         # Two projects, two transects and five tracks each.
         assert result["n_projects"] == 2
@@ -431,30 +433,27 @@ class TestMultiProject:
         assert any(n.endswith("/ North") for n in names)
         assert any(n.endswith("/ South") for n in names)
 
-        # The current project used the configured DEM; the second used the
-        # dem.json supplied with it.
+        # Each flight is placed with its own DEM: the first through the JSON
+        # beside its mesh, the second through its dem.json.
         sources = {p["name"]: p["dem_origin_source"] for p in result["projects"]}
-        assert sources[os.path.basename(flight["target_folder"])] == "config"
-        assert sources["target2"] == "provided"
+        assert sources["target"] == "dem"
+        assert sources["target2"] == "dem.json"
 
     def test_added_project_without_dem_is_an_error(self, processor, flight, tmp_path):
         folder2 = tmp_path / "target2"
         _write_second_flight(str(folder2), origin=(600000.0, 5100000.0))
         config = dict(flight)
-        # The added project carries no dem.json, so its origin cannot be resolved.
-        config["pop_project_folders"] = [
-            {"target": flight["target_folder"], "dem": ""},
-            {"target": str(folder2), "dem": ""},
-        ]
+        # The second flight carries no DEM, so its origin cannot be resolved.
+        config["survey"] = dict(flight["survey"])
+        config["survey"]["flights"] = list(flight["survey"]["flights"]) + [
+            {"name": "target2", "target_folder": str(folder2),
+             "epsg": 32633}]
         with pytest.raises(FileNotFoundError, match="dem.json"):
             processor.run_population_estimation(config)
 
-    def test_single_project_via_folders_matches_default(self, processor, flight):
-        config = dict(flight)
-        config["pop_project_folders"] = [{"target": flight["target_folder"], "dem": ""}]
-        processor.run_population_estimation(config)
-        result = _read_json(os.path.join(
-            flight["target_folder"], "analytics_t", "population_estimate.json"))
+    def test_single_flight_keeps_plain_names(self, processor, flight):
+        processor.run_population_estimation(flight)
+        result = _estimate(flight)
 
         assert result["n_projects"] == 1
         assert result["n_transects"] == 2

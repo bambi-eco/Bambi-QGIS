@@ -114,16 +114,34 @@ def _centre(row: dict) -> Tuple[float, float]:
     return ((row["gx1"] + row["gx2"]) / 2.0, (row["gy1"] + row["gy2"]) / 2.0)
 
 
+def _apply_area(points, provenance, area):
+    """Keep the points inside *area* and record what the area removed."""
+    if area is None:
+        return points
+    points, dropped = area.filter_points(points)
+    provenance["survey_area"] = area.describe()
+    provenance["outside_survey_area"] = dropped
+    provenance["n_points"] = len(points)
+    if "n_tracks" in provenance:
+        provenance["n_tracks"] = len(points)
+    return points
+
+
 def load_points(target_folder: str, modality: str, source: str = DETECTIONS,
                 species_ids: Optional[Sequence[int]] = None,
                 include_manual: bool = True,
-                run_id: Optional[int] = None
+                run_id: Optional[int] = None,
+                area=None,
                 ) -> Tuple[List[Tuple[float, float]], dict]:
     """World-coordinate points for an analytic, plus its provenance.
 
     ``source='detections'`` gives one point per detection; ``source='tracks'``
     gives one per track - the centroid of its detections - so an animal
     followed across two hundred frames counts once.
+
+    :param area: a :class:`core.survey_area.SurveyArea`; points outside it
+        (outside the plot, or inside an exclusion zone) are dropped. For
+        tracks the centroid decides, so a track is never half counted.
     """
     rows, provenance = load_rows(
         target_folder, modality, species_ids, include_manual, run_id)
@@ -132,11 +150,28 @@ def load_points(target_folder: str, modality: str, source: str = DETECTIONS,
         points = [_centre(row) for row in rows]
         provenance["source"] = DETECTIONS
         provenance["n_points"] = len(points)
-        return points, provenance
+        return _apply_area(points, provenance, area), provenance
 
     if source != TRACKS:
         raise AnalyticsError(f"Unknown analytics source '{source}'.")
 
+    centroids, untracked = track_centroids(rows)
+    points = list(centroids.values())
+
+    provenance["source"] = TRACKS
+    provenance["n_tracks"] = len(points)
+    provenance["n_points"] = len(points)
+    provenance["untracked_detections"] = untracked
+    return _apply_area(points, provenance, area), provenance
+
+
+def track_centroids(rows: Sequence[dict]
+                    ) -> Tuple[Dict[int, Tuple[float, float]], int]:
+    """``({track_id: centroid}, untracked)`` of geo-referenced rows.
+
+    The centroid of a track's box centres is where every analytic places the
+    animal, so a track is counted inside or outside an area as a whole.
+    """
     grouped: Dict[int, List[Tuple[float, float]]] = defaultdict(list)
     untracked = 0
     for row in rows:
@@ -144,22 +179,20 @@ def load_points(target_folder: str, modality: str, source: str = DETECTIONS,
         if track_id is None:
             untracked += 1
             continue
+        if row.get("gx1") is None:
+            continue
         grouped[track_id].append(_centre(row))
-
-    points = [(sum(x for x, _ in centres) / len(centres),
-               sum(y for _, y in centres) / len(centres))
-              for centres in grouped.values()]
-
-    provenance["source"] = TRACKS
-    provenance["n_tracks"] = len(points)
-    provenance["n_points"] = len(points)
-    provenance["untracked_detections"] = untracked
-    return points, provenance
+    centroids = {
+        track_id: (sum(x for x, _ in centres) / len(centres),
+                   sum(y for _, y in centres) / len(centres))
+        for track_id, centres in grouped.items()}
+    return centroids, untracked
 
 
 def load_points_by_species(target_folder: str, modality: str,
                            source: str = DETECTIONS,
-                           include_manual: bool = True
+                           include_manual: bool = True,
+                           area=None,
                            ) -> Tuple[Dict[str, List[Tuple[float, float]]], dict]:
     """Points grouped by species name, for stratified analytics.
 
@@ -177,7 +210,8 @@ def load_points_by_species(target_folder: str, modality: str,
     for entry in species_options(target_folder):
         species_id = entry["species_id"]
         points, provenance = load_points(
-            target_folder, modality, source, [species_id], include_manual)
+            target_folder, modality, source, [species_id], include_manual,
+            area=area)
         if points:
             strata[names.get(species_id, str(species_id))] = points
 
@@ -258,4 +292,8 @@ def describe_filter(provenance: dict) -> str:
             f"{provenance['excluded_not_an_animal']} not-an-animal excluded")
     if provenance.get("species_filter"):
         parts.append(f"species {provenance['species_filter']}")
+    if provenance.get("survey_area"):
+        parts.append(
+            f"survey area applied ({provenance.get('outside_survey_area', 0)} "
+            "outside)")
     return "; ".join(parts)

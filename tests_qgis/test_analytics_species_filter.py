@@ -2,9 +2,11 @@
 """The species filter on the Survey Analytics tab (§8.2).
 
 The filtering itself is covered headlessly in ``tests/test_analytics_source.py``;
-what needs a real QGIS is the wiring - that the list comes from the active
-flight's own vocabulary, that "All species" means no filter rather than a list
-of today's ids, and that the choice reaches every analytic that counts animals.
+what needs a real QGIS is the wiring - that the list comes from the
+vocabularies of the flights ticked in the Survey box, that species are chosen
+by name (ids are per flight), that "All species" means no filter rather than
+a list of today's species, and that the choice reaches the survey every
+analytic reads.
 
 Run via the QGIS image only::
 
@@ -61,7 +63,7 @@ def _tick(dock, name):
 def test_all_species_is_the_default(dock):
     """The behaviour every earlier version had."""
     assert dock.analytics_all_species_check.isChecked() is True
-    assert dock.analytics_species_ids() is None
+    assert dock.analytics_species_names() is None
 
 
 def test_the_list_is_disabled_while_all_species_is_ticked(dock):
@@ -70,8 +72,7 @@ def test_the_list_is_disabled_while_all_species_is_ticked(dock):
     assert dock.analytics_species_list.isEnabled() is True
 
 
-def test_the_list_comes_from_the_projects_own_vocabulary(dock,
-                                                         project_folder):
+def test_the_list_comes_from_the_surveyed_flights(dock, project_folder):
     dock.target_folder_edit.setText(project_folder)
     assert dock.refresh_analytics_species() > 0
 
@@ -94,10 +95,9 @@ def test_ticking_a_species_selects_only_it(dock, project_folder):
     dock.target_folder_edit.setText(project_folder)
     dock.refresh_analytics_species()
     dock.analytics_all_species_check.setChecked(False)
-    item = _tick(dock, "roe deer")
+    _tick(dock, "roe deer")
 
-    assert dock.analytics_species_ids() == [
-        item.data(Qt.ItemDataRole.UserRole)]
+    assert dock.analytics_species_names() == ["roe deer"]
 
 
 def test_all_species_means_no_filter_not_a_list_of_ids(dock, project_folder):
@@ -108,7 +108,7 @@ def test_all_species_means_no_filter_not_a_list_of_ids(dock, project_folder):
     _tick(dock, "roe deer")
     dock.analytics_all_species_check.setChecked(True)
 
-    assert dock.analytics_species_ids() is None
+    assert dock.analytics_species_names() is None
 
 
 def test_a_tick_survives_a_refresh(dock, project_folder):
@@ -118,8 +118,7 @@ def test_a_tick_survives_a_refresh(dock, project_folder):
     _tick(dock, "roe deer")
 
     dock.refresh_analytics_species()
-    assert [name for name, _id in dock._analytics_species_selection()] == [
-        "roe deer"]
+    assert dock._analytics_species_selection() == ["roe deer"]
 
 
 def test_the_status_says_what_is_counted(dock, project_folder):
@@ -136,6 +135,12 @@ def test_a_folder_without_a_project_offers_nothing(dock, tmp_path):
     assert dock.refresh_analytics_species() == 0
 
 
+def test_no_ticked_flight_offers_nothing(dock, project_folder):
+    dock.target_folder_edit.setText(project_folder)
+    dock.survey_panel._tick_all(False)
+    assert dock.analytics_species_list.count() == 0
+
+
 # ---------------------------------------------------------------------------
 # Reaching the analytics
 # ---------------------------------------------------------------------------
@@ -144,16 +149,15 @@ def test_the_choice_reaches_the_config(dock, project_folder):
     dock.target_folder_edit.setText(project_folder)
     dock.refresh_analytics_species()
     dock.analytics_all_species_check.setChecked(False)
-    item = _tick(dock, "roe deer")
+    _tick(dock, "roe deer")
 
-    config = dock.get_config()
-    assert config["analytics_species_ids"] == [
-        item.data(Qt.ItemDataRole.UserRole)]
+    assert dock.current_survey().species == ["roe deer"]
+    assert dock._survey_config()["species"] == ["roe deer"]
 
 
 def test_all_species_reaches_the_config_as_no_filter(dock, project_folder):
     dock.target_folder_edit.setText(project_folder)
-    assert dock.get_config()["analytics_species_ids"] is None
+    assert dock.current_survey().species is None
 
 
 def test_running_with_nothing_ticked_is_refused(dock, quiet, project_folder):
@@ -185,12 +189,12 @@ def test_the_coverage_map_is_not_blocked_by_the_filter(dock, quiet,
 
 def test_pooling_is_the_default(dock):
     assert dock.analytics_per_species_check.isChecked() is False
-    assert dock.get_config()["analytics_per_species"] is False
+    assert dock.current_survey().per_species is False
 
 
 def test_the_choice_reaches_the_config_too(dock):
     dock.analytics_per_species_check.setChecked(True)
-    assert dock.get_config()["analytics_per_species"] is True
+    assert dock.current_survey().per_species is True
 
 
 def test_the_status_distinguishes_pooled_from_separate(dock, project_folder):
