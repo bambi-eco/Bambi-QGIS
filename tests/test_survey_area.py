@@ -156,6 +156,48 @@ class TestArea:
         assert survey_area.union_adjusted_m2([first, None]) is None
 
 
+class TestSeveralSurveyAreas:
+    """Any number of survey areas: inside any of them and outside every
+    exclusion zone counts."""
+
+    @pytest.fixture
+    def area(self, tmp_path):
+        return _area(str(tmp_path),
+                     plots=[(box(0, 0, 100, 100), "North"),
+                            (box(200, 0, 300, 100), "South"),
+                            # Overlaps North: shared ground counts once.
+                            (box(50, 0, 150, 100), "Middle")],
+                     exclusions=[(box(10, 10, 30, 30), "", "forest"),
+                                 (box(210, 10, 230, 30), "", "village")])
+
+    def test_animals_in_any_area_count_but_not_in_an_exclusion(self, area):
+        xs = [50, 250, 120, 175, 20, 220, 500]
+        ys = [50, 50, 50, 50, 20, 20, 50]
+        assert area.contains_xy(xs, ys).tolist() == \
+            [True, True, True, False, False, False, False]
+
+    def test_the_area_is_the_union_minus_the_exclusions(self, area):
+        # North+Middle = 150 x 100, South = 100 x 100.
+        assert area.plot_m2 == pytest.approx(25000.0)
+        assert area.excluded_m2 == pytest.approx(800.0)
+        assert area.adjusted_m2 == pytest.approx(24200.0)
+
+    def test_every_area_is_listed(self, area):
+        assert area.describe()["plots"] == ["North", "South", "Middle"]
+        assert area.summary().startswith("3 survey area(s), 2.50 ha")
+
+    def test_census_counts_across_the_areas(self, area):
+        from bambi_wildlife_detection.core import census
+
+        records = [{"species": "roe deer", "x": x, "y": y}
+                   for x, y in [(50, 50), (250, 50), (175, 50), (20, 20)]]
+        result = census.build([{"name": "F1", "records": records,
+                                "covered_m2": None}], area)
+        row = next(r for r in result["rows"] if r["species"] == "roe deer")
+        assert (row["counted"], row["inside"], row["outside"]) == (4, 2, 2)
+        assert row["per_km2_plot"] == pytest.approx(2 / 0.0242)
+
+
 # ---------------------------------------------------------------------------
 # analytics_source
 # ---------------------------------------------------------------------------
@@ -206,7 +248,7 @@ def test_the_filter_is_off_unless_asked_for(tmp_path):
 def test_exclusions_covering_the_plot_are_an_error(tmp_path):
     _area(str(tmp_path), plots=[(box(0, 0, 10, 10), "")],
           exclusions=[(box(-1, -1, 11, 11), "", "")])
-    with pytest.raises(RuntimeError, match="whole survey plot"):
+    with pytest.raises(RuntimeError, match="whole survey area"):
         BambiProcessor()._survey_area(_survey(str(tmp_path), str(tmp_path)))
 
 

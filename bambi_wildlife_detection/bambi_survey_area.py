@@ -27,7 +27,7 @@ from .core import survey_area
 
 #: Layer names in the QGIS layer tree, per GeoPackage table.
 LAYER_TITLES = {
-    survey_area.PLOT_LAYER: "Survey Plot",
+    survey_area.PLOT_LAYER: "Survey Areas",
     survey_area.EXCLUSION_LAYER: "Survey Exclusion Zones",
 }
 
@@ -57,11 +57,12 @@ class SurveyAreaPanel(QGroupBox):
 
         layout = QVBoxLayout(self)
         desc = QLabel(
-            "Optional census plot with exclusion zones (e.g. thick forest "
-            "cover). When applied, the density heatmap, coverage map, "
-            "distance sampling and population estimation count only animals "
-            "inside the plot and outside the exclusions, and use only that "
-            "ground as the surveyed area. Stored in the survey folder "
+            "Optional survey areas (one or more census polygons) with "
+            "exclusion zones (e.g. thick forest cover). When applied, the "
+            "census, density heatmap, coverage map, distance sampling and "
+            "population estimation count only animals inside any survey area "
+            "and outside every exclusion zone, and use only that ground as "
+            "the surveyed area. Stored in the survey folder "
             "(survey_area/survey_area.gpkg) - draw or edit the polygons with "
             "the normal QGIS editing tools.")
         desc.setWordWrap(True)
@@ -71,29 +72,32 @@ class SurveyAreaPanel(QGroupBox):
         self.enabled_check = QCheckBox("Limit analytics to the survey area")
         self.enabled_check.setToolTip(
             "Off: the analytics cover the whole flight, as before.\n"
-            "On: only the plot minus its exclusion zones is analysed, in "
-            "every flight of the survey.")
+            "On: only the survey areas minus the exclusion zones are "
+            "analysed, in every flight of the survey.")
         layout.addWidget(self.enabled_check)
 
         buttons = QHBoxLayout()
-        self.draw_plot_btn = QPushButton("Draw Plot")
+        self.draw_plot_btn = QPushButton("Draw Survey Area")
         self.draw_plot_btn.setToolTip(
-            "Add the Survey Plot layer, switch it to editing and start the "
+            "Add the Survey Areas layer, switch it to editing and start the "
             "polygon tool. Click the vertices, right-click to finish, then "
-            "save the layer edits.")
+            "save the layer edits. Draw as many survey areas as needed - "
+            "animals inside any of them count.")
         self.draw_plot_btn.clicked.connect(
             lambda: self.draw(survey_area.PLOT_LAYER))
         self.draw_exclusion_btn = QPushButton("Draw Exclusion Zone")
         self.draw_exclusion_btn.setToolTip(
-            "Like 'Draw Plot', for a zone to cut out of the plot. Give it a "
+            "Like 'Draw Survey Area', for a zone to cut out of the survey "
+            "areas. Give it a "
             "reason in the attribute form (e.g. 'thick forest cover').")
         self.draw_exclusion_btn.clicked.connect(
             lambda: self.draw(survey_area.EXCLUSION_LAYER))
         self.import_btn = QPushButton("Import…")
         self.import_btn.setToolTip(
             "Copy polygons from a layer already in the project - a shapefile "
-            "of the hunting district, a KML, a GeoJSON - into the plot or the "
-            "exclusion zones.")
+            "of the hunting districts, a KML, a GeoJSON - into the survey "
+            "areas or the exclusion zones. Every polygon becomes its own "
+            "survey area.")
         self.import_btn.clicked.connect(self.import_from_layer)
         self.show_btn = QPushButton("Add to QGIS")
         self.show_btn.setToolTip("Load both survey-area layers into the map.")
@@ -232,7 +236,7 @@ class SurveyAreaPanel(QGroupBox):
         if not layer.isEditable():
             layer.startEditing()
         iface.actionAddFeature().trigger()
-        what = ("survey plot" if table == survey_area.PLOT_LAYER
+        what = ("survey area" if table == survey_area.PLOT_LAYER
                 else "exclusion zone")
         self.dock.log(
             f"Drawing the {what}: click the corners on the map, right-click to "
@@ -298,7 +302,7 @@ class SurveyAreaPanel(QGroupBox):
                 layer_combo.setCurrentIndex(index)
         form.addRow("From layer:", layer_combo)
         role_combo = QComboBox()
-        role_combo.addItem("Survey plot", survey_area.PLOT_LAYER)
+        role_combo.addItem("Survey areas", survey_area.PLOT_LAYER)
         role_combo.addItem("Exclusion zones", survey_area.EXCLUSION_LAYER)
         form.addRow("Import as:", role_combo)
         selected_check = QCheckBox("Selected features only")

@@ -55,7 +55,7 @@ class SurveyAnalyticsMixin:
             return None
         if area.has_plot and not area.adjusted_m2:
             raise RuntimeError(
-                "The exclusion zones cover the whole survey plot, so there "
+                "The exclusion zones cover the whole survey area, so there "
                 "is no ground left to analyse.")
         if log_fn:
             log_fn(f"Survey area: {area.summary()}")
@@ -141,7 +141,7 @@ class SurveyAnalyticsMixin:
                 raise RuntimeError(
                     f"All {provenance['outside_survey_area']} {source} lie "
                     "outside the survey area (or inside an exclusion zone). "
-                    "Check the plot polygon, or untick 'Limit analytics to "
+                    "Check the survey areas, or untick 'Limit analytics to "
                     "the survey area'.")
             if names is not None:
                 raise RuntimeError(
@@ -709,11 +709,11 @@ class SurveyAnalyticsMixin:
             "species_filter": survey.species,
             "notes": (
                 "Minimum counts: no detection probability is modelled. "
-                "per_km2_plot divides by the survey plot minus its exclusion "
-                "zones (assumes the flights cover it completely; across "
-                "flights the counts are summed onto one plot). "
+                "per_km2_plot divides by the survey areas minus the "
+                "exclusion zones (assumes the flights cover them completely; "
+                "across flights the counts are summed onto that area). "
                 "per_km2_covered divides by the ground the frames actually "
-                "saw inside the plot, summed across flights."),
+                "saw inside the survey areas, summed across flights."),
         })
         folder = survey.ensure_analytics_folder()
         stem = f"census_summary_{source}"
@@ -1571,13 +1571,13 @@ class SurveyAnalyticsMixin:
             plot_m2 = None if area is None else area.adjusted_m2
             if not plot_m2:
                 raise RuntimeError(
-                    "'Use survey area' needs a survey plot. Draw one on the "
+                    "'Use survey area' needs a survey area. Draw one on the "
                     "Survey Analytics tab (and tick 'Limit analytics to the "
                     "survey area'), or choose another study area.")
             study_area_ha = plot_m2 / 10000.0
             study_area_source = "survey_area"
             if log_fn:
-                log_fn(f"Study area from the survey plot(s) minus exclusion "
+                log_fn(f"Study area from the survey area(s) minus exclusion "
                        f"zones: {study_area_ha:.2f} ha")
         elif study_area_auto:
             study_area_ha = total_flight_area_ha

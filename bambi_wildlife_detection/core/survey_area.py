@@ -1,13 +1,15 @@
 # -*- coding: utf-8 -*-
-"""Survey plot and exclusion zones that limit the survey analytics.
+"""Survey areas and exclusion zones that limit the survey analytics.
 
 A drone census is usually reported for a defined area - a hunting district, a
 reserve, a forest compartment - not for whatever ground the flight happened
 to see. This module holds that area:
 
-* **plot polygons** - the census area. Only animals inside count, and only the
-  ground inside is the surveyed area.
-* **exclusion zones** - parts of the plot that are removed again, each with an
+* **survey areas** (plot polygons) - the census areas; there may be any
+  number of them, e.g. several hunting districts or forest compartments. An
+  animal counts when it is inside any of them, and only the ground inside them
+  is the surveyed area (overlapping areas count once).
+* **exclusion zones** - ground that is removed again, each with an
   optional reason (thick forest cover, a building, a road). Animals there are
   not counted and their ground is not part of the area.
 
@@ -422,10 +424,10 @@ class SurveyArea:
         """One line for the log and the dock status label."""
         parts = []
         if self.plot_m2 is not None:
-            parts.append(f"{len(self.plots)} plot polygon(s), "
+            parts.append(f"{len(self.plots)} survey area(s), "
                          f"{self.plot_m2 / 10000.0:.2f} ha")
         else:
-            parts.append("no plot (whole flight)")
+            parts.append("no survey area (whole flights)")
         if self.exclusions:
             parts.append(f"{len(self.exclusions)} exclusion zone(s), "
                          f"-{self.excluded_m2 / 10000.0:.2f} ha")

@@ -357,11 +357,11 @@ class CensusTableDialog(QDialog):
         facts = [f"Flights: {', '.join(census.get('flights', []))}"]
         if census.get("plot_ha") is not None:
             facts.append(
-                f"survey plot {area.get('plot_ha') or 0:.2f} ha - exclusions "
+                f"survey areas {area.get('plot_ha') or 0:.2f} ha - exclusions "
                 f"{area.get('excluded_ha') or 0:.2f} ha = adjusted "
                 f"{census['plot_ha']:.2f} ha")
         else:
-            facts.append("no survey plot - densities on the covered ground")
+            facts.append("no survey area - densities on the covered ground")
         header = QLabel(" · ".join(facts))
         header.setWordWrap(True)
         layout.addWidget(header)

@@ -3549,7 +3549,7 @@ class BambiDockWidget(QDockWidget):
         census_layout = QVBoxLayout(census_group)
         census_desc = QLabel(
             "Counts per species and flight - inside the survey area when one "
-            "is applied - with animals per km² of the survey plot and of the "
+            "is applied - with animals per km² of the survey areas and of the "
             "ground the frames actually covered, and the sex and age "
             "breakdown. Minimum counts: no detection probability is modelled."
         )
@@ -3875,7 +3875,7 @@ class BambiDockWidget(QDockWidget):
             "frames that belong to no transect.")
         self.pop_study_area_survey_check = QCheckBox("Use survey area")
         self.pop_study_area_survey_check.setToolTip(
-            "Use the survey plot minus its exclusion zones (Survey Area box\n"
+            "Use the survey areas minus the exclusion zones (Survey Area box\n"
             "above) as the study area.")
         self.pop_study_area_auto_check.toggled.connect(
             self._on_pop_study_area_mode_changed)
@@ -9258,7 +9258,7 @@ class BambiDockWidget(QDockWidget):
 
         source_labels = {
             "flight_fov": "from the flights' FoV coverage",
-            "survey_area": "the survey plot minus exclusion zones",
+            "survey_area": "the survey areas minus exclusion zones",
             "manual": "entered manually",
         }
         source = source_labels.get(r.get("study_area_source", ""), "")
