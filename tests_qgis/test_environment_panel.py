@@ -155,11 +155,17 @@ def test_a_finished_source_starts_the_next_queued_one(dock, flight,
     started = []
     monkeypatch.setattr(type(dock), "run_environment_step",
                         lambda self, step: started.append(step) or True)
+    from qgis.PyQt.QtCore import QCoreApplication
+
     dock._environment_queue = ["env_landcover", "env_weather"]
     dock.on_worker_finished("env_sentinel2", False)     # it failed
+    # not from inside the finished signal: the worker's thread has to stop
+    assert started == []
+    QCoreApplication.processEvents()
     assert started == ["env_landcover"]
     assert dock._environment_queue == ["env_weather"]
     dock.on_worker_finished("env_landcover", True)
+    QCoreApplication.processEvents()
     assert started == ["env_landcover", "env_weather"]
     # the label shows what is on disk, not just "completed"
     assert dock._environment_status_labels["env_sentinel2"].text() == \
@@ -281,3 +287,41 @@ def test_habitat_tracks_become_a_survey_layer(dock, flight):
         == list(habitat.TRACK_COLUMNS)
     values = sorted(f["ndvi"] for f in layer.getFeatures())
     assert values == pytest.approx([0.3, 0.4, 0.5])
+
+
+def test_run_all_runs_the_sources_on_real_worker_threads(dock, flight,
+                                                         monkeypatch):
+    """The next source must not start before the previous worker's thread
+    has stopped: replacing a QThread that is still running destroys it and
+    takes QGIS down with it (9.1.0: a crash near the end of the first
+    source of "Run All Four")."""
+    from qgis.PyQt.QtCore import QCoreApplication, QEventLoop, QTimer
+
+    ran = []
+
+    def source(name):
+        def run(self, config, progress_fn=None, log_fn=None,
+                cancel_check=None):
+            ran.append(name)
+            if progress_fn:
+                progress_fn(95)
+        return run
+
+    processor = type(dock.processor)
+    for step in ENVIRONMENT_STEPS:
+        monkeypatch.setattr(processor, f"run_{step}", source(step))
+
+    dock.run_environment_all()
+    loop = QEventLoop()
+    timer = QTimer()
+    timer.timeout.connect(
+        lambda: (dock.worker is None and not dock._environment_queue
+                 and loop.quit()))
+    timer.start(20)
+    QTimer.singleShot(15000, loop.quit)
+    loop.exec()
+    timer.stop()
+    QCoreApplication.processEvents()
+
+    assert ran == ["env_sentinel2", "env_landcover", "env_weather"]
+    assert dock.worker is None and dock._environment_queue == []

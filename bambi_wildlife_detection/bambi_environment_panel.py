@@ -290,6 +290,8 @@ class EnvironmentDockMixin:
         self._run_next_environment_step()
 
     def _run_next_environment_step(self) -> None:
+        if self.worker is not None:
+            return      # something else was started in the meantime
         while self._environment_queue:
             step = self._environment_queue.pop(0)
             if self.run_environment_step(step):
@@ -302,7 +304,30 @@ class EnvironmentDockMixin:
         done = environment.status(target_folder)
         if done.get(ENVIRONMENT_STEPS[step]):
             self._set_environment_status(step, target_folder)
-        self._run_next_environment_step()
+        if self._environment_queue:
+            self._run_next_when_thread_stopped()
+
+    def _run_next_when_thread_stopped(self) -> None:
+        """Start the next queued source once the finished worker's thread
+        has really stopped.
+
+        This runs inside the worker's ``finished`` signal, before the thread
+        was told to quit. Starting the next worker here would replace
+        ``self.worker_thread`` while that thread is still running - Qt
+        destroys a running QThread by aborting the process, which took QGIS
+        down at the end of the first source of "Run All Four".
+        """
+        from qgis.PyQt.QtCore import QTimer
+
+        thread = getattr(self, "worker_thread", None)
+        try:
+            running = thread is not None and thread.isRunning()
+        except RuntimeError:        # the Qt object is already gone
+            running = False
+        if running:
+            thread.finished.connect(self._run_next_environment_step)
+        else:
+            QTimer.singleShot(0, self._run_next_environment_step)
 
     def _set_environment_status(self, step: str, target_folder: str) -> None:
         """Mark *step* completed, with what it found as the tooltip."""
