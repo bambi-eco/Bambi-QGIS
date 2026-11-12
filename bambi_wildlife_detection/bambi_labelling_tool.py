@@ -1893,6 +1893,10 @@ class LabellingToolDialog(QDialog):
 
     def _update_status(self):
         parts = [f"Frame {self._current_frame} / {len(self._images) - 1}"]
+        if 0 <= self._current_frame < len(self._images) and \
+                self._images[self._current_frame].get("duplicated"):
+            parts.append("❄ frozen frame (thermal calibration) - the image "
+                         "repeats the previous one, boxes here are not saved")
         if self._selected_track is not None and self._store:
             track = self._store.tracks.get(self._selected_track)
             if track:

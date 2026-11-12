@@ -169,6 +169,57 @@ def read_vectors(target_folder: str, modality: str, projection: str,
     return vectors
 
 
+class LazyVectors:
+    """The vectors of the given detections, read frame by frame on demand.
+
+    A drop-in for the dict :func:`read_vectors` returns where only
+    ``.get(detection_id)`` and truthiness are used (the classification
+    step): a flight's embeddings are hundreds of megabytes, and the step
+    only ever looks at a batch of them at a time. The most recently used
+    frame archives are kept, so consecutive detections of a frame - and an
+    animal's consecutive frames - cost one read.
+    """
+
+    def __init__(self, target_folder: str, modality: str, projection: str,
+                 wanted: Iterable[dict], cache_frames: int = 256):
+        self._folder = run_folder(target_folder, modality, projection)
+        self._file_of: Dict[int, str] = {
+            int(row["detection_id"]): frame_file_name(
+                row["frame"], row.get("imagefile", ""))
+            for row in wanted}
+        self._cache: Dict[str, Dict[int, "object"]] = {}
+        self._order: List[str] = []
+        self._cache_frames = max(1, int(cache_frames))
+        self._any: Optional[bool] = None
+
+    def _archive(self, name: str) -> Dict[int, "object"]:
+        if name in self._cache:
+            return self._cache[name]
+        archive = read_frame(os.path.join(self._folder, name)) or {}
+        self._cache[name] = archive
+        self._order.append(name)
+        while len(self._order) > self._cache_frames:
+            self._cache.pop(self._order.pop(0), None)
+        return archive
+
+    def get(self, detection_id, default=None):
+        if detection_id is None:
+            return default
+        name = self._file_of.get(int(detection_id))
+        if name is None:
+            return default
+        vector = self._archive(name).get(int(detection_id))
+        return default if vector is None else vector
+
+    def __bool__(self) -> bool:
+        """True when at least one of the wanted frames is on disk."""
+        if self._any is None:
+            self._any = any(
+                os.path.isfile(os.path.join(self._folder, name))
+                for name in set(self._file_of.values()))
+        return self._any
+
+
 def present_ids(target_folder: str, modality: str, projection: str,
                 wanted: Iterable[dict]) -> List[int]:
     """Which of *wanted* actually have a vector on disk.

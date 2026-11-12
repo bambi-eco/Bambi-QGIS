@@ -558,3 +558,20 @@ def test_label_store_without_a_project_store_is_a_no_op(tmp_path):
     ls.export_to_detections()
 
     assert not store.project_path(root) or not label_store.load_tracks(root, "t")
+
+
+def test_no_box_is_materialised_on_a_duplicated_frame(tmp_path):
+    """Frozen thermal frames repeat the previous image, so an interpolated
+    box there would label the wrong picture (core.poses)."""
+    import json
+    import os
+
+    root = str(tmp_path)
+    images = [{"imagefile": f"{i}.jpg"} for i in range(5)]
+    images[2]["duplicated"] = True
+    with open(os.path.join(root, "poses_t.json"), "w", encoding="utf-8") as fh:
+        json.dump({"images": images}, fh)
+
+    result = label_store.materialise(root, "t", [_track()])
+    assert result["added"] == 2
+    assert [row["frame"] for row in _detections(root)] == [1, 3]

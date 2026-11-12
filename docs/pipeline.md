@@ -51,6 +51,7 @@ In photo mode, GPS positions are matched to images via timestamps in the AirData
 | Correction    | `.json`           | Positional/rotational corrections; can be found interactively with the [Correction Wizard](correction-wizard.md) |
 | DEM           | `.gltf` / `.glb`  | Digital Elevation Model + metadata JSON. Provide manually, convert a GeoTIFF, download automatically (Austria), or generate a flat surface mesh; see [DEM Import & Conversion](dem.md) |
 | Target CRS    | EPSG code         | UTM-based CRS for the output (e.g. `EPSG:32633` for UTM Zone 33N). The **Auto** button derives a suitable UTM zone from the flight data |
+| Flight name   | text (required)   | Name of the flight: titles its layer group and identifies it in the survey tools |
 | Target folder | folder path       | Output directory for all generated files |
 
 ## Configuration
@@ -59,13 +60,21 @@ Before starting processing, configure per-step settings in the **Configuration**
 
 ![Configuration Tab](../images/config_tab.png)
 
-- **Extraction**: Frame skip, limit, sampling rate, and thermal visualisation (see below)
-- **Detection**: Confidence threshold, thermal/RGB model paths
-- **Tracking**: Backend selection, IoU threshold, interpolation, TRex tracklet import
-- **ALFS**: Resolution, tile size
-- **Correction factors**: Translation and rotation offsets for geo-referencing
-- **Flight route**: Frame marker interval, distance marker interval
-- **Field of View**: Custom mask, simplification
+The tab has one sub-tab per topic:
+
+| Sub-tab | Settings |
+|---|---|
+| **Project** | The project schema: species, enums and custom fields ([Results, Flights and Export](results-and-export.md#the-project-schema)) |
+| **Extraction** | Frame skip, limit, sampling rate, aspect ratio, heading source, AirData margin, **duplicated thermal frames**, timezone, thermal visualisation (see below) |
+| **Flight Route** | Frame, distance and time marker intervals |
+| **Detection** | Thermal / RGB model, confidence, frame range, **Projection** (camera frames, GeoTIFFs or ALFS integrals), detector class mapping, **custom detector** per camera ([Custom Implementations](custom-implementations.md)) |
+| **Position Correction** | Translation and rotation offsets for geo-referencing, default and per frame range ([Correction Wizard](correction-wizard.md)) |
+| **Tracking** | Backend, IoU threshold, interpolation, Re-ID model, RGB↔thermal matching, TRex tracklet import, **custom tracker** |
+| **Classification** | Projection, crop settings, backbone, the classifier per task (default, model file or **custom implementation**), class mapping, voting, the size-based age estimate ([Classifier configuration](tools.md#classifier-configuration)) |
+| **Field of View** | Custom mask, simplification, frame range and sample rate |
+| **ALFS/GeoTiff** | Ground resolution or fixed render size, frame range and step, crop to content, overviews, tile size, sampling mode; edge erosion of the frame GeoTIFFs |
+| **Orthomosaic** | Merge mode, frame range |
+
 
 ### Extraction
 
@@ -78,6 +87,7 @@ The **Extraction** sub-tab provides fine-grained control over which frames are p
 | **Skip first** | Skip this many frames/images at the start before processing begins. Useful for ignoring take-off frames. |
 | **Limit** | Cap the total number of frames processed (enable the checkbox to activate). |
 | **Sampling rate** *(video only)* | Take every N-th frame (e.g. 5 = every 5th frame). Reduces processing time for long recordings. |
+| **Keep duplicated thermal frames (flagged)** *(thermal video only, on by default)* | A thermal camera closes its shutter now and then to recalibrate; while it is closed the video repeats the previous image. Ticked, these frozen frames stay in `poses_t.json`, marked `"duplicated": true`, so the frame index equals the video's frame number (one video, no skip or sampling). Unticked, they are dropped as before 9.0.0 and all later frames move up. See [Duplicated frames](#duplicated-frozen-thermal-frames). |
 
 **Thermal visualisation** (requires the DJI Thermal SDK, installable via the [Dependency Manager](installation.md#dependency-manager); the group is greyed out when the SDK is not detected):
 
@@ -89,11 +99,32 @@ The **Extraction** sub-tab provides fine-grained control over which frames are p
 | **Upper threshold** | *(threshold mode)* Pixels above this temperature (°C) are rendered black. Enable the checkbox to activate. |
 | **Curve** | *(curve mode)* Opens the curve editor: a tone curve maps a fixed temperature range to display intensity via draggable control points (left-click adds/drags, right-click removes). Because a flight's temperature bounds are usually unknown, the range can be entered manually or filled by **Auto Detect**, which scans all images in the thermal photo directory for the actual minimum/maximum (optionally ignoring the extreme 1 % to suppress dead/hot pixels). Temperatures outside the range clamp to the curve's endpoint values instead of turning black. The curve is saved with the project. |
 
+### Duplicated (frozen) thermal frames
+
+A frozen frame has a **valid pose** (position, rotation, timestamp) but the
+**wrong image** - it shows what the camera saw before the shutter closed.
+The frame list is never shortened, so frame numbers stay what they are;
+instead each step decides what to do with a flagged frame:
+
+| Skipped (the image would give a wrong result) | Kept, only marked (the pose is what counts) |
+|---|---|
+| Detection, thermal↔RGB frame matching and track matching, field of view (and with it transect area), ALFS, GeoTIFFs (and with them orthomosaic and coverage map), segmentation, embeddings and classification crops, COCO / YOLO / Camtrap DP export, label boxes (interpolated or propagated), the Correction Wizard, and in the 3D Flight Viewer the trail, live ALFS, auto-refine, frame comparison and the thermal reconstruction texture | Flight route and camera positions (with a `duplicated` attribute), transects, the height profile, track times; the click, transect, labelling and segmentation tools, the 3D Flight Viewer and the video creator show a ❄ "frozen frame" note |
+
+Detection simply has no boxes on a frozen frame; the track interpolation
+closes the gap like any other missed frame.
+
+**Changing the setting renumbers the frames.** Re-extracting with the other
+setting asks for confirmation, and everything computed from the previous
+frames is marked out of date. Labels and frame-range corrections refer to the
+old numbers and have to be checked by hand. Flights extracted before 9.0.0
+had their frozen frames dropped.
+
 ### TRex tracklet import
 
 If you have already tracked animals externally with [TRex](https://trex.run), the plugin can import those tracklets instead of running its own tracker. In the **Tracking** sub-tab, set the **NPZ Folder** to the directory containing the TRex `*.npz` tracklet files.
 
 - Check **Labels already in undistorted frame space** if TRex was run on already-undistorted BAMBI frames; leave it unchecked (default) if TRex was run on the original raw video
+- **Frame numbers:** TRex counts frames as the video does, and that number is used as the frame index. Extract the thermal frames with **Keep duplicated thermal frames** ticked (the default), from one video, without skip or sampling - otherwise every box after the first frozen frame is placed with a later pose. The import warns when the frames were extracted with duplicates dropped, and leaves out boxes on frozen frames.
 - When an NPZ folder is set, step **4. Track Animals Or Import** imports and geo-references the TRex tracklets instead of running the configured tracking backend
 
 ## Processing steps
@@ -103,14 +134,26 @@ The steps live on two tabs, split by what they depend on:
 | Tab | Steps | Depends on |
 |---|---|---|
 | **Pre-Processing** | P1 Extract Frames, P2 Generate Flight Route, P3 Calculate Field of View, P4 Generate ALFS, P5 Export Frames as GeoTIFF, P6 Generate Orthomosaic | the drone poses and the DEM - **no animals involved** |
-| **Processing** | Three sections: *Detection and Tracking* (A1 Detect Animals with geo-referencing and perpendicular distances, A2 Track Animals Or Import), *Classification* (C1–C7), and *Segmentation* (S1 opens the [Segmentation Tool](tools.md#segmentation-tool)) | the detections |
+| **Processing** | Three sections: *Detection and Tracking* (A1 Detect Animals with geo-referencing and perpendicular distances, A2 Track Animals Or Import, A3 Match RGB ↔ Thermal Tracks with label sync), *Classification* (C1 embeddings, C2 occlusion, C3 species, C4 sex, C5 age), and *Segmentation* (S1 opens the [Segmentation Tool](tools.md#segmentation-tool)) | the detections |
 
 The numbering is prefixed so a bare number cannot mean two different steps.
 They are *not* one sequence: only P1 is a prerequisite for the Processing tab.
 Re-running detection marks the Processing steps out of date and leaves the ALFS
 and orthomosaic alone.
 
-The **→** buttons below each step load the corresponding results into QGIS as styled layers, or compute derived products. Layers are grouped under the active flight's name.
+The **→** buttons below each step load the corresponding results into QGIS as styled layers, or compute derived products. Layers are grouped under the active flight's name, per camera (see [Layer groups and order](results-and-export.md#layer-groups-and-order)).
+
+**Camera selection.** Each stage has one selector at its top, instead of one
+per step (since 9.0.0):
+
+| Stage | Selector | Applies to |
+|-------|----------|------------|
+| Pre-Processing steps | **Camera** (Thermal / RGB) | P1 extraction, flight route, FoV, ALFS, GeoTIFFs, orthomosaic |
+| Detection and Tracking | **Camera** (Thermal / RGB) | detection, geo-referencing, perpendicular distances, tracking (matching always uses both) |
+| Classification | **Input** (Thermal / RGB / Matched) | C1 embeddings and all classifiers |
+
+The step statuses show the selected camera's outputs. To process both
+cameras, run the stage once per selection.
 
 Progress, the abort button and the log sit below the tabs, so they are visible whichever tab a step was started from.
 
@@ -158,6 +201,32 @@ Use **→ Add Flight Route to QGIS** to load both layers with styling applied.
 ### A1. Detect Animals
 
 Runs YOLO-based detection on all extracted frames. Separate model paths can be configured for the thermal and the RGB modality; the model matching the selected camera is used. The default wildlife detection model for each modality is downloaded automatically from HuggingFace on first use.
+
+**Projection** (Configuration → Detection): detection normally looks at the
+extracted camera frames (*Perspective*). With *Orthorectified (GeoTIFF)* it
+looks at the per-frame GeoTIFFs instead - for detectors trained on orthophotos,
+built-in or [custom](custom-implementations.md). *Export Frames as GeoTIFF* has
+to have run for the camera (frames without a GeoTIFF are skipped) and the DEM
+is needed. The detector's boxes are then raster pixels, and their world
+position follows directly from the GeoTIFF; what the plugin adds is the box's
+place in the **camera frame** (through the DEM and the frame's corrected
+camera), because a detection is stored as a box in the extracted frame - the
+picture the labelling tool, the inspector, the video creator, the classifiers'
+crops and the image exports draw it on. From there on it is a detection like
+any other: geo-referencing, tracking and everything after work unchanged. A
+box that falls outside the DEM or its camera frame is dropped and counted in
+the log. The default BAMBI models were trained on perspective frames.
+
+*ALFS (light-field integrals)* works the same way on the integrals of **ALFS
+sampling mode** (*Generate ALFS* with sampling enabled): one integral per
+central frame, focused on the DEM, in which occluding vegetation is blurred
+away. Only the central frames have an integral, so only those are searched;
+the boxes are placed in the central frame's camera image. It is there for
+detectors trained on ALFS imagery ([custom](custom-implementations.md) ones
+today). The Classification tab's **Projection** has the same third option
+for the crops of the embedding step and of custom classifiers - a frame
+between two central frames then uses the nearest integral; no default
+classifiers have been published for ALFS imagery yet.
 
 **Outputs:**
 ```
@@ -336,7 +405,7 @@ The reason this is worth doing in two sensors rather than one is that they fail 
 
 > **Requires a Hugging Face token.** The DINOv3 model these classifiers read is *gated*: request access at [huggingface.co/facebook/dinov3-vith16plus-pretrain-lvd1689m](https://huggingface.co/facebook/dinov3-vith16plus-pretrain-lvd1689m), then paste a read token into **Configuration → Classification** and press **Check access**. See [Installation](installation.md#classification).
 
-#### C1. Match RGB ↔ Thermal Tracks
+#### A3. Match RGB ↔ Thermal Tracks
 
 Decides which thermal track and which RGB track are the same animal, by registering the two views onto each other and comparing where the boxes sit. Needs both cameras tracked; there is no camera selector, because the step is inherently about the pair.
 
@@ -346,12 +415,16 @@ The run log reports how many pairs were confirmed out of how many raw tracks. If
 
 **→ Add Matched Pairs to QGIS** draws a line between each pair's positions, attributed with the shared frame count and median distance - the quickest way to see whether the gate is set sensibly.
 
+**→ Sync Labels Across the Match** copies species, sex and age from one camera's animals onto their matched partners on the other (direction selectable: *Thermal → RGB* or *RGB → Thermal*), and the per-frame occlusion onto the paired detections. Only matched pairs are touched; an animal that already carries an answer keeps it, and hand annotations from the labelling tool are never overwritten. It is what lets a classifier that only works on one camera label the animals of both.
+
+The step sits in the *Detection and Tracking* section (it needs both cameras tracked, nothing else); the classification stage builds on it whenever its **Input** is *Matched*.
+
 **Outputs:**
 ```
 matches.gpkg    # beside project.gpkg: a match belongs to neither camera
 ```
 
-#### C2. Compute DINOv3 Embeddings
+#### C1. Compute DINOv3 Embeddings
 
 Describes every tracked animal's crop as a feature vector, once, so all three classifiers can reuse it. This is the expensive step - the model is large, and on CPU it takes minutes per hundred crops.
 
@@ -365,7 +438,7 @@ embeddings_t/            # or embeddings_w/
 bambi_t/classification.gpkg   # which detections are embedded, and by which run
 ```
 
-#### C3–C5. Occlusion, Species and Sex Classification
+#### C2–C4. Occlusion, Species and Sex Classification
 
 One step each, run in that order, because each depends on the one before:
 
@@ -379,9 +452,9 @@ An animal the classifier cannot call is **left unknown, never discarded**: it ke
 
 **Frames used** decides what may vote. *Visible frames only* uses the occlusion classifier when it ran, otherwise occlusion values you annotated by hand, and otherwise every frame - the run log always says which of the three it used.
 
-**C7. Apply Classifications to Tracks and Detections** copies the answers onto the animals themselves, which is what makes them visible to the exports, the map layers, the survey analytics and the labelling tool. It runs automatically unless switched off, and is safe to repeat.
+**Applying the classifications to tracks and detections** copies the answers onto the animals themselves, which is what makes them visible to the exports, the map layers, the survey analytics and the labelling tool. It runs automatically unless switched off, and is safe to repeat.
 
-#### C6. Age Classification
+#### C5. Age Classification
 
 Flags juveniles by body size - the **fallback** where no classifier called the animal.
 
@@ -421,26 +494,102 @@ segmentation_t/    # or segmentation_w/ depending on the camera
 
 ## Survey analytics
 
-The **Survey Analytics** tab (next to *Processing*) turns geo-referenced detections, tracks, or exported frames into population-level products. The point-based tools (density heatmap, distance sampling) let you pick the **source**: *Detections* uses every geo-referenced bounding box, while *Tracks* uses one representative point per track (so an animal followed across many frames is counted once); their camera (thermal/RGB) follows the existing Detection / Tracking camera selectors. The coverage map instead combines the exported frame GeoTIFFs and has its own camera selector. Results are written to a new `analytics_t/` or `analytics_w/` folder, and the run log for these steps appears below the tabs.
+The **Survey Analytics** tab (next to *Processing*) turns geo-referenced
+detections, tracks and exported frames into population-level products. It is
+**not tied to the flight selected on the other tabs**: a survey is a set of
+processed flights analysed together.
 
-Each result records **what it counted** - the tracking run used, whether manual
-tracks were included, the species filter, and how many detections labelled
-`not-an-animal` were excluded - so a figure can be traced back to the rows
-behind it. Two rules apply throughout: one tracker run contributes (built-in,
-BoxMOT and TRex describe the same animals, so pooling two would double-count),
-and manual tracks are *added* to it, since labels are usually animals the
-detector missed. A label created with *Import as label track* replaces the
-tracker track it came from instead of adding to it. See
-[Results, Flights and Export](results-and-export.md#what-the-analytics-counted).
+### The survey: flights, camera, folder
 
-**Analysing several flights together.** *Distance sampling* and *Population estimation* each carry a **Projects** selector: add one or more BAMBI projects and/or keep **Add current project** ticked, and the analysis runs on every project and combines the results into a single estimate (distance sampling pools the perpendicular distances and sums the flight-route effort *L*; population estimation pools all the transects into one count/area sample set). Leaving the list empty with only *Add current project* ticked reproduces the single-project behaviour. Before running, each project is checked for its required files - if anything is missing the run is aborted and a message names what is missing in which project(s). The combined result is written to the **active project's** `analytics_*` folder, while each pooled project keeps its own per-transect CSV/GeoJSON in its own folder.
+The box at the top of the tab defines the survey every tool below works on:
 
-**+ Add Flight…** is the shortcut for flights this QGIS project already holds:
-the target folder and the DEM are taken from the flight itself, so there is
-nothing to look up. Pointing at unrelated target folders still works exactly as
-before.
+| Setting | |
+|---|---|
+| **Flights** | Tick the processed flights of this QGIS project that make up the survey. Their counts, areas and distances are pooled; the census summary also lists them one by one. A flight that has not been processed, or whose folder is missing, cannot be ticked. |
+| **Camera** | Thermal or RGB - whose detections, tracks, footprints and transects are analysed. The flights must have been processed for it. (This is the survey's own selector; it is independent of the stage selectors on the processing tabs.) |
+| **Survey folder** | Where the survey results (`analytics_t/` / `analytics_w/`) and the survey area are stored. Empty = `bambi_survey` next to the QGIS project. |
 
-For distance sampling an added project is just a target folder. For population estimation the transects must be georeferenced with the right DEM origin, so its **+ Add Project…** button opens a small dialog with **two pickers** - the project's target folder and its **`dem.json`** (DEM metadata JSON). The active project reuses the DEM configured for the active flight; every *added* project supplies its own `dem.json`, and the results dialog shows each project's DEM-origin source (`config` for the active project, `provided` for added ones).
+Three things hold for every tool:
+
+- **One CRS.** Pooled points, rasters and areas need the ticked flights to
+  share their target CRS; this is checked, not assumed.
+- **Species by name.** Species ids are assigned per flight, so the species
+  filter works on names. A name missing from a flight is not an error - that
+  flight simply has none of it.
+- **What was counted is recorded.** Each result notes the tracking run used,
+  whether manual tracks were included, the species filter, and how many
+  detections labelled `not-an-animal` were excluded. One tracker run
+  contributes (built-in, BoxMOT and TRex describe the same animals, so pooling
+  two would double-count), and manual tracks are *added* to it. A label created
+  with *Import as label track* replaces the tracker track it came from. See
+  [Results, Flights and Export](results-and-export.md#what-the-analytics-counted).
+
+The point-based tools (census, density heatmap, distance sampling) let you
+pick the **source**: *Detections* uses every geo-referenced box, *Tracks* one
+representative point per track, so an animal followed across many frames is
+counted once.
+
+### Survey area and exclusion zones
+
+A census is usually reported for a defined area - a hunting district, a
+reserve, a forest compartment - not for whatever ground the flights happened
+to see. The **Survey Area** box holds that area:
+
+- **Survey areas** - one or more census polygons. An animal counts when it is
+  inside any of them, and only the ground inside them is surveyed area
+  (overlapping areas count once).
+- **Exclusion zones** - ground removed again, each with an optional reason
+  (thick forest cover, a building, a road). Animals there are not counted and
+  their ground is not part of the area.
+
+`effective area = union(survey areas) − union(exclusion zones)`. Exclusion
+zones may be defined without a survey area; they are then cut out of the
+whole flights.
+
+**Draw Survey Area** / **Draw Exclusion Zone** add the layer, switch it to
+editing and start the polygon tool (click the vertices, right-click to finish,
+save the layer edits). **Import…** copies polygons from a layer already in the
+project - a shapefile of the hunting districts, a KML, a GeoJSON. The polygons
+live in `<survey folder>/survey_area/survey_area.gpkg`, an ordinary
+GeoPackage edited with the normal QGIS tools.
+
+With **Limit analytics to the survey area** ticked, the census, density
+heatmap, coverage map, distance sampling and population estimation count only
+animals inside a survey area and outside every exclusion zone, and use only
+that ground as the surveyed area. Unticked, they cover the whole flights. The
+survey orthomosaic is never clipped.
+
+### Census summary
+
+The plain census figures a survey report starts from: how many of each
+species were counted, how many of them inside the survey area, how many per
+km², and how they split by sex and age - per flight and for the survey as a
+whole. No detection-function model is involved; these are minimum counts.
+
+| Setting | Description |
+|---------|-------------|
+| **Count** | *Tracks*: each tracked individual once (video surveys). *Detections*: every box - what a still-photo survey without tracking has; an animal on two photos counts twice. |
+
+Two densities are reported, because which is right depends on the survey:
+
+- **per plot** - the survey area minus its exclusion zones. Right when the
+  flights together cover the area completely: adjacent flights add up to one
+  census, `sum(counts) / plot area`.
+- **per covered ground** - the ground the frames actually saw inside the area
+  (the union of the field-of-view footprints). It does not assume full
+  coverage, and across flights it is `sum(counts) / sum(covered areas)` -
+  right for repeat flights over the same plot as well.
+
+An animal without a geo-referenced position is counted, but with a survey
+area it is reported as *unplaced* rather than inside. **→ Show Census Table**
+opens the result as a table.
+
+**Outputs:**
+```
+analytics_t/    # or analytics_w/, in the survey folder
+├── census_summary_tracks.csv    # or census_summary_detections.csv
+└── census_summary_tracks.json
+```
 
 ### Density heatmap
 
@@ -488,7 +637,6 @@ Combines the exported per-frame GeoTIFFs on the same grid as the **Orthomosaic**
 
 | Setting | Description |
 |---------|-------------|
-| **Camera** | Thermal or RGB - which exported frame GeoTIFFs to combine |
 | **Cell (m)** | Output raster cell size in metres. `0` = native resolution of the exported GeoTIFFs (larger output) |
 
 **Outputs:**
@@ -499,6 +647,76 @@ analytics_t/    # or analytics_w/
 ```
 
 Use **→ Add Coverage Map to QGIS** to load the raster with a graduated colour ramp scaled to the data. Uncovered cells are stored as nodata so the surround renders transparent.
+
+### Survey Orthomosaic
+
+One orthomosaic over every flight ticked in the survey. It is the flight's
+**Orthomosaic** step (Pre-Processing tab) across flights: the same merge of the
+exported per-frame GeoTIFFs, with the **merge mode** of
+*Configuration → Orthomosaic*, written with the same compression and
+overviews - a survey of one flight gives exactly that flight's orthomosaic.
+
+- The camera is the survey's camera, and *Export Frames as GeoTIFF* has to
+  have run for it in every ticked flight.
+- The flights are merged in the order of the flight list and each flight's
+  frames in frame order; that is what the *first* and *last* merge modes refer
+  to where flights overlap.
+- The frame range of the Orthomosaic tab belongs to a single flight and is not
+  applied: all exported frames of every flight are used.
+- The survey plot and exclusion zones do not clip it - it is an image of what
+  was flown, not an analytic of the census area.
+- All flights have to share one target CRS (as for every survey tool). The
+  mosaic is built in memory at the GeoTIFFs' resolution, so several large
+  flights need correspondingly more RAM than one.
+
+**Outputs:**
+```
+analytics_t/    # or analytics_w/
+├── orthomosaic.tif     # the mosaic over all ticked flights
+└── orthomosaic.json    # flights, frames per flight, merge mode, size
+```
+
+Use **→ Add Survey Orthomosaic to QGIS** to load it into the *BAMBI Survey*
+layer group.
+
+### Population estimation (transects)
+
+Density from the **transects** of the ticked flights, pooled into one
+count / area table - the analysis of Praschl et al. 2026. Every transect
+contributes one row: a *count* (the tracks assigned to it) and an *area* in
+hectares (the ground it monitored).
+
+- **Counts:** each track is assigned to the transect nearest in perpendicular
+  distance. **Truncation (m)** drops tracks farther than that from every
+  transect (`0` = assign every track to its nearest transect).
+- **Areas:** the union of the field-of-view footprints of the frames inside the
+  transect's frame range.
+
+Requires, for every ticked flight: transects defined with the
+[Transect Splitting Tool](tools.md#transect-splitting-tool), *Calculate Field
+of View*, *Calculate Track Perpendicular* and the flight's DEM.
+
+| Estimator | |
+|---|---|
+| **Naive** | `sum(count) / sum(ha) × 100` - animals per 100 ha (= per km²) |
+| **Bootstrap** | transects resampled with replacement (*Bootstrap iterations*, reproducible with *Seed*); mean, SE and percentile 95 % CI of the naive density |
+| **ZINB** | zero-inflated negative binomial regression `count ~ ha`, for surveys where most transects are empty |
+
+**Study area (ha)** turns the density into an abundance: enter it, or take
+it from the flights' field-of-view area (**Use flight FoV area**) or from the
+survey area (**Use survey area**).
+
+**→ Add Transect Areas to QGIS** loads each transect's monitored area with
+its tracks, route and footprint, labelled with name and count. **→ Show
+Report** opens the estimates.
+
+**Outputs:**
+```
+analytics_t/    # or analytics_w/, in the survey folder
+├── population_estimate.json    # estimates per method, the transect table
+├── population_tracks.csv       # which track was assigned to which transect
+└── transect_areas.geojson      # monitored area per transect
+```
 
 ### Track inventory
 
@@ -639,7 +857,9 @@ target_folder/
 │   ├── density_detections.json             # Density heatmap stats
 │   ├── distance_sampling_detections.json   # Distance-sampling density/abundance estimate
 │   ├── coverage_map.tif                    # Coverage map raster (overlapping frame count)
-│   └── coverage_map.json                   # Coverage map stats
+│   ├── coverage_map.json                   # Coverage map stats
+│   ├── orthomosaic.tif                     # Survey orthomosaic (all ticked flights)
+│   └── orthomosaic.json                    # Survey orthomosaic info
 └── analytics_w/
     └── ...
 ```

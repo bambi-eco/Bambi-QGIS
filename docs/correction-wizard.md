@@ -53,3 +53,7 @@ A light-field integral image is rendered using the found correction and displaye
 | **Save as Local Correction** | Appends an `additional` entry with the specified start/end frame range to `correction.json`, overriding the global default for those frames only |
 
 See [Correction JSON](pipeline.md#correction-json-optional) for the resulting file format.
+
+## Camera model (since 9.0.0)
+
+The wizard's light-field preview, ALFS mosaics, the GeoTIFF / orthomosaic export, the 3D Flight Viewer and geo-referencing all turn a pose and its correction factors into a camera in the same way (`core/camera_pose.py`): translation corrections along east / north / up in metres, rotation corrections in radians subtracted once from the pose angles, heading about world up. A correction that aligns the preview therefore aligns the geo-referenced detections and tracks as well. Before 9.0.0 the renderers used their own variant (translation turned with the heading, x rotation with the opposite sign, tilted frames mis-oriented), so values tuned by eye in an older preview may need re-checking - the [3D Flight Viewer](tools.md#3d-flight-viewer)'s Corrections tab shows the effect live.

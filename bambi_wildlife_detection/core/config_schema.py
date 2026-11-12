@@ -117,6 +117,9 @@ CONFIG_ENTRIES: List[ConfigEntry] = [
     # Missing in projects saved before it existed -> unticked, so they keep
     # their fixed margin; the widget itself starts ticked for new projects.
     ConfigEntry("Extraction/AirdataPaddingAuto", "bool", False),
+    # 9.0.0: frozen thermal frames are kept and marked "duplicated"
+    # (core.poses). On by default, also for projects saved before it existed.
+    ConfigEntry("Extraction/FlagDuplicates", "bool", True),
     # ===== Common Inputs =====
     ConfigEntry("Input/AirdataPath", "str"),
     ConfigEntry("Input/DemPath", "str"),
@@ -219,6 +222,12 @@ CONFIG_ENTRIES: List[ConfigEntry] = [
     # The classifier mapping table (task -> modality, model, label mapping).
     ConfigEntry("Classification/Models", "str"),
     ConfigEntry("Inventory/Columns", "str"),
+    # 9.0.0: custom implementations of detection (per camera) and tracking
+    # (core.custom_models); the classifiers' live in Classification/Models.
+    ConfigEntry("Custom/Implementations", "str"),
+    # 9.0.0: detection on the camera frames (0) or on the orthorectified
+    # per-frame GeoTIFFs (1) - core.ortho_detection.
+    ConfigEntry("Detection/ProjectionIndex", "int_double", 0),
     # ===== Cross-modal matching (feeds the 'matched' classifiers) =====
     ConfigEntry("Match/MinSharedFrames", "int_double", 8),
     ConfigEntry("Match/GatePx", "double", 28.0),
@@ -287,6 +296,7 @@ WIDGET_BINDINGS: Dict[str, Tuple[str, str]] = {
     "Extraction/HeadingSource": ("heading_source_combo", "combo_data"),
     "Extraction/AirdataPaddingSeconds": ("airdata_padding_spin", "spin"),
     "Extraction/AirdataPaddingAuto": ("airdata_padding_auto_check", "check"),
+    "Extraction/FlagDuplicates": ("flag_duplicates_check", "check"),
     "Input/AirdataPath": ("airdata_path_edit", "line"),
     "Input/DemPath": ("dem_path_edit", "line"),
     "Input/DemMetadataPath": ("dem_metadata_path_edit", "line"),
@@ -367,6 +377,8 @@ WIDGET_BINDINGS: Dict[str, Tuple[str, str]] = {
     "LifeStage/MinIndividuals": ("life_stage_min_spin", "spin"),
     "Classification/Models": ("_classification_models", "json"),
     "Inventory/Columns": ("_inventory_columns", "json"),
+    "Custom/Implementations": ("_custom_implementations", "json"),
+    "Detection/ProjectionIndex": ("detection_projection_combo", "combo_index"),
     "Match/MinSharedFrames": ("match_min_shared_spin", "spin"),
     "Match/GatePx": ("match_gate_spin", "spin"),
     "Match/Space": ("match_space_combo", "combo_index"),

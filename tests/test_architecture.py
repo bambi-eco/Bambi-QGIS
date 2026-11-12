@@ -26,7 +26,7 @@ FORBIDDEN_ANYWHERE_PREFIXES = (
 HEAVY_TOP_LEVEL_PACKAGES = {
     "alfspy", "bambi", "boxmot", "cv2", "geopandas", "fiona", "huggingface_hub",
     "pycolmap", "rasterio", "shapely", "simplekml", "torch", "transformers",
-    "trimesh", "pyrr",
+    "trimesh", "pyrr", "pyqtgraph", "OpenGL",
 }
 
 CORE_MODULES = sorted(p.stem for p in CORE_DIR.glob("*.py") if p.stem != "__init__")

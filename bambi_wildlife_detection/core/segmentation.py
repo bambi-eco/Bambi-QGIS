@@ -207,8 +207,7 @@ class SegmentationRequest:
             raise SegmentationError(
                 "Roboflow API key is required for SAM3 segmentation")
         if self.points and self.source == SOURCE_FRAMES:
-            outside = sorted({p.frame_idx for p in self.points}
-                             - set(self.frames))
+            outside = sorted({p.frame_idx for p in self.points} - set(self.frames))
             if outside:
                 raise SegmentationError(
                     f"Points were clicked on frame(s) {outside}, which are "
@@ -239,14 +238,25 @@ def pose_images(target_folder: str, modality: str) -> List[dict]:
     return images
 
 
+def duplicated_frames(images) -> set:
+    """Frames a segmentation run leaves out: frozen thermal images, whose
+    masks would belong to an earlier position (:mod:`core.poses`)."""
+    from . import poses
+    return poses.duplicated_frames(images)
+
+
 def frame_path(target_folder: str, modality: str, image: dict) -> str:
     return os.path.join(target_folder, f"frames_{modality}",
                         image.get("imagefile", "") or "")
 
 
 def select_frames(total: int, all_frames: bool = True, start: int = 0,
-                  end: int = 999999, step: int = 1) -> List[int]:
-    """Frame indices in range, then every *step*-th - the pipeline's rule."""
+                  end: int = 999999, step: int = 1,
+                  exclude=None) -> List[int]:
+    """Frame indices in range, then every *step*-th - the pipeline's rule.
+
+    *exclude* (e.g. the duplicated frames, :mod:`core.poses`) is dropped
+    after the stepping, so the remaining frames keep their positions."""
     if step < 1:
         raise SegmentationError("The frame step must be >= 1")
     if total <= 0:
@@ -257,7 +267,10 @@ def select_frames(total: int, all_frames: bool = True, start: int = 0,
         start = max(0, int(start))
         end = min(int(end), total - 1)
         indices = list(range(start, end + 1))
-    return indices[::step] if step > 1 else indices
+    indices = indices[::step] if step > 1 else indices
+    if exclude:
+        indices = [i for i in indices if i not in exclude]
+    return indices
 
 
 # ---------------------------------------------------------------------------
@@ -368,10 +381,8 @@ class SequencePace:
             self.propagating()
         self._done += 1
         rest = 1.0 - self._load_share - self._prepare_share
-        self._emit(self._load_share + self._prepare_share
-                   + rest * self._done / self.total)
-        if self._log and (self._done % self._every == 0
-                          or self._done == self.total):
+        self._emit(self._load_share + self._prepare_share + rest * self._done / self.total)
+        if self._log and (self._done % self._every == 0 or self._done == self.total):
             elapsed = max(1e-6, self._clock() - self._started)
             rate = elapsed / self._done
             left = rate * max(0, self.total - self._done)
@@ -495,8 +506,7 @@ class RoboflowBackend(SegmentationBackend):
         entries = []
         for prompt_result in response.get("prompt_results", []) or []:
             echo = prompt_result.get("echo", {}) or {}
-            prompt_text = (echo.get("text") or prompt_result.get("prompt")
-                           or prompt_result.get("text") or "")
+            prompt_text = (echo.get("text") or prompt_result.get("prompt") or prompt_result.get("text") or "")
             predictions = []
             for prediction in prompt_result.get("predictions", []) or []:
                 data = {"confidence": float(prediction.get("confidence", 0.0))}
@@ -713,10 +723,9 @@ class TransformersBackend(SegmentationBackend):
             image, scale = _load_image(path, SEQUENCE_MAX_SIDE)
             frames.append(image)
             pace.loading(index + 1, len(image_paths))
-        self.log(f"Loaded {len(frames)} frames"
-                 + (f", shrunk to {SEQUENCE_MAX_SIDE} px (x{scale:.2f} back "
-                    "on export) - SAM3 works at that size" if scale != 1.0
-                    else ""))
+        shrunk = (f", shrunk to {SEQUENCE_MAX_SIDE} px (x{scale:.2f} back "
+                  "on export) - SAM3 works at that size" if scale != 1.0 else "")
+        self.log(f"Loaded {len(frames)} frames{shrunk}")
         return frames, scale
 
     def _init_clip_session(self, processor, frames):
@@ -1174,6 +1183,11 @@ def run_segmentation(request: SegmentationRequest, progress_fn=None,
         if frame_idx < 0 or frame_idx >= len(images):
             continue
         image = images[frame_idx]
+        if image.get("duplicated"):
+            if log_fn:
+                log_fn(f"Frame {frame_idx} is a duplicated (frozen thermal) "
+                       "frame - skipped")
+            continue
         path = frame_path(request.target_folder, request.modality, image)
         if not image.get("imagefile") or not os.path.isfile(path):
             if log_fn:
@@ -1380,8 +1394,7 @@ class SegmentationStore:
         if not self.has_pixel() or not self.has_georef():
             return False
         try:
-            return (os.path.getmtime(self.georef_path)
-                    < os.path.getmtime(self.pixel_path))
+            return (os.path.getmtime(self.georef_path) < os.path.getmtime(self.pixel_path))
         except OSError:
             return False
 
@@ -1419,8 +1432,7 @@ def merge_results(existing: List[dict], new: List[dict],
         merged_entry = dict(current)
         merged_entry.update({k: v for k, v in entry.items() if k != "prompts"})
         merged_entry["frame_idx"] = frame_idx
-        merged_entry["imagefile"] = (entry.get("imagefile", "")
-                                     or current.get("imagefile", ""))
+        merged_entry["imagefile"] = (entry.get("imagefile", "") or current.get("imagefile", ""))
         merged_entry["prompts"] = kept + list(entry.get("prompts", []) or [])
         by_frame[frame_idx] = merged_entry
     return [by_frame[k] for k in sorted(by_frame)]
@@ -1510,6 +1522,5 @@ def export_geojson(georef_results: List[dict], output_path: str,
         json.dump(document, handle, indent=2)
     if log_fn:
         log_fn(f"GeoJSON written: {len(features)} segmentation polygon(s) "
-               f"to {output_path}"
-               + (f" - {skipped} empty mask(s) skipped" if skipped else ""))
+               f"to {output_path}" + (f" - {skipped} empty mask(s) skipped" if skipped else ""))
     return {"features": len(features), "skipped": skipped}

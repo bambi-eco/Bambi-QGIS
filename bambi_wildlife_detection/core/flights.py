@@ -132,6 +132,12 @@ def default_name(target_folder: str) -> str:
     return base or "Flight"
 
 
+#: Names of groups the plugin creates itself: the camera subgroups of a
+#: flight and the survey group. A flight called like one of them could not
+#: be told apart from it in the layer tree.
+RESERVED_NAMES = frozenset({"thermal", "rgb", "bambi survey"})
+
+
 def validate_folder(folder: str, flights: List[dict],
                     ignore_index: Optional[int] = None) -> None:
     """Raise :class:`FlightError` when *folder* cannot host a new flight.
@@ -159,6 +165,10 @@ def validate_name(name: str, flights: List[dict],
     name = (name or "").strip()
     if not name:
         raise FlightError("A flight needs a name.")
+    if name.lower() in RESERVED_NAMES:
+        raise FlightError(
+            f"'{name}' is the name of a layer group inside every flight - "
+            "choose another name.")
     for index, flight in enumerate(flights):
         if index == ignore_index:
             continue
@@ -172,6 +182,25 @@ def add_flight(flights: List[dict], name: str, target_folder: str) -> List[dict]
     name = validate_name(name, flights)
     validate_folder(target_folder, flights)
     return list(flights) + [{"name": name, "target_folder": target_folder}]
+
+
+def add_named_flight(flights: List[dict], name: str) -> List[dict]:
+    """Return *flights* with a new flight that has a name but no target
+    folder yet - the folder is chosen afterwards on the Input tab, where
+    :func:`set_folder` checks it."""
+    name = validate_name(name, flights)
+    return list(flights) + [{"name": name, "target_folder": ""}]
+
+
+def without_folder(flights: List[dict]) -> Optional[int]:
+    """Index of the first flight that has no target folder yet, or None.
+
+    Such a flight has nowhere to keep its configuration, so there is at
+    most one at a time."""
+    for index, flight in enumerate(flights):
+        if not (flight.get("target_folder") or "").strip():
+            return index
+    return None
 
 
 def rename_flight(flights: List[dict], index: int, name: str) -> List[dict]:

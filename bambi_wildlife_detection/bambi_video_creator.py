@@ -864,6 +864,10 @@ class VideoCreatorDialog(QDialog):
 
         # Camera label banner.
         label = "Thermal" if suffix == "t" else "RGB"
+        if params["source"] == "extracted" and \
+                idx in video_export.load_duplicated(params["target"], suffix):
+            # the picture repeats the previous frame (shutter calibration)
+            label += "  -  FROZEN FRAME"
         cv2.putText(img, label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9,
                     (255, 255, 255), 2, cv2.LINE_AA)
         return img

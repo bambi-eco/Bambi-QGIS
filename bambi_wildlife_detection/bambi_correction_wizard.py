@@ -1053,8 +1053,7 @@ class _LightFieldRenderWorker(QThread):
             self.error.emit(f"{exc}\n\n{traceback.format_exc()}")
 
     def _render(self):
-        import numpy as _np
-        from pyrr import Quaternion, Vector3
+        from pyrr import Quaternion
         from alfspy.render.render import (
             read_gltf, process_render_data,
             make_camera, make_shot_loader, release_all,
@@ -1063,9 +1062,8 @@ class _LightFieldRenderWorker(QThread):
         from alfspy.render.data import BaseSettings, CameraPositioningMode
         from alfspy.core.rendering.renderer import Renderer
         from alfspy.core.rendering import CtxShot, Resolution, TextureData
-        from alfspy.core.geo.transform import Transform
-        from alfspy.core.util.pyrrs import quaternion_from_eulers
         from alfspy.core.util.geo import get_aabb
+        from .core.camera_pose import shot_pose
 
         p = self._p
         corr = p['correction']
@@ -1076,10 +1074,8 @@ class _LightFieldRenderWorker(QThread):
         ry = corr['rotation']['y']
         rz = corr['rotation']['z']
 
-        cor_translation = Vector3([tx, ty, tz], dtype='f4')
-        cor_rot_eulers = Vector3([rx, ry, rz], dtype='f4')
-        cor_quat = Quaternion.from_eulers(cor_rot_eulers)
-        cor_transform = Transform(cor_translation, cor_quat)
+        cor_t = {'x': tx, 'y': ty, 'z': tz}
+        cor_r = {'x': rx, 'y': ry, 'z': rz}
 
         self.progress.emit(5)
 
@@ -1117,15 +1113,16 @@ class _LightFieldRenderWorker(QThread):
             if isinstance(fovy, (list, tuple)):
                 fovy = fovy[0] if fovy else default_fov
 
-            cam_pos = Vector3(loc, dtype='f4')
-            # Rotation values are in degrees in the poses file (matches alfs.py)
-            eulers = [_np.deg2rad(_wrap_deg(v)) for v in rot[:3]]
-            cam_rot = quaternion_from_eulers(eulers, 'zyx')
+            # The plugin's one camera model (core.camera_pose), the same
+            # the geo-referencing uses - so the preview shows what the
+            # correction does to the results.
+            cam_pos, cam_rot = shot_pose(
+                {'location': loc, 'rotation': rot}, cor_t, cor_r)
 
             try:
                 shot = CtxShot(
                     ctx, img_path, cam_pos, cam_rot,
-                    fovy, 1, cor_transform, lazy=False,
+                    fovy, 1, None, lazy=False,
                 )
                 shots.append(shot)
             except Exception:  # nosec B110
@@ -1153,7 +1150,7 @@ class _LightFieldRenderWorker(QThread):
             aspect_ratio=1.0,
             orthogonal=True,
             ortho_size=(70, 70),
-            correction=cor_transform,
+            correction=None,       # already part of every shot's pose
             resolution=Resolution(render_sz, render_sz),
         )
 
@@ -1882,6 +1879,15 @@ class BambiCorrectionWizard(QDialog):
             img_lbl.clear_image()
             img_lbl.setText(f"Frame {frame_idx} is out of range.")
             return
+        if images[frame_idx].get('duplicated'):
+            # The image repeats the previous frame while the pose moved on,
+            # so a point clicked here would fit the correction to the wrong
+            # position.
+            img_lbl.clear_image()
+            img_lbl.setText(
+                f"Frame {frame_idx} is a frozen frame (thermal calibration):"
+                "\nits image repeats the previous one.\nChoose another frame.")
+            return
         imagefile = images[frame_idx].get('imagefile', '')
         img_path = os.path.join(folder, frames_dir, imagefile)
         if not os.path.isfile(img_path):
@@ -2307,6 +2313,9 @@ class BambiCorrectionWizard(QDialog):
             for ft in ('t', 'w'):
                 pose = self._frame_pose(ft, idx)
                 if pose is None:
+                    continue
+                if pose.get('duplicated'):
+                    # frozen thermal image: use the RGB frame, or none
                     continue
                 frames_dir = 'frames_t' if ft == 't' else 'frames_w'
                 img_path = os.path.join(

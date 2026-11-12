@@ -127,11 +127,45 @@ def ground_heights(mesh_path: str,
         return [None for _ in xy]
 
 
+def surface_heights_fn(target_folder: str, origin=None):
+    """Height sampler of the 3D Flight Viewer's reconstructed surface (the
+    digital surface model: ground plus vegetation and buildings), or None.
+
+    Reads ``reconstruction_w/surface.npz`` of the target folder; refuses a
+    surface made over another DEM (different origin).
+
+    :return: ``f([(x, y), ...]) -> [height | None, ...]`` (mesh-local z)
+    """
+    from . import flight_reconstruction as fr
+    path = os.path.join(target_folder, "reconstruction_w", fr.SURFACE_FILE)
+    if not os.path.isfile(path):
+        return None
+    try:
+        data = fr.load_surface(path)
+    except Exception:  # noqa: BLE001 - an unreadable file means no surface
+        return None
+    stored = data.get("origin")
+    if origin is not None and stored is not None:
+        import numpy as np
+        if np.all(np.isfinite(stored)) and not np.allclose(stored, origin, atol=0.01):
+            return None
+    sample = fr.ground_sampler(data["grid"], data["surface_z"])
+
+    def heights(xy):
+        if not xy:
+            return []
+        import numpy as np
+        pts = np.asarray(xy, dtype=float)
+        z = sample(pts[:, 0], pts[:, 1])
+        return [float(v) if np.isfinite(v) else None for v in z]
+    return heights
+
+
 def build_profile(target_folder: str, modality: str, dem_path: str = "",
                   dem_json_path: str = "",
                   ground_fn: Optional[Callable[[Sequence[Tuple[float, float]]],
-                                               List[Optional[float]]]] = None
-                  ) -> dict:
+                                               List[Optional[float]]]] = None,
+                  surface_fn=None, with_surface: bool = False) -> dict:
     """The AGL profile of one camera's flight.
 
     :param modality: ``"t"`` or ``"w"``
@@ -144,7 +178,10 @@ def build_profile(target_folder: str, modality: str, dem_path: str = "",
         "mesh_path": str, "modality": str, "n_ground": int}`` where each
         point holds ``frame, x, y, east, north, altitude, ground, agl,
         distance_m, time_s, timestamp`` - ``ground``/``agl`` ``None`` where
-        the DEM has no height there.
+        the DEM has no height there. With *with_surface* (or *surface_fn*)
+        points also carry ``surface`` / ``agl_surface``: the height of the
+        reconstructed surface under the camera and the distance to it
+        (``None`` outside the reconstruction).
     """
     from . import inspection
 
@@ -172,8 +209,7 @@ def build_profile(target_folder: str, modality: str, dem_path: str = "",
             continue
         if not all(math.isfinite(v) for v in (x, y, z)):
             continue
-        located.append((frame, x, y, z, image.get("timestamp")
-                        or image.get("epoch")))
+        located.append((frame, x, y, z, image.get("timestamp") or image.get("epoch")))
 
     xy = [(x, y) for _f, x, y, _z, _t in located]
     errors: List[str] = []
@@ -185,12 +221,17 @@ def build_profile(target_folder: str, modality: str, dem_path: str = "",
                       f"{dem_path or dem_json_path or '(empty)'}")
     else:
         grounds = ground_heights(mesh_path, xy, errors)
+    if surface_fn is None and with_surface:
+        surface_fn = surface_heights_fn(target_folder, origin)
+    surfaces = list(surface_fn(xy)) if surface_fn is not None \
+        else [None for _ in xy]
 
     points = []
     distance = 0.0
     start_time = None
     previous = None
-    for (frame, x, y, z, stamp), ground in zip(located, grounds):
+    for (frame, x, y, z, stamp), ground, surface in zip(
+            located, grounds, surfaces):
         if previous is not None:
             distance += math.hypot(x - previous[0], y - previous[1])
         previous = (x, y)
@@ -205,9 +246,10 @@ def build_profile(target_folder: str, modality: str, dem_path: str = "",
             "altitude": z + oz,
             "ground": ground_abs,
             "agl": (z - ground) if ground is not None else None,
+            "surface": (surface + oz) if surface is not None else None,
+            "agl_surface": (z - surface) if surface is not None else None,
             "distance_m": distance,
-            "time_s": (seconds - start_time) if seconds is not None
-            and start_time is not None else None,
+            "time_s": (seconds - start_time) if seconds is not None and start_time is not None else None,
             "timestamp": stamp if stamp is not None else "",
         })
     return {
@@ -216,6 +258,7 @@ def build_profile(target_folder: str, modality: str, dem_path: str = "",
         "mesh_path": mesh_path,
         "modality": modality,
         "n_ground": sum(1 for p in points if p["ground"] is not None),
+        "n_surface": sum(1 for p in points if p["surface"] is not None),
         "ground_error": errors[0] if errors else "",
     }
 
@@ -280,6 +323,10 @@ def summarise(profile: dict) -> List[str]:
     else:
         lines.append("No DEM ground under the route - the mesh does not "
                      "cover the poses (wrong DEM for this flight?)")
+    above = [p["agl_surface"] for p in points if p.get("agl_surface") is not None]
+    if above:
+        lines.append(f"Above the reconstructed surface {min(above):.1f}-"
+                     f"{max(above):.1f} m over {len(above)} frame(s)")
     if profile.get("origin") is None:
         lines.append("Warning: no DEM origin found; altitudes are mesh-local, "
                      "not above sea level")

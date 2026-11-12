@@ -161,3 +161,40 @@ class TestAnimalCounts:
             "0,1,1,1,5,5,0.9,0,0\n0,2,6,6,9,9,0.8,0,0\n2,1,1,1,5,5,0.9,0,1\n")
         assert agl_profile.animal_counts(str(root), "t", "detections") == {0: 2, 4: 1}
         assert agl_profile.animal_counts(str(root), "t", "tracks") == {0: 2, 2: 1}
+
+
+class TestReconstructedSurface:
+    """The 3D Flight Viewer's reconstruction as a second (surface) curve."""
+
+    def test_profile_carries_surface_height_and_distance(self, tmp_path):
+        root = str(tmp_path)
+        _poses(root, "t", [(0.0, 0.0, 120.0, ""), (10.0, 0.0, 120.0, "")])
+        profile = agl_profile.build_profile(
+            root, "t", ground_fn=lambda xy: [100.0, 100.0],
+            surface_fn=lambda xy: [112.0, None])
+        a, b = profile["points"]
+        assert a["surface"] == 112.0 and a["agl_surface"] == pytest.approx(8.0)
+        assert a["agl"] == pytest.approx(20.0)
+        assert b["surface"] is None and b["agl_surface"] is None
+        assert profile["n_surface"] == 1
+        assert any("reconstructed surface" in line
+                   for line in agl_profile.summarise(profile))
+
+    def test_surface_is_read_from_the_reconstruction_folder(self, tmp_path):
+        np = pytest.importorskip("numpy")
+        from bambi_wildlife_detection.core import flight_reconstruction as fr
+        root = str(tmp_path)
+        assert agl_profile.surface_heights_fn(root) is None
+        os.makedirs(os.path.join(root, "reconstruction_w"))
+        g = fr.GroundGrid([-10, -10], [10, 10], 1.0)
+        z = np.full((g.height, g.width), 7.0, np.float32)
+        path = os.path.join(root, "reconstruction_w", fr.SURFACE_FILE)
+        fr.save_surface(path, g, z, z * 0, z, z, origin=(100.0, 200.0, 0.0))
+        fn = agl_profile.surface_heights_fn(root, origin=(100.0, 200.0, 0.0))
+        assert fn([(0.0, 0.0), (50.0, 0.0)]) == [pytest.approx(7.0), None]
+        # a surface made over another DEM is not used
+        assert agl_profile.surface_heights_fn(root, origin=(0.0, 0.0, 0.0)) is None
+        _poses(root, "t", [(0.0, 0.0, 30.0, "")])
+        profile = agl_profile.build_profile(root, "t", ground_fn=lambda xy: [0.0],
+                                            with_surface=True)
+        assert profile["points"][0]["agl_surface"] == pytest.approx(23.0)

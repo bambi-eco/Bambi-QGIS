@@ -45,6 +45,7 @@ STEP_TO_METHOD = {
     "trex_import": "run_trex_import",
     "density_heatmap": "run_density_heatmap",
     "coverage_map": "run_coverage_map",
+    "survey_orthomosaic": "run_survey_orthomosaic",
     "distance_sampling": "run_distance_sampling",
     "census_summary": "run_census_summary",
     "track_inventory": "run_track_inventory",

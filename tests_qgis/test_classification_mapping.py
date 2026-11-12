@@ -81,11 +81,21 @@ def test_matched_is_the_default_input(dock):
         assert dock._classification_input_combo(task).currentData() == "matched"
 
 
-def test_every_task_has_its_own_input_combo(dock):
-    """The classifiers are separate models, and one may read a camera another
-    cannot use - so the choice sits on each step rather than once."""
-    combos = [dock._classification_input_combo(t) for t in hf_access.TASKS]
-    assert len({id(c) for c in combos}) == len(hf_access.TASKS)
+def test_the_stage_has_one_input_selector(dock):
+    """9.0.0: one selection for the classification stage, not one per step."""
+    combo = dock.classification_camera_combo
+    assert [combo.itemData(i) for i in range(combo.count())] == \
+        ["thermal", "rgb", "matched"]
+    assert combo.currentData() == "matched"
+
+
+def test_the_stage_selector_sets_every_classifier_and_the_embeddings(dock):
+    dock.classification_camera_combo.setCurrentIndex(1)            # RGB
+
+    for task in hf_access.TASKS:
+        assert dock._classification_input_combo(task).currentData() == "rgb"
+        assert dock._classification_spec(task)["modality"] == "rgb"
+    assert dock.get_config()["embeddings_camera"] == "rgb"
 
 
 def test_the_input_combos_offer_both_cameras_and_matched(dock):
@@ -101,11 +111,13 @@ def test_editing_the_input_updates_the_saved_mapping(dock):
     assert spec["modality"] == "rgb"
 
 
-def test_one_tasks_input_leaves_the_others_alone(dock):
+def test_one_tasks_input_carries_the_stage_with_it(dock):
+    """The classifiers cannot disagree about the camera any more."""
     dock._classification_input_combo("species").setCurrentIndex(0)     # thermal
 
+    assert dock.classification_camera_combo.currentData() == "thermal"
     assert dock._classification_spec("species")["modality"] == "thermal"
-    assert dock._classification_spec("sex")["modality"] == "matched"
+    assert dock._classification_spec("sex")["modality"] == "thermal"
 
 
 def test_the_mapping_survives_a_project_round_trip(dock):
@@ -413,7 +425,7 @@ def test_life_stage_species_offer_size_as_the_default(project_folder):
         {}, project_folder, task="life_stage")
     combo = dialog.table.cellWidget(0, 1)
     assert [combo.itemData(i) for i in range(combo.count())] == \
-        ["off", "size", "custom"]
+        ["off", "size", "custom", "implementation"]
     assert combo.itemText(1) == "Default (size-based)"
 
 

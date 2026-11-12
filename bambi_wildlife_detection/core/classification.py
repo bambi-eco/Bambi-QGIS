@@ -330,8 +330,7 @@ class Backbone:
         """``"bf16"``, ``"fp16"`` or ``"fp32"`` - what the weights are in."""
         if not self.fp16:
             return "fp32"
-        name = str(getattr(self._reduced_dtype, "__name__", None)
-                   or self._reduced_dtype or "")
+        name = str(getattr(self._reduced_dtype, "__name__", None) or self._reduced_dtype or "")
         return "bf16" if "bfloat16" in name else "fp16"
 
     def _demote_to_fp32(self, reason: str) -> None:
@@ -374,7 +373,6 @@ class Backbone:
     def embed(self, crops: Sequence["object"]):
         """CLS vectors for a batch of ``HxWx3`` uint8 crops, as float32."""
         import numpy as np
-        import torch
 
         if not len(crops):
             return np.zeros((0, self.dim), dtype=np.float32)
@@ -730,6 +728,35 @@ class FeatureResolver:
         self.vectors_t = vectors_t or {}
         self.vectors_w = vectors_w or {}
         self.partner = partner_of_primary or {}
+        #: For classifiers that read the cut-out boxes instead of
+        #: embeddings (custom implementations): a :class:`CropResolver`.
+        self.crops: Optional["CropResolver"] = None
+        #: ``detection_id -> {"track_id", "frame", "box"}`` of the primary
+        #: camera.
+        self.meta: Dict[int, dict] = {}
+        #: ``frame -> camera pose`` and ``() -> {detection_id: world box}``;
+        #: both only called when a custom classifier asks for its items.
+        self.pose_of = None
+        self.world_boxes = None
+        self._world: Optional[Dict[int, tuple]] = None
+
+    def items(self, detection_ids: Sequence[int]) -> List[dict]:
+        """What a custom classifier is told about each row: which detection
+        of which animal on which frame, its box in pixels and in the world,
+        and the camera of that frame."""
+        if self._world is None:
+            self._world = dict(self.world_boxes() or {}) \
+                if self.world_boxes is not None else {}
+        out = []
+        for detection_id in detection_ids:
+            item = dict(self.meta.get(detection_id, {}),
+                        detection_id=detection_id,
+                        world=self._world.get(detection_id))
+            item["pose"] = (self.pose_of(item["frame"])
+                            if self.pose_of is not None and "frame" in item
+                            else None)
+            out.append(item)
+        return out
 
     def thermal(self, detection_id: int):
         if self.primary == "t":
@@ -769,6 +796,122 @@ class FeatureResolver:
     def resolved_dim(self, modality_in: str, backbone_dim: int) -> int:
         """Feature width a head reading *modality_in* expects."""
         return backbone_dim * 2 if modality_in == "matched" else backbone_dim
+
+
+class CropResolver:
+    """The cut-out box a crop-reading classifier expects, per detection.
+
+    The counterpart of :class:`FeatureResolver` for classifiers that work on
+    the image itself (custom implementations with ``input = "crops"``):
+    thermal, RGB, or for ``matched`` a ``(thermal, rgb)`` pair. Crops are
+    cut exactly as the embedding step cuts them (same padding and
+    letterboxing) - from the perspective frames, or with *world_boxes*
+    from the orthorectified per-frame GeoTIFFs.
+
+    :param boxes_t / boxes_w: ``detection_id -> (frame, (x1, y1, x2, y2))``
+    :param read_image: ``(modality, frame) -> image`` or None for a frame
+        that must not be used (missing, or a frozen thermal frame); with
+        *world_boxes* it is called as ``(modality, frame, world_box)`` and
+        returns ``(raster, transform)`` - the frame's GeoTIFF, or the ALFS
+        integral showing that box
+    :param world_boxes: ``{"t" | "w": {detection_id: (gx1, gy1, gx2,
+        gy2)}}`` - given for the orthographic projection: the box is then
+        placed in the raster through *to_pixel(transform, world_box)*, and
+        a detection without world coordinates has no crop
+    """
+
+    def __init__(self, primary: str, boxes_t: Dict[int, tuple],
+                 boxes_w: Dict[int, tuple],
+                 partner_of_primary: Optional[Dict[int, int]],
+                 read_image, config: CropConfig = CropConfig(),
+                 cache_frames: int = 6, world_boxes: Optional[dict] = None,
+                 to_pixel=None):
+        if primary not in ("t", "w"):
+            raise ValueError(f"Unknown modality: {primary!r}")
+        self.primary = primary
+        self.world_boxes = world_boxes
+        self._to_pixel = to_pixel
+        self.boxes = {"t": boxes_t or {}, "w": boxes_w or {}}
+        self.partner = partner_of_primary or {}
+        self._read = read_image
+        self.config = config
+        self._cache: Dict[Tuple[str, int], object] = {}
+        self._order: List[Tuple[str, int]] = []
+        self._cache_frames = max(1, int(cache_frames))
+
+    def _image(self, modality: str, frame: int, world=None):
+        if self.world_boxes is not None:
+            # Raster projections: which raster shows the box depends on
+            # the box (ALFS tiles), and the source caches what it reads.
+            raster, transform = self._read(modality, frame, world) \
+                or (None, None)
+            return None if raster is None else (to_rgb(raster), transform)
+        key = (modality, frame)
+        if key in self._cache:
+            return self._cache[key]
+        image = self._read(modality, frame)
+        if isinstance(image, tuple):            # (raster, transform)
+            raster, transform = image
+            image = None if raster is None else (to_rgb(raster), transform)
+        elif image is not None:
+            image = (to_rgb(image), None)
+        self._cache[key] = image
+        self._order.append(key)
+        while len(self._order) > self._cache_frames:
+            self._cache.pop(self._order.pop(0), None)
+        return image
+
+    def _crop(self, modality: str, detection_id, size: int):
+        entry = self.boxes[modality].get(detection_id)
+        if entry is None:
+            return None
+        frame, box = entry
+        world = None
+        if self.world_boxes is not None:
+            world = (self.world_boxes.get(modality) or {}).get(detection_id)
+            if world is None or self._to_pixel is None:
+                return None
+        loaded = self._image(modality, int(frame), world)
+        if loaded is None:
+            return None
+        image, transform = loaded
+        if self.world_boxes is not None:
+            if transform is None:
+                return None
+            box = self._to_pixel(transform, world)
+        config = self.config._replace(size=int(size))
+        return extract_crop(image, crop_window(box, config), config.size)
+
+    def thermal(self, detection_id: int, size: int):
+        if self.primary == "t":
+            return self._crop("t", detection_id, size)
+        return self._crop("t", self.partner.get(detection_id), size)
+
+    def rgb(self, detection_id: int, size: int):
+        if self.primary == "w":
+            return self._crop("w", detection_id, size)
+        return self._crop("w", self.partner.get(detection_id), size)
+
+    def resolve(self, detection_id: int, modality_in: str,
+                unmatched: str = UNMATCHED_SKIP, size: int = 224):
+        """The crop for *detection_id* under *modality_in*, or ``None``.
+        ``matched`` gives a ``(thermal, rgb)`` pair; without a partner the
+        *unmatched* rule decides, the missing side being ``None``."""
+        if modality_in == "thermal":
+            return self.thermal(detection_id, size)
+        if modality_in == "rgb":
+            return self.rgb(detection_id, size)
+        if modality_in != "matched":
+            raise ValueError(f"Unknown input configuration: {modality_in!r}")
+        thermal = self.thermal(detection_id, size)
+        rgb = self.rgb(detection_id, size)
+        if thermal is not None and rgb is not None:
+            return (thermal, rgb)
+        if unmatched == UNMATCHED_RGB and rgb is not None:
+            return (None, rgb)
+        if unmatched == UNMATCHED_THERMAL and thermal is not None:
+            return (thermal, None)
+        return None
 
 
 #: Label used when a head reports no class names of its own. The mapping is

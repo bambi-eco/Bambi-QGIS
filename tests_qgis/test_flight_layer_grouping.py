@@ -164,6 +164,85 @@ def test_it_can_append_instead(dock, flight):
     assert [n.name() for n in group.children()] == ["first", "second"]
 
 
+# ---------------------------------------------------------------------------
+# Camera subgroups and the fixed order (9.0.0)
+# ---------------------------------------------------------------------------
+
+def _names(group):
+    return [n.name() for n in group.children()]
+
+
+def test_camera_products_go_into_the_camera_subgroup(dock, flight):
+    dock._add_layer_to_flight(_layer("BAMBI Orthomosaic (Thermal)"))
+    dock._create_layer_group("BAMBI Wildlife Tracks (RGB)")
+
+    group = QgsProject.instance().layerTreeRoot().findGroup("meadow")
+    assert _names(group) == ["Thermal", "RGB"]
+    assert _names(group.findGroup("Thermal")) == ["BAMBI Orthomosaic (Thermal)"]
+    assert _names(group.findGroup("RGB")) == ["BAMBI Wildlife Tracks (RGB)"]
+
+
+def test_thermal_comes_before_rgb_whatever_was_added_first(dock, flight):
+    dock._add_layer_to_flight(_layer("BAMBI ALFS (RGB)"))
+    dock._add_layer_to_flight(_layer("BAMBI ALFS (Thermal)"))
+
+    group = QgsProject.instance().layerTreeRoot().findGroup("meadow")
+    assert _names(group) == ["Thermal", "RGB"]
+
+
+def test_the_order_does_not_depend_on_when_a_layer_was_added(dock, flight):
+    """Rasters first, overlays last - the overlays still end up on top."""
+    dock._create_layer_group("BAMBI Frame GeoTIFFs (Thermal)")
+    dock._add_layer_to_flight(_layer("BAMBI Orthomosaic (Thermal)"))
+    dock._add_layer_to_flight(_layer("BAMBI ALFS (Thermal)"))
+    dock._create_layer_group("BAMBI Wildlife Tracks (Thermal)")
+    dock._create_layer_group("BAMBI Frame Detections (Thermal)")
+    dock._create_layer_group("BAMBI Flight Route (Thermal)")
+    dock._create_layer_group("BAMBI FoV Polygons (Thermal)")
+
+    thermal = QgsProject.instance().layerTreeRoot().findGroup("Thermal")
+    assert _names(thermal) == [
+        "BAMBI Flight Route (Thermal)",
+        "BAMBI FoV Polygons (Thermal)",
+        "BAMBI Wildlife Tracks (Thermal)",
+        "BAMBI Frame Detections (Thermal)",
+        "BAMBI Orthomosaic (Thermal)",
+        "BAMBI ALFS (Thermal)",
+        "BAMBI Frame GeoTIFFs (Thermal)",
+    ]
+
+
+def test_a_group_is_replaced_inside_its_camera_subgroup(dock, flight):
+    dock._create_layer_group("BAMBI Wildlife Tracks (Thermal)")
+    assert dock._remove_layer_group("BAMBI Wildlife Tracks (Thermal)") is True
+    dock._create_layer_group("BAMBI Wildlife Tracks (Thermal)")
+
+    thermal = QgsProject.instance().layerTreeRoot().findGroup("Thermal")
+    assert _names(thermal) == ["BAMBI Wildlife Tracks (Thermal)"]
+
+
+def test_the_users_own_layers_are_not_moved(dock, flight):
+    dock._add_layer_to_flight(_layer("BAMBI Orthomosaic (Thermal)"))
+    thermal = QgsProject.instance().layerTreeRoot().findGroup("Thermal")
+    mine = _layer("my notes")
+    QgsProject.instance().addMapLayer(mine, False)
+    thermal.insertLayer(0, mine)
+
+    dock._create_layer_group("BAMBI Flight Route (Thermal)")
+    assert _names(thermal) == ["my notes", "BAMBI Flight Route (Thermal)",
+                               "BAMBI Orthomosaic (Thermal)"]
+
+
+def test_survey_layers_follow_the_order_too(dock, flight):
+    dock._add_layer_to_survey(_layer("BAMBI Track Inventory (Thermal)"))
+    dock._add_layer_to_survey(_layer("BAMBI Coverage Map (Thermal)"))
+    dock._add_layer_to_survey(_layer("Survey Areas"))
+
+    survey = QgsProject.instance().layerTreeRoot().findGroup(dock.SURVEY_GROUP)
+    assert _names(survey) == ["Survey Areas", "BAMBI Coverage Map (Thermal)",
+                              "BAMBI Track Inventory (Thermal)"]
+
+
 def test_without_a_flight_it_falls_back_to_the_root(dock):
     """A project with no flight has no group to put anything in."""
     dock._flight_list = []
@@ -171,3 +250,34 @@ def test_without_a_flight_it_falls_back_to_the_root(dock):
 
     root = QgsProject.instance().layerTreeRoot()
     assert root.findLayer(layer.id()) is not None
+
+
+# ---------------------------------------------------------------------------
+# "Added" statuses look at the active flight only
+# ---------------------------------------------------------------------------
+
+def test_another_flights_orthomosaic_does_not_count_as_added(dock, flight,
+                                                             tmp_path):
+    dock._add_layer_to_flight(_layer("BAMBI Orthomosaic (Thermal)"))
+    dock._check_existing_qgis_layers()
+    assert "Added" in dock.add_orthomosaic_status.text()
+
+    # a second flight, active, with nothing added yet
+    other = str(tmp_path / "forest" / "qgis")
+    os.makedirs(other, exist_ok=True)
+    dock._flight_list = dock._flights() + [
+        {"name": "forest", "target_folder": other}]
+    dock._active_flight_index = 1
+
+    dock._check_existing_qgis_layers()
+    assert "Added" not in dock.add_orthomosaic_status.text()
+
+    dock._active_flight_index = 0
+    dock._check_existing_qgis_layers()
+    assert "Added" in dock.add_orthomosaic_status.text()
+
+
+def test_added_groups_are_found_inside_the_camera_subgroup(dock, flight):
+    dock._create_layer_group("BAMBI Wildlife Tracks (Thermal)")
+    dock._check_existing_qgis_layers()
+    assert "Added" in dock.layers_status.text()

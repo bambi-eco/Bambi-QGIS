@@ -82,8 +82,27 @@ Two limits of 5.x data, both reported when they apply:
 ## Flights
 
 A QGIS project can hold several flights. The **Flight** box at the top of the
-Input tab shows the active one, `+` adds another, **Rename…** renames it and
-🗑 removes it.
+Input tab shows the active one; **Rename…** renames it and 🗑 removes it.
+
+- **Adding a new flight:** type its name into the **Name** field and press
+  `+` (or Enter). The flight is added and becomes active; then set its
+  **Target folder** further down the Input tab. `+` does not ask for a folder.
+- **Adding an existing flight:** **Browse and Add…** picks a target folder
+  that has been processed before (see below). The name is taken from the
+  Name field, or asked for.
+- Every flight has **a name you give it** - also when the project holds only
+  one flight (since 9.0.0). Names are unique within the project, nothing is
+  suggested, and `Thermal`, `RGB` and `BAMBI Survey` are not available because
+  they title the plugin's own layer groups. If a target folder is set before
+  any flight exists, the plugin uses the Name field or asks for the name; no
+  step runs before the flight is named. Projects saved by an earlier version
+  keep the name they had (derived from the folder).
+- The **target folder field checks the folder**: one that another flight
+  already uses is refused, and for a flight just added by name a folder that
+  has been processed before is adopted with its stored configuration, after a
+  confirmation.
+- Only one flight at a time can be waiting for its target folder - a flight
+  keeps its configuration in its folder, so set it before adding the next.
 
 - Each flight has **its own target folder**. This is enforced: the result files
   are per folder, so two flights sharing one would overwrite each other's
@@ -91,14 +110,51 @@ Input tab shows the active one, `+` adds another, **Rename…** renames it and
 - Each flight has **its own configuration**, stored in its `project.gpkg`. Hand
   someone the folder and the settings that produced it come with it.
 - Each flight has **its own QGIS layer group**, named after the flight.
-  Renaming the flight renames the group.
+  Renaming the flight renames the group. Inside it, the layers of each camera
+  are collected in a **Thermal** and an **RGB** subgroup (see
+  [Layer groups and order](#layer-groups-and-order)).
 - **Exactly one flight is active.** Everything else in the plugin reads that
   one flight, so nothing changes about how the steps work.
+
+### Layer groups and order
+
+```
+BAMBI Survey                 survey-wide layers (all flights)
+<flight name>
+├── Thermal                  everything from the thermal camera
+└── RGB                      everything from the RGB camera
+```
+
+Within a group the plugin's layers keep one fixed order, top to bottom,
+whatever the order they were created in - overlays on top, rasters below:
+
+1. Survey area and exclusion zones
+2. Flight route
+3. FoV polygons and coverage
+4. Density heatmaps
+5. Coverage map
+6. Transect areas
+7. Track inventory, matched RGB/thermal pairs
+8. Wildlife tracks
+9. Detections
+10. Distance sampling (perpendicular distances)
+11. Segmentation masks
+12. 3D reconstruction rasters (DSM, height, texture)
+13. Orthomosaic
+14. ALFS
+15. Per-frame GeoTIFFs
+
+A new layer is inserted at its place in this order; layers that already exist
+are never moved. So you can re-arrange the tree by hand and add your own
+layers - the plugin leaves them where they are and fits new results in around
+them. Layer groups created by an earlier version (directly in the flight
+group) are replaced by the new ones the next time the step adds its layers.
 
 ### Adding a flight that was processed before
 
 Because a target folder describes itself, a folder that has already been
-through the pipeline can simply be added back. Pick it with `+`: the plugin
+through the pipeline can simply be added back. Pick it with **Browse and Add…** (or enter it as
+the target folder of a flight just added with `+`): the plugin
 notices the `project.gpkg` and result stores, lists what it found, and asks
 before adding.
 
@@ -126,11 +182,14 @@ folder, and behave exactly as before.
 
 ### Flights in the survey analytics
 
-Distance sampling and population estimation have always been able to pool
-several target folders, and still can - flights and projects can stay separate
-if that suits you. **+ Add Flight…** is the shortcut for flights this project
-already knows about: the folder and the DEM are looked up rather than browsed
-for.
+The Survey Analytics tab is not tied to the active flight. At its top you
+**tick the flights** that make up the survey, pick the survey's **camera** and
+a **survey folder**; every analytic - census summary, track inventory,
+density, coverage, survey orthomosaic, distance sampling, population
+estimation - then works on all ticked flights and writes into
+`<survey folder>/analytics_{t|w}/`. Each flight's DEM and settings are taken
+from the flight itself. See
+[Survey analytics](pipeline.md#survey-analytics).
 
 ---
 

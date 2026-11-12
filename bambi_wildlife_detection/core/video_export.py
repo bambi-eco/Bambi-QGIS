@@ -164,6 +164,12 @@ def load_poses(target, suffix, log_fn: Optional[Callable[[str], None]] = None):
         return []
 
 
+def load_duplicated(target, suffix):
+    """Indices of a camera's duplicated (frozen thermal) frames."""
+    from . import poses
+    return poses.flagged(target, suffix)
+
+
 def load_pixel_detections(target, suffix):
     """frame -> list of (x1, y1, x2, y2, class_id) in extracted-frame pixels."""
     from . import store, track_store

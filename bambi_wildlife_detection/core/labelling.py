@@ -1389,6 +1389,11 @@ class _GeoPropagator:
         boxes: List[Tuple[int, Box]] = []
         failures: List[Tuple[int, str]] = []
         for frame in frames:
+            if 0 <= frame < len(images) and images[frame].get("duplicated"):
+                # the pose is fine, but the image shows an earlier moment
+                failures.append(
+                    (frame, "duplicated (frozen thermal) frame - skipped"))
+                continue
             try:
                 boxes.append((frame, self._world_to_box(
                     world, frame, images, img_width, img_height)))

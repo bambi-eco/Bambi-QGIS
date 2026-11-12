@@ -21,6 +21,7 @@ Detect, track, and geo-reference wildlife in aerial drone recordings, directly i
 - **Results that carry their own meaning**: every detection has an identity the later steps refer to, so a track knows which detections it is made of and a geo-referencing failure is recorded rather than silently dropped; user-defined fields travel through the whole pipeline
 - **Export & publish**: COCO, YOLO, MOT, TRex tracklets, GeoJSON, Camtrap DP, and Darwin Core Archive for GBIF
 - **Several flights per project**: each with its own target folder, configuration and QGIS layer group
+- **3D Flight Viewer**: the flight in 3D - DEM, route and corrected camera poses - replayed with the frames, detections or tracks and live ALFS integrals draped onto the DEM; adjust the correction factors interactively (with an automatic search), and reconstruct the surface (sparse points and a dense DEM-seeded surface, RGB- or thermal-textured)
 - **Companion tools**: video creator for shareable result videos, radiometric thermal image viewer, randomized transect flight planner, interactive map-canvas inspectors, and a built-in dependency manager
 
 ## Installation
@@ -60,7 +61,8 @@ What you need as input: MP4 videos + SRT subtitle files (video mode) *or* a fold
 | [DEM Import & Conversion](docs/dem.md) | Automatic download (Austria), GeoTIFF conversion, manual DEMs, flat surface meshes for aquatic surveys |
 | [Correction Wizard](docs/correction-wizard.md) | Finding per-flight positional/rotational correction factors |
 | [Camera Calibration Wizard](docs/camera-calibration.md) | Estimating camera intrinsics for single cameras (SfM) and stereo RGB+thermal setups |
-| [Tools](docs/tools.md) | Video Creator, Thermal Image Viewer, Labelling Tool, interactive map-canvas inspectors |
+| [Custom Implementations](docs/custom-implementations.md) | Your own detector, tracker or classifier as a class in a .py file: interface, samples (YOLO, OWL, DroneMegaDetector, IoU tracker, crop and track-level classifiers), dependencies and safety |
+| [Tools](docs/tools.md) | 3D Flight Viewer, Video Creator, Thermal Image Viewer, Labelling Tool, Segmentation Tool, Transect Splitting Tool, AGL Profile, interactive map-canvas inspectors |
 | [Flight Strategy Planner](docs/flight-planner.md) | Randomized transect-based survey route generation |
 | [Troubleshooting](docs/troubleshooting.md) | Common errors and how to resolve them |
 

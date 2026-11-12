@@ -8,7 +8,6 @@ This module contains the processing logic for all pipeline steps.
 
 import os
 import json
-import shutil
 from typing import Dict, Any, Optional, List, Sequence
 
 from qgis.PyQt.QtCore import QObject, pyqtSignal
@@ -239,6 +238,10 @@ class ProcessingWorker(QObject):
                 self.processor.run_coverage_map(
                     self.config, self.progress.emit, self.log.emit, self.is_cancelled
                 )
+            elif self.step == "survey_orthomosaic":
+                self.processor.run_survey_orthomosaic(
+                    self.config, self.progress.emit, self.log.emit, self.is_cancelled
+                )
             elif self.step == "distance_sampling":
                 self.processor.run_distance_sampling(
                     self.config, self.progress.emit, self.log.emit, self.is_cancelled
@@ -288,6 +291,49 @@ def _legacy_text_writer(config: Dict[str, Any], path: str, stack):
     if not config.get("write_legacy_text_outputs", True):
         return _DiscardedWriter()
     return stack.enter_context(open(path, "w", encoding="utf-8"))
+
+
+def _frames_reextracted(config: Dict[str, Any], modality: str,
+                        log_fn=None) -> None:
+    """Flag everything computed from a camera's frames as out of date.
+
+    Frame extraction is not a store stage (its output is the frames folder
+    and the poses file), so it is not recorded itself - but a re-extraction
+    can renumber every frame, and what was computed from the old frames no
+    longer belongs to them. A no-op on a first extraction.
+    """
+    from .core import stages, store
+
+    target_folder = config.get("target_folder", "")
+    if not target_folder or not os.path.isfile(
+            store.project_path(target_folder)):
+        return
+    try:
+        stale = stages.mark_dependents_stale(
+            target_folder, stages.FRAMES, modality)
+    except Exception as exc:  # noqa: BLE001 - never fail an extraction on it
+        if log_fn:
+            log_fn(f"Warning: could not mark dependent steps out of date: "
+                   f"{exc}")
+        return
+    if stale and log_fn:
+        log_fn("Now out of date after re-extracting the frames: " + ", ".join(stale))
+
+
+def _drop_duplicated(frame_indices, images, log_fn=None):
+    """*frame_indices* without the duplicated (frozen thermal) frames.
+
+    Their image repeats the previous frame, so a step that looks at the
+    image would repeat that frame's result at a new position (core.poses).
+    The frame numbers themselves are untouched.
+    """
+    from .core import poses as poses_core
+
+    kept = poses_core.without_duplicated(frame_indices, images)
+    skipped = len(frame_indices) - len(kept)
+    if skipped and log_fn:
+        log_fn(f"Skipping {skipped} duplicated (frozen thermal) frame(s)")
+    return kept
 
 
 def _record_stage(config: Dict[str, Any], stage: str, modality: str,
@@ -762,6 +808,7 @@ class BambiProcessor(SurveyAnalyticsMixin):
         frames_folder_t = os.path.join(target_folder, "frames_t")
         os.makedirs(frames_folder_t, exist_ok=True)
         target_poses_t = os.path.join(target_folder, "poses_t.json")
+        video_flagging = None   # set by a video extraction (core.poses)
 
         if config.get("input_mode") == "photo":
             from bambi.webgl.photo_pose_extractor import UniqueMatchPhotoPoseExtractor
@@ -945,9 +992,16 @@ class BambiProcessor(SurveyAnalyticsMixin):
             if log_fn:
                 log_fn(f"Processing {total_frames} frames...")
 
+            # Frozen thermal frames (shutter closed for calibration) are
+            # kept and marked "duplicated" instead of dropped, so the frame
+            # index stays the video's frame number (core.poses).
+            from .core import poses as poses_core
+            flag_duplicates = bool(config.get("flag_duplicate_frames", False))
             with patch_frame_extraction_progress(progress_fn, total_frames, log_fn, cancel_check=cancel_check):
-                extractor.extract(
+                poses_core.extract_with_flag(
+                    extractor.extract,
                     frames_folder_t, airdata_path, thermal_video_paths, thermal_srt_paths,
+                    flag_duplicates=flag_duplicates,
                     origin=ad_origin, include_gps=True,
                     skip=config.get("extract_skip", 0),
                     limit=config.get("extract_limit"),
@@ -955,6 +1009,7 @@ class BambiProcessor(SurveyAnalyticsMixin):
                     timezone=_video_tz,
                     no_images=config.get("no_images", False),
                 )
+            video_flagging = flag_duplicates
 
         # Move poses.json written into frames_folder to target folder with suffix
         poses_in_frames = os.path.join(frames_folder_t, "poses.json")
@@ -978,9 +1033,18 @@ class BambiProcessor(SurveyAnalyticsMixin):
 
         # Log frame count from poses file
         if os.path.exists(target_poses_t):
+            if video_flagging is not None:
+                from .core import poses as poses_core
+                n_duplicated = poses_core.record_flag_setting(
+                    target_poses_t, video_flagging)
+                if video_flagging and log_fn:
+                    log_fn(f"{n_duplicated} duplicated (shutter) frames "
+                           "flagged - kept in the frame list, skipped by the "
+                           "image-based steps")
             with open(target_poses_t, 'r') as f:
                 poses_t = json.load(f)
             thermal_frames = len(poses_t.get("images", []))
+            _frames_reextracted(config, "t", log_fn)
             if log_fn:
                 log_fn(f"Thermal extraction complete: {thermal_frames} frames")
                 _heading_msg = heading_check_message(poses_t, "Thermal")
@@ -1185,6 +1249,7 @@ class BambiProcessor(SurveyAnalyticsMixin):
             with open(target_poses_w, 'r') as f:
                 poses_w = json.load(f)
             rgb_frames = len(poses_w.get("images", []))
+            _frames_reextracted(config, "w", log_fn)
             if log_fn:
                 log_fn(f"RGB extraction complete: {rgb_frames} frames")
                 _heading_msg = heading_check_message(poses_w, "RGB")
@@ -1317,7 +1382,9 @@ class BambiProcessor(SurveyAnalyticsMixin):
                     "frame_idx": i,
                     "imagefile": img_info.get("imagefile", ""),
                     "altitude": z,
-                    "timestamp": img_info.get("timestamp", "")
+                    "timestamp": img_info.get("timestamp", ""),
+                    # frozen thermal image; the position itself is valid
+                    "duplicated": bool(img_info.get("duplicated")),
                 }
             })
 
@@ -1956,6 +2023,8 @@ class BambiProcessor(SurveyAnalyticsMixin):
         max_dt = float(config.get("match_max_time_offset", 0.10))
         frame_map = {}
         for frame in range(len(images_t)):
+            if images_t[frame].get("duplicated"):
+                continue    # a frozen thermal frame shows an earlier moment
             partner = matcher.matches_within(frame, max_dt)
             if partner is not None:
                 frame_map[frame] = partner
@@ -2106,13 +2175,14 @@ class BambiProcessor(SurveyAnalyticsMixin):
         # reach them through the world coordinates geo-referencing already
         # produced - so one geo-referencing result serves both projections.
         geo_boxes: Dict[int, tuple] = {}
-        if geo_crops.is_geo(projection):
-            if not geo_crops.available_frames(target_folder, suffix):
-                raise ValueError(
-                    f"No {camera_name} GeoTIFFs found. Orthorectified crops "
-                    "come from the per-frame GeoTIFF export, so run 'Export "
-                    "Frames as GeoTIFF' for this camera first - or set the "
-                    "projection to Perspective.")
+        from .core import raster_sources
+        rasters = self._raster_source(config, target_folder, suffix,
+                                      projection)
+        if rasters is not None:
+            if not rasters.frames():
+                raise ValueError(raster_sources.missing_message(
+                    rasters.kind, camera_name, "The classification "
+                    "projection"))
             geo_boxes = {
                 row["detection_id"]: (row["gx1"], row["gy1"],
                                       row["gx2"], row["gy2"])
@@ -2122,12 +2192,12 @@ class BambiProcessor(SurveyAnalyticsMixin):
                 raise ValueError(
                     f"No {camera_name} detections have world coordinates. "
                     "Run Geo-Reference Detections before using an "
-                    "orthorectified projection.")
+                    "orthorectified or ALFS projection.")
             rows = [row for row in rows if row["detection_id"] in geo_boxes]
             if not rows:
                 raise ValueError(
                     "None of the tracked detections could be geo-referenced, "
-                    "so there is nothing to crop from the GeoTIFFs.")
+                    "so there is nothing to crop from the rasters.")
 
         crop_config = classification.CropConfig(
             padding=float(config.get("classification_crop_padding", 0.25)),
@@ -2227,52 +2297,68 @@ class BambiProcessor(SurveyAnalyticsMixin):
         batch_size = int(config.get("classification_batch_size", 16))
         done = 0
         skipped_frames = 0
+        frozen_frames = 0
         warned_resolution = False
         for index, frame in enumerate(sorted(by_frame)):
             if cancel_check and cancel_check():
                 raise CancelledException("Embedding cancelled")
 
-            imagefile = image_of_frame.get(frame, "")
-            transform = None
-            if geo_boxes:
-                image, transform = geo_crops.read_geotiff(
-                    geo_crops.geotiff_path(target_folder, suffix, frame))
-                if image is not None and not warned_resolution:
-                    warning = geo_crops.resolution_warning(
-                        projection, image.shape[1])
-                    if warning and log_fn:
-                        log_fn(warning)
-                    warned_resolution = True
-            else:
-                image = self._read_frame_image(frames_folder, imagefile, frame)
-
-            if image is None:
-                if log_fn:
-                    log_fn(f"Warning: frame {frame} could not be read, "
-                           "skipping its detections")
-                skipped_frames += 1
+            if 0 <= frame < len(images) and images[frame].get("duplicated"):
+                # A frozen thermal frame shows the previous image: a crop
+                # from it (e.g. of an interpolated box) is not this animal
+                # at this moment, so it gets no vector and no vote.
+                frozen_frames += 1
                 continue
 
-            image = classification.to_rgb(image)
+            imagefile = image_of_frame.get(frame, "")
+            image = None
+            if rasters is None:
+                image = self._read_frame_image(frames_folder, imagefile, frame)
+                if image is not None:
+                    image = classification.to_rgb(image)
+
             entries = by_frame[frame]
             crops, ids = [], []
             for row in entries:
-                if transform is not None:
-                    # The world box mapped into this raster's own pixel space.
-                    # Thermal anchoring does not apply: an orthophoto is
-                    # already in metric ground units, so both modalities'
-                    # boxes describe the same footprint.
-                    box = geo_crops.geo_box_to_pixel(
-                        transform, geo_boxes[row["detection_id"]])
+                if rasters is not None:
+                    # The raster showing this box at this frame - the
+                    # frame's GeoTIFF, or the (nearest) ALFS integral and
+                    # of its tiles the one the box lies in - and the world
+                    # box mapped into that raster's own pixel space.
+                    # Thermal anchoring does not apply: a raster is already
+                    # in metric ground units, so both modalities' boxes
+                    # describe the same footprint.
+                    world_box = geo_boxes[row["detection_id"]]
+                    raster, transform = rasters.read_for(frame, world_box)
+                    if raster is None:
+                        continue
+                    if not warned_resolution:
+                        warning = geo_crops.resolution_warning(
+                            projection, raster.shape[1])
+                        if warning and log_fn:
+                            log_fn(warning)
+                        warned_resolution = True
+                    source = classification.to_rgb(raster)
+                    box = geo_crops.geo_box_to_pixel(transform, world_box)
                     override = None
                 else:
+                    if image is None:
+                        break
+                    source = image
                     box = (row["x1"], row["y1"], row["x2"], row["y2"])
                     override = anchor_sizes.get(row["detection_id"])
                 window = classification.crop_window(
                     box, crop_config, size_override=override)
                 crops.append(classification.extract_crop(
-                    image, window, crop_config.size))
+                    source, window, crop_config.size))
                 ids.append(int(row["detection_id"]))
+
+            if not crops:
+                if log_fn:
+                    log_fn(f"Warning: frame {frame} could not be read, "
+                           "skipping its detections")
+                skipped_frames += 1
+                continue
 
             vectors = {}
             for start in range(0, len(crops), batch_size):
@@ -2297,6 +2383,9 @@ class BambiProcessor(SurveyAnalyticsMixin):
         if log_fn:
             note = (f", {skipped_frames} frame(s) skipped for want of an image"
                     if skipped_frames else "")
+            if frozen_frames:
+                note += (f", {frozen_frames} duplicated (frozen thermal) "
+                         "frame(s) left out")
             log_fn(f"Embedded {done} crop(s) into "
                    f"{embedding_files.relative_run_folder(suffix, projection)}"
                    f"{note}")
@@ -2384,21 +2473,20 @@ class BambiProcessor(SurveyAnalyticsMixin):
         target_folder = config["target_folder"]
         models = config.get("classification_models") or {}
 
+        # Embeddings are only needed by classifiers that read them. A custom
+        # implementation may read the cut-out boxes instead, so their
+        # absence is reported by the first head that asks for them
+        # (_open_head) rather than up front.
         run = classification_store.active_embedding_run(target_folder, suffix)
-        if run is None:
-            raise ValueError(
-                f"No {camera_name} embeddings found. Run 'Compute DINOv3 "
-                "Embeddings' for this camera first.")
-
-        projection = run["projection"]
+        projection = run["projection"] if run is not None else None
         rows = track_store.load_pixel_tracks(target_folder, suffix)
         if not rows:
             raise ValueError(f"No {camera_name} tracks found.")
 
         if log_fn:
             enabled = ", ".join(tasks)
-            log_fn(f"Classifying {camera_name} tracks ({projection}): "
-                   f"{enabled}")
+            log_fn(f"Classifying {camera_name} tracks "
+                   f"({projection or 'no embeddings'}): {enabled}")
         if progress_fn:
             progress_fn(5)
 
@@ -2409,9 +2497,12 @@ class BambiProcessor(SurveyAnalyticsMixin):
         wanted = [{"detection_id": row["detection_id"], "frame": row["frame"],
                    "imagefile": image_of_frame.get(row["frame"], "")}
                   for row in rows]
-        vectors_primary = embedding_files.read_vectors(
-            target_folder, suffix, projection, wanted)
-        if not vectors_primary:
+        # Read frame by frame as the heads ask for them: a flight's
+        # vectors are hundreds of megabytes, and no head needs them at once.
+        vectors_primary = embedding_files.LazyVectors(
+            target_folder, suffix, projection, wanted) if run is not None \
+            else {}
+        if run is not None and not vectors_primary:
             raise ValueError(
                 "The embedding vectors are missing from disk. Re-run 'Compute "
                 "DINOv3 Embeddings'.")
@@ -2424,17 +2515,20 @@ class BambiProcessor(SurveyAnalyticsMixin):
             for task in tasks)
         vectors_other: Dict[int, Any] = {}
         partner_of_primary: Dict[int, int] = {}
+        other_rows: List[dict] = []
+        other_images: List[dict] = []
         if needs_partner:
             partner_of_primary = match_store.partner_detections(
                 target_folder, suffix)
             other_run = classification_store.active_embedding_run(
                 target_folder, other)
-            if partner_of_primary and other_run is not None:
+            if partner_of_primary:
                 other_rows = track_store.load_pixel_tracks(target_folder, other)
                 other_images = self._load_pose_images(target_folder, other)
+            if partner_of_primary and other_run is not None:
                 other_names = {i: (img.get("imagefile") or "")
                                for i, img in enumerate(other_images)}
-                vectors_other = embedding_files.read_vectors(
+                vectors_other = embedding_files.LazyVectors(
                     target_folder, other, other_run["projection"],
                     [{"detection_id": r["detection_id"], "frame": r["frame"],
                       "imagefile": other_names.get(r["frame"], "")}
@@ -2450,6 +2544,21 @@ class BambiProcessor(SurveyAnalyticsMixin):
             vectors_t=vectors_primary if suffix == "t" else vectors_other,
             vectors_w=vectors_primary if suffix == "w" else vectors_other,
             partner_of_primary=partner_of_primary)
+        resolver.meta = {
+            row["detection_id"]: {"track_id": int(row["track_id"]),
+                                  "frame": int(row["frame"]),
+                                  "box": (row["x1"], row["y1"],
+                                          row["x2"], row["y2"])}
+            for row in rows}
+        # Only read when a custom classifier asks for its items.
+        resolver.pose_of = self._pose_lookup(config, target_folder, images)
+        resolver.world_boxes = lambda: {
+            geo["detection_id"]: (geo["gx1"], geo["gy1"], geo["gz1"],
+                                  geo["gx2"], geo["gy2"], geo["gz2"])
+            for geo in track_store.load_georeferenced(target_folder, suffix)}
+        resolver.crops = self._crop_resolver(
+            config, target_folder, suffix, rows, images, other_rows,
+            other_images, partner_of_primary)
 
         by_track: Dict[int, List[dict]] = {}
         for row in rows:
@@ -2475,7 +2584,10 @@ class BambiProcessor(SurveyAnalyticsMixin):
             occlusion_labels = self._run_head(
                 config, target_folder, suffix, "occlusion", models["occlusion"],
                 [row["detection_id"] for row in rows], resolver, unmatched,
-                projection, log_fn)
+                projection, log_fn,
+                progress=(None if progress_fn is None else
+                          lambda f: progress_fn(5 + int(30 * f))),
+                cancel_check=cancel_check)
         elif occlusion_labels and log_fn:
             log_fn(f"Using the occlusion classifier's {len(occlusion_labels)} "
                    "stored frame call(s) to choose what may vote")
@@ -2539,7 +2651,11 @@ class BambiProcessor(SurveyAnalyticsMixin):
             species_of_track = self._run_voted_task(
                 config, target_folder, suffix, task, models[task],
                 by_track, voting_frames, resolver, unmatched, projection,
-                quorum, min_frames, frame_source, species_of_track, log_fn)
+                quorum, min_frames, frame_source, species_of_track, log_fn,
+                progress=(None if progress_fn is None else
+                          lambda f, i=index: progress_fn(
+                              40 + int(55 * (i + f) / len(voted)))),
+                cancel_check=cancel_check)
             if progress_fn:
                 progress_fn(40 + int(55 * (index + 1) / len(voted)))
 
@@ -2672,8 +2788,8 @@ class BambiProcessor(SurveyAnalyticsMixin):
         # One snapshot before anything is rewritten, so a call carried onto
         # one camera is not read back as fresh evidence for the other.
         calls = {suffix: classification_store.track_predictions(
-                     target_folder, suffix, classification_store.LIFE_STAGE)
-                 for suffix in ("t", "w")}
+            target_folder, suffix, classification_store.LIFE_STAGE)
+            for suffix in ("t", "w")}
 
         for suffix, other in (("t", "w"), ("w", "t")):
             juveniles_there = {
@@ -2885,8 +3001,43 @@ class BambiProcessor(SurveyAnalyticsMixin):
         if progress_fn:
             progress_fn(100)
 
+    #: Detections handed to a classifier per call: embedding vectors are
+    #: small, crops are not. Keeps the memory of a stage independent of the
+    #: size of the flight, and gives the progress bar something to show.
+    _HEAD_BATCH = {"embeddings": 1024, "crops": 64}
+
+    def _predict_in_batches(self, head, resolver, detection_ids, modality_in,
+                            unmatched, progress=None, cancel_check=None):
+        """Per-frame calls for *detection_ids*, a batch at a time.
+
+        :return: ``(usable ids, calls)`` - the detections that had an input
+            (a vector or a crop), and their ``(class_index, probability)``
+        """
+        size = self._HEAD_BATCH.get(getattr(head, "input", "embeddings"),
+                                    1024)
+        usable, calls = [], []
+        total = len(detection_ids)
+        for start in range(0, total, size):
+            if cancel_check and cancel_check():
+                raise CancelledException("Classification cancelled")
+            ids, features = [], []
+            for detection_id in detection_ids[start:start + size]:
+                vector = self._head_input(head, resolver, detection_id,
+                                          modality_in, unmatched)
+                if vector is None:
+                    continue
+                ids.append(detection_id)
+                features.append(vector)
+            if ids:
+                calls.extend(self._head_predict(head, features, resolver, ids))
+                usable.extend(ids)
+            if progress is not None and total:
+                progress(min(1.0, (start + size) / total))
+        return usable, calls
+
     def _run_head(self, config, target_folder, suffix, task, spec,
-                  detection_ids, resolver, unmatched, projection, log_fn):
+                  detection_ids, resolver, unmatched, projection, log_fn,
+                  progress=None, cancel_check=None):
         """Run one per-frame head and record its output. Returns its labels."""
         from .core import classification_store
 
@@ -2894,20 +3045,23 @@ class BambiProcessor(SurveyAnalyticsMixin):
         head, _dim = self._open_head(config, task, spec, modality_in,
                                      projection, log_fn)
 
-        usable, features = [], []
-        for detection_id in detection_ids:
-            vector = resolver.resolve(detection_id, modality_in, unmatched)
-            if vector is None:
-                continue
-            usable.append(detection_id)
-            features.append(vector)
+        if getattr(head, "level", "frame") == "track":
+            raise ValueError(
+                f"The {task} classifier {head.path} decides per track, but "
+                f"{task} is a per-frame call. Use a frame-level classifier "
+                "for it.")
+
+        usable, calls = self._predict_in_batches(
+            head, resolver, list(detection_ids), modality_in, unmatched,
+            progress, cancel_check)
+        if hasattr(head, "close"):
+            head.close()
 
         if not usable:
             if log_fn:
                 log_fn(f"No features available for '{task}' - nothing to do")
             return {}
 
-        calls = head.predict(features)
         classes = head.classes
         predictions, labels = [], {}
         for detection_id, (index, probability) in zip(usable, calls):
@@ -2937,7 +3091,8 @@ class BambiProcessor(SurveyAnalyticsMixin):
     def _run_voted_task(self, config, target_folder, suffix, task, spec,
                         by_track, voting_frames, resolver, unmatched,
                         projection, quorum, min_frames, frame_source,
-                        species_of_track, log_fn):
+                        species_of_track, log_fn, progress=None,
+                        cancel_check=None):
         """Run a per-frame head and aggregate it per track by quorum vote."""
         from .core import classification, classification_store, hf_access
 
@@ -2950,7 +3105,12 @@ class BambiProcessor(SurveyAnalyticsMixin):
         # - a flight with three species uses three different classifiers.
         heads: Dict[str, Any] = {}
 
-        for track_id, members in sorted(by_track.items()):
+        for position, (track_id, members) in enumerate(
+                sorted(by_track.items())):
+            if cancel_check and cancel_check():
+                raise CancelledException("Classification cancelled")
+            if progress is not None:
+                progress(position / max(1, len(by_track)))
             chosen = voting_frames.get(track_id, [])
             if not chosen:
                 continue
@@ -2982,18 +3142,47 @@ class BambiProcessor(SurveyAnalyticsMixin):
                     log_fn)
             head, _dim = heads[key]
 
-            usable, features = [], []
-            for detection_id in chosen:
-                vector = resolver.resolve(detection_id, modality_in, unmatched)
-                if vector is None:
-                    continue
-                usable.append(detection_id)
-                features.append(vector)
+            track_level = getattr(head, "level", "frame") == "track"
+            usable, features, calls = [], [], []
+            if track_level:
+                # the whole animal at once: that is what "track level" means
+                for detection_id in chosen:
+                    vector = self._head_input(head, resolver, detection_id,
+                                              modality_in, unmatched)
+                    if vector is None:
+                        continue
+                    usable.append(detection_id)
+                    features.append(vector)
+            else:
+                usable, calls = self._predict_in_batches(
+                    head, resolver, list(chosen), modality_in, unmatched,
+                    cancel_check=cancel_check)
             if not usable:
                 continue
 
-            calls = head.predict(features)
             classes = head.classes
+            if track_level:
+                # A track-level classifier (custom implementation) sees the
+                # animal's frames at once and makes the call itself, so
+                # there is no per-frame result and no vote to take.
+                call = head.predict_track(features, resolver.items(usable))
+                if call is None:
+                    continue
+                index, probability = call
+                label = classes[index] if index < len(classes) else str(index)
+                if task == "species":
+                    resolved_species[track_id] = species_names(label)
+                track_rows.append({
+                    "track_id": track_id, "label": label,
+                    "votes": len(usable), "n": len(usable),
+                    "fraction": probability,
+                    "modality_in": modality_in,
+                    "model": os.path.basename(head.path),
+                    "evidence": {"frames": frame_source,
+                                 "class_index": index, "level": "track"},
+                })
+                continue
+
             per_frame = []
             for detection_id, (index, probability) in zip(usable, calls):
                 label = classes[index] if index < len(classes) else str(index)
@@ -3023,6 +3212,10 @@ class BambiProcessor(SurveyAnalyticsMixin):
                              "class_index": vote.class_index},
             })
 
+        for opened, _dim in heads.values():
+            if hasattr(opened, "close"):
+                opened.close()
+
         classification_store.record_frame_predictions(
             target_folder, suffix, task, frame_rows)
         classification_store.record_track_predictions(
@@ -3040,6 +3233,83 @@ class BambiProcessor(SurveyAnalyticsMixin):
             log_fn(f"{task}: {summary or 'nothing called'}{note}")
         return resolved_species
 
+    @staticmethod
+    def _head_input(head, resolver, detection_id, modality_in, unmatched):
+        """What *head* reads for one detection: its embedding vector, or -
+        for a custom classifier working on the image - its crop."""
+        if getattr(head, "input", "embeddings") == "crops":
+            return resolver.crops.resolve(
+                detection_id, modality_in, unmatched,
+                size=getattr(head, "crop_size", 224))
+        return resolver.resolve(detection_id, modality_in, unmatched)
+
+    @staticmethod
+    def _head_predict(head, features, resolver, detection_ids):
+        """Per-frame calls of a built-in head or a custom classifier (which
+        is also told which detection each row is, where it is and where the
+        camera was)."""
+        if hasattr(head, "implementation"):
+            return head.predict(features, resolver.items(detection_ids))
+        return head.predict(features)
+
+    def _crop_resolver(self, config, target_folder, suffix, rows, images,
+                       other_rows, other_images, partner_of_primary):
+        """Crops for classifiers that read the image (core.classification
+        ``CropResolver``); frames are only read when one asks."""
+        from .core import classification
+
+        other = "w" if suffix == "t" else "t"
+        boxes = {
+            suffix: {r["detection_id"]: (r["frame"], (r["x1"], r["y1"],
+                                                      r["x2"], r["y2"]))
+                     for r in rows},
+            other: {r["detection_id"]: (r["frame"], (r["x1"], r["y1"],
+                                                     r["x2"], r["y2"]))
+                    for r in other_rows},
+        }
+        pose_images = {suffix: images, other: other_images}
+
+        # The imagery follows the Classification tab's "Projection": the
+        # camera frames, or the orthorectified per-frame GeoTIFFs, where a
+        # box is placed through its world coordinates (as step C1 does).
+        from .core import geo_crops, track_store
+        sources = {m: self._raster_source(
+            config, target_folder, m,
+            config.get("classification_projection", "non_geo"))
+            for m in (suffix, other)}
+        ortho = sources[suffix] is not None
+        world_boxes = None
+        if ortho:
+            world_boxes = {
+                m: {row["detection_id"]: (row["gx1"], row["gy1"],
+                                          row["gx2"], row["gy2"])
+                    for row in track_store.load_georeferenced(
+                        target_folder, m)}
+                for m in (suffix, other)}
+
+        def read_image(modality, frame, world_box=None):
+            entries = pose_images.get(modality) or []
+            if not 0 <= frame < len(entries):
+                return None
+            if entries[frame].get("duplicated"):
+                return None         # frozen thermal image (core.poses)
+            if ortho:
+                # the frame's GeoTIFF, or the ALFS integral (and tile)
+                # showing this box
+                return sources[modality].read_for(frame, world_box)
+            return self._read_frame_image(
+                os.path.join(target_folder, f"frames_{modality}"),
+                entries[frame].get("imagefile") or "", frame)
+
+        return classification.CropResolver(
+            suffix, boxes["t"], boxes["w"], partner_of_primary, read_image,
+            world_boxes=world_boxes, to_pixel=geo_crops.geo_box_to_pixel,
+            config=
+            classification.CropConfig(
+                padding=float(config.get("classification_crop_padding", 0.25)),
+                size=int(config.get("classification_crop_size", 224)),
+                letterbox=bool(config.get("classification_letterbox", True))))
+
     def _open_head(self, config, task, spec, modality_in, projection,
                    log_fn=None):
         """Load the head configured for *task*, downloading a default if needed."""
@@ -3047,6 +3317,36 @@ class BambiProcessor(SurveyAnalyticsMixin):
 
         models_dir = self._get_default_model_dir()
         source = spec.get("model", "default")
+
+        from .core import custom_models
+        if source == custom_models.SOURCE:
+            head = custom_models.ClassifierHead(
+                custom_models.open_implementation(
+                    spec, custom_models.CLASSIFIER,
+                    self._custom_context(config, custom_models.CLASSIFIER,
+                                         modality_in, log_fn, task=task)))
+            if log_fn:
+                log_fn(f"Using custom {task} classifier {head.path} "
+                       f"(reads {head.input}, decides per {head.level}; "
+                       f"classes: {', '.join(head.classes)})")
+            if head.input == custom_models.INPUT_EMBEDDINGS \
+                    and projection is None:
+                raise ValueError(
+                    f"{head.path} reads embeddings, but none have been "
+                    "computed for this camera. Run 'Compute DINOv3 "
+                    "Embeddings' first.")
+            return head, 0
+
+        if projection is None:
+            raise ValueError(
+                f"No embeddings found for the {task} classifier. Run "
+                "'Compute DINOv3 Embeddings' for this camera first.")
+        if projection == "alfs" and source != "custom":
+            raise ValueError(
+                f"No default {task} classifier has been published for ALFS "
+                "imagery yet. Choose a custom model or a custom "
+                "implementation for it in the Classification tab, or switch "
+                "the projection.")
 
         if source == "custom":
             path = (spec.get("path") or "").strip()
@@ -3500,6 +3800,166 @@ class BambiProcessor(SurveyAnalyticsMixin):
             slug = slug.replace("--", "-")
         return slug or "species"
 
+    @staticmethod
+    def _raster_source(config, target_folder: str, suffix: str,
+                       projection: str):
+        """The georeferenced rasters behind a projection setting
+        (core.raster_sources): per-frame GeoTIFFs or ALFS integrals; None
+        for the perspective frames."""
+        from .core import raster_sources
+
+        kind = raster_sources.kind_of(projection)
+        if kind == raster_sources.PERSPECTIVE:
+            return None
+        # An ALFS integral stands in for the frames within one sampling
+        # step of its central frame.
+        max_gap = None
+        if kind == raster_sources.ALFS:
+            max_gap = max(1, int(config.get("alfs_sampling_rate") or 1))
+        return raster_sources.RasterSource(
+            target_folder, suffix, kind, max_gap=max_gap)
+
+    def _pose_lookup(self, config, target_folder: str, images):
+        """``frame index -> custom_models.Pose``: the camera extrinsics a
+        custom implementation is given, with this flight's correction
+        factors applied (the camera the plugin itself works with). Cached
+        per frame; never fails a run - without the camera stack the
+        rotation is simply left out."""
+        from .core import agl_profile, custom_models
+        from .core.camera_pose import corrected_pose
+
+        try:
+            origin = agl_profile.dem_origin(
+                config.get("dem_path") or "",
+                config.get("alfs_dem_metadata_path") or "", target_folder)
+        except Exception:  # noqa: BLE001  # nosec B110 - world stays None
+            origin = None
+        cache: Dict[int, Any] = {}
+
+        def pose_of(frame_idx: int):
+            if frame_idx in cache:
+                return cache[frame_idx]
+            if not 0 <= frame_idx < len(images):
+                return None
+            meta = images[frame_idx]
+            try:
+                correction = self.get_correction_for_frame(frame_idx, config)
+            except Exception:  # noqa: BLE001 - no correction configured
+                correction = {}
+            try:
+                corrected = corrected_pose(
+                    meta, correction.get("translation"),
+                    correction.get("rotation"))
+            except Exception:  # noqa: BLE001 - no alfspy / pyrr
+                corrected = None
+            cache[frame_idx] = custom_models.make_pose(
+                meta, correction, origin, corrected)
+            return cache[frame_idx]
+
+        return pose_of
+
+    def _custom_context(self, config, kind: str, camera: str, log_fn=None,
+                        task: str = "", min_confidence: float = 0.0,
+                        progress=None):
+        from .core import custom_models, raster_sources
+        projection = raster_sources.context_name(config.get(
+            "detection_projection" if kind == custom_models.DETECTOR
+            else "classification_projection"))
+        context = self._custom_context_for(
+            config, kind, camera, log_fn, task, min_confidence, projection)
+        if progress is not None:
+            def report(fraction):
+                try:
+                    progress(min(1.0, max(0.0, float(fraction))))
+                except (TypeError, ValueError):
+                    pass            # not a number: ignore, never fail a run
+            context.progress = report
+        return context
+
+    def _custom_context_for(self, config, kind, camera, log_fn, task,
+                            min_confidence, projection):
+        """What a custom implementation's ``setup`` is handed
+        (core.custom_models). *camera* is t / w or thermal / rgb / matched."""
+        from .core import classification, custom_models
+
+        camera = {"t": "thermal", "w": "rgb"}.get(camera, camera)
+        try:
+            device = classification.resolve_device(
+                config.get("classification_device", "auto"))
+        except Exception:  # noqa: BLE001 - no torch: the code decides
+            device = "cpu"
+        return custom_models.Context(
+            kind=kind, camera=camera, task=task, device=device,
+            model_dir=self._get_default_model_dir(),
+            min_confidence=min_confidence, projection=projection,
+            target_folder=config.get("target_folder", ""),
+            log=(log_fn or (lambda message: None)))
+
+    def _raster_boxes_to_frame(self, config, target_folder, camera_suffix,
+                               images, frames_folder):
+        """``(frame, transform, raster boxes) -> frame boxes`` for
+        detection on GeoTIFFs (core.ortho_detection): the DEM gives the
+        ground height under each corner, the frame's corrected camera
+        projects it into the extracted frame."""
+        import cv2
+
+        from .core import agl_profile, ortho_detection
+        from .core.camera_pose import build_camera, world_to_pixel
+
+        dem_path = config.get("dem_path") or ""
+        if not dem_path or not os.path.isfile(dem_path):
+            raise RuntimeError(
+                "Detection on the GeoTIFFs needs the DEM (Input tab) to "
+                "bring the boxes back into the camera frames.")
+        origin = agl_profile.dem_origin(
+            dem_path, config.get("alfs_dem_metadata_path") or "",
+            target_folder)
+        if origin is None:
+            raise RuntimeError(
+                "The DEM origin could not be found (DEM metadata JSON), so "
+                "the GeoTIFFs cannot be related to the camera poses.")
+
+        # size of the extracted frames: the boxes are stored in their pixels
+        size = None
+        for image in images:
+            path = os.path.join(frames_folder, image.get("imagefile") or "")
+            if os.path.isfile(path):
+                first = cv2.imread(path)
+                if first is not None:
+                    size = (first.shape[1], first.shape[0])
+                    break
+        if size is None:
+            raise RuntimeError(
+                "No extracted frame could be read to get the frame size.")
+        width, height = size
+        cameras: Dict[int, Any] = {}
+
+        def heights(points):
+            import numpy as np
+            return agl_profile.ground_heights(
+                dem_path, [(float(x), float(y)) for x, y in np.asarray(points)])
+
+        def to_frame(frame_idx, transform, boxes):
+            import numpy as np
+
+            if frame_idx not in cameras:
+                correction = self.get_correction_for_frame(frame_idx, config)
+                cameras[frame_idx] = build_camera(
+                    images[frame_idx], correction["translation"],
+                    correction["rotation"], aspect_ratio=width / height)
+            camera = cameras[frame_idx]
+
+            def project(points):
+                return world_to_pixel(
+                    np.asarray(points, dtype=np.float64), width, height,
+                    camera)
+
+            return ortho_detection.boxes_to_frame(
+                boxes, transform, (origin[0], origin[1]), heights, project,
+                width, height)
+
+        return to_frame
+
     def run_detection(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Run animal detection on extracted frames.
 
@@ -3508,9 +3968,6 @@ class BambiProcessor(SurveyAnalyticsMixin):
         :param log_fn: Logging callback function
         """
         import cv2
-
-        from bambi.ai.models.ultralytics_yolo_detector import UltralyticsYoloDetector
-        from bambi.ai.output.yolo_writer import YoloWriter
 
         camera = config.get("detection_camera", "T")
         camera_suffix = "t" if camera == "T" else "w"
@@ -3537,18 +3994,27 @@ class BambiProcessor(SurveyAnalyticsMixin):
         if log_fn:
             log_fn(f"Running detection on {camera_name} frames...")
 
-        # Download default model if not specified
-        if not model_path:
+        # A custom implementation (core.custom_models) replaces the
+        # Ultralytics detector; frame selection, storage and everything
+        # downstream stay the same.
+        from .core import custom_models
+        custom_spec = (config.get("custom_implementations") or {}).get(
+            f"detector_{camera_suffix}")
+        use_custom = custom_models.is_custom(custom_spec)
+
+        if not use_custom:
+            # Download default model if not specified
+            if not model_path:
+                if log_fn:
+                    log_fn(f"No {camera_name} model specified, downloading default model...")
+                model_path = self.download_default_model(log_fn, camera=camera)
+
+            # Verify model exists
+            if not os.path.exists(model_path):
+                raise FileNotFoundError(f"Model file not found: {model_path}")
+
             if log_fn:
-                log_fn(f"No {camera_name} model specified, downloading default model...")
-            model_path = self.download_default_model(log_fn, camera=camera)
-
-        # Verify model exists
-        if not os.path.exists(model_path):
-            raise FileNotFoundError(f"Model file not found: {model_path}")
-
-        if log_fn:
-            log_fn(f"Using model: {model_path}")
+                log_fn(f"Using model: {model_path}")
 
         # Load poses to get frame list
         poses_file = os.path.join(target_folder, f"poses_{camera_suffix}.json")
@@ -3582,6 +4048,11 @@ class BambiProcessor(SurveyAnalyticsMixin):
             if log_fn:
                 log_fn(f"Sampling every {sample_rate}th frame")
 
+        # A frozen frame would repeat the previous frame's boxes, which
+        # reads as an animal standing still. The gap is closed by the
+        # track interpolation, like any other missed frame.
+        frame_indices = _drop_duplicated(frame_indices, images, log_fn)
+
         if len(frame_indices) == 0:
             raise RuntimeError("No frames to process after applying filters")
 
@@ -3593,13 +4064,53 @@ class BambiProcessor(SurveyAnalyticsMixin):
         os.makedirs(detections_folder, exist_ok=True)
 
         # Initialize detector
-        detector = UltralyticsYoloDetector(
-            model_path=model_path,
-            labels=['animal'],
-            detection_writer=YoloWriter(),
-            min_confidence=min_confidence,
-            verbose=False
-        )
+        custom = None
+        detector = None
+        if use_custom:
+            custom = custom_models.open_implementation(
+                custom_spec, custom_models.DETECTOR,
+                self._custom_context(config, custom_models.DETECTOR,
+                                     camera_suffix, log_fn,
+                                     min_confidence=float(min_confidence)))
+            model_path = custom.label
+            if log_fn:
+                names = ", ".join(custom.class_names) or "none declared"
+                log_fn(f"Using custom detector {custom.label} "
+                       f"(classes: {names})")
+        else:
+            from bambi.ai.models.ultralytics_yolo_detector import UltralyticsYoloDetector
+            from bambi.ai.output.yolo_writer import YoloWriter
+
+            detector = UltralyticsYoloDetector(
+                model_path=model_path,
+                labels=['animal'],
+                detection_writer=YoloWriter(),
+                min_confidence=min_confidence,
+                verbose=False
+            )
+
+        pose_of = self._pose_lookup(config, target_folder, images)
+
+        # Perspective frames, or the orthorectified per-frame GeoTIFFs.
+        # (core.raster_sources) or the ALFS light-field integrals.
+        from .core import raster_sources
+        rasters = self._raster_source(
+            config, target_folder, camera_suffix,
+            config.get("detection_projection", raster_sources.PERSPECTIVE))
+        on_geotiffs = rasters is not None
+        to_frame = None
+        missing_rasters = 0
+        outside_frame = 0
+        if on_geotiffs:
+            if not rasters.frames():
+                raise RuntimeError(raster_sources.missing_message(
+                    rasters.kind, camera_name, "Detection"))
+            to_frame = self._raster_boxes_to_frame(
+                config, target_folder, camera_suffix, images, frames_folder)
+            if log_fn:
+                log_fn(f"Detecting on the {raster_sources.LABELS[rasters.kind]} "
+                       f"({len(rasters.frames())} frame(s) have one); boxes "
+                       "are stored in the camera frame")
 
         # Process filtered frames
         detection_results = 0
@@ -3614,54 +4125,123 @@ class BambiProcessor(SurveyAnalyticsMixin):
         with ExitStack() as _stack:
             f = _legacy_text_writer(config, output_file, _stack)
             f.write("# frame x1 y1 x2 y2 confidence class_id\n")
-            for idx in frame_indices:
+            for position, idx in enumerate(frame_indices):
                 # Check for cancellation
                 if cancel_check and cancel_check():
                     if log_fn:
                         log_fn("Detection cancelled by user")
                     raise CancelledException("Detection cancelled")
 
+                # Progress counts every frame visited - also the ones
+                # skipped (no image, no raster of their own) - so the bar
+                # moves evenly whichever imagery the detector looks at.
+                if progress_fn and position % 10 == 0:
+                    progress_fn(min(
+                        int(position / len(frame_indices) * 100), 99))
+
                 image_info = images[idx]
                 imagefile = image_info.get("imagefile")
                 if not imagefile:
                     continue
 
-                image_path = os.path.join(frames_folder, imagefile)
-                if log_fn:
-                    log_fn(f"Detecting frame {idx} / {total_frames}: {image_path}")
-
-                if not os.path.exists(image_path):
+                # (image the detector sees, its file, its geotransform)
+                views = []
+                if on_geotiffs:
+                    # The frame's raster(s) - its GeoTIFF, or the tiles of
+                    # the ALFS integral it is the central frame of. The
+                    # detector sees the raster, and its boxes are brought
+                    # into the camera frame below (core.ortho_detection).
+                    for raster_path in rasters.paths(idx):
+                        raster, transform = rasters.read(raster_path)
+                        if raster is not None:
+                            views.append((cv2.cvtColor(
+                                raster, cv2.COLOR_RGB2BGR), raster_path,
+                                transform))
+                    if not views:
+                        missing_rasters += 1
+                        continue
                     if log_fn:
-                        log_fn(f"Warning: Image not found: {image_path}")
-                    continue
+                        log_fn(f"Detecting frame {idx} / {total_frames}: "
+                               f"{views[0][1]}")
+                else:
+                    image_path = os.path.join(frames_folder, imagefile)
+                    if log_fn:
+                        log_fn(f"Detecting frame {idx} / {total_frames}: {image_path}")
 
-                # Load and detect
-                frame = cv2.imread(image_path)
-                if frame is None:
-                    continue
+                    if not os.path.exists(image_path):
+                        if log_fn:
+                            log_fn(f"Warning: Image not found: {image_path}")
+                        continue
 
-                boxes = detector.detect_frame(idx, frame)
+                    # Load and detect
+                    frame = cv2.imread(image_path)
+                    if frame is None:
+                        continue
+                    views.append((frame, image_path, None))
 
-                for box in boxes:
-                    detection_results += 1
-                    f.write(f"{idx} {box.start_x:.2f} {box.start_y:.2f} "
-                            f"{box.end_x:.2f} {box.end_y:.2f} {box.propability:.4f} "
-                            f"{box.label}\n")
-                    store_rows.append({
-                        "frame": idx,
-                        "x1": round(float(box.start_x), 2),
-                        "y1": round(float(box.start_y), 2),
-                        "x2": round(float(box.end_x), 2),
-                        "y2": round(float(box.end_y), 2),
-                        "confidence": round(float(box.propability), 4),
-                        "source_class": str(box.label),
-                    })
+                # one pass per view: the frame, or each raster tile of it
+                for frame, image_path, transform in views:
+                    # One list of boxes whichever detector ran: x1 y1 x2 y2,
+                    # confidence, class - in pixels of the image it was given.
+                    if custom is not None:
+                        found = [
+                            (det["x1"], det["y1"], det["x2"], det["y2"],
+                             det["confidence"],
+                             # one token, as the text file is space separated
+                             "_".join(str(det["class_name"]).split()) or "0")
+                            for det in custom.detect(frame, custom_models.Frame(
+                                index=idx, path=image_path,
+                                camera=_modality_name(camera_suffix),
+                                timestamp=image_info.get("timestamp", "") or "",
+                                pose=pose_of(idx)))]
+                    else:
+                        found = [
+                            (float(box.start_x), float(box.start_y),
+                             float(box.end_x), float(box.end_y),
+                             float(box.propability), str(box.label))
+                            for box in detector.detect_frame(idx, frame)]
+
+                    if on_geotiffs and found:
+                        in_frame = to_frame(idx, transform,
+                                            [det[:4] for det in found])
+                        kept = []
+                        for det, box in zip(found, in_frame):
+                            if box is None:
+                                outside_frame += 1
+                                continue
+                            kept.append(box + det[4:])
+                        found = kept
+
+                    for x1, y1, x2, y2, confidence, source_class in found:
+                        detection_results += 1
+                        f.write(f"{idx} {x1:.2f} {y1:.2f} {x2:.2f} {y2:.2f} "
+                                f"{confidence:.4f} {source_class}\n")
+                        store_rows.append({
+                            "frame": idx,
+                            "x1": round(float(x1), 2),
+                            "y1": round(float(y1), 2),
+                            "x2": round(float(x2), 2),
+                            "y2": round(float(y2), 2),
+                            "confidence": round(float(confidence), 4),
+                            "source_class": source_class,
+                        })
 
                 processed += 1
 
-                if progress_fn and processed % 10 == 0:
-                    progress = int((processed / len(frame_indices)) * 100)
-                    progress_fn(min(progress, 99))
+        if custom is not None:
+            custom.close()
+        if on_geotiffs and log_fn:
+            if missing_rasters:
+                log_fn(f"{missing_rasters} selected frame(s) have no raster "
+                       "of their own and were skipped"
+                       + (" - ALFS integrals exist for the central frames "
+                          "of sampling mode only"
+                          if rasters.kind == raster_sources.ALFS else
+                          " - export them to include them"))
+            if outside_frame:
+                log_fn(f"{outside_frame} box(es) could not be placed in "
+                       "their camera frame (outside the DEM or the frame) "
+                       "and were dropped")
 
         # Mirror the detections into the 6.0 store. Only this producer's rows
         # are replaced, so manual labels and TRex imports survive a re-run.
@@ -3765,7 +4345,6 @@ class BambiProcessor(SurveyAnalyticsMixin):
         self._apply_render_selection(config, log_fn)
         import numpy as np
 
-        from pyrr import Vector3, Quaternion
         from trimesh import Trimesh
 
         from alfspy.core.rendering import Resolution
@@ -4096,7 +4675,6 @@ class BambiProcessor(SurveyAnalyticsMixin):
         import cv2
         import numpy as np
         from pathlib import Path
-        from pyrr import Vector3, Quaternion
         from trimesh import Trimesh
         from alfspy.core.rendering import Camera, Resolution
         from alfspy.render.render import read_gltf, process_render_data
@@ -4177,6 +4755,31 @@ class BambiProcessor(SurveyAnalyticsMixin):
         detections.sort(key=lambda d: (d["frame"], d["track_id"]))
         if log_fn:
             log_fn(f"Total: {len(detections)} detections, raw video size: {raw_size}")
+
+        # TRex numbers frames as the video does, and its number is used as
+        # the index into the poses. That only holds when the extraction kept
+        # the duplicated (frozen) frames - dropping them moves every later
+        # frame up, so each box would land on a later pose (core.poses).
+        from .core import poses as poses_core
+        if camera_suffix == "t":
+            if poses_core.flag_setting(target_folder, "t") is False:
+                if log_fn:
+                    log_fn(
+                        "WARNING: the thermal frames were extracted with "
+                        "duplicated (frozen) frames dropped, so the frame "
+                        "numbers of the poses do not match the video's from "
+                        "the first frozen frame on - TRex boxes after it are "
+                        "placed with the wrong pose. Re-extract with 'Keep "
+                        "duplicated thermal frames' ticked (Configuration → "
+                        "Extraction), without skip or sampling, and import "
+                        "again.")
+        frozen = poses_core.flagged(target_folder, camera_suffix)
+        if frozen:
+            n_all = len(detections)
+            detections = [d for d in detections if d["frame"] not in frozen]
+            if log_fn and n_all != len(detections):
+                log_fn(f"Left out {n_all - len(detections)} TRex box(es) on "
+                       "duplicated (frozen thermal) frames")
 
         if progress_fn:
             progress_fn(10)
@@ -4549,10 +5152,8 @@ class BambiProcessor(SurveyAnalyticsMixin):
         :param log_fn: Logging callback function
         """
         self._apply_render_selection(config, log_fn)
-        import numpy as np
         import cv2
 
-        from pyrr import Vector3, Quaternion
         from trimesh import Trimesh
 
         from alfspy.core.rendering import Resolution
@@ -4703,6 +5304,11 @@ class BambiProcessor(SurveyAnalyticsMixin):
                 frame_indices = frame_indices[::sample_rate]
                 if log_fn:
                     log_fn(f"Sampling every {sample_rate}th frame")
+
+            # Nothing was seen while the shutter was closed, so a frozen
+            # frame has no footprint (coverage, transect area, click tool).
+            frame_indices = _drop_duplicated(
+                frame_indices, poses["images"], log_fn)
 
             if log_fn:
                 log_fn(f"Calculating FoV for {len(frame_indices)} frames...")
@@ -4895,7 +5501,11 @@ class BambiProcessor(SurveyAnalyticsMixin):
         # produce a second, competing set for the same animals, so the step
         # imports and stops. The dock widget routes around this too; the guard
         # lives here so every caller - worker, script, test - behaves the same.
-        if config.get("trex_npz_dir", "").strip():
+        from .core import custom_models
+        custom_spec = (config.get("custom_implementations") or {}).get(
+            "tracker")
+        use_custom = custom_models.is_custom(custom_spec)
+        if config.get("trex_npz_dir", "").strip() and not use_custom:
             if log_fn:
                 log_fn("TRex tracklet folder configured - importing tracklets "
                        "instead of running a tracker.")
@@ -4912,7 +5522,11 @@ class BambiProcessor(SurveyAnalyticsMixin):
         tracker_manager = get_tracker_manager(self._get_default_model_dir())
 
         # Check which backend to use
-        if tracker_id == "builtin":
+        camera_suffix = "t" if config.get("tracking_camera", "T") == "T" else "w"
+        if use_custom:
+            self._run_custom_tracking(config, custom_spec, camera_suffix,
+                                      progress_fn, log_fn, cancel_check)
+        elif tracker_id == "builtin":
             # Use existing built-in tracking implementation
             self._run_builtin_tracking(config, progress_fn, log_fn)
         else:
@@ -4929,6 +5543,185 @@ class BambiProcessor(SurveyAnalyticsMixin):
         except Exception as e:  # noqa: BLE001 - best-effort, never fail tracking
             if log_fn:
                 log_fn(f"Warning: could not create pixel tracks file: {e}")
+
+    def _run_custom_tracking(self, config: Dict[str, Any], spec: dict,
+                             camera_suffix: str, progress_fn=None,
+                             log_fn=None, cancel_check=None):
+        """Track with a custom implementation (core.custom_models).
+
+        The class is handed every detection of the camera in frame order
+        and returns which track each belongs to; recording the run, the
+        pixel tracks file and everything downstream are the plugin's.
+        """
+        from .core import custom_models, track_store
+        from .core import poses as poses_core
+
+        target_folder = config["target_folder"]
+        camera_name = _modality_label(camera_suffix)
+        # The tracker gets everything in one call, so the bar between
+        # loading (10 %) and writing (85 %) is its own to move.
+        tracker = custom_models.open_implementation(
+            spec, custom_models.TRACKER,
+            self._custom_context(
+                config, custom_models.TRACKER, camera_suffix, log_fn,
+                progress=(None if progress_fn is None else
+                          lambda f: progress_fn(10 + int(75 * f)))))
+        if log_fn:
+            log_fn(f"Tracking {camera_name} detections with custom tracker "
+                   f"{tracker.label} ({tracker.space} space, "
+                   f"{'frame by frame' if tracker.online else 'one call'})")
+
+        pixel = track_store.load_detections(target_folder, camera_suffix)
+        if not pixel:
+            raise RuntimeError(
+                f"No {camera_name} detections in the store. Run detection "
+                "first.")
+        world = {row["detection_id"]: row for row in
+                 track_store.load_georeferenced(target_folder, camera_suffix)}
+        if tracker.space == custom_models.SPACE_GEO and not world:
+            raise RuntimeError(
+                "No geo-referenced detections in the store. Run "
+                "'Geo-Reference Detections' first - this tracker works in "
+                "geo space.")
+
+        detections = []
+        for row in sorted(pixel, key=lambda r: (r["frame"],
+                                                r["detection_id"])):
+            geo = world.get(row["detection_id"])
+            if geo is None and tracker.space == custom_models.SPACE_GEO:
+                continue        # could not be geo-referenced
+            detections.append({
+                "detection_id": row["detection_id"], "frame": row["frame"],
+                "x1": row["x1"], "y1": row["y1"],
+                "x2": row["x2"], "y2": row["y2"],
+                "confidence": (row["confidence"]
+                               if row["confidence"] is not None else 1.0),
+                "class": row.get("source_class") or "",
+                "species_id": row.get("species_id"),
+                "world": (None if geo is None else (
+                    geo["gx1"], geo["gy1"], geo["gz1"],
+                    geo["gx2"], geo["gy2"], geo["gz2"])),
+            })
+
+        images = poses_core.load_images(target_folder, camera_suffix)
+        frames_folder = os.path.join(target_folder, f"frames_{camera_suffix}")
+        pose_of = self._pose_lookup(config, target_folder, images)
+        frames = [custom_models.Frame(
+            index=i,
+            path=os.path.join(frames_folder, img.get("imagefile") or ""),
+            camera=_modality_name(camera_suffix),
+            timestamp=img.get("timestamp", "") or "",
+            duplicated=bool(img.get("duplicated")),
+            pose=pose_of(i))
+            for i, img in enumerate(images)]
+        if progress_fn:
+            progress_fn(10)
+
+        try:
+            if tracker.online:
+                # Frame by frame: the loop is the plugin's, so progress,
+                # cancelling and loading the images are too.
+                by_frame: Dict[int, List[dict]] = {}
+                for detection in detections:
+                    by_frame.setdefault(detection["frame"], []).append(
+                        detection)
+                assignment = {}
+                for position, frame in enumerate(frames):
+                    if cancel_check and cancel_check():
+                        raise CancelledException("Tracking cancelled")
+                    if progress_fn and position % 10 == 0:
+                        progress_fn(10 + int(75 * position / len(frames)))
+                    if tracker.wants_images and os.path.isfile(frame.path):
+                        import cv2
+                        frame.image = cv2.imread(frame.path)
+                    try:
+                        assignment.update(tracker.track_frame(
+                            frame, by_frame.get(frame.index, [])))
+                    finally:
+                        frame.image = None      # one image in memory
+                final, untracked = tracker.track_finish(
+                    [d["detection_id"] for d in detections])
+                assignment.update(final)
+                for detection_id in untracked:
+                    assignment.pop(detection_id, None)
+            else:
+                assignment = tracker.track(detections, frames)
+        finally:
+            tracker.close()
+        if progress_fn:
+            progress_fn(85)
+        if not assignment:
+            raise RuntimeError(
+                f"{tracker.label} assigned no detection to a track.")
+
+        by_id = {d["detection_id"]: d for d in detections}
+        tracks_folder = os.path.join(target_folder, f"tracks_{camera_suffix}")
+        os.makedirs(tracks_folder, exist_ok=True)
+
+        # Gaps are filled where that makes sense for this tracker (its
+        # setup() says so) and the configuration asks for it. As with the
+        # other backends, interpolated boxes exist in the track files only:
+        # no detection was made on those frames.
+        interpolate = tracker.interpolate and bool(
+            spec.get("interpolate", config.get("interpolate", True)))
+        members = [dict(by_id[detection_id], track_id=track_id)
+                   for detection_id, track_id in assignment.items()]
+        pixel_rows = sorted(members, key=lambda r: (r["frame"],
+                                                    r["track_id"]))
+        world_rows = [dict(m, gx1=m["world"][0], gy1=m["world"][1],
+                           gz1=m["world"][2], gx2=m["world"][3],
+                           gy2=m["world"][4], gz2=m["world"][5])
+                      for m in pixel_rows if m["world"] is not None]
+        n_filled = 0
+        if interpolate:
+            pixel_rows = custom_models.interpolate_gaps(
+                pixel_rows, ("x1", "y1", "x2", "y2"))
+            world_rows = custom_models.interpolate_gaps(
+                world_rows, ("gx1", "gy1", "gz1", "gx2", "gy2", "gz2"))
+            n_filled = sum(1 for r in pixel_rows if r.get("interpolated"))
+
+        with ExitStack() as _stack:
+            f = _legacy_text_writer(
+                config, os.path.join(tracks_folder, "tracks.csv"), _stack)
+            for r in world_rows:        # the legacy file is in world coords
+                f.write(f"{r['frame']:08d},{r['track_id']},{r['gx1']:.6f},"
+                        f"{r['gy1']:.6f},{r['gz1']:.6f},{r['gx2']:.6f},"
+                        f"{r['gy2']:.6f},{r['gz2']:.6f},"
+                        f"{r['confidence']:.6f},{r['species_id'] or 0},"
+                        f"{int(r.get('interpolated', 0))}\n")
+        pixel_file = os.path.join(tracks_folder, "tracks_pixel.csv")
+        if os.path.exists(pixel_file):
+            os.remove(pixel_file)
+        if interpolate and config.get("write_legacy_text_outputs", True):
+            # written here, with the interpolated boxes; otherwise it is
+            # derived from the store after the step
+            with open(pixel_file, "w", encoding="utf-8") as f:
+                f.write("# frame,track_id,x1,y1,x2,y2,conf,cls,interpolated\n")
+                for r in pixel_rows:
+                    f.write(f"{r['frame']},{r['track_id']},{r['x1']:.2f},"
+                            f"{r['y1']:.2f},{r['x2']:.2f},{r['y2']:.2f},"
+                            f"{r['confidence']:.4f},{r['species_id'] or 0},"
+                            f"{int(r.get('interpolated', 0))}\n")
+
+        track_store.record_tracks(
+            target_folder, camera_suffix,
+            [{"track_id": track_id, "detection_id": detection_id,
+              "interpolated": 0}
+             for detection_id, track_id in assignment.items()],
+            kind="custom", tracker=tracker.label, log_fn=log_fn)
+
+        n_tracks = len(set(assignment.values()))
+        _record_stage(config, "tracking", camera_suffix,
+                      row_count=n_tracks, log_fn=log_fn)
+        if log_fn:
+            left = len(detections) - len(assignment)
+            log_fn(f"Tracking complete: {n_tracks} tracks, "
+                   f"{len(assignment)} detections"
+                   + (f" ({left} left untracked)" if left else "")
+                   + (f", {n_filled} gap frame(s) interpolated"
+                      if n_filled else "")
+                   + ("" if tracker.interpolate else
+                      " - no interpolation: not applicable to this tracker"))
 
     def _write_pixel_tracks(self, config: Dict[str, Any], camera_suffix: str,
                             log_fn=None):
@@ -5585,12 +6378,10 @@ class BambiProcessor(SurveyAnalyticsMixin):
         :param start_progress: Starting progress value (for integration with tracking)
         """
         self._apply_render_selection(config, log_fn)
-        import numpy as np
 
-        from pyrr import Vector3, Quaternion
         from trimesh import Trimesh
 
-        from alfspy.core.rendering import Resolution, Camera
+        from alfspy.core.rendering import Resolution
         from alfspy.render.render import read_gltf, process_render_data, release_all
         from bambi.util.projection_util import label_to_world_coordinates
 
@@ -5925,6 +6716,14 @@ class BambiProcessor(SurveyAnalyticsMixin):
             if log_fn:
                 log_fn(f"After frame step: {len(images)} images")
 
+        # A frozen frame would be integrated at a position its image was
+        # not taken from, smearing the light field (all three renderers).
+        n_before = len(images)
+        images = [img for img in images if not img.get("duplicated")]
+        if len(images) < n_before and log_fn:
+            log_fn(f"Skipping {n_before - len(images)} duplicated (frozen "
+                   "thermal) frame(s)")
+
         if len(images) == 0:
             raise RuntimeError("No images remaining after filtering")
 
@@ -6060,14 +6859,13 @@ class BambiProcessor(SurveyAnalyticsMixin):
         import numpy as np
         from pyrr import Quaternion, Vector3
 
-        from alfspy.core.geo.transform import Transform
         from alfspy.core.rendering import Resolution, Camera, CtxShot, TextureData
         from alfspy.core.rendering.renderer import Renderer
         from alfspy.core.util.geo import get_aabb
-        from alfspy.core.util.pyrrs import quaternion_from_eulers
         from alfspy.render.render import (
             read_gltf, process_render_data
         )
+        from .core.camera_pose import shot_pose
         from .core.render_context import make_render_context
         from .core import render_size
 
@@ -6156,40 +6954,21 @@ class BambiProcessor(SurveyAnalyticsMixin):
                 correction_translation = correction_data["translation"]
                 correction_rotation = correction_data["rotation"]
 
-                cor_translation = Vector3([
-                    correction_translation.get('x', 0),
-                    correction_translation.get('y', 0),
-                    correction_translation.get('z', 0)
-                ], dtype='f4')
-                cor_rotation_eulers = Vector3([
-                    correction_rotation.get('x', 0),
-                    correction_rotation.get('y', 0),
-                    correction_rotation.get('z', 0)
-                ], dtype='f4')
-                cor_quat = Quaternion.from_eulers(cor_rotation_eulers)
-                correction = Transform(cor_translation, cor_quat)
-
-                location = img_info.get("location", [0, 0, 0])
                 rotation = img_info.get("rotation", [0, 0, 0])
+                if len(rotation) not in (3, 4):
+                    continue
                 fovy = img_info.get("fovy", [default_fovy])
                 fov_value = fovy[0] if isinstance(fovy, (list, tuple)) else fovy
 
-                camera_position = Vector3(location, dtype='f4')
-                if len(rotation) == 3:
-                    # Canonical create_shot / CtxShot convention: no negation, 'zyx' order.
-                    # A negated rotation renders the texture rotated ~2*heading off.
-                    camera_rotation = quaternion_from_eulers(
-                        [np.deg2rad(val % 360.0) for val in rotation], 'zyx'
-                    )
-                elif len(rotation) == 4:
-                    camera_rotation = Quaternion(rotation)
-                else:
-                    continue
+                # One camera model for rendering and geo-referencing: the
+                # corrected pose of core.camera_pose, no shot correction.
+                camera_position, camera_rotation = shot_pose(
+                    img_info, correction_translation, correction_rotation)
 
                 try:
                     shot = CtxShot(
                         ctx, image_path, camera_position, camera_rotation,
-                        fov_value, frame_aspect_ratio, correction, lazy=True
+                        fov_value, frame_aspect_ratio, None, lazy=True
                     )
                     shots.append(shot)
                 except Exception as e:
@@ -6341,15 +7120,14 @@ class BambiProcessor(SurveyAnalyticsMixin):
         from pyrr import Quaternion, Vector3
 
         # Import alfspy components
-        from alfspy.core.geo.transform import Transform
         from alfspy.core.rendering import Resolution, Camera, CtxShot, TextureData
         from alfspy.core.rendering.renderer import Renderer
         from alfspy.core.util.geo import get_aabb
-        from alfspy.core.util.pyrrs import quaternion_from_eulers
         from alfspy.render.render import (
             read_gltf, process_render_data,
             release_all
         )
+        from .core.camera_pose import shot_pose
         from .core.render_context import make_render_context
 
         if log_fn:
@@ -6408,44 +7186,21 @@ class BambiProcessor(SurveyAnalyticsMixin):
             correction_translation = correction_data["translation"]
             correction_rotation = correction_data["rotation"]
 
-            cor_translation = Vector3([
-                correction_translation.get('x', 0),
-                correction_translation.get('y', 0),
-                correction_translation.get('z', 0)
-            ], dtype='f4')
-
-            cor_rotation_eulers = Vector3([
-                correction_rotation.get('x', 0),
-                correction_rotation.get('y', 0),
-                correction_rotation.get('z', 0)
-            ], dtype='f4')
-            cor_quat = Quaternion.from_eulers(cor_rotation_eulers)
-            correction = Transform(cor_translation, cor_quat)
-
-            location = img_info.get("location", [0, 0, 0])
             rotation = img_info.get("rotation", [0, 0, 0])
-            fovy = img_info.get("fovy", [default_fovy])
-
-            camera_position = Vector3(location, dtype='f4')
-
-            # Convert rotation
-            if len(rotation) == 3:
-                # Canonical create_shot / CtxShot convention: no negation, 'zyx' order.
-                # A negated rotation renders the texture rotated ~2*heading off.
-                camera_rotation = quaternion_from_eulers(
-                    [np.deg2rad(val % 360.0) for val in rotation], 'zyx'
-                )
-            elif len(rotation) == 4:
-                camera_rotation = Quaternion(rotation)
-            else:
+            if len(rotation) not in (3, 4):
                 continue
-
+            fovy = img_info.get("fovy", [default_fovy])
             fov_value = fovy[0] if isinstance(fovy, (list, tuple)) else fovy
+
+            # One camera model for rendering and geo-referencing: the
+            # corrected pose of core.camera_pose, no shot correction.
+            camera_position, camera_rotation = shot_pose(
+                img_info, correction_translation, correction_rotation)
 
             try:
                 shot = CtxShot(
                     ctx, image_path, camera_position, camera_rotation,
-                    fov_value, frame_aspect_ratio, correction, lazy=True
+                    fov_value, frame_aspect_ratio, None, lazy=True
                 )
                 shots.append(shot)
             except Exception as e:
@@ -7131,6 +7886,26 @@ class BambiProcessor(SurveyAnalyticsMixin):
                 f"{geotiff_folder}."
             )
 
+        out_folder = os.path.join(target_folder, f"orthomosaic_{camera_suffix}")
+        self._write_orthomosaic(
+            candidates, method, nodata, target_epsg,
+            os.path.join(out_folder, "orthomosaic.tif"),
+            progress_fn, log_fn, cancel_check)
+
+    def _write_orthomosaic(self, candidates, method, nodata, target_epsg,
+                           output_file, progress_fn=None, log_fn=None,
+                           cancel_check=None):
+        """Mosaic frame GeoTIFFs into *output_file* - the one implementation
+        behind the flight's orthomosaic and the survey's (several flights).
+
+        *candidates* are merged in the order given, which is what the
+        ``first`` / ``last`` merge modes refer to.
+
+        :return: ``(width, height, bands)`` of the mosaic
+        """
+        import rasterio
+        from rasterio.merge import merge as rio_merge
+
         if log_fn:
             log_fn(f"Merging {len(candidates)} GeoTIFF(s)...")
         if progress_fn:
@@ -7165,9 +7940,7 @@ class BambiProcessor(SurveyAnalyticsMixin):
         if progress_fn:
             progress_fn(80)
 
-        out_folder = os.path.join(target_folder, f"orthomosaic_{camera_suffix}")
-        os.makedirs(out_folder, exist_ok=True)
-        output_file = os.path.join(out_folder, "orthomosaic.tif")
+        os.makedirs(os.path.dirname(output_file), exist_ok=True)
 
         # Resolve the output CRS the same way the frame GeoTIFFs were written
         # (authoritatively from target_epsg), so the orthomosaic is tagged with
@@ -7219,6 +7992,7 @@ class BambiProcessor(SurveyAnalyticsMixin):
             )
         if progress_fn:
             progress_fn(100)
+        return mosaic.shape[2], mosaic.shape[1], mosaic.shape[0]
 
     def _merge_orthomosaic_average(self, datasets, nodata, rio_merge):
         """Merge datasets by averaging overlapping pixels (core.ortho_tiling)."""
@@ -7243,11 +8017,9 @@ class BambiProcessor(SurveyAnalyticsMixin):
         from pyrr import Vector3, Quaternion
 
         try:
-            from alfspy.core.geo.transform import Transform
             from alfspy.core.rendering import Resolution, Camera, CtxShot, TextureData
             from alfspy.core.rendering.renderer import Renderer
             from alfspy.core.util.geo import get_aabb
-            from alfspy.core.util.pyrrs import quaternion_from_eulers
             from alfspy.render.render import read_gltf, process_render_data, release_all
             from .core.render_context import make_render_context
             from trimesh import Trimesh
@@ -7310,6 +8082,9 @@ class BambiProcessor(SurveyAnalyticsMixin):
         ]
         if frame_step > 1:
             frame_indices = frame_indices[::frame_step]
+        # no GeoTIFF for a frozen frame - and so none in the orthomosaic
+        # or the coverage map, which are built from these files
+        frame_indices = _drop_duplicated(frame_indices, all_images, log_fn)
         if not frame_indices:
             raise RuntimeError("No frames to export after filtering")
         if log_fn:
@@ -7426,8 +8201,6 @@ class BambiProcessor(SurveyAnalyticsMixin):
                             log_fn(f"Warning: Image not found: {image_file}")
                         continue
 
-                    location = img_info.get("location", [0, 0, 0])
-                    rotation = img_info.get("rotation", [0, 0, 0])
                     fovy = img_info.get("fovy", [45.0])
                     if isinstance(fovy, (list, tuple)):
                         fovy = fovy[0]
@@ -7436,22 +8209,11 @@ class BambiProcessor(SurveyAnalyticsMixin):
                     correction_data = self.get_correction_for_frame(frame_idx, config)
                     cor_t = correction_data["translation"]
                     cor_r = correction_data["rotation"]
-                    cor_translation_v = Vector3(
-                        [cor_t.get('x', 0), cor_t.get('y', 0), cor_t.get('z', 0)], dtype='f4'
-                    )
-                    cor_rotation_v = Vector3(
-                        [cor_r.get('x', 0), cor_r.get('y', 0), cor_r.get('z', 0)], dtype='f4'
-                    )
-                    # Projection camera: 2x correction matches CtxShot's effective rotation.
-                    # alfspy CtxShot doubles correction_transform.rotation in its shader;
-                    # multiplying by 2 here keeps geographic bounds consistent with the
-                    # rendered content and with TRexConnector (which uses the full correction
-                    # value directly, i.e. 2× the QGIS calibration value).
-                    from .core.camera_pose import build_camera
-                    proj_camera = build_camera(
-                        img_info, cor_t,
-                        {k: cor_r.get(k, 0) * 2.0 for k in ('x', 'y', 'z')},
-                        aspect_ratio=aspect_ratio)
+                    # One camera model for the footprint and the rendered
+                    # texture: the corrected pose of core.camera_pose.
+                    from .core.camera_pose import build_camera, shot_pose
+                    proj_camera = build_camera(img_info, cor_t, cor_r,
+                                               aspect_ratio=aspect_ratio)
 
                     # Project mask polygon → world coords → UTM bounds
                     georef_points = self._georeference_polygon(
@@ -7477,19 +8239,10 @@ class BambiProcessor(SurveyAnalyticsMixin):
                         width_m, height_m, ground_resolution, config,
                         max_dim=8000)
 
-                    # Build the shot rotation exactly like bambi's canonical create_shot
-                    # (alfspy CtxShot rendering convention): no negation, 'zyx' Euler order.
-                    # A negated rotation here renders the texture rotated by ~2*heading
-                    # relative to the (correct) georeferencing/footprint.
-                    raw_rotation = quaternion_from_eulers(
-                        [np.deg2rad(val % 360.0) for val in rotation], 'zyx'
-                    )
-                    cor_quat = Quaternion.from_eulers(cor_rotation_v)
-                    correction_transform = Transform(cor_translation_v, cor_quat)
+                    shot_position, shot_rotation = shot_pose(img_info, cor_t, cor_r)
                     shot = CtxShot(
-                        ctx, image_path,
-                        Vector3(location, dtype='f4'), raw_rotation,
-                        fovy, aspect_ratio, correction_transform, lazy=False
+                        ctx, image_path, shot_position, shot_rotation,
+                        fovy, aspect_ratio, None, lazy=False
                     )
 
                     # Orthographic camera covering this frame's footprint (local DEM coords)
@@ -7691,7 +8444,8 @@ class BambiProcessor(SurveyAnalyticsMixin):
             len(images), bool(config.get("sam3_use_all_frames", True)),
             int(config.get("sam3_start_frame", 0)),
             int(config.get("sam3_end_frame", 999999)),
-            int(config.get("sam3_step", 1)))
+            int(config.get("sam3_step", 1)),
+            exclude=seg.duplicated_frames(images))
         request = seg.SegmentationRequest(
             target_folder=target_folder, modality=modality,
             backend=seg.BACKEND_TRANSFORMERS if use_local else seg.BACKEND_ROBOFLOW,
@@ -7723,12 +8477,10 @@ class BambiProcessor(SurveyAnalyticsMixin):
         :param progress_fn: Progress callback function
         :param log_fn: Logging callback function
         """
-        import numpy as np
 
-        from pyrr import Vector3, Quaternion
         from trimesh import Trimesh
 
-        from alfspy.core.rendering import Resolution, Camera
+        from alfspy.core.rendering import Resolution
         from alfspy.render.render import read_gltf, process_render_data, release_all
         from bambi.util.projection_util import label_to_world_coordinates
 
@@ -7826,6 +8578,10 @@ class BambiProcessor(SurveyAnalyticsMixin):
                 frame_idx = frame_result['frame_idx']
 
                 if frame_idx >= len(poses["images"]):
+                    failed_count += 1
+                    continue
+                if poses["images"][frame_idx].get("duplicated"):
+                    # masks of a frozen frame belong to an earlier position
                     failed_count += 1
                     continue
 

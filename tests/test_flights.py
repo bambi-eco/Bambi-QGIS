@@ -505,3 +505,50 @@ def test_an_empty_configuration_does_not_count_as_configured(tmp_path):
     root = str(tmp_path)
     flights.save_config(root, {})
     assert flights.describe_existing(root)["configured"] is False
+
+
+def test_a_flight_cannot_be_named_like_a_plugin_layer_group():
+    from bambi_wildlife_detection.core import flights
+    for name in ("Thermal", "rgb", "BAMBI Survey"):
+        with pytest.raises(flights.FlightError):
+            flights.validate_name(name, [])
+    assert flights.validate_name(" Meadow ", []) == "Meadow"
+
+
+# ---------------------------------------------------------------------------
+# Flights added by name; the folder follows (9.0.0)
+# ---------------------------------------------------------------------------
+
+def test_a_flight_can_be_added_by_name_alone():
+    result = flights.add_named_flight([], "  Meadow ")
+    assert result == [{"name": "Meadow", "target_folder": ""}]
+
+
+def test_a_name_only_flight_still_needs_a_unique_name(tmp_path):
+    existing = flights.add_flight([], "Meadow", str(tmp_path / "a"))
+    with pytest.raises(flights.FlightError):
+        flights.add_named_flight(existing, "meadow")
+    with pytest.raises(flights.FlightError):
+        flights.add_named_flight(existing, "")
+
+
+def test_without_folder_finds_the_flight_waiting_for_one(tmp_path):
+    existing = flights.add_flight([], "Meadow", str(tmp_path / "a"))
+    assert flights.without_folder(existing) is None
+    assert flights.without_folder(
+        flights.add_named_flight(existing, "Forest")) == 1
+
+
+def test_the_folder_of_a_named_flight_is_checked_when_set(tmp_path):
+    a = str(tmp_path / "a")
+    listed = flights.add_named_flight(
+        flights.add_flight([], "Meadow", a), "Forest")
+    with pytest.raises(flights.FlightError):
+        flights.set_folder(listed, 1, a)
+    moved = flights.set_folder(listed, 1, str(tmp_path / "b"))
+    assert moved[1]["target_folder"] == str(tmp_path / "b")
+
+
+def test_name_only_flights_are_left_out_of_the_analytics(tmp_path):
+    listed = flights.add_named_flight([], "Forest")
+    assert flights.analysis_entries(listed) == []

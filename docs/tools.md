@@ -2,12 +2,85 @@
 
 Besides the main processing pipeline, the plugin ships several companion tools available from the BAMBI toolbar and the plugin menu.
 
+- [3D Flight Viewer](#3d-flight-viewer)
 - [Video Creator](#video-creator)
 - [Thermal Image Viewer](#thermal-image-viewer)
 - [Labelling Tool](#labelling-tool)
 - [Segmentation Tool](#segmentation-tool)
+- [Transect Splitting Tool](#transect-splitting-tool)
+- [AGL Profile](#agl-profile)
 - [Classifier configuration](#classifier-configuration)
 - [Interactive selection tools](#interactive-selection-tools)
+
+Documented on their own pages: the [Correction Wizard](correction-wizard.md),
+the [Camera Calibration Wizard](camera-calibration.md), the
+[Flight Strategy Planner](flight-planner.md), the
+[Dependency Manager](installation.md) and
+[custom detectors, trackers and classifiers](custom-implementations.md).
+
+## 3D Flight Viewer
+
+The 3D Flight Viewer shows the active flight in a separate window: the DEM mesh, the flight route and every camera pose with its correction factors applied. Open it via the **3D Flight Viewer** toolbar button or the plugin menu; it loads the flight that is active in the BAMBI panel (**Reload** after switching flights).
+
+> **Requires pyqtgraph and PyOpenGL** (Dependency Manager, *3D Flight Viewer*) and a graphics driver with OpenGL 3.3. Without them the window shows the frames only.
+
+**Navigation**: left drag orbits, right/middle drag (or Shift + left drag) pans, the wheel zooms towards the point under the cursor. The status bar shows the coordinates under the cursor (project CRS and WGS84); double-click sets a marker and the readout adds the distance to it. While a reconstructed surface is shown (Reconstruction tab), hover, double click and zooming hit it where it stands above the DEM, and the readout adds the height above the DEM. Click a camera position (or the route next to it) to jump to that frame.
+
+**Replay** (bottom bar): play/pause, previous/next frame, slider and frame number, step (frames per step, *jump in stride*), speed (real time from the frame timestamps, or every frame as fast as possible) and loop. A frame is shown once its image has loaded, so playback never shows an empty DEM. Keys: Space play/pause, ←/→ or H/J step (Shift = 10), F follow camera, Home whole flight, Enter render ALFS.
+
+### View tab
+
+| Option | Effect |
+|--------|--------|
+| **Show** | *Current frame (pinhole)* drapes the frame onto the DEM by projective texture mapping (the mapping ALFS uses); *ALFS integral* drapes the integral of the ALFS tab; *Nothing* |
+| **Keep trail (continuous orthophoto)** | Every frame shown is painted once into a single top-down texture over the flight area, which stays draped on the DEM - like a scanner sliding along the route; newer frames cover older ones. Costs one draped layer however long the trail. When the replay jumps ahead, the frames in between are filled in every k-th frame (**fill every k-th frame**); stepping back before the trail's end starts it anew (also **Clear**). **Show** hides the trail without discarding it; it keeps growing while hidden and switching to ALFS and back keeps it. **Trail resolution** is the texture's longest edge (the ground resolution is shown) |
+| **Show orthomosaic** | Drape the flight's orthomosaic (pipeline steps *Export GeoTIFFs* and *Orthomosaic*; `orthomosaic_t` / `orthomosaic_w` in the target folder) onto the DEM - a static alternative to the trail, with the current frame drawn on top. Loaded once per camera (up to 8192 px); disabled when the camera has no orthomosaic yet |
+| **Texture size** | Longest edge of the frame textures |
+| **Hide the undistortion border (mask)** | Use the camera's undistortion mask (`mask_T.png` / `mask_W.png` in the target folder, as the ALFS step does) so the black border of undistorted frames is left out of the draped frames and trail, live ALFS, auto-refine and the reconstruction. **Mask edge erosion** shrinks the mask by a few pixels to drop the dark rim at its edge (starts from the GeoTIFF export's *Edge erosion*). Disabled when the camera has no mask |
+| **Follow camera** | Lock the view to the drone camera of the current frame. Dragging leaves follow mode where the camera was; without it the view can be moved freely while the replay runs |
+| **Show frustum / route / camera positions** | The current camera's frustum and ground footprint, the route (flown part orange), and markers along it |
+| **Line width / Camera marker size** | Thickness of the route, frustum and track lines, and size of the camera markers (the current camera is drawn larger); scaled for high-DPI screens |
+| **Annotations** | *No annotations*, *Show bounding boxes* or *Show tracks*. Boxes are drawn in 3D on the DEM (each edge projected with the frame's camera, so they sit on the image content): boxes of the current frame solid, boxes seen earlier dashed (**Keep boxes seen earlier**) - an overview of what the flight has seen. In box mode the earlier boxes of every k-th frame are kept; in track mode the last box of every track seen so far, plus each track's history as a line on the ground (optionally the last N frames). **Box line width** sets their thickness |
+| **DEM** | Shaded relief or the DEM's own texture, opacity, wireframe. **Detail** High / Medium / Low draws the DEM with all, 66 % or 33 % of its triangles - every draped or integrated frame draws the whole DEM once, so fewer triangles make the trail and live ALFS faster on large DEMs. The height error of the reduced DEM (max / RMS against the full one) is shown below it. Only the viewer is affected: ray casting, frustums and the reconstruction use the full DEM, the plugin's ALFS and GeoTIFF products are unchanged |
+| **Screenshot…** | Save the 3D view as PNG |
+
+**Camera** (top): RGB or thermal. Switching keeps the moment in time (frames are matched by timestamp).
+
+### ALFS tab
+
+Live airborne light-field integrals of the frames around the current one, rendered in the background with the plugin's ALFS engine:
+
+| Option | Effect |
+|--------|--------|
+| **Frames N** | The window: N/2 frames before to N/2 after the current frame; **stride** uses every s-th of them |
+| **Mode** | *Fixed on the DEM* (default) renders top-down over the window's footprints and is draped onto the DEM, so it stays in place while you navigate - like the draped frame. *From the current view* renders from the on-screen camera; it stays where it was rendered until the next *Render* (Enter), or follows every move with *Continuous* |
+| **Focus offset** | The focal surface is the DEM raised by this many metres (±50 m) |
+| **Focal surface** | DEM, or the surface of a dense reconstruction |
+| **Min. frames per pixel** | Hide pixels seen by fewer frames |
+| **Resolution** | Size of the integral (and of the frames used) |
+| **Live / Continuous / Render** | Re-render on every change, keep rendering, or render on demand |
+| **Export integral…** | PNG; in Ortho mode with a world file and CRS so it opens georeferenced in QGIS |
+
+### Corrections tab
+
+A second way, next to the [Correction Wizard](correction-wizard.md), to find the correction factors. Pick the **default** correction or a **frame range** (add one at the current frame with **+**), and change translation (m) and rotation (°): the route, frustum, draped frames and ALFS follow immediately.
+
+- **Compare two frames** drapes the frames k before and after the current one at half opacity - with wrong factors the terrain shows twice.
+- **ALFS sharpness** scores each integral (variance of the Laplacian over covered pixels; higher is sharper) and plots the history. Compare at the same frame, focus and resolution.
+- **Auto-refine** searches the ticked parameters for the sharpest ALFS integrals on a few windows (the current one plus windows spread along the flight, or along the range being edited; window size and stride from the ALFS tab). The result is proposed with its gain and applied only with **Apply result**.
+- **Undo / Revert / Save…**: saving writes `correction.json` in the wizard's layout (the previous file is kept as `correction.backup-<time>.json`), updates the BAMBI panel, and optionally marks results computed from the poses (geo-referencing, FoV, ALFS, GeoTIFFs and what depends on them) as out of date.
+
+### Reconstruction tab
+
+A 3D reconstruction of a frame range from the **RGB** frames, with the poses fixed and the DEM as prior:
+
+- **Frames**: the range defaults to the whole flight (**All**); **Here** limits it to ±100 frames around the current one.
+- **Sparse points**: SIFT features of neighbouring keyframes, triangulated with the corrected cameras and kept when they reproject within 2 px and lie in the height band above the DEM.
+- **Dense surface** by pairwise stereo: every keyframe is matched against its next two keyframes as a rectified stereo pair in image space (semi-global block matching with a left-right check). Each pair's orientation comes from its own images - or from the refined poses - and its scale from the ground on the DEM; the pairs' depth maps then vote for a height per ground cell (*Heights from / to / step* above the DEM) and the median wins. Cells without a height take the one around them, gaps enclosed by measured cells are closed, and only ground the frames cover is meshed. The DEM is bare earth, so the result is the height of what stands on it - vegetation, buildings.
+- **Texture**: a high-resolution orthophoto of the surface (**Texture pixel size**, default 5 cm, at most 4096 px) from the RGB frames, or from the **thermal** frames linked by capture time (each with its own poses and corrections), draped on the smoother surface - a sharp image on a clean shape. Cells hidden from a camera by the surface are skipped for that camera.
+- **Refine poses from the images** (optional): before reconstructing, features are matched between the keyframes and their positions and rotations are adjusted to agree with the images (telemetry as a soft prior, the result put back on the DEM using the ground under the vegetation). Heights from stereo are very sensitive to small pose errors, so this is the biggest accuracy gain on real flights; it takes longer. **Also estimate the field of view** replaces the poses' fovy by the one the images and DEM suggest (best effort: weakly determined from a single straight pass at one altitude).
+
+Shown in the 3D view coloured by RGB, thermal or height above DEM; written to `<target>/reconstruction_w/`: `sparse_points.ply`, a COLMAP model with the fixed poses (`colmap/`, for densifying in COLMAP/OpenMVS/Metashape), `dsm.tif`, `ndsm.tif` (height above DEM), `confidence.tif`, `rgb.tif`, `thermal.tif`, `surface.glb` + `surface.json`, `surface.npz` (the surface and its textures as the viewer shows them), `nadir_distances_w.csv` / `nadir_distances_t.csv` (every camera position's vertical distance to the reconstructed surface and to the DEM) and `recon.json` (parameters). Opening the viewer again shows the last result (points and surface) without reconstructing. The **AGL Profile** tool then also shows the reconstructed surface (a digital surface model) above the DEM (the terrain model), with the camera's height above it - switchable with *Reconstructed surface (DSM)*. **Add rasters to QGIS** loads the GeoTIFFs. Coordinates in the PLY and COLMAP model are DEM-local; `recon.json` holds the origin.
 
 ## Video Creator
 
@@ -184,6 +257,64 @@ The masks are drawn over the frame, coloured per prompt, with the object id and 
 
 Backend, model, prompts, confidence and the Roboflow key are remembered in QSettings across sessions; they describe your machine rather than one flight, so they are not written into the project.
 
+## Transect Splitting Tool
+
+Splits a processed flight into **transects** - named, contiguous frame ranges
+of the extracted frames. Transects are what the
+[population estimation](pipeline.md#population-estimation-transects) counts
+animals and areas by. Open it via the **Transect Splitting Tool** toolbar
+button or the plugin menu.
+
+- **Frame viewer** with the navigation of the labelling tool: previous / next,
+  step buttons, frame number, slider, arrow keys and PageUp / PageDown. The
+  camera (thermal / RGB) is selectable; each camera has its own transects.
+- **Overview map**: the flight route from the camera positions, the current
+  frame highlighted and the defined transects in their colours. Clicking the
+  map jumps to the nearest frame.
+- **Defining a transect**: set the start and the end frame to the current
+  frame (button or shortcut). The length between them is measured along the
+  flight path, in metres.
+- **End after distance**: instead of picking the end frame by hand, place it
+  at the first frame at least *X* metres along the flight path from the start
+  - for transects of equal length.
+- **Names** are optional; an unnamed transect shows as `Transect {id}`.
+- The status line shows the current frame, its distance along the flight path
+  and, on a frozen thermal frame, a ❄ note (its position still counts).
+
+**Saving** writes the definitions to the flight's target folder; existing
+ones are loaded when the tool opens.
+
+```
+transects_t/    # or transects_w/
+├── transects.json    # the definitions (source of truth)
+└── transects.csv     # the same as a table
+```
+
+## AGL Profile
+
+The flight's altitude over the relief it flew across - for checking the
+height above ground level (AGL) a model was flown at, and where it varied.
+Open it via the **AGL Profile** toolbar button or the plugin menu.
+
+One plot: the ground below the route as a filled relief, the aircraft's
+altitude as a line above it, both in metres above sea level.
+
+- **X axis**: distance flown, time since the first frame, or frame index.
+- **Camera**: thermal or RGB - the two were extracted separately and can
+  differ in frame count and timing.
+- **Animals**: frames with detections or tracks can be marked along the bottom
+  of the plot, to see at which heights animals were found.
+- **Hover**: the frame under the cursor with its altitude, the ground height
+  and the height above ground.
+- **Reconstructed surface**: when the [3D Flight Viewer](#3d-flight-viewer)
+  has reconstructed a surface for the flight, a tick box adds it to the plot
+  as a second relief (canopy and objects above the bare-earth DEM), with the
+  nadir distance of every camera to it; the distances are also written as a
+  CSV by the reconstruction.
+
+The status line sums the flight up: frames, distance flown and the minimum,
+maximum and mean height above ground.
+
 ## Classifier configuration
 
 The **Configuration → Classification** tab holds everything the [classification steps](pipeline.md#classification) read. Two dialogs open from it.
@@ -222,7 +353,7 @@ Sex and life stage are not one problem across animals. The published sex classif
 
 So the choice is made per species. For **sex** the options are a model or **Off**, and Off means simply not sexed - the honest answer for a species nobody has a classifier for.
 
-**Life stage** has a third option, **Size-based**: not a model at all, but the box-area measurement described under [C6](pipeline.md#c6-age-classification). It sits in the same column because it answers the same question, and because which of the two decides a species is one decision rather than a model choice plus a switch elsewhere.
+**Life stage** has a third option, **Size-based**: not a model at all, but the box-area measurement described under [C5](pipeline.md#c5-age-classification). It sits in the same column because it answers the same question, and because which of the two decides a species is one decision rather than a model choice plus a switch elsewhere.
 
 Red deer is the only species with a released sex model, so it is the only sex row switched on by default. No life-stage model has been published yet, so every species there defaults to Size-based.
 

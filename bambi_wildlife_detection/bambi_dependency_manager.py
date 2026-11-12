@@ -37,9 +37,14 @@ from .core.dependency_ops import (  # noqa: F401 - re-exported API
     ALFS_REPO,
     BAMBI_DETECTION_TAG,
     GEOREF_TRACKER_TAG,
+    PYCOLMAP_VERSION,
+    PYOPENGL_VERSION,
+    PYQTGRAPH_VERSION,
     TORCH_CUDA_INDEX,
     alfs_install_spec,
     gpu_torch_requirements,
+    pyopengl_requirement,
+    pyqtgraph_requirement,
     _DJI_SDK_URL,
     _VERSION_RANGES,
     _find_python,
@@ -170,7 +175,7 @@ class DependencyManagerDialog(QDialog):
         vbox.addWidget(self._build_group('Calibration  (optional)', [
             dict(
                 key='pycolmap',
-                label='pycolmap  (v4.0.3)',
+                label=f'pycolmap  (v{PYCOLMAP_VERSION})',
                 desc='Structure-from-Motion via COLMAP for single-camera calibration.',
                 callback=self._install_pycolmap,
                 dist_name='pycolmap',
@@ -228,6 +233,31 @@ class DependencyManagerDialog(QDialog):
                 desc='KML/KMZ export – required for writing flight routes in the flight planner.',
                 callback=self._install_simplekml,
                 dist_name='simplekml',
+            ),
+        ]))
+
+        # ---- 3D Flight Viewer (optional) ----
+        vbox.addWidget(self._build_group('3D Flight Viewer  (optional)', [
+            dict(
+                key='pyopengl',
+                label=f'PyOpenGL  (v{PYOPENGL_VERSION})',
+                desc=(
+                    'OpenGL for the 3D Flight Viewer: DEM mesh, flight route, '
+                    'camera poses, frame replay and live ALFS draped onto the '
+                    'DEM. Needs a graphics driver with OpenGL 3.3.'
+                ),
+                callback=self._install_pyopengl,
+                dist_name='PyOpenGL',
+            ),
+            dict(
+                key='pyqtgraph',
+                label=f'pyqtgraph  (v{PYQTGRAPH_VERSION})',
+                desc=(
+                    'Qt helpers and plots of the 3D Flight Viewer (e.g. the ALFS '
+                    'sharpness history on the Corrections tab).'
+                ),
+                callback=self._install_pyqtgraph,
+                dist_name='pyqtgraph',
             ),
         ]))
 
@@ -633,10 +663,11 @@ class DependencyManagerDialog(QDialog):
         self._start_worker('alfs_py', _do)
 
     def _install_pycolmap(self):
-        self._log_line('─── pycolmap 4.0.3 ───')
+        self._log_line(f'─── pycolmap {PYCOLMAP_VERSION} ───')
 
         def _do(log_fn):
-            _run_pip(['install', '--force-reinstall', 'pycolmap==4.0.3'], log_fn)
+            _run_pip(['install', '--force-reinstall',
+                      f'pycolmap=={PYCOLMAP_VERSION}'], log_fn)
         self._start_worker('pycolmap', _do)
 
     def _install_boxmot(self):
@@ -669,6 +700,22 @@ class DependencyManagerDialog(QDialog):
         def _do(log_fn):
             _run_pip(['install', '--force-reinstall', 'simplekml==1.3.6'], log_fn)
         self._start_worker('simplekml', _do)
+
+    def _install_pyopengl(self):
+        self._log_line(f'─── PyOpenGL {PYOPENGL_VERSION} ───')
+
+        def _do(log_fn):
+            _run_pip(['install', pyopengl_requirement()], log_fn)
+        self._start_worker('pyopengl', _do)
+
+    def _install_pyqtgraph(self):
+        self._log_line(f'─── pyqtgraph {PYQTGRAPH_VERSION} ───')
+
+        def _do(log_fn):
+            # No --force-reinstall: pyqtgraph depends on numpy, which must stay
+            # the build QGIS ships (the constraints file pins it as well).
+            _run_pip(['install', pyqtgraph_requirement()], log_fn)
+        self._start_worker('pyqtgraph', _do)
 
     def _install_classification(self):
         self._log_line('─── Classification (transformers + huggingface-hub) ───')

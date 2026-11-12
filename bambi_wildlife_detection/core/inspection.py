@@ -78,23 +78,10 @@ _POSES_CACHE: Dict[Tuple[str, str], Tuple[float, List[dict]]] = {}
 
 
 def _pose_images(target_folder: str, modality: str) -> List[dict]:
-    """The ``images`` list of ``poses_{modality}.json``, or ``[]``."""
-    poses_path = os.path.join(target_folder, f"poses_{modality}.json")
-    try:
-        stamp = os.path.getmtime(poses_path)
-    except OSError:
-        return []
-    key = (os.path.normcase(os.path.abspath(target_folder)), modality)
-    cached = _POSES_CACHE.get(key)
-    if cached is not None and cached[0] == stamp:
-        return cached[1]
-    try:
-        with open(poses_path, "r", encoding="utf-8") as fh:
-            images = json.load(fh).get("images", [])
-    except Exception:  # nosec B110
-        images = []
-    _POSES_CACHE[key] = (stamp, images)
-    return images
+    """The ``images`` list of ``poses_{modality}.json``, or ``[]`` (the
+    shared, cached reader of :mod:`core.poses`)."""
+    from . import poses
+    return poses.load_images(target_folder, modality)
 
 
 def partner_frame(target_folder: str, frame_idx: int, modality: str,

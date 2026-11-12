@@ -116,6 +116,7 @@ def classification_states(target_folder: str,
         result[status_key] = _combine(per_modality)
     return result
 
+
 # (subfolder_base, status_step_key, additional_check_file, camera_key)
 _FOLDER_STATUS_MAPPING = [
     ("flight_route", "flight_route", None, "flight_route"),

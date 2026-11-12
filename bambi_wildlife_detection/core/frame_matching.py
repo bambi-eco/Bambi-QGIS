@@ -55,8 +55,11 @@ class FrameMatcher:
         self._src_epochs = pose_epochs(src_images)
         dst_epochs = pose_epochs(dst_images)
         # Sorted (epoch, dst_index) of target frames that have a timestamp.
+        # A duplicated target frame (frozen thermal image, core.poses) is
+        # never a partner: what it shows belongs to an earlier moment.
         self._pairs = sorted(
-            (e, i) for i, e in enumerate(dst_epochs) if e is not None)
+            (e, i) for i, e in enumerate(dst_epochs)
+            if e is not None and not (dst_images[i] or {}).get("duplicated"))
         self._keys = [e for e, _ in self._pairs]
         self._bisect = bisect.bisect_left
 

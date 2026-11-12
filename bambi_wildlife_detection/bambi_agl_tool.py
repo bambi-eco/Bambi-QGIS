@@ -20,7 +20,7 @@ from qgis.PyQt.QtCore import QPointF, QRectF, Qt, QThread, pyqtSignal
 from qgis.PyQt.QtGui import (QBrush, QColor, QFont, QFontMetrics, QPainter,
                              QPainterPath, QPen, QPolygonF)
 from qgis.PyQt.QtWidgets import (
-    QButtonGroup, QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel,
+    QButtonGroup, QCheckBox, QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel,
     QLineEdit, QPushButton, QRadioButton, QSizePolicy, QVBoxLayout, QWidget,
 )
 
@@ -53,6 +53,7 @@ class ProfileCanvas(QWidget):
         self._message = ""
         self._markers: Dict[int, int] = {}
         self._marker_label = ""
+        self._show_surface = False
         self.setMouseTracking(True)
         self.setMinimumHeight(240)
         self.setSizePolicy(QSizePolicy.Policy.Expanding,
@@ -83,6 +84,15 @@ class ProfileCanvas(QWidget):
         self._axis = axis
         self.set_points(getattr(self, "_all_points", self._points))
 
+    def set_show_surface(self, show: bool):
+        """Draw the reconstructed surface (DSM) above the DEM (DTM)."""
+        self._show_surface = bool(show)
+        self.update()
+
+    def _surface_on(self) -> bool:
+        return self._show_surface and any(p.get("surface") is not None
+                                          for p in self._points)
+
     def set_hover_callback(self, callback):
         self._on_hover = callback
 
@@ -102,6 +112,9 @@ class ProfileCanvas(QWidget):
         xs = [p[self._axis] for p in self._points]
         ys = [p["altitude"] for p in self._points]
         ys += [p["ground"] for p in self._points if p["ground"] is not None]
+        if self._surface_on():
+            ys += [p["surface"] for p in self._points
+                   if p.get("surface") is not None]
         if not xs or not ys:
             return (0.0, 1.0), (0.0, 1.0)
         x0, x1 = min(xs), max(xs)
@@ -193,6 +206,36 @@ class ProfileCanvas(QWidget):
             segment.append(self._to_pixel(p[self._axis], p["ground"], rect, xr, yr))
         _flush()
 
+        # Reconstructed surface (DSM): vegetation / buildings above the DEM,
+        # filled down to the ground, gaps where it was not reconstructed.
+        surface_pen = QPen(QColor(40, 140, 60), 1.5)
+        surface_brush = QBrush(QColor(80, 170, 90, 110))
+        if self._surface_on():
+            top: List[QPointF] = []
+            bottom: List[QPointF] = []
+
+            def _flush_surface():
+                if len(top) >= 2:
+                    polygon = QPolygonF(top + bottom[::-1])
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.setBrush(surface_brush)
+                    painter.drawPolygon(polygon)
+                    painter.setPen(surface_pen)
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
+                    painter.drawPolyline(QPolygonF(top))
+                top.clear()
+                bottom.clear()
+
+            for p in self._points:
+                if p.get("surface") is None:
+                    _flush_surface()
+                    continue
+                top.append(self._to_pixel(p[self._axis], p["surface"], rect, xr, yr))
+                base = p["ground"] if p["ground"] is not None else p["surface"]
+                bottom.append(self._to_pixel(p[self._axis], min(base, p["surface"]),
+                                             rect, xr, yr))
+            _flush_surface()
+
         # Flight altitude
         path = QPainterPath()
         for i, p in enumerate(self._points):
@@ -254,12 +297,21 @@ class ProfileCanvas(QWidget):
         painter.setPen(QColor(60, 60, 60))
         painter.drawText(QPointF(rect.left() + 156, rect.top() + 12 + metrics.ascent() / 2 - 1),
                          "ground (DEM)")
+        legend_x = rect.left() + 250
+        if self._surface_on():
+            painter.setPen(surface_pen)
+            painter.setBrush(surface_brush)
+            painter.drawRect(QRectF(legend_x, rect.top() + 6, 20, 12))
+            painter.setPen(QColor(60, 60, 60))
+            painter.drawText(QPointF(legend_x + 26, rect.top() + 12 + metrics.ascent() / 2 - 1),
+                             "surface (reconstruction)")
+            legend_x += 190
         if self._markers:
             painter.setPen(QPen(MARKER_COLOR, 2))
-            painter.drawLine(QPointF(rect.left() + 250, rect.top() + 6),
-                             QPointF(rect.left() + 250, rect.top() + 18))
+            painter.drawLine(QPointF(legend_x, rect.top() + 6),
+                             QPointF(legend_x, rect.top() + 18))
             painter.setPen(QColor(60, 60, 60))
-            painter.drawText(QPointF(rect.left() + 258, rect.top() + 12 + metrics.ascent() / 2 - 1),
+            painter.drawText(QPointF(legend_x + 8, rect.top() + 12 + metrics.ascent() / 2 - 1),
                              self._marker_label or "animals")
 
         # Hover marker
@@ -279,6 +331,13 @@ class ProfileCanvas(QWidget):
                 agl_label = f"{point['agl']:.1f} m AGL"
                 painter.drawText(QPointF(px.x() + 8, (px.y() + pg.y()) / 2 + metrics.ascent() / 2),
                                  agl_label)
+            if self._surface_on() and point.get("surface") is not None:
+                ps = self._to_pixel(point[self._axis], point["surface"], rect, xr, yr)
+                painter.setPen(QPen(QColor(40, 140, 60), 2))
+                painter.setBrush(QBrush(QColor(255, 255, 255)))
+                painter.drawEllipse(ps, 4, 4)
+                painter.drawText(QPointF(ps.x() + 8, ps.y() - 6),
+                                 f"{point['agl_surface']:.1f} m above surface")
 
     # -- mouse -------------------------------------------------------------
 
@@ -339,7 +398,8 @@ class _ProfileWorker(QThread):
         folder, modality, dem_mesh, dem_json = self.args
         try:
             profile = agl_profile.build_profile(
-                folder, modality, dem_path=dem_mesh, dem_json_path=dem_json)
+                folder, modality, dem_path=dem_mesh, dem_json_path=dem_json,
+                with_surface=True)
         except Exception as exc:  # noqa: BLE001 - surfaced to the user
             self.failed.emit(str(exc))
             return
@@ -358,9 +418,8 @@ class AglToolDialog(QDialog):
         self._pending: Optional[tuple] = None
         self.setWindowTitle("AGL - altitude above ground along the flight")
         self.setMinimumSize(900, 520)
-        self.setWindowFlags(self.windowFlags()
-                            | Qt.WindowType.WindowMaximizeButtonHint
-                            | Qt.WindowType.WindowMinimizeButtonHint)
+        buttons = Qt.WindowType.WindowMaximizeButtonHint | Qt.WindowType.WindowMinimizeButtonHint
+        self.setWindowFlags(self.windowFlags() | buttons)
 
         layout = QVBoxLayout(self)
 
@@ -414,6 +473,17 @@ class AglToolDialog(QDialog):
         self.marker_combo.currentIndexChanged.connect(
             lambda _i: self._load_markers())
         controls.addWidget(self.marker_combo)
+        controls.addSpacing(16)
+        self.surface_check = QCheckBox("Reconstructed surface (DSM)")
+        self.surface_check.setChecked(True)
+        self.surface_check.setEnabled(False)
+        self.surface_check.setToolTip(
+            "Show the surface reconstructed in the 3D Flight Viewer - ground "
+            "plus vegetation and buildings - above the DEM (the bare-earth "
+            "terrain), with the camera's distance to it. Available once a "
+            "reconstruction exists for this flight.")
+        self.surface_check.toggled.connect(self.canvas_surface_toggled)
+        controls.addWidget(self.surface_check)
         controls.addStretch()
         self.load_btn = QPushButton("Load")
         self.load_btn.clicked.connect(self.load)
@@ -422,6 +492,7 @@ class AglToolDialog(QDialog):
 
         self.canvas = ProfileCanvas()
         self.canvas.set_hover_callback(self._on_hover)
+        self.canvas.set_show_surface(self.surface_check.isChecked())
         layout.addWidget(self.canvas, 1)
 
         self.hover_label = QLabel("Hover over the profile to read the altitude above ground.")
@@ -559,6 +630,12 @@ class AglToolDialog(QDialog):
         self.canvas.set_message("")
         self.canvas.set_axis(self._axis())
         self.canvas.set_points(self._profile["points"])
+        has_surface = self._profile.get("n_surface", 0) > 0
+        self.surface_check.setEnabled(has_surface)
+        self.surface_check.setToolTip(
+            self.surface_check.toolTip().split("\n")[0] + (
+                "" if has_surface else "\nNo reconstruction under this "
+                "flight yet (3D Flight Viewer, Reconstruction tab)."))
         camera = self.camera_combo.currentText()
         lines = agl_profile.summarise(self._profile)
         if not self._profile["points"]:
@@ -569,6 +646,9 @@ class AglToolDialog(QDialog):
         self.hover_label.setText(
             "Hover over the profile to read the altitude above ground.")
         self._load_markers()
+
+    def canvas_surface_toggled(self, on: bool):
+        self.canvas.set_show_surface(on)
 
     def _marker_status(self, message: str):
         summary = getattr(self, "_summary", "")
@@ -613,6 +693,10 @@ class AglToolDialog(QDialog):
         ground = (f"{point['ground']:8.1f} m" if point["ground"] is not None
                   else "    n/a")
         agl = (f"{point['agl']:6.1f} m" if point["agl"] is not None else "   n/a")
+        surface = ""
+        if self.surface_check.isChecked() and point.get("surface") is not None:
+            surface = (f"  |  surface {point['surface']:8.1f} m   above surface "
+                       f"{point['agl_surface']:6.1f} m")
         animals = ""
         if self.marker_combo.currentData():
             count = getattr(self, "_marker_counts", {}).get(point["frame"], 0)
@@ -620,4 +704,4 @@ class AglToolDialog(QDialog):
         self.hover_label.setText(
             f"frame {point['frame']:5d}  d = {point['distance_m']:8.1f} m{time_part}"
             f"  |  altitude {point['altitude']:8.1f} m ASL   ground {ground}"
-            f"   AGL {agl}  |  E {point['east']:.1f}  N {point['north']:.1f}{animals}")
+            f"   AGL {agl}{surface}  |  E {point['east']:.1f}  N {point['north']:.1f}{animals}")

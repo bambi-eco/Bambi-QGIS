@@ -84,8 +84,7 @@ class _SegCanvas(QGraphicsView):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setScene(QGraphicsScene(self))
-        self.setRenderHints(QPainter.RenderHint.Antialiasing
-                            | QPainter.RenderHint.SmoothPixmapTransform)
+        self.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform)
         self.setTransformationAnchor(
             QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setBackgroundBrush(QColor(30, 30, 30))
@@ -343,10 +342,8 @@ class SegmentationToolDialog(QDialog):
 
         self.setWindowTitle(
             "Segmentation - SAM3 / SAM 3.1 on the frames or the orthomosaic")
-        self.setWindowFlags(Qt.WindowType.Window
-                            | Qt.WindowType.WindowCloseButtonHint
-                            | Qt.WindowType.WindowMinimizeButtonHint
-                            | Qt.WindowType.WindowMaximizeButtonHint)
+        window = Qt.WindowType.Window | Qt.WindowType.WindowCloseButtonHint
+        self.setWindowFlags(window | Qt.WindowType.WindowMinimizeButtonHint | Qt.WindowType.WindowMaximizeButtonHint)
         self._setup_ui()
         fit_to_screen(self, 1280, 820)
         self._restore_settings()
@@ -1263,10 +1260,13 @@ class SegmentationToolDialog(QDialog):
 
         name = self._images[self._frame].get("imagefile", "")
         stamp = self._images[self._frame].get("timestamp", "") or ""
+        missing = "" if path else "  |  image file missing"
+        frozen = ("  |  ❄ frozen frame (thermal calibration) - not segmented"
+                  if self._images[self._frame].get("duplicated") else "")
         self.frame_label.setText(
             f"frame {self._frame:5d} / {len(self._images) - 1}  {name}"
             f"{'  ' + str(stamp) if stamp else ''}  |  {masks} mask(s) shown"
-            + ("" if path else "  |  image file missing"))
+            f"{missing}{frozen}")
         self._refresh_points_list()
 
     def _render_ortho(self):
@@ -1517,7 +1517,7 @@ class SegmentationToolDialog(QDialog):
             points = list(self._points)
         mode = (seg.MODE_SEQUENCE
                 if self.range_radio.isChecked() and self.sequence_check.isChecked()
-                and self.sequence_check.isEnabled() and not self._is_ortho()
+                and self.sequence_check.isEnabled() and not self._is_ortho()  # noqa: W503
                 else seg.MODE_IMAGE)
         model = (self.version_combo.currentData() if key == seg.BACKEND_META
                  else self.model_edit.text().strip())
@@ -1557,7 +1557,7 @@ class SegmentationToolDialog(QDialog):
             QMessageBox.warning(self, "Segmentation", str(exc))
             return
         if (request.mode == seg.MODE_SEQUENCE and len(request.frames) > 300
-                and request.backend == seg.BACKEND_TRANSFORMERS):
+                and request.backend == seg.BACKEND_TRANSFORMERS):  # noqa: W503
             reply = QMessageBox.question(
                 self, "Long sequence",
                 f"The clip has {len(request.frames)} frames. The video "
@@ -1579,9 +1579,9 @@ class SegmentationToolDialog(QDialog):
         if request.backend != seg.BACKEND_ROBOFLOW:
             from .core import hf_access
             _token, source = hf_access.resolve_token(self.hf_token_edit.text())
-            self._log("Hugging Face token: "
-                      + (hf_access.describe_token_source(source)
-                         if source else "none - a gated download will fail"))
+            described = (hf_access.describe_token_source(source) if source
+                         else "none - a gated download will fail")
+            self._log("Hugging Face token: " + described)
         if self._is_ortho():
             info = self._ortho_info
             self._log(f"Running on the orthomosaic: "

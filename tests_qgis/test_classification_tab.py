@@ -141,7 +141,8 @@ def test_perspective_is_the_default_projection(dock):
 
 
 def test_projection_reports_the_repo_folder_not_the_label(dock):
-    for index, expected in enumerate(("non_geo", "geo_1k", "geo_2k")):
+    for index, expected in enumerate(("non_geo", "geo_1k", "geo_2k",
+                                      "alfs")):
         dock.classification_projection_combo.setCurrentIndex(index)
         assert dock.get_config()["classification_projection"] == expected
 
@@ -153,8 +154,9 @@ def test_device_reports_a_stable_value(dock):
 
 
 def test_projection_combo_covers_every_published_variant(dock):
+    # ... plus ALFS, which has no published classifiers yet (9.0.0)
     assert dock.classification_projection_combo.count() == \
-        len(hf_access.PROJECTIONS)
+        len(hf_access.PROJECTIONS) + 1
 
 
 def test_model_mapping_round_trips_through_the_json_role(dock):

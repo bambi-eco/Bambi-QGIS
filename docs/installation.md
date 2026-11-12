@@ -54,6 +54,7 @@ Each dependency group shows the currently installed version (green ✔, orange �
 | **Calibration (optional)** | pycolmap |
 | **Extended Tracking (optional)** | BoxMOT, Geo-Referenced Tracking |
 | **Flight Route Generation (optional)** | Fiona, simplekml |
+| **3D Flight Viewer (optional)** | PyOpenGL, pyqtgraph |
 | **DJI Thermal SDK** | Download & extract to the correct plugin subfolder |
 | **GPU Support – CUDA** | torch + torchvision (CUDA 12.6 builds) |
 
@@ -96,9 +97,13 @@ All packages can alternatively be installed with pip inside the **OSGeo4W Shell*
 The plugin requires the **BAMBI Detection Framework** and the **ALFS-PY** framework:
 
 ```bash
-pip install git+https://github.com/bambi-eco/bambi_detection.git
-pip install "AlfsPy[moderngl,embree] @ git+https://github.com/bambi-eco/alfs_py.git"
+pip install git+https://github.com/bambi-eco/bambi_detection.git@v1.2.1
+pip install "AlfsPy[moderngl,embree] @ git+https://github.com/bambi-eco/alfs_py.git@v3.1.0"
 ```
+
+Version 9.0.0 needs at least **bambi_detection 1.2.1** and **alfs_py 3.1.0**
+(duplicated-frame flag of the thermal extraction). The Dependency Manager
+installs exactly these releases and reports older installs as out of date.
 
 ALFS-PY ships no renderer of its own: the render engine and the ray
 caster are optional extras, and installing it without one leaves it
@@ -145,6 +150,16 @@ The [Random Flight Strategy Planner](flight-planner.md) requires:
 pip install fiona==1.10.1
 pip install simplekml==1.3.6
 ```
+
+### Optional: 3D Flight Viewer
+
+The interactive 3D view of the [3D Flight Viewer](tools.md#3d-flight-viewer) draws with OpenGL 3.3 and needs:
+
+```bash
+pip install pyqtgraph==0.13.7 PyOpenGL==3.1.10
+```
+
+Without them (or without an OpenGL 3.3 driver, e.g. over a remote desktop) the viewer still opens and shows the frames, without the 3D scene.
 
 ### Optional: Classification
 

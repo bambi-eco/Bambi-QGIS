@@ -47,8 +47,13 @@ _bundled_versions_cache = None
 #: change to the pose→camera convention.  Each is kept in step with the lower
 #: bound of its ``_VERSION_RANGES`` entry below, which is what flags an
 #: out-of-date install (``tests/test_alfspy_pin.py``).
-ALFS_PY_TAG = 'v3.0.0'
-BAMBI_DETECTION_TAG = 'v1.1.0'
+ALFS_PY_TAG = 'v3.1.0'
+BAMBI_DETECTION_TAG = 'v1.2.1'
+#: Versions the dependency manager installs for the 3D Flight Viewer.
+PYQTGRAPH_VERSION = '0.13.7'
+PYOPENGL_VERSION = '3.1.10'
+#: pycolmap: structure-from-motion of the single-camera calibration.
+PYCOLMAP_VERSION = '4.0.3'
 #: Geo-Referenced-Tracking tags its releases without the ``v`` prefix the other
 #: two repositories use.  0.1.0 is the release the plugin's tracking step was
 #: written against; 1.0.0 exists but has not been run through the plugin, hence
@@ -119,15 +124,20 @@ _VERSION_RANGES = {
     # back for the CPU 2.5.1 wheel (too old for transformers 5).  1.1.0 is the
     # floor: frame extraction passes ``heading_source`` and
     # ``airdata_video_padding_ms`` to TimedPoseExtractor, which 1.0.x rejects.
-    'bambi-detection': ("1.1.0", None),
+    # 1.2.0 adds ``flag_duplicates`` (frozen thermal frames kept in the poses
+    # file, marked "duplicated"), 1.2.1 reads and writes that key in
+    # ``bambi.io.poses`` - the floor since the flag is on by default.
+    'bambi-detection': ("1.2.1", None),
     # 3.0.0 is the release that merged the PyTorch fork back in: one package
     # with selectable engines and ray casters, ``make_context`` in place of the
     # per-backend factories, and an integral result that reports coverage
     # separately from alpha.  2.1.0 was the floor before that - the first
     # release whose drone-pose rotation applies the gimbal heading about world
-    # up - and anything older still mis-points every oblique frame.
-    'AlfsPy': ("3.0.0", None),
-    'pycolmap': ('4.0.3', '4.0.3'),
+    # up - and anything older still mis-points every oblique frame.  3.1.0
+    # knows the "duplicated" key of a pose entry and skips such frames in its
+    # own loaders (the plugin builds its shots itself and skips them there).
+    'AlfsPy': ("3.1.0", None),
+    'pycolmap': (PYCOLMAP_VERSION, PYCOLMAP_VERSION),
     'boxmot': ('17.0.0', '18.0.0'),
     # Closed on both ends: 0.1.0 is what ``GEOREF_TRACKER_TAG`` installs and the
     # only release the tracking step has been run against.  1.0.0 exists and is
@@ -141,6 +151,11 @@ _VERSION_RANGES = {
     'dji-thermal-sdk': ('1.7', '1.8'),
     'fiona': ('1.10.1', '1.10.1'),
     'simplekml': ('1.3.6', '1.3.6'),
+    # 3D Flight Viewer.  pyqtgraph 0.13.7 is the newest release that still runs
+    # on Python 3.9 (QGIS 3.22-3.28); 0.14.0 needs 3.10 and is accepted where
+    # it is already installed.  Both support PyQt5 and PyQt6.
+    'pyqtgraph': (PYQTGRAPH_VERSION, '0.14.0'),
+    'PyOpenGL': ('3.1.7', PYOPENGL_VERSION),
     # DINOv3 support landed in transformers 4.56.0; anything older cannot load
     # the backbone the classification heads were trained against.
     'transformers': ('4.56.0', None),
@@ -152,6 +167,16 @@ _VERSION_RANGES = {
 #: 2.5.1, below the floor above; cu126 carries 2.6 onwards and runs on any
 #: driver a CUDA 12.x setup already has.
 TORCH_CUDA_INDEX = 'cu126'
+
+
+def pyqtgraph_requirement() -> str:
+    """pip requirement for the 3D Flight Viewer's Qt helpers and plots."""
+    return f'pyqtgraph=={PYQTGRAPH_VERSION}'
+
+
+def pyopengl_requirement() -> str:
+    """pip requirement for the 3D Flight Viewer's OpenGL view."""
+    return f'PyOpenGL=={PYOPENGL_VERSION}'
 
 
 def gpu_torch_requirements():
@@ -220,7 +245,11 @@ def _get_version_status(dist_name, plugins_dir=None):
 
     try:
         from packaging.version import Version
-        ver = Version(ver_str)
+        # The local build tag is not part of the release: "2.11.0+cu126"
+        # is torch 2.11.0 built for CUDA, but PEP 440 sorts it *after*
+        # 2.11.0 - so a CUDA build of the newest tested release was
+        # reported as outside the range (2026-11-12).
+        ver = Version(Version(ver_str).public)
         if (min_ver and ver < Version(min_ver)) or (max_ver and ver > Version(max_ver)):
             return ver_str, 'untested'
     except Exception:  # nosec B110

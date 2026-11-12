@@ -48,3 +48,15 @@ def dock(iface, clean_project):
     widget = BambiDockWidget(iface)
     yield widget
     widget.deleteLater()
+
+
+@pytest.fixture(autouse=True)
+def flight_name_prompt(monkeypatch):
+    """Since 9.0.0 a flight needs a name from the user: setting a target
+    folder asks for it. The tests answer that prompt with the folder-derived
+    name, so a test that only sets a target folder still gets its flight.
+    A test about the prompt itself patches ``_prompt_flight_name`` again."""
+    from bambi_wildlife_detection.bambi_dock_widget import BambiDockWidget
+    from bambi_wildlife_detection.core import flights
+    monkeypatch.setattr(BambiDockWidget, "_prompt_flight_name",
+                        lambda self, folder: flights.default_name(folder))

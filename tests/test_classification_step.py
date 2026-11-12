@@ -58,8 +58,8 @@ PLAN = {
 }
 
 
-def _build_modality(root, suffix, plan=None):
-    """Detections, tracks, poses and embeddings for one camera."""
+def _build_modality(root, suffix, plan=None, embeddings=True):
+    """Detections, tracks, poses and (unless switched off) embeddings."""
     plan = plan or PLAN
 
     conn = store.open_store(
@@ -81,6 +81,9 @@ def _build_modality(root, suffix, plan=None):
     with open(poses, "w", encoding="utf-8") as fh:
         json.dump({"images": [{"imagefile": f"f{i:03d}.jpg"}
                               for i in range(len(plan))]}, fh)
+
+    if not embeddings:
+        return
 
     run_id = classification_store.start_embedding_run(
         root, suffix, backbone="fake", dim=DIM, crop_size=32, padding=0.1,
@@ -396,7 +399,19 @@ def test_missing_embeddings_are_refused(flight, tmp_path):
     bare = str(tmp_path / "bare")
     os.makedirs(bare)
     store.open_store(store.project_path(bare), store.PROJECT).close()
-    with pytest.raises(ValueError, match="No Thermal embeddings"):
+    # Tracked but never embedded: the first head that reads embeddings is the
+    # one that reports them missing.
+    _build_modality(bare, "t", embeddings=False)
+    with pytest.raises(ValueError, match="No embeddings found for the "
+                                         "occlusion classifier"):
+        BambiProcessor().run_classification(_config(bare, _models(flight)))
+
+
+def test_a_flight_without_tracks_is_refused(flight, tmp_path):
+    bare = str(tmp_path / "bare")
+    os.makedirs(bare)
+    store.open_store(store.project_path(bare), store.PROJECT).close()
+    with pytest.raises(ValueError, match="No Thermal tracks found"):
         BambiProcessor().run_classification(_config(bare, _models(flight)))
 
 

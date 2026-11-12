@@ -733,6 +733,78 @@ class SurveyAnalyticsMixin:
             progress_fn(100)
         return result
 
+    def run_survey_orthomosaic(self, config: Dict[str, Any], progress_fn=None,
+                               log_fn=None, cancel_check=None):
+        """One orthomosaic over every flight of the survey.
+
+        Exactly the flight's orthomosaic (:meth:`run_orthomosaic`): the same
+        merge of the exported per-frame GeoTIFFs with the same merge mode
+        and nodata value from the Orthomosaic configuration - only that the
+        frames of all ticked flights go onto one grid. The flights are
+        merged in the survey's order and each flight's frames in frame
+        order, which is what "first" / "last" refer to.
+
+        Written to ``<survey>/analytics_{m}/orthomosaic.tif``; the frame
+        range of the Orthomosaic tab belongs to a single flight and does
+        not apply here.
+        """
+        try:
+            import rasterio  # noqa: F401 - checked before any work is done
+        except ImportError as exc:
+            raise ImportError(
+                f"rasterio is required for orthomosaic generation.\n"
+                f"Original error: {exc}"
+            )
+
+        survey = self._survey(config)
+        camera_suffix = survey.modality
+        camera_name = survey.camera_label
+        method = config.get("ortho_method", "first")
+        nodata = config.get("ortho_nodata", 0)
+        target_epsg = survey.epsg or config.get("target_epsg", 32633)
+
+        if log_fn:
+            log_fn(f"Building the survey orthomosaic from the {camera_name} "
+                   f"frame GeoTIFFs of {self._flights_note(survey)}...")
+            log_fn(f"Merge mode: {method}")
+
+        candidates = []
+        per_flight = {}
+        for flight in survey.flights:
+            geotiff_folder = os.path.join(flight.target_folder,
+                                          f"geotiffs_{camera_suffix}")
+            found = (self._collect_frame_geotiffs(geotiff_folder)
+                     if os.path.isdir(geotiff_folder) else [])
+            if not found:
+                raise FileNotFoundError(
+                    f"{flight.name}: no frame GeoTIFFs in {geotiff_folder}. "
+                    f"Run 'Export Frames as GeoTIFF' for the {camera_name} "
+                    "camera first.")
+            per_flight[flight.name] = len(found)
+            candidates.extend(found)
+            if log_fn:
+                log_fn(f"  {flight.name}: {len(found)} GeoTIFF(s)")
+
+        analytics_folder = survey.ensure_analytics_folder()
+        output_file = os.path.join(analytics_folder, "orthomosaic.tif")
+        width, height, bands = self._write_orthomosaic(
+            candidates, method, nodata, target_epsg, output_file,
+            progress_fn, log_fn, cancel_check)
+
+        with open(os.path.join(analytics_folder, "orthomosaic.json"),
+                  "w", encoding="utf-8") as f:
+            json.dump({
+                "camera_suffix": camera_suffix,
+                "crs": f"EPSG:{target_epsg}",
+                "merge_mode": method,
+                "nodata": nodata,
+                "flights": [f.name for f in survey.flights],
+                "frames_per_flight": per_flight,
+                "n_frames": len(candidates),
+                "width": width, "height": height, "bands": bands,
+                "raster": output_file,
+            }, f, indent=2)
+
     def run_coverage_map(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Build a survey coverage map from the exported frame GeoTIFFs.
 

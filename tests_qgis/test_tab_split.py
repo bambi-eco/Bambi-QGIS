@@ -339,3 +339,101 @@ def test_the_analytics_tab_has_no_second_progress_bar(dock):
 def test_progress_still_reaches_the_shared_bar(dock):
     dock.on_worker_progress(42)
     assert dock.progress_bar.value() == 42
+
+
+# ---------------------------------------------------------------------------
+# One camera selector per stage (9.0.0)
+# ---------------------------------------------------------------------------
+
+def test_the_preprocessing_camera_sets_every_preprocessing_step(dock):
+    dock.preprocessing_camera_combo.setCurrentIndex(1)             # RGB
+    config = dock.get_config()
+    for key in ("flight_route_camera", "fov_camera", "alfs_camera",
+                "geotiff_camera", "ortho_camera"):
+        assert config[key] == "W", key
+    assert dock.extract_camera_combo.currentIndex() == 1
+    # the Processing tab keeps its own selection
+    assert config["detection_camera"] == "T"
+    assert config["tracking_camera"] == "T"
+
+
+def test_the_processing_camera_sets_detection_and_tracking(dock):
+    dock.processing_camera_combo.setCurrentIndex(1)                # RGB
+    config = dock.get_config()
+    assert config["detection_camera"] == "W"
+    assert config["georeference_camera"] == "W"
+    assert config["tracking_camera"] == "W"
+    assert config["fov_camera"] == "T"
+
+
+def test_a_step_camera_set_from_code_carries_its_stage(dock):
+    """E.g. a project of an earlier version with one camera per step."""
+    dock.alfs_camera_combo.setCurrentIndex(1)
+    assert dock.preprocessing_camera_combo.currentIndex() == 1
+    assert dock.geotiff_camera_combo.currentIndex() == 1
+
+
+def test_the_step_rows_no_longer_show_a_camera_combo(dock):
+    for name in ("extract_camera_combo", "flight_route_camera_combo",
+                 "detection_camera_combo", "tracking_camera_combo",
+                 "fov_camera_combo", "alfs_camera_combo",
+                 "geotiff_camera_combo", "ortho_camera_combo",
+                 "embeddings_camera_combo"):
+        assert getattr(dock, name).parent() is None, name
+    assert dock.preprocessing_camera_combo.parent() is \
+        dock.extract_btn.parent()
+    assert dock.processing_camera_combo.parent() is dock.detect_btn.parent()
+    assert dock.classification_camera_combo.parent() is \
+        dock.embeddings_btn.parent()
+
+
+# ---------------------------------------------------------------------------
+# Duplicated (frozen thermal) frames (9.0.0)
+# ---------------------------------------------------------------------------
+
+def test_duplicated_frames_are_flagged_by_default(dock):
+    assert dock.flag_duplicates_check.isChecked()
+    assert dock.get_config()["flag_duplicate_frames"] is True
+
+
+def test_the_flag_only_applies_to_video(dock):
+    dock.video_mode_check.setChecked(False)
+    assert dock.get_config()["flag_duplicate_frames"] is False
+    assert not dock.flag_duplicates_check.isEnabled()
+    dock.video_mode_check.setChecked(True)
+    assert dock.flag_duplicates_check.isEnabled()
+
+
+def test_switching_the_flag_on_existing_frames_asks_first(dock, tmp_path,
+                                                          monkeypatch):
+    import json
+    from qgis.PyQt.QtWidgets import QMessageBox
+
+    with open(tmp_path / "poses_t.json", "w", encoding="utf-8") as fh:
+        json.dump({"images": [{"imagefile": "a.jpg"}]}, fh)   # pre-9.0.0
+    asked = []
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        lambda *a, **k: asked.append(1) or QMessageBox.StandardButton.No)
+
+    config = {"input_mode": "video", "target_folder": str(tmp_path),
+              "flag_duplicate_frames": True}
+    assert dock._confirm_duplicate_flag_change(config) is False
+    assert asked == [1]
+
+    config["flag_duplicate_frames"] = False        # same as the file: no question
+    assert dock._confirm_duplicate_flag_change(config) is True
+    assert asked == [1]
+
+
+def test_switching_a_stage_camera_scans_the_statuses_once(dock, tmp_path,
+                                                          monkeypatch):
+    """Six step combos follow the stage selector; one scan, not six."""
+    scans = []
+    monkeypatch.setattr(type(dock), "_check_existing_outputs",
+                        lambda self, folder: scans.append(folder))
+    dock.target_folder_edit.setText(str(tmp_path))
+    scans.clear()
+
+    dock.preprocessing_camera_combo.setCurrentIndex(1)
+    assert len(scans) == 1

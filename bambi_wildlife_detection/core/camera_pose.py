@@ -107,9 +107,86 @@ def ray_convention(force_probe: bool = False) -> str:
     return best
 
 
+def corrected_pose(meta: dict, t_corr: Optional[dict],
+                   r_corr: Optional[dict]):
+    """The corrected camera pose of a poses-file entry - the plugin's one
+    camera model, used by geo-referencing *and* rendering.
+
+    * position = pose location + translation correction (world axes, metres)
+    * rotation = pose eulers (degrees, ``[tilt, roll, heading]``) minus the
+      rotation correction (radians), applied once, turned into a camera
+      rotation by ``quaternion_from_drone_pose`` (heading about world up -
+      correct for tilted cameras too)
+    * a 4-element rotation is taken as a ready quaternion (only the
+      translation correction applies)
+
+    Renderers build their shots from this pose **without** an alfspy shot
+    correction transform (see :func:`shot_pose`): that transform applies the
+    correction in camera space - translation rotating with the heading, the
+    x rotation with the opposite sign - and placed frames differently from
+    geo-referencing.
+
+    :return: ``(pyrr.Vector3 position, pyrr.Quaternion rotation)``
+    """
+    import numpy as np
+    try:
+        from pyrr import Quaternion, Vector3
+        from alfspy.core.util.pyrrs import quaternion_from_drone_pose
+    except ImportError as exc:
+        raise RuntimeError(f"alfspy / pyrr not available: {exc}") from exc
+
+    t_corr, r_corr = t_corr or {}, r_corr or {}
+    cor_t = Vector3([t_corr.get("x", 0), t_corr.get("y", 0),
+                     t_corr.get("z", 0)], dtype="f4")
+    cor_r = Vector3([r_corr.get("x", 0), r_corr.get("y", 0),
+                     r_corr.get("z", 0)], dtype="f4")
+    position = Vector3(list(meta.get("location", [0.0, 0.0, 0.0]))[:3]) + cor_t
+    rotation = list(meta.get("rotation", [0.0, 0.0, 0.0]))
+    if len(rotation) == 4:
+        return position, Quaternion([float(v) for v in rotation])
+    # Corrections are stored in radians; the pose itself is in degrees.
+    rotation_eulers = (
+        Vector3([np.deg2rad(float(v) % 360.0) for v in rotation[:3]]) - cor_r
+    )
+    return position, quaternion_from_drone_pose(np.degrees(rotation_eulers))
+
+
+def pose_fovy(meta: dict, default: float = 50.0) -> float:
+    fovy = meta.get("fovy", default)
+    if isinstance(fovy, (list, tuple)):
+        fovy = fovy[0] if fovy else default
+    try:
+        return float(fovy)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def shot_pose(meta: dict, t_corr: Optional[dict], r_corr: Optional[dict]):
+    """``(position, rotation)`` to hand to ``CtxShot`` together with
+    ``correction=None`` - renders the frame where geo-referencing puts it."""
+    return corrected_pose(meta, t_corr, r_corr)
+
+
+def render_camera(meta: dict, t_corr: Optional[dict], r_corr: Optional[dict],
+                  aspect_ratio: float = 1.0):
+    """The corrected camera for *rendering* (view / projection matrices).
+
+    Same pose as :func:`build_camera`, but never conjugated: the legacy
+    ray-convention compensation only concerns alfspy's ray caster.
+    """
+    try:
+        from alfspy.core.rendering import Camera
+    except ImportError as exc:
+        raise RuntimeError(f"alfspy not available: {exc}") from exc
+    position, rotation = corrected_pose(meta, t_corr, r_corr)
+    return Camera(fovy=pose_fovy(meta), aspect_ratio=aspect_ratio,
+                  position=position, rotation=rotation)
+
+
 def build_camera(meta: dict, t_corr: dict, r_corr: dict,
                  aspect_ratio: float = 1.0):
-    """Build an ``alfspy.core.rendering.Camera`` from a poses-file entry.
+    """Build an ``alfspy.core.rendering.Camera`` for ray casting
+    (geo-referencing, FoV, box projection) from a poses-file entry.
 
     :param meta: one entry of the poses file's ``images`` list
         (keys ``location``, ``rotation`` in degrees, optional ``fovy``)
@@ -118,40 +195,19 @@ def build_camera(meta: dict, t_corr: dict, r_corr: dict,
     :param aspect_ratio: camera aspect ratio (width / height); the
         geo-referencing and box-projection paths use 1.0
     """
-    import numpy as np
     try:
-        from pyrr import Vector3
         from alfspy.core.rendering import Camera
-        from alfspy.core.util.pyrrs import quaternion_from_drone_pose
     except ImportError as exc:
         raise RuntimeError(f"alfspy / pyrr not available: {exc}") from exc
 
-    fovy = meta.get("fovy", 50.0)
-    if isinstance(fovy, (list, tuple)):
-        fovy = fovy[0] if fovy else 50.0
-    fovy = float(fovy)
-
-    cor_t = Vector3(
-        [t_corr.get("x", 0), t_corr.get("y", 0), t_corr.get("z", 0)],
-        dtype="f4")
-    cor_r = Vector3(
-        [r_corr.get("x", 0), r_corr.get("y", 0), r_corr.get("z", 0)],
-        dtype="f4")
-
-    position = Vector3(meta.get("location", [0.0, 0.0, 0.0])) + cor_t
-    # Corrections are stored in radians; the pose itself is in degrees.
-    rotation_eulers = (
-        Vector3([np.deg2rad(v % 360.0)
-                 for v in meta.get("rotation", [0.0, 0.0, 0.0])[:3]]) - cor_r
-    )
-    rotation_quat = quaternion_from_drone_pose(np.degrees(rotation_eulers))
+    position, rotation_quat = corrected_pose(meta, t_corr, r_corr)
     if ray_convention() == "legacy":
         # The legacy ray path multiplies by R33.T, so hand it the inverse
         # rotation; both branches then cast the same world ray.
         rotation_quat = rotation_quat.conjugate
 
     return Camera(
-        fovy=fovy,
+        fovy=pose_fovy(meta),
         aspect_ratio=aspect_ratio,
         position=position,
         rotation=rotation_quat,

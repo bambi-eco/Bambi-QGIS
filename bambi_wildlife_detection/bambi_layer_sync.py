@@ -18,9 +18,10 @@ import os
 from typing import Callable, Dict, Iterable, List, Optional
 
 from qgis.core import (
-    QgsFeature, QgsGeometry, QgsLayerTreeGroup, QgsPointXY, QgsProject,
-    QgsVectorLayer,
+    QgsFeature, QgsGeometry, QgsLayerTree, QgsLayerTreeGroup, QgsPointXY,
+    QgsProject, QgsVectorLayer,
 )
+from qgis.PyQt import sip
 
 TRACK_TYPES = ("track_final", "track_path")
 DETECTION_TYPE = "detection"
@@ -97,9 +98,12 @@ def _remove_layers(layers: List[QgsVectorLayer]) -> None:
             parents.append(node.parent())
     QgsProject.instance().removeMapLayers([layer.id() for layer in layers])
     for group in parents:
-        if isinstance(group, QgsLayerTreeGroup) and not group.children() \
-                and group.parent() is not None:
-            group.parent().removeChildNode(group)
+        # PyQGIS can hand these back as bare QgsLayerTreeNode objects, so
+        # test with QgsLayerTree.isGroup and cast with sip, not isinstance.
+        parent = group.parent()
+        if QgsLayerTree.isGroup(group) and not group.children() \
+                and parent is not None and QgsLayerTree.isGroup(parent):
+            sip.cast(parent, QgsLayerTreeGroup).removeChildNode(group)
 
 
 def _refresh_canvas() -> None:

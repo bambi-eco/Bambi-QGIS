@@ -909,6 +909,7 @@ class FeatureViewerDialog(QDialog):
             camera = "RGB" if self._view_mode == "w" else "thermal"
             if partner is not None and partner != frame_idx:
                 label += f"   ({camera} frame {partner})"
+        label += self._frozen_note(data, frame_idx, boxes_modality)
         if total > 1:
             self.frame_label.setText(
                 f"{label}   ({self._current_idx + 1} / {total})"
@@ -1026,6 +1027,22 @@ class FeatureViewerDialog(QDialog):
 
         painter.end()
         return result
+
+    def _frozen_note(self, data, frame_idx, boxes_modality) -> str:
+        """A note when the frame shown is a frozen thermal image, whose
+        picture repeats the previous frame (core.poses)."""
+        if not self._target_folder or frame_idx is None:
+            return ""
+        from .core import poses
+        shown = frame_idx
+        if self._view_mode != boxes_modality:
+            shown = data.get(f"frame_idx_{self._view_mode}", frame_idx)
+        if shown is None:
+            return ""
+        images = poses.load_images(self._target_folder, self._view_mode)
+        if poses.frame_is_duplicated(images, int(shown)):
+            return f"   ❄ {poses.FROZEN_LABEL}"
+        return ""
 
     def _draw_crosshair(self, img: "QImage", px: float, py: float) -> "QImage":
         """Draw a yellow crosshair at *(px, py)* in image pixel coordinates.

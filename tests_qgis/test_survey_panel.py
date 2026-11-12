@@ -48,7 +48,7 @@ def two_flights(dock, quiet, monkeypatch, tmp_path):
                         lambda *a_, **k: ("Forest", True))
     monkeypatch.setattr(type(dock), "_ask_new_flight_configuration",
                         lambda self: True)
-    dock.add_flight()
+    dock.browse_and_add_flight()
     dock.save_config_to_project()      # the forest flight's own store
     dock.flight_combo.setCurrentIndex(0)
     return a, b
@@ -186,3 +186,24 @@ def test_show_census_reads_the_survey_folder(dock, two_flights, tmp_path,
     dock.show_census_table()
     assert dock._census_dialog.isVisible()
     dock._census_dialog.close()
+
+
+# ---------------------------------------------------------------------------
+# Survey orthomosaic (9.0.0)
+# ---------------------------------------------------------------------------
+
+def test_the_survey_orthomosaic_controls_exist(dock):
+    assert dock.survey_ortho_btn is not None
+    assert dock.add_survey_ortho_btn is not None
+    dock.update_status("survey_orthomosaic", "🟢 Completed")
+    assert "Completed" in dock.survey_ortho_status.text()
+    assert "survey_orthomosaic" in dock._SURVEY_STEPS
+
+
+def test_adding_the_survey_orthomosaic_needs_it_generated(dock, monkeypatch):
+    from qgis.PyQt.QtWidgets import QMessageBox
+    warned = []
+    monkeypatch.setattr(QMessageBox, "warning",
+                        lambda *a, **k: warned.append(a[2]))
+    dock.add_survey_orthomosaic_to_qgis()
+    assert any("Generate Survey Orthomosaic" in text for text in warned)

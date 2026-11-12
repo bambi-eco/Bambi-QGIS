@@ -816,6 +816,9 @@ class TransectToolDialog(QDialog):
             self.status_label.setText("No project loaded.")
             return
         parts = [f"Frame {self._current_frame} / {len(self._images) - 1}"]
+        if self._images[self._current_frame].get("duplicated"):
+            # the position is valid, so it still counts for the transect
+            parts.append("❄ frozen frame (thermal calibration)")
         if self._cum:
             parts.append(
                 f"along flight path: {self._cum[self._current_frame]:.1f} m")

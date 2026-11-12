@@ -89,6 +89,20 @@ class TestTorchBuildVariant:
         assert ops._torch_build_variant("2.5.1") is None
 
 
+class TestViewer3dInstall:
+    def test_installs_pinned_versions(self):
+        assert ops.pyqtgraph_requirement() == f"pyqtgraph=={ops.PYQTGRAPH_VERSION}"
+        assert ops.pyopengl_requirement() == f"PyOpenGL=={ops.PYOPENGL_VERSION}"
+
+    @pytest.mark.parametrize("dist,version", [
+        ("pyqtgraph", "PYQTGRAPH_VERSION"), ("PyOpenGL", "PYOPENGL_VERSION")])
+    def test_installed_version_is_inside_the_tested_range(self, dist, version):
+        packaging = pytest.importorskip("packaging.version")
+        low, high = ops._VERSION_RANGES[dist]
+        v = packaging.Version(getattr(ops, version))
+        assert packaging.Version(low) <= v <= packaging.Version(high)
+
+
 class TestGpuTorchInstall:
     def test_requirements_follow_the_tested_ranges(self):
         assert ops.gpu_torch_requirements() == [
@@ -438,3 +452,19 @@ class TestInstallGithubZip:
             ops._install_github_zip(
                 "https://github.com/x/repo/archive/main.zip", "repo",
                 str(tmp_path), lambda m: None)
+
+
+def test_a_local_build_tag_does_not_put_a_release_out_of_range(monkeypatch):
+    """torch 2.11.0+cu126 is the CUDA build of 2.11.0, the newest tested
+    release - not something newer than it."""
+    import importlib.metadata
+
+    from bambi_wildlife_detection.core import dependency_ops as ops
+
+    monkeypatch.setitem(ops._VERSION_RANGES, "torch", ("2.6.0", "2.11.0"))
+    for version, expected in (("2.11.0+cu126", "ok"), ("2.6.0+cpu", "ok"),
+                              ("2.11.1+cu126", "untested"),
+                              ("2.5.1+cu121", "untested")):
+        monkeypatch.setattr(importlib.metadata, "version",
+                            lambda name, v=version: v)
+        assert ops._get_version_status("torch") == (version, expected)

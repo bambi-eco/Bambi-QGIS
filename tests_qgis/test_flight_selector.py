@@ -45,7 +45,7 @@ def _add(dock, monkeypatch, folder, name, copy_configuration=True):
     monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: (name, True))
     monkeypatch.setattr(type(dock), "_ask_new_flight_configuration",
                         lambda self: copy_configuration)
-    dock.add_flight()
+    dock.browse_and_add_flight()
 
 
 # ---------------------------------------------------------------------------
@@ -55,6 +55,8 @@ def _add(dock, monkeypatch, folder, name, copy_configuration=True):
 def test_the_widgets_exist(dock):
     assert dock.flight_combo is not None
     assert dock.flight_add_btn is not None
+    assert dock.flight_browse_add_btn is not None
+    assert dock.flight_name_edit is not None
     assert dock.flight_rename_btn is not None
 
 
@@ -67,12 +69,212 @@ def test_setting_a_target_folder_creates_the_first_flight(dock, two_flights):
     assert dock._active_flight()["target_folder"] == a
 
 
-def test_the_default_name_comes_from_the_parent_folder(dock, two_flights):
-    """The default target folder is <input>/qgis, so 'qgis' names nothing."""
+def test_the_first_flight_is_named_by_the_user(dock, monkeypatch, two_flights):
+    """9.0.0: no name is made up - the user is asked for it."""
+    a, _b = two_flights
+    monkeypatch.setattr(type(dock), "_prompt_flight_name",
+                        lambda self, folder: "North Meadow")
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    assert dock._active_flight()["name"] == "North Meadow"
+
+
+def test_the_name_field_names_the_first_flight(dock, monkeypatch, two_flights):
+    """A name typed on the Input tab is used; nothing is asked."""
+    a, _b = two_flights
+    asked = []
+    monkeypatch.setattr(type(dock), "_prompt_flight_name",
+                        lambda self, folder: asked.append(folder) or "")
+    dock.flight_name_edit.setText("Typed Name")
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    assert dock._active_flight()["name"] == "Typed Name"
+    assert asked == []
+
+
+def test_without_a_name_there_is_no_flight(dock, monkeypatch, two_flights):
+    a, _b = two_flights
+    monkeypatch.setattr(type(dock), "_prompt_flight_name",
+                        lambda self, folder: "")
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    assert dock._flights() == []
+
+
+def test_a_step_does_not_run_without_a_flight_name(dock, quiet, monkeypatch,
+                                                   two_flights):
+    a, _b = two_flights
+    monkeypatch.setattr(type(dock), "_prompt_flight_name",
+                        lambda self, folder: "")
+    dock.target_folder_edit.setText(a)
+    assert dock.validate_inputs([]) is False
+    assert any("Flight name" in str(args) for args in quiet["warn"])
+
+
+# ---------------------------------------------------------------------------
+# "+" adds a flight by name; its folder is set in the target folder field
+# ---------------------------------------------------------------------------
+
+def _add_named(dock, monkeypatch, name, copy_configuration=True):
+    monkeypatch.setattr(type(dock), "_ask_new_flight_configuration",
+                        lambda self: copy_configuration)
+    dock.flight_name_edit.setText(name)
+    dock.add_flight()
+
+
+def test_plus_opens_no_folder_dialog(dock, quiet, monkeypatch):
+    asked = []
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory",
+                        lambda *a, **k: asked.append(1) or "")
+    _add_named(dock, monkeypatch, "North Meadow")
+    assert asked == []
+    assert [f["name"] for f in dock._flights()] == ["North Meadow"]
+
+
+def test_plus_without_a_name_adds_nothing(dock, quiet, monkeypatch):
+    _add_named(dock, monkeypatch, "   ")
+    assert dock._flights() == []
+    assert quiet["info"]
+
+
+def test_the_first_flight_added_by_name_keeps_the_form(dock, quiet,
+                                                       monkeypatch, two_flights):
+    a, _b = two_flights
+    monkeypatch.setattr(type(dock), "_prompt_flight_name",
+                        lambda self, folder: "")
+    dock.target_folder_edit.setText(a)
+    _add_named(dock, monkeypatch, "North Meadow")
+    assert dock._active_flight() == {"name": "North Meadow",
+                                     "target_folder": a}
+    assert dock.flight_name_edit.text() == ""
+
+
+def test_plus_adds_a_second_flight_without_a_folder(dock, quiet, monkeypatch,
+                                                    two_flights):
     a, _b = two_flights
     dock.target_folder_edit.setText(a)
     dock._on_target_folder_changed()
-    assert dock._active_flight()["name"] == "meadow"
+
+    _add_named(dock, monkeypatch, "Forest")
+
+    assert [f["name"] for f in dock._flights()] == ["meadow", "Forest"]
+    assert dock._active_flight()["name"] == "Forest"
+    assert dock._active_flight()["target_folder"] == ""
+    assert dock.target_folder_edit.text() == ""
+
+
+def test_a_name_must_be_unique(dock, quiet, monkeypatch, two_flights):
+    a, _b = two_flights
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+
+    _add_named(dock, monkeypatch, "MEADOW")
+    assert len(dock._flights()) == 1
+    assert quiet["warn"]
+
+
+@pytest.mark.parametrize("reserved", ["Thermal", "RGB", "BAMBI Survey"])
+def test_a_reserved_group_name_is_refused(dock, quiet, monkeypatch, reserved):
+    """These title the plugin's own layer groups."""
+    _add_named(dock, monkeypatch, reserved)
+    assert dock._flights() == []
+
+
+def test_the_target_folder_field_gives_the_new_flight_its_folder(
+        dock, quiet, monkeypatch, two_flights):
+    a, b = two_flights
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    _add_named(dock, monkeypatch, "Forest")
+
+    dock.target_folder_edit.setText(b)
+    dock._on_target_folder_changed()
+
+    assert dock._active_flight() == {"name": "Forest", "target_folder": b}
+    assert len(dock._flights()) == 2
+
+
+def test_the_target_folder_field_refuses_another_flights_folder(
+        dock, quiet, monkeypatch, two_flights):
+    """The check "+" used to make, now where the folder is entered."""
+    a, _b = two_flights
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    _add_named(dock, monkeypatch, "Forest")
+
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+
+    assert quiet["warn"]
+    assert dock._active_flight()["name"] == "Forest"
+    assert dock._active_flight()["target_folder"] == ""
+    assert dock.target_folder_edit.text() == ""
+
+
+def test_a_processed_folder_is_adopted_from_the_target_folder_field(
+        dock, quiet, monkeypatch, two_flights):
+    a, b = two_flights
+    flights.save_config(b, {"Detection/Confidence": "0.42"})
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    _add_named(dock, monkeypatch, "Forest")
+    seen = []
+    monkeypatch.setattr(type(dock), "_confirm_existing_flight",
+                        lambda self, folder, existing: seen.append(folder) or True)
+
+    dock.target_folder_edit.setText(b)
+    dock._on_target_folder_changed()
+
+    assert seen == [b]
+    assert dock._active_flight()["target_folder"] == b
+    assert dock.target_folder_edit.text() == b
+
+
+def test_declining_a_processed_folder_leaves_the_flight_without_one(
+        dock, quiet, monkeypatch, two_flights):
+    a, b = two_flights
+    flights.save_config(b, {"Detection/Confidence": "0.42"})
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    _add_named(dock, monkeypatch, "Forest")
+    monkeypatch.setattr(type(dock), "_confirm_existing_flight",
+                        lambda self, folder, existing: False)
+
+    dock.target_folder_edit.setText(b)
+    dock._on_target_folder_changed()
+
+    assert dock._active_flight()["target_folder"] == ""
+    assert dock.target_folder_edit.text() == ""
+
+
+def test_only_one_flight_waits_for_its_folder(dock, quiet, monkeypatch,
+                                              two_flights):
+    """A flight keeps its configuration in its folder, so the next one is
+    added once this one has a folder."""
+    a, _b = two_flights
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    _add_named(dock, monkeypatch, "Forest")
+    _add_named(dock, monkeypatch, "Lake")
+
+    assert [f["name"] for f in dock._flights()] == ["meadow", "Forest"]
+
+
+def test_browse_and_add_uses_the_name_field(dock, quiet, monkeypatch,
+                                            two_flights):
+    a, b = two_flights
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory",
+                        lambda *a_, **k: b)
+    monkeypatch.setattr(QInputDialog, "getText",
+                        lambda *a_, **k: ("not used", True))
+    monkeypatch.setattr(type(dock), "_ask_new_flight_configuration",
+                        lambda self: True)
+    dock.flight_name_edit.setText("Forest")
+    dock.browse_and_add_flight()
+
+    assert dock._active_flight() == {"name": "Forest", "target_folder": b}
 
 
 def test_adding_a_second_flight_switches_to_it(dock, quiet, monkeypatch,
@@ -171,9 +373,11 @@ def test_layer_groups_nest_under_the_flight(dock, two_flights):
     dock._on_target_folder_changed()
 
     group = dock._create_layer_group("Detections (Thermal)")
-    parent = group.parent()
-    assert parent is not None
-    assert parent.name() == "meadow"
+    # 9.0.0: inside the flight, per camera
+    camera = group.parent()
+    assert camera is not None
+    assert camera.name() == "Thermal"
+    assert camera.parent().name() == "meadow"
 
 
 def test_renaming_a_flight_renames_its_group(dock, quiet, monkeypatch,
@@ -493,7 +697,7 @@ def _add_existing(dock, monkeypatch, folder, name, accept=True):
     monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: (name, True))
     monkeypatch.setattr(type(dock), "_confirm_existing_flight",
                         lambda self, folder, existing: accept)
-    dock.add_flight()
+    dock.browse_and_add_flight()
 
 
 def test_an_existing_folder_is_adopted_with_its_configuration(dock, quiet,
@@ -640,3 +844,20 @@ def test_the_flight_info_wraps(dock):
     for label in box.findChildren(QLabel):
         if "target folder" in label.text():
             assert label.wordWrap() is True
+
+
+def test_a_flight_without_a_target_folder_shows_nothing_processed(
+        dock, quiet, monkeypatch, two_flights):
+    a, _b = two_flights
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    for step in ("extract_thermal_frames", "detection", "tracking",
+                 "orthomosaic", "embeddings", "perpendicular"):
+        dock.update_status(step, "🟢 Completed")
+
+    _add_named(dock, monkeypatch, "Forest")
+
+    for label in (dock.extract_status, dock.detect_status, dock.track_status,
+                  dock.orthomosaic_status, dock.embeddings_status,
+                  dock.perpendicular_status):
+        assert "Completed" not in label.text()

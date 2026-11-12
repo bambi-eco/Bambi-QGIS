@@ -130,6 +130,7 @@ def export_camtrap_dp(target_folder: str, modality: str, output_folder: str,
     taxonomy = vocabulary["taxonomy"]
     rows = common.load_detections(target_folder, modality, include_not_an_animal)
     frames = {f["frame"]: f for f in common.load_frames(target_folder, modality)}
+    rows = common.without_duplicated(rows, frames)
     common.ensure_folder(output_folder)
 
     deployment_id = deployment_id or os.path.basename(

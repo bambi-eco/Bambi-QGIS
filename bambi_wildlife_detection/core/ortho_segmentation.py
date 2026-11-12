@@ -253,8 +253,7 @@ class OrthoReader:
 
     def preview(self, max_side: int = PREVIEW_MAX_SIDE):
         """``(rgb uint8 (h, w, 3), scale)`` with *scale* = mosaic px per preview px."""
-        factor = max(1, int(math.ceil(max(self.info.width, self.info.height)
-                                      / float(max_side))))
+        factor = max(1, int(math.ceil(max(self.info.width, self.info.height) / float(max_side))))
         h = max(1, int(math.ceil(self.info.height / factor)))
         w = max(1, int(math.ceil(self.info.width / factor)))
         data = self._dataset.read(self._indexes(), out_shape=(len(self._indexes()), h, w))

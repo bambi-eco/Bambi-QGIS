@@ -198,8 +198,22 @@ def load_frames(target_folder: str, modality: str) -> List[dict]:
             "imagefile": image.get("imagefile", f"frame_{index:06d}.jpg"),
             "location": image.get("location"),
             "epoch": image.get("epoch") or image.get("timestamp"),
+            # a frozen thermal frame: its image repeats the previous one
+            "duplicated": bool(image.get("duplicated")),
         })
     return frames
+
+
+def without_duplicated(rows: List[dict], frames: Dict[int, dict]) -> List[dict]:
+    """*rows* without those on a duplicated (frozen thermal) frame.
+
+    Such a frame's image repeats the previous one, so a box on it - an
+    interpolated one, say - would pair an annotation with the wrong picture
+    in a training set, and list a media file that shows another moment.
+    *frames* is ``{frame: load_frames() entry}``.
+    """
+    return [row for row in rows
+            if not frames.get(row.get("frame"), {}).get("duplicated")]
 
 
 def frame_size(target_folder: str, modality: str,

@@ -38,6 +38,7 @@ def export_coco(target_folder: str, modality: str, output_path: str,
     width, height = common.require_frame_size(
         target_folder, modality, image_size)
     frames = {f["frame"]: f for f in common.load_frames(target_folder, modality)}
+    rows = common.without_duplicated(rows, frames)
 
     mapping, names = common.class_map(
         (row["species_id"] for row in rows), vocabulary["species"])
@@ -123,6 +124,7 @@ def export_yolo(target_folder: str, modality: str, output_folder: str,
     width, height = common.require_frame_size(
         target_folder, modality, image_size)
     frames = {f["frame"]: f for f in common.load_frames(target_folder, modality)}
+    rows = common.without_duplicated(rows, frames)
 
     mapping, names = common.class_map(
         (row["species_id"] for row in rows), vocabulary["species"])

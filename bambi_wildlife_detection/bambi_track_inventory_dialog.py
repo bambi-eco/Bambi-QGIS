@@ -131,8 +131,7 @@ class _CheckItem(QTableWidgetItem):
 
     def __init__(self, checked: bool):
         super().__init__("")
-        self.setFlags((self.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                      & ~Qt.ItemFlag.ItemIsEditable)
+        self.setFlags((self.flags() | Qt.ItemFlag.ItemIsUserCheckable) & ~Qt.ItemFlag.ItemIsEditable)
         self.setCheckState(Qt.CheckState.Checked if checked
                            else Qt.CheckState.Unchecked)
         self.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -164,8 +163,7 @@ class BambiInventoryColumnsDialog(QDialog):
             item = QListWidgetItem(column)
             item.setToolTip(COLUMN_HINTS.get(column, ""))
             if column in ALWAYS_SHOWN:
-                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable
-                              & ~Qt.ItemFlag.ItemIsEnabled)
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable & ~Qt.ItemFlag.ItemIsEnabled)
                 item.setCheckState(Qt.CheckState.Checked)
             else:
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)

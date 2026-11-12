@@ -51,6 +51,28 @@ class TestDialogsConstruct:
         assert dlg.load_btn.isEnabled()
         _close(dlg)
 
+    def test_flight_viewer(self, iface, dock):
+        from bambi_wildlife_detection.bambi_flight_viewer import FlightViewerDialog
+        dlg = FlightViewerDialog(iface, dock)
+        assert isinstance(dlg, QDialog)
+        tabs = [dlg.tabs.tabText(i) for i in range(dlg.tabs.count())]
+        assert tabs == ["View", "ALFS", "Corrections", "Reconstruction"]
+        # No flight in the dock: nothing loads, the window says why.
+        assert dlg.scene is None
+        _close(dlg)
+
+    def test_flight_viewer_without_opengl_packages(self, iface, dock,
+                                                   monkeypatch):
+        """Without PyOpenGL the window still opens, with the frame fallback."""
+        from bambi_wildlife_detection import viewer3d
+        from bambi_wildlife_detection.bambi_flight_viewer import FlightViewerDialog
+        monkeypatch.setattr(viewer3d, "missing_dependencies",
+                            lambda: ["PyOpenGL"])
+        dlg = FlightViewerDialog(iface, dock)
+        assert dlg.viewport is None
+        assert "PyOpenGL" in dlg.fallback.text()
+        _close(dlg)
+
     def test_segmentation_tool(self, iface, dock):
         from bambi_wildlife_detection.bambi_segmentation_tool import (
             SegmentationToolDialog)

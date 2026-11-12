@@ -226,6 +226,10 @@ class BambiLabelMappingDialog(QDialog):
         *quiet* is the automatic call on opening: it never downloads, never
         pops a dialog, and reports through the status line only.
         """
+        if self.spec.get("model") == "implementation":
+            self._detect_implementation_classes(quiet)
+            return
+
         path = self._model_path()
         if not path and not quiet:
             path = self._offer_download()
@@ -270,6 +274,53 @@ class BambiLabelMappingDialog(QDialog):
                       "name them - fill the names in if you want them "
                       "readable; the mapping works either way."),
         }.get(source, f"{len(names)} class(es) found."))
+
+    def _detect_implementation_classes(self, quiet: bool):
+        """Class names of a custom implementation (core.custom_models).
+
+        Reading them means running its setup(), so never on opening - only
+        when asked, and after the trust prompt."""
+        from .bambi_custom_impl_widget import confirm_trust, run_with_feedback
+        from .core import custom_models
+
+        if quiet:
+            self.status.setText(
+                "A custom implementation: press 'Read classes from the "
+                "model' to load it and read its class names.")
+            return
+        path = (self.spec.get("path") or "").strip()
+        if not confirm_trust(self, path):
+            return
+        def work(status):
+            impl = custom_models.open_implementation(
+                self.spec, custom_models.CLASSIFIER,
+                custom_models.Context(
+                    kind=custom_models.CLASSIFIER,
+                    camera=self.spec.get("modality", "matched"),
+                    task=self.task, model_dir=self.models_dir or "",
+                    log=lambda message: status(str(message))),
+                status)
+            try:
+                return list(impl.class_names)
+            finally:
+                impl.close()
+
+        # In the background: setup() may load or download a model.
+        ok, names = run_with_feedback(
+            self, "Reading the classes of the custom implementation", work)
+        if ok is None:
+            return                              # stopped waiting
+        if not ok:
+            QMessageBox.warning(self, "Class Mapping", str(names))
+            return
+        existing = {self.table.item(row, 1).text()
+                    for row in range(self.table.rowCount())
+                    if self.table.item(row, 1)}
+        for name in names:
+            if name not in existing:
+                self._add_row(name, None)
+        self.status.setText(
+            f"{len(names)} class(es) read from the custom implementation.")
 
     def _offer_download(self) -> str:
         """Fetch the default head so its classes can be read. ``""`` if not."""

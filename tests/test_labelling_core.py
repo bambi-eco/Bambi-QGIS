@@ -906,6 +906,19 @@ class TestGeoPropagator:
         assert [f for f, _ in boxes] == [20, 25]
         assert [f for f, _ in failures] == [10]
 
+    def test_propagate_series_leaves_duplicated_frames_out(
+            self, fake_geo_stack, tmp_path):
+        """A frozen thermal frame keeps its pose, but its image shows an
+        earlier moment - no box is put on it (core.poses)."""
+        prop = self._propagator(tmp_path)
+        images = [dict(i) for i in _images(30)]
+        images[10]["duplicated"] = True
+        boxes, failures = prop.propagate_series(
+            (10, 10, 20, 20), 0, 25, images, 640, 512, step=10)
+        assert [f for f, _ in boxes] == [20, 25]
+        assert [f for f, _ in failures] == [10]
+        assert "duplicated" in failures[0][1]
+
     def test_propagate_series_raises_when_source_misses_dem(
             self, fake_geo_stack, tmp_path, monkeypatch):
         import sys as _sys

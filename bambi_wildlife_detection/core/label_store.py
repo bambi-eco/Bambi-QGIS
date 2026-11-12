@@ -272,9 +272,16 @@ def materialise(target_folder: str, modality: str,
 
     source_id = _manual_source_id(target_folder)
 
+    # No box on a duplicated (frozen thermal) frame: its image repeats the
+    # previous one, so an interpolated box would label the wrong picture.
+    from . import poses
+    frozen = poses.flagged(target_folder, modality)
+
     desired: Dict[Tuple[int, int], dict] = {}
     for track in tracks:
         for row in interpolate(track.get("keyframes", [])):
+            if row["frame"] in frozen:
+                continue
             desired[(track["label_track_id"], row["frame"])] = {
                 "x1": row["x1"], "y1": row["y1"],
                 "x2": row["x2"], "y2": row["y2"],

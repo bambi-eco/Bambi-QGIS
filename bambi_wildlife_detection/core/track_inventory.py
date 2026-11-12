@@ -233,8 +233,7 @@ def build_inventory(target_folder: str, modality: str,
             if level is None:
                 n_unknown += 1
             elif str(level).lower() == "occluded" or (
-                    level in occlusion_labels.values()
-                    and str(level).lower() != "clear"):
+                    level in occlusion_labels.values() and str(level).lower() != "clear"):
                 n_occluded += 1
             else:
                 n_clear += 1

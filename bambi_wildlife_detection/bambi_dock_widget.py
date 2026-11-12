@@ -29,9 +29,11 @@ from qgis.core import (
     QgsProject, QgsSettings, QgsVectorLayer, QgsCoordinateReferenceSystem,
     QgsFeature, QgsGeometry, QgsPointXY, QgsField, QgsRasterLayer,
     QgsLineSymbol, QgsMarkerSymbol, QgsPalLayerSettings, QgsTextFormat,
-    QgsVectorLayerSimpleLabeling, QgsTextBufferSettings, QgsLayerTreeGroup
+    QgsVectorLayerSimpleLabeling, QgsTextBufferSettings, QgsLayerTreeGroup,
+    QgsLayerTreeLayer, QgsLayerTree
 )
 from qgis.PyQt.QtCore import QVariant
+from qgis.PyQt import sip
 
 from .bambi_processing import BambiProcessor, ProcessingWorker
 from .austria_dem_downloader import DEMDownloadWorker, GeoTIFFConversionWorker
@@ -58,6 +60,7 @@ def _camera_suffix(camera_label: str) -> str:
     two cameras' persisted layer files apart."""
     return "w" if camera_label == "RGB" else "t"
 
+
 # The Hugging Face token lives in the QGIS settings rather than in the project
 # configuration: it is a user credential, and a project file gets shared.
 _HF_TOKEN_SETTING = gui_utils_hf.HF_TOKEN_SETTING  # one key with the Segmentation tool
@@ -65,7 +68,10 @@ _HF_TOKEN_SETTING = gui_utils_hf.HF_TOKEN_SETTING  # one key with the Segmentati
 # Combo index -> the value the processing steps use. Kept beside the combo
 # rather than derived from its label so renaming a label cannot silently
 # re-target a setting.
-_CLASSIFICATION_PROJECTIONS = ("non_geo", "geo_1k", "geo_2k")
+_CLASSIFICATION_PROJECTIONS = ("non_geo", "geo_1k", "geo_2k", "alfs")
+#: Detection "Projection" values, in the order of its combo
+#: (core.raster_sources).
+_DETECTION_PROJECTIONS = ("perspective", "geotiff", "alfs")
 _CLASSIFICATION_DEVICES = ("auto", "cpu", "cuda")
 _CLASSIFICATION_UNMATCHED = ("skip", "rgb", "thermal")
 
@@ -475,12 +481,6 @@ class BambiDockWidget(QDockWidget):
         self.flight_combo.currentIndexChanged.connect(self._on_flight_changed)
         flight_row.addWidget(self.flight_combo, 1)
 
-        self.flight_add_btn = QPushButton("+")
-        self.flight_add_btn.setFixedWidth(30)
-        self.flight_add_btn.setToolTip("Add another flight to this project")
-        self.flight_add_btn.clicked.connect(self.add_flight)
-        flight_row.addWidget(self.flight_add_btn)
-
         self.flight_rename_btn = QPushButton("Rename…")
         self.flight_rename_btn.setToolTip(
             "Rename this flight. Its QGIS layer group is renamed with it.")
@@ -496,10 +496,43 @@ class BambiDockWidget(QDockWidget):
         flight_row.addWidget(self.flight_remove_btn)
         flight_box.addLayout(flight_row)
 
+        # Every flight has a name the user gave it (9.0.0). A new flight
+        # is added by name; its target folder is chosen below afterwards.
+        name_row = QHBoxLayout()
+        name_row.addWidget(QLabel("Name:"))
+        self.flight_name_edit = QLineEdit()
+        self.flight_name_edit.setPlaceholderText(
+            "Name of a new flight - e.g. area and date")
+        self.flight_name_edit.setToolTip(
+            "Type the name of a new flight and press + (or Enter) to add it. "
+            "Every flight needs a name, also a single one: it titles the "
+            "flight's layer group in QGIS and identifies the flight in the "
+            "survey tools. Names are unique within the project.")
+        self.flight_name_edit.returnPressed.connect(self.add_flight)
+        name_row.addWidget(self.flight_name_edit, 1)
+
+        self.flight_add_btn = QPushButton("+")
+        self.flight_add_btn.setFixedWidth(30)
+        self.flight_add_btn.setToolTip(
+            "Add a new flight with this name. Its target folder is then set "
+            "under 'Target folder' below.")
+        self.flight_add_btn.clicked.connect(self.add_flight)
+        name_row.addWidget(self.flight_add_btn)
+
+        self.flight_browse_add_btn = QPushButton("Browse and Add…")
+        self.flight_browse_add_btn.setToolTip(
+            "Add an existing flight: pick a target folder that has been "
+            "processed before. It is added back with its stored "
+            "configuration and results.")
+        self.flight_browse_add_btn.clicked.connect(self.browse_and_add_flight)
+        name_row.addWidget(self.flight_browse_add_btn)
+        flight_box.addLayout(name_row)
+
         flight_info = QLabel(
-            "Adding a new flight requires defining the output target folder, "
-            "to avoid multiple use. A folder that has already been processed "
-            "is added back with its stored configuration."
+            "A flight needs a name and its own output target folder. Add a "
+            "new flight by name with +, then set its target folder below. "
+            "\"Browse and Add\" adds a folder that has already been "
+            "processed, with its stored configuration."
         )
         flight_info.setWordWrap(True)
         flight_info.setStyleSheet("color: gray; font-size: 10px;")
@@ -812,6 +845,8 @@ class BambiDockWidget(QDockWidget):
         self.target_folder_edit = QLineEdit()
         self.target_folder_edit.setPlaceholderText("Target folder for all outputs")
         self.target_folder_edit.editingFinished.connect(self._on_target_folder_changed)
+        self.target_folder_edit.textChanged.connect(
+            lambda _text: self._mark_flight_name())
         target_browse_btn = QPushButton("Browse...")
         target_browse_btn.clicked.connect(self.browse_target_folder)
         # Offered only for folders holding 5.x outputs that have not been
@@ -1170,6 +1205,25 @@ class BambiDockWidget(QDockWidget):
         sampling_row.addWidget(self.extract_sampling_rate_spin)
         sampling_row.addStretch()
         frame_ext_layout.addRow("Sampling rate (video only):", sampling_row)
+
+        self.flag_duplicates_check = QCheckBox(
+            "Keep duplicated thermal frames (flagged)")
+        self.flag_duplicates_check.setChecked(True)
+        self.flag_duplicates_check.setToolTip(
+            "Thermal video only. A thermal camera closes its shutter now and "
+            "then to recalibrate; while it is closed the video repeats the "
+            "previous image.\n\n"
+            "Ticked: these frozen frames stay in the frame list, marked "
+            "\"duplicated\", and every image-based step skips them. The frame "
+            "index then equals the video's frame number (one video, no skip "
+            "or sampling) - which is what TRex tracklets and anything else "
+            "that refers to the video by frame number need.\n\n"
+            "Unticked: they are dropped, as before 9.0.0, and all later "
+            "frames move up.\n\n"
+            "Changing this renumbers the frames: re-run the steps that were "
+            "computed from the previous extraction.")
+        frame_ext_layout.addRow("Duplicates (thermal video):",
+                                self.flag_duplicates_check)
 
         self.preserve_aspect_ratio_check = QCheckBox("Preserve original aspect ratio (otherwise square 1:1 format)")
         self.preserve_aspect_ratio_check.setChecked(False)
@@ -1585,6 +1639,35 @@ class BambiDockWidget(QDockWidget):
         self.confidence_spin.setToolTip("Minimum detection confidence")
         detection_layout.addRow("Min Confidence:", self.confidence_spin)
 
+        self.detection_projection_combo = QComboBox()
+        self.detection_projection_combo.addItems([
+            "Perspective (camera frames)",
+            "Orthorectified (GeoTIFF)",
+            "ALFS (light-field integrals)",
+        ])
+        self.detection_projection_combo.setToolTip(
+            "Which imagery the detector looks at - the built-in one and a "
+            "custom one alike.\n\n"
+            "Perspective: the extracted camera frames, as always.\n\n"
+            "Orthorectified: the per-frame GeoTIFFs, for models trained on "
+            "orthophotos. 'Export Frames as GeoTIFF' has to have run for "
+            "the camera (frames without a GeoTIFF are skipped), and the DEM "
+            "is needed. The detector's boxes are raster pixels; each is "
+            "placed in its camera frame through the GeoTIFF's "
+            "georeference, the DEM and the frame's camera, because a "
+            "detection is stored as a box in the extracted frame - the "
+            "picture the labelling tool, the inspector, the video creator "
+            "and the classifiers' crops use. Everything after detection "
+            "works as before.\n\n"
+            "ALFS: the light-field integrals of ALFS sampling mode "
+            "('Generate ALFS' with sampling enabled), in which occluding "
+            "vegetation is blurred away - for detectors trained on ALFS "
+            "imagery. An integral exists per central frame, so only those "
+            "frames are searched; the boxes are placed in the central "
+            "frame's camera image the same way.\n\n"
+            "The default BAMBI models were trained on perspective frames.")
+        detection_layout.addRow("Projection:", self.detection_projection_combo)
+
         # Detection frame filters
         det_filter_label = QLabel("Frame Range:")
         det_filter_label.setStyleSheet("font-weight: bold; margin-top: 8px;")
@@ -1623,6 +1706,45 @@ class BambiDockWidget(QDockWidget):
         detection_layout.addRow("Sample Rate:", self.detect_sample_rate_spin)
 
         detect_tab_layout.addWidget(detection_group)
+
+        # Custom detectors (core.custom_models, 9.0.0): a class from the
+        # user's own .py file in place of the Ultralytics model, per camera.
+        from .bambi_custom_impl_widget import (
+            DEPENDENCY_NOTE, FOLDER_NOTE, CustomImplementationBox)
+        from .core import custom_models as _custom_models
+
+        self._custom_implementations = {}
+        self._custom_boxes = {}
+        custom_det_group = QGroupBox("Custom detector")
+        custom_det_layout = QVBoxLayout(custom_det_group)
+        custom_det_info = QLabel(
+            "Any detector can stand in for the built-in Ultralytics YOLO "
+            "model: write a class with <code>setup(context)</code> and "
+            "<code>run(image, frame)</code> in a .py file and select it "
+            "here. The sample implementations show the interface - the "
+            "built-in detector itself, Microsoft's Overhead Wildlife "
+            "Locator (OWL) and DroneMegaDetector. " + FOLDER_NOTE + " "
+            + DEPENDENCY_NOTE)
+        custom_det_info.setWordWrap(True)
+        custom_det_info.setTextFormat(Qt.TextFormat.RichText)
+        custom_det_info.setStyleSheet("color: gray; font-size: 10px;")
+        custom_det_layout.addWidget(custom_det_info)
+        for key, title, camera in (
+                ("detector_t", "Thermal detector", "thermal"),
+                ("detector_w", "RGB detector", "rgb")):
+            box = CustomImplementationBox(
+                title, _custom_models.DETECTOR, camera)
+            box.changed.connect(self._on_custom_implementation_changed)
+            self._custom_boxes[key] = box
+            custom_det_layout.addWidget(box)
+        self.custom_samples_btn = QPushButton(
+            "Download sample implementations…")
+        self.custom_samples_btn.setToolTip(
+            "Save ready-to-edit sample files for detectors, trackers and "
+            "classifiers into a folder of your choice.")
+        self.custom_samples_btn.clicked.connect(self.download_custom_samples)
+        custom_det_layout.addWidget(self.custom_samples_btn)
+        detect_tab_layout.addWidget(custom_det_group)
 
         # The mapping belongs with the model rather than with the project's
         # species: it describes what these weights report, so a different model
@@ -1937,6 +2059,34 @@ class BambiDockWidget(QDockWidget):
 
         tracking_tab_layout.addWidget(tracking_group)
 
+        custom_trk_box = CustomImplementationBox(
+            "Custom tracker", _custom_models.TRACKER)
+        custom_trk_box.setToolTip(
+            "A class with setup(context) and update(frame, detections) - or "
+            "run(detections, frames) for the whole flight at once - that "
+            "says which track each detection belongs to. When ticked it "
+            "replaces the tracker selected above (and the TRex import does "
+            "not apply).\n\nOther .py files in the same folder can be "
+            "imported by it, and files next to it (weights, data) are "
+            "reached through os.path.dirname(__file__).")
+        self.custom_tracker_interpolate_check = QCheckBox(
+            "Interpolate gaps in the tracks")
+        self.custom_tracker_interpolate_check.setChecked(True)
+        self.custom_tracker_interpolate_check.setToolTip(
+            "Fill the frames a track skips with linearly interpolated boxes "
+            "(in the track files, as for the other trackers). Only applied "
+            "where the tracker says it is applicable - its setup() may "
+            "return {\"interpolate\": false}, e.g. for a tracker that "
+            "already fills gaps itself or tracks re-identified animals "
+            "across long absences.")
+        self.custom_tracker_interpolate_check.toggled.connect(
+            self._on_custom_implementation_changed)
+        custom_trk_box.body.layout().addRow(
+            "", self.custom_tracker_interpolate_check)
+        custom_trk_box.changed.connect(self._on_custom_implementation_changed)
+        self._custom_boxes["tracker"] = custom_trk_box
+        tracking_tab_layout.addWidget(custom_trk_box)
+
         # Initialize tracker UI state
         self._on_tracker_changed(0)
 
@@ -2174,6 +2324,7 @@ class BambiDockWidget(QDockWidget):
             "Perspective (camera frames)",
             "Orthorectified 1k (GeoTIFF)",
             "Orthorectified 2k (GeoTIFF)",
+            "ALFS (light-field integrals)",
         ])
         self.classification_projection_combo.setToolTip(
             "Which imagery the crops come from - and, with it, which variant "
@@ -2186,7 +2337,12 @@ class BambiDockWidget(QDockWidget):
             "1k and 2k refer to the source width the two variants were fitted "
             "at; pick the one nearer your export. Perspective is the better "
             "view for RGB - orthorectification smears animals that are "
-            "already small and low in contrast."
+            "already small and low in contrast.\n\n"
+            "ALFS crops the light-field integrals of ALFS sampling mode "
+            "(one per central frame; a frame in between uses the nearest), "
+            "in which occluding vegetation is blurred away. No default "
+            "classifiers have been published for ALFS imagery yet - use a "
+            "custom model or a custom implementation with it."
         )
         source_layout.addRow("Projection:", self.classification_projection_combo)
 
@@ -2823,6 +2979,32 @@ class BambiDockWidget(QDockWidget):
         proc_steps_group = QGroupBox("Detection and Tracking")
         proc_steps_layout = QVBoxLayout(proc_steps_group)
 
+        # One camera selector per stage instead of one per step (9.0.0).
+        # The per-step combos still exist - the steps, the configuration
+        # and the status checks read them - but are not shown; the stage
+        # selector sets them all.
+        self.preprocessing_camera_combo = QComboBox()
+        self.preprocessing_camera_combo.addItems(["T - Thermal", "W - RGB"])
+        self.preprocessing_camera_combo.setToolTip(
+            "The camera every pre-processing step works on: frame "
+            "extraction, flight route, field of view, ALFS, GeoTIFFs and "
+            "the orthomosaic. The step statuses show this camera's outputs.")
+        pre_camera_row = QHBoxLayout()
+        pre_camera_row.addWidget(QLabel("Camera:"))
+        pre_camera_row.addWidget(self.preprocessing_camera_combo, 1)
+        steps_btn_layout.addLayout(pre_camera_row)
+
+        self.processing_camera_combo = QComboBox()
+        self.processing_camera_combo.addItems(["T - Thermal", "W - RGB"])
+        self.processing_camera_combo.setToolTip(
+            "The camera detection, geo-referencing, the perpendicular "
+            "distances and tracking work on. Matching (A3) always uses "
+            "both cameras.")
+        proc_camera_row = QHBoxLayout()
+        proc_camera_row.addWidget(QLabel("Camera:"))
+        proc_camera_row.addWidget(self.processing_camera_combo, 1)
+        proc_steps_layout.addLayout(proc_camera_row)
+
         # ----- P1: Extract Frames -----
         step1_row = QHBoxLayout()
         self.extract_btn = QPushButton("P1. Extract Frames")
@@ -2837,7 +3019,6 @@ class BambiDockWidget(QDockWidget):
         self.extract_camera_combo.setToolTip("Select camera source for frame extraction")
         self.extract_status = QLabel("⚪ Not started")
         step1_row.addWidget(self.extract_btn)
-        step1_row.addWidget(self.extract_camera_combo)
         step1_row.addWidget(self.extract_status)
         steps_btn_layout.addLayout(step1_row)
 
@@ -2866,7 +3047,6 @@ class BambiDockWidget(QDockWidget):
         self.flight_route_camera_combo.setToolTip("Select camera source for poses")
         self.flight_route_status = QLabel("⚪ Not started")
         step2_row.addWidget(self.flight_route_btn)
-        step2_row.addWidget(self.flight_route_camera_combo)
         step2_row.addWidget(self.flight_route_status)
         steps_btn_layout.addLayout(step2_row)
 
@@ -2889,7 +3069,6 @@ class BambiDockWidget(QDockWidget):
         self.detection_camera_combo.setToolTip("Select camera source for frames")
         self.detect_status = QLabel("⚪ Not started")
         step3_row.addWidget(self.detect_btn)
-        step3_row.addWidget(self.detection_camera_combo)
         step3_row.addWidget(self.detect_status)
         proc_steps_layout.addLayout(step3_row)
 
@@ -2953,7 +3132,6 @@ class BambiDockWidget(QDockWidget):
         self.tracking_camera_combo.setToolTip("Select camera source for geo-referenced detections")
         self.track_status = QLabel("⚪ Not started")
         step5_row.addWidget(self.track_btn)
-        step5_row.addWidget(self.tracking_camera_combo)
         step5_row.addWidget(self.track_status)
         proc_steps_layout.addLayout(step5_row)
 
@@ -3037,7 +3215,6 @@ class BambiDockWidget(QDockWidget):
         self.fov_camera_combo.setToolTip("Select camera source for poses and calibration")
         self.calculate_fov_status = QLabel("⚪ Not started")
         step6_row.addWidget(self.calculate_fov_btn)
-        step6_row.addWidget(self.fov_camera_combo)
         step6_row.addWidget(self.calculate_fov_status)
         steps_btn_layout.addLayout(step6_row)
 
@@ -3071,7 +3248,6 @@ class BambiDockWidget(QDockWidget):
         self.alfs_camera_combo.setToolTip("Select camera source for frames and poses")
         self.alfs_status = QLabel("⚪ Not started")
         step7_row.addWidget(self.alfs_btn)
-        step7_row.addWidget(self.alfs_camera_combo)
         step7_row.addWidget(self.alfs_status)
         steps_btn_layout.addLayout(step7_row)
 
@@ -3094,7 +3270,6 @@ class BambiDockWidget(QDockWidget):
         self.geotiff_camera_combo.setToolTip("Select camera source for frames and poses")
         self.export_geotiffs_status = QLabel("⚪ Not started")
         step8_row.addWidget(self.export_geotiffs_btn)
-        step8_row.addWidget(self.geotiff_camera_combo)
         step8_row.addWidget(self.export_geotiffs_status)
         steps_btn_layout.addLayout(step8_row)
 
@@ -3120,7 +3295,6 @@ class BambiDockWidget(QDockWidget):
         self.ortho_camera_combo.setToolTip("Select camera source (GeoTIFFs) for the orthomosaic")
         self.orthomosaic_status = QLabel("⚪ Not started")
         ortho_step_row.addWidget(self.orthomosaic_btn)
-        ortho_step_row.addWidget(self.ortho_camera_combo)
         ortho_step_row.addWidget(self.orthomosaic_status)
         steps_btn_layout.addLayout(ortho_step_row)
 
@@ -3154,6 +3328,20 @@ class BambiDockWidget(QDockWidget):
             "border-radius: 4px; padding: 5px; font-size: 10px;")
         classify_steps_layout.addWidget(classify_note)
 
+        self.classification_camera_combo = QComboBox()
+        for label, value in _CLASSIFICATION_INPUTS:
+            self.classification_camera_combo.addItem(label, value)
+        self.classification_camera_combo.setCurrentIndex(2)
+        self.classification_camera_combo.setToolTip(
+            "Which camera's crops the embeddings (C1) and the classifiers "
+            "(C2-C5) read.\n\n'Matched' reads both cameras fused, which is "
+            "where the two sensors complement each other most - it needs "
+            "the tracks matched (A3).")
+        classify_camera_row = QHBoxLayout()
+        classify_camera_row.addWidget(QLabel("Input:"))
+        classify_camera_row.addWidget(self.classification_camera_combo, 1)
+        classify_steps_layout.addLayout(classify_camera_row)
+
         # ----- C1: Compute DINOv3 embeddings -----
         embeddings_row = QHBoxLayout()
         self.embeddings_btn = QPushButton("C1. Compute DINOv3 Embeddings")
@@ -3177,14 +3365,12 @@ class BambiDockWidget(QDockWidget):
         )
         self.embeddings_status = QLabel("⚪ Not started")
         embeddings_row.addWidget(self.embeddings_btn)
-        embeddings_row.addWidget(self.embeddings_camera_combo)
         embeddings_row.addWidget(self.embeddings_status)
         classify_steps_layout.addLayout(embeddings_row)
 
         # ----- C2-C5: one step per classifier -----
-        # Each carries its own Input combo, which is the whole of what that
-        # step is about: the camera it reads is the camera whose animals it
-        # labels, and 'Matched' reads both and labels both.
+        # Their Input combos are not shown: the stage's one "Input" selector
+        # above sets them all (9.0.0).
         inputs = self._ensure_classification_input_combos()
         # Separate steps rather than one: they take very different times, and
         # each reads what the earlier ones stored, so they can be run on
@@ -3202,7 +3388,6 @@ class BambiDockWidget(QDockWidget):
         )
         self.classify_occlusion_status = QLabel("⚪ Not started")
         classify_row.addWidget(self.classify_occlusion_btn)
-        classify_row.addWidget(inputs["occlusion"])
         classify_row.addWidget(self.classify_occlusion_status)
         classify_steps_layout.addLayout(classify_row)
 
@@ -3218,7 +3403,6 @@ class BambiDockWidget(QDockWidget):
         )
         self.classify_species_status = QLabel("⚪ Not started")
         species_row.addWidget(self.classify_species_btn)
-        species_row.addWidget(inputs["species"])
         species_row.addWidget(self.classify_species_status)
         classify_steps_layout.addLayout(species_row)
 
@@ -3234,7 +3418,6 @@ class BambiDockWidget(QDockWidget):
         )
         self.classify_sex_status = QLabel("⚪ Not started")
         sex_row.addWidget(self.classify_sex_btn)
-        sex_row.addWidget(inputs["sex"])
         sex_row.addWidget(self.classify_sex_status)
         classify_steps_layout.addLayout(sex_row)
 
@@ -3255,7 +3438,6 @@ class BambiDockWidget(QDockWidget):
         )
         self.life_stage_status = QLabel("⚪ Not started")
         life_stage_row.addWidget(self.life_stage_btn)
-        life_stage_row.addWidget(inputs["life_stage"])
         life_stage_row.addWidget(self.life_stage_status)
         classify_steps_layout.addLayout(life_stage_row)
 
@@ -3328,6 +3510,27 @@ class BambiDockWidget(QDockWidget):
                              self.fov_camera_combo, self.alfs_camera_combo,
                              self.geotiff_camera_combo, self.ortho_camera_combo):
             camera_combo.currentIndexChanged.connect(self._on_step_camera_changed)
+
+        # (stage selector, the step combo it is read back from, all the
+        # step combos it sets)
+        self._stage_cameras = [
+            (self.preprocessing_camera_combo, self.extract_camera_combo,
+             [self.extract_camera_combo, self.flight_route_camera_combo,
+              self.fov_camera_combo, self.alfs_camera_combo,
+              self.geotiff_camera_combo, self.ortho_camera_combo]),
+            (self.processing_camera_combo, self.detection_camera_combo,
+             [self.detection_camera_combo, self.tracking_camera_combo]),
+            (self.classification_camera_combo, inputs["species"],
+             [self.embeddings_camera_combo] + [inputs[task] for task in _CLASSIFICATION_TASKS]),
+        ]
+        for stage_combo, _lead, step_combos in self._stage_cameras:
+            stage_combo.currentIndexChanged.connect(
+                lambda index, combos=step_combos:
+                self._push_stage_camera(index, combos))
+            # a step combo set from code (configuration load, a script)
+            # carries its stage with it, so the steps cannot disagree
+            for combo in step_combos:
+                combo.currentIndexChanged.connect(stage_combo.setCurrentIndex)
 
         processing_layout.addWidget(steps_group)
         processing_layout.addStretch()
@@ -3767,6 +3970,49 @@ class BambiDockWidget(QDockWidget):
         coverage_layout.addLayout(coverage_add_row)
 
         analytics_tab_layout.addWidget(coverage_group)
+
+        # ----- Survey Orthomosaic -----
+        survey_ortho_group = QGroupBox("Survey Orthomosaic")
+        survey_ortho_layout = QVBoxLayout(survey_ortho_group)
+
+        survey_ortho_desc = QLabel(
+            "One orthomosaic over every ticked flight: the same merge of the "
+            "exported frame GeoTIFFs as 'Generate Orthomosaic' on the "
+            "Pre-Processing tab, with the merge mode of "
+            "Configuration → Orthomosaic - only across flights. The flights "
+            "are merged in the order of the list above (what 'first' and "
+            "'last' refer to). Requires 'Export Frames as GeoTIFF' for each "
+            "flight; the frame range of the Orthomosaic tab belongs to a "
+            "single flight and is not applied."
+        )
+        survey_ortho_desc.setWordWrap(True)
+        survey_ortho_desc.setStyleSheet("color: gray; font-size: 10px;")
+        survey_ortho_layout.addWidget(survey_ortho_desc)
+
+        survey_ortho_run_row = QHBoxLayout()
+        self.survey_ortho_btn = QPushButton("→ Generate Survey Orthomosaic")
+        self.survey_ortho_btn.clicked.connect(self.run_survey_orthomosaic)
+        self.survey_ortho_btn.setToolTip(
+            "Merge the frame GeoTIFFs of all ticked flights into one "
+            "orthomosaic (survey camera).")
+        self.survey_ortho_status = QLabel("⚪")
+        survey_ortho_run_row.addWidget(self.survey_ortho_btn)
+        survey_ortho_run_row.addWidget(self.survey_ortho_status)
+        survey_ortho_layout.addLayout(survey_ortho_run_row)
+
+        survey_ortho_add_row = QHBoxLayout()
+        self.add_survey_ortho_btn = QPushButton(
+            "→ Add Survey Orthomosaic to QGIS")
+        self.add_survey_ortho_btn.clicked.connect(
+            self.add_survey_orthomosaic_to_qgis)
+        self.add_survey_ortho_btn.setToolTip(
+            "Load the survey orthomosaic into the survey's layer group.")
+        self.add_survey_ortho_status = QLabel("⚪")
+        survey_ortho_add_row.addWidget(self.add_survey_ortho_btn)
+        survey_ortho_add_row.addWidget(self.add_survey_ortho_status)
+        survey_ortho_layout.addLayout(survey_ortho_add_row)
+
+        analytics_tab_layout.addWidget(survey_ortho_group)
 
         # ----- Distance Sampling -----
         ds_group = QGroupBox("Distance Sampling")
@@ -4211,6 +4457,8 @@ class BambiDockWidget(QDockWidget):
                 self.airdata_padding_spin.value() * 1000)),
             "airdata_video_padding_auto": self.airdata_padding_auto_check.isChecked(),
             "no_images": self.no_images_check.isChecked(),
+            "flag_duplicate_frames": (
+                self.flag_duplicates_check.isChecked() and self.video_mode_check.isChecked()),
 
             # Thermal visualisation
             "thermal_photo_colormap": (
@@ -4274,6 +4522,12 @@ class BambiDockWidget(QDockWidget):
 
             # Tracking
             "tracker_id": self._get_selected_tracker_id(),
+            "detection_projection": _DETECTION_PROJECTIONS[max(0, min(
+                self.detection_projection_combo.currentIndex(),
+                len(_DETECTION_PROJECTIONS) - 1))],
+            "custom_implementations": {
+                key: dict(spec) for key, spec in
+                (getattr(self, "_custom_implementations", None) or {}).items()},
             "reid_model": self._get_selected_reid_model(),
             "custom_reid_path": self.custom_reid_path_edit.text() if hasattr(self, 'custom_reid_path_edit') else "",
             "tracker_params_json": self.tracker_params_edit.toPlainText() if hasattr(self,
@@ -4617,8 +4871,17 @@ class BambiDockWidget(QDockWidget):
 
     def validate_inputs(self, required_fields: list) -> bool:
         """Validate that required input fields are filled."""
+        # A target folder typed in without a flight yet: name the flight now
+        # (asks for the name), since every result belongs to a named flight.
+        folder = self.target_folder_edit.text().strip()
+        if folder and self._active_flight() is None:
+            self._adopt_target_folder(folder)
+
         config = self.get_config()
         missing = []
+        flight = self._active_flight()
+        if folder and not (flight and (flight.get("name") or "").strip()):
+            missing.append("Flight name (Input tab)")
 
         field_labels = {
             "thermal_video_paths": "Thermal video files",
@@ -4887,6 +5150,8 @@ class BambiDockWidget(QDockWidget):
         self.extract_sampling_rate_check.setEnabled(video_mode)
         if not video_mode:
             self.extract_sampling_rate_check.setChecked(False)
+        # only thermal video has frozen frames; the setting itself is kept
+        self.flag_duplicates_check.setEnabled(video_mode)
 
     def _on_embedded_srt_changed(self, state: int):
         """Show/hide the SRT file input rows depending on embedded SRT mode."""
@@ -6073,6 +6338,17 @@ class BambiDockWidget(QDockWidget):
             FOLDER_STATUS_STEPS, PERPENDICULAR_STEPS, check_existing_outputs)
 
         if not target_folder or not os.path.isdir(target_folder):
+            # A flight without a (valid) target folder has processed
+            # nothing: show that, rather than whatever the previously
+            # shown flight left in the labels.
+            from .core.output_inventory import CLASSIFICATION_STATUS_STEPS
+            for step in FOLDER_STATUS_STEPS:
+                self.update_status(step, "⚪ Not started")
+            for step in PERPENDICULAR_STEPS:
+                self.update_status(step, "⚪")
+            for step in CLASSIFICATION_STATUS_STEPS:
+                self.update_status(step, "⚪ Not started")
+            self._check_existing_qgis_layers()
             return
 
         # Reset all folder-based statuses before re-checking so that deleted
@@ -6157,18 +6433,27 @@ class BambiDockWidget(QDockWidget):
                      "add_track_perpendicular", "add_matches"):
             self.update_status(step, "⚪")
 
-        root = QgsProject.instance().layerTreeRoot()
-
-        # Get all existing layer group names
+        # Only the active flight's own group counts: every flight has
+        # layers of the same names, so a look at the whole project would
+        # report another flight's orthomosaic as this one's. Groups and
+        # layers are collected at any depth (camera subgroups, 9.0.0).
+        scope = self._flight_group(create=False)
         existing_groups = set()
-        for child in root.children():
-            if hasattr(child, 'name'):
-                existing_groups.add(child.name())
-
-        # Get all existing layer names
         existing_layers = set()
-        for layer in QgsProject.instance().mapLayers().values():
-            existing_layers.add(layer.name())
+
+        def collect(node):
+            for child in node.children():
+                if QgsLayerTree.isGroup(child):
+                    existing_groups.add(child.name())
+                    collect(child)
+                elif hasattr(child, "name"):
+                    existing_layers.add(child.name())
+
+        # A flight whose group does not exist yet has nothing added - the
+        # root (what _flight_group falls back to) holds the other flights.
+        root = QgsProject.instance().layerTreeRoot()
+        if scope is not root or self._active_flight() is None:
+            collect(scope)
 
         # Define mapping: (check_type, name_prefix, status_key, camera_combo)
         # Group/layer names carry the camera label of the modality they were
@@ -6210,8 +6495,7 @@ class BambiDockWidget(QDockWidget):
     def _on_target_folder_changed(self):
         """Handle target folder path change from manual text editing."""
         folder = self.target_folder_edit.text().strip()
-        if folder and os.path.isdir(folder):
-            self._check_existing_outputs(folder)
+        self._check_existing_outputs(folder)
         if not getattr(self, "_switching_flight", False):
             self._adopt_target_folder(folder)
         self._refresh_migrate_button()
@@ -6320,8 +6604,9 @@ class BambiDockWidget(QDockWidget):
             restored = json.loads(raw) if raw else []
         except ValueError:
             restored = []
+        # a flight added by name may not have its target folder yet
         restored = [f for f in restored
-                    if isinstance(f, dict) and f.get("target_folder")]
+                    if isinstance(f, dict) and (f.get("target_folder") or f.get("name"))]
 
         if not restored:
             folder, _ok = project.readEntry(
@@ -6365,6 +6650,9 @@ class BambiDockWidget(QDockWidget):
             self.flight_combo.setCurrentIndex(index)
         self.flight_combo.blockSignals(blocked)
 
+        if hasattr(self, "flight_name_edit"):
+            self._mark_flight_name()
+
         several = self.flight_combo.count() > 1
         self.flight_combo.setEnabled(several)
         self.flight_rename_btn.setEnabled(self.flight_combo.count() > 0)
@@ -6379,35 +6667,139 @@ class BambiDockWidget(QDockWidget):
         no flights creates the first, and changing it moves the active flight
         rather than silently detaching it from its outputs.
         """
-        from .core import flights as flights_core
 
         folder = (folder or "").strip()
-        if not folder:
+        if not folder or getattr(self, "_adopting_folder", False):
             return
+        self._adopting_folder = True
+        try:
+            self._adopt_target_folder_now(folder)
+        finally:
+            self._adopting_folder = False
+
+    def _adopt_target_folder_now(self, folder: str):
+        from .core import flights as flights_core
+
         existing = self._flights()
 
         if not existing:
-            self._flight_list = [{
-                "name": flights_core.default_name(folder),
-                "target_folder": folder,
-            }]
+            # The first flight: it exists once it has a name the user gave
+            # it - typed into the name field, or asked for here.
+            name = self.flight_name_edit.text().strip() \
+                or self._prompt_flight_name(folder)
+            try:
+                self._flight_list = flights_core.add_flight([], name, folder)
+            except flights_core.FlightError as exc:
+                self._mark_flight_name()
+                if name:
+                    QMessageBox.warning(self, "Flight", str(exc))
+                else:
+                    self.log("No flight yet: enter a flight name on the Input "
+                             "tab.")
+                return
             self._active_flight_index = 0
-            self._refresh_flight_combo()
-            return
-
-        found = flights_core.find_by_folder(existing, folder)
-        if found is not None:
-            self._active_flight_index = found
+            self.flight_name_edit.clear()
             self._refresh_flight_combo()
             return
 
         index = getattr(self, "_active_flight_index", 0)
+        previous = (existing[index].get("target_folder") or "").strip() \
+            if 0 <= index < len(existing) else ""
+        if flights_core.normalise(previous) == flights_core.normalise(folder):
+            return
         try:
-            self._flight_list = flights_core.set_folder(existing, index, folder)
+            # refuses a folder another flight already uses
+            updated = flights_core.set_folder(existing, index, folder)
         except flights_core.FlightError as exc:
             QMessageBox.warning(self, "Flight", str(exc))
+            self._set_target_folder_text(previous)
             return
+
+        if not previous:
+            # The folder of a flight just added by name. One that has been
+            # processed before is adopted as it stands, once confirmed.
+            found = flights_core.describe_existing(folder)
+            if found["is_flight"]:
+                if not self._confirm_existing_flight(folder, found):
+                    self._set_target_folder_text("")
+                    return
+                self._flight_list = updated
+                if found["configured"]:
+                    self._switching_flight = True
+                    try:
+                        self.load_config_from_project(restore_flights=False)
+                    finally:
+                        self._switching_flight = False
+                self._set_target_folder_text(folder)
+                self._refresh_flight_combo()
+                self.save_config_to_project()
+                return
+            self._flight_list = updated
+            self._refresh_flight_combo()
+            if os.path.isdir(folder):
+                # the configuration now has a home in the flight's folder
+                self.save_config_to_project()
+            return
+
+        self._flight_list = updated
         self._refresh_flight_combo()
+
+    def _set_target_folder_text(self, folder: str):
+        """Set the target folder field without it being taken for an edit."""
+        was = getattr(self, "_switching_flight", False)
+        self._switching_flight = True
+        try:
+            self.target_folder_edit.setText(folder)
+        finally:
+            self._switching_flight = was
+
+    def _prompt_flight_name(self, folder: str) -> str:
+        """Ask for the name of the flight in *folder*; ``""`` when the
+        user gives none. Nothing is suggested: the name is the user's."""
+        name, ok = QInputDialog.getText(
+            self, "Flight name",
+            "Every flight needs a name - it titles the flight's layer group "
+            "in QGIS and identifies it in the survey tools.\n\nName of the "
+            f"flight in\n{folder}:")
+        return name.strip() if ok else ""
+
+    def _mark_flight_name(self):
+        """Show the name field as missing while a target folder is set
+        but no named flight exists."""
+        flight = self._active_flight()
+        named = bool(flight and (flight.get("name") or "").strip())
+        folder = self.target_folder_edit.text().strip() \
+            if hasattr(self, "target_folder_edit") else ""
+        missing = bool(folder) and not named
+        self.flight_name_edit.setStyleSheet(
+            "QLineEdit { border: 1px solid #c0392b; }" if missing else "")
+
+    def _rename_active_flight(self, name: str) -> bool:
+        """Rename the active flight and its layer group; False (with the
+        reason shown) when the name is empty, reserved or taken."""
+        from .core import flights as flights_core
+
+        flight = self._active_flight()
+        if flight is None:
+            return False
+        previous = flights_core.group_name(flight)
+        try:
+            updated = flights_core.rename_flight(
+                self._flights(), self._active_flight_index, name)
+        except flights_core.FlightError as exc:
+            QMessageBox.warning(self, "Flight", str(exc))
+            return False
+
+        self._flight_list = updated
+        self._refresh_flight_combo()
+
+        # Rename the group rather than leaving a stale one behind.
+        group = QgsProject.instance().layerTreeRoot().findGroup(previous)
+        if group is not None:
+            group.setName(flights_core.group_name(updated[
+                self._active_flight_index]))
+        self.log(f"Renamed flight to '{updated[self._active_flight_index]['name']}'")
+        return True
 
     def _on_flight_changed(self, index: int):
         """Switch flights: save the current configuration, load the new one."""
@@ -6440,19 +6832,112 @@ class BambiDockWidget(QDockWidget):
         self._refresh_survey_area()
 
     def add_flight(self):
-        """Add another flight to this project and switch to it."""
+        """Add a new flight with the name in the Name field and switch to
+        it. Its target folder is set afterwards, in the target folder field."""
+        from .core import flights as flights_core
+        from .core.config_schema import WIDGET_BINDINGS
+
+        if getattr(self, "current_worker", None) is not None:
+            QMessageBox.information(
+                self, "Flight",
+                "A step is running. Wait for it to finish before adding a "
+                "flight.")
+            return
+
+        existing = self._flights()
+        name = self.flight_name_edit.text()
+        if not name.strip():
+            QMessageBox.information(
+                self, "Flight",
+                "Enter the name of the new flight in the Name field first.")
+            self.flight_name_edit.setFocus()
+            return
+
+        if not existing:
+            # The first flight: the form is this flight's already, so it
+            # keeps what was entered, a target folder included.
+            folder = self.target_folder_edit.text().strip()
+            try:
+                updated = (flights_core.add_flight([], name, folder) if folder
+                           else flights_core.add_named_flight([], name))
+            except flights_core.FlightError as exc:
+                QMessageBox.warning(self, "Flight", str(exc))
+                return
+            self._flight_list = updated
+            self._active_flight_index = 0
+            self.flight_name_edit.clear()
+            self._refresh_flight_combo()
+            self.log(f"Added flight '{updated[0]['name']}'")
+            self.save_config_to_project()
+            return
+
+        try:
+            updated = flights_core.add_named_flight(existing, name)
+        except flights_core.FlightError as exc:
+            QMessageBox.warning(self, "Flight", str(exc))
+            return
+
+        pending = flights_core.without_folder(existing)
+        if pending is not None:
+            QMessageBox.information(
+                self, "Flight",
+                f"'{existing[pending]['name']}' has no target folder yet. "
+                "Set it before adding another flight - a flight keeps its "
+                "configuration in its target folder.")
+            return
+
+        copy_configuration = self._ask_new_flight_configuration()
+        if copy_configuration is None:
+            return
+
+        self.save_config_to_project()
+        current = {key: self._config_widget_value(attr, role)
+                   for key, (attr, role) in WIDGET_BINDINGS.items()}
+
+        self._flight_list = updated
+        self._active_flight_index = len(updated) - 1
+        self.flight_name_edit.clear()
+        self._refresh_flight_combo()
+
+        self._switching_flight = True
+        try:
+            self._apply_flight_values(
+                flights_core.new_flight_values(current, copy_configuration))
+            self.target_folder_edit.setText("")
+        finally:
+            self._switching_flight = False
+
+        how = "copied" if copy_configuration else "default"
+        self.log(f"Added flight '{updated[-1]['name']}' ({how} configuration, "
+                 "inputs cleared) - now set its target folder")
+        self.save_config_to_project()
+        self._check_existing_outputs("")   # nothing processed yet
+        self._refresh_migrate_button()
+        self.refresh_analytics_species()
+        self._refresh_survey_area()
+        self.target_folder_edit.setFocus()
+
+    def browse_and_add_flight(self):
+        """Add a flight by its target folder - meant for a folder that has
+        been processed before - and switch to it."""
         from .core import flights as flights_core
 
         folder = QFileDialog.getExistingDirectory(
-            self, "Target folder for the new flight")
+            self, "Target folder of the flight to add")
         if not folder:
             return
-
-        name, ok = QInputDialog.getText(
-            self, "New flight", "Flight name:",
-            text=flights_core.default_name(folder))
-        if not ok:
+        try:
+            flights_core.validate_folder(folder, self._flights())
+        except flights_core.FlightError as exc:
+            QMessageBox.warning(self, "Flight", str(exc))
             return
+
+        name = self.flight_name_edit.text().strip()
+        if not name:
+            name, ok = QInputDialog.getText(
+                self, "Add flight", "Flight name (required):")
+            if not ok:
+                return
 
         try:
             updated = flights_core.add_flight(self._flights(), name, folder)
@@ -6467,6 +6952,7 @@ class BambiDockWidget(QDockWidget):
             if not self._confirm_existing_flight(folder, existing):
                 return
             self._adopt_existing_flight(updated, folder, existing["configured"])
+            self.flight_name_edit.clear()
             return
 
         copy_configuration = self._ask_new_flight_configuration()
@@ -6481,6 +6967,7 @@ class BambiDockWidget(QDockWidget):
 
         self._flight_list = updated
         self._active_flight_index = len(updated) - 1
+        self.flight_name_edit.clear()
         self._refresh_flight_combo()
 
         self._switching_flight = True
@@ -6595,7 +7082,6 @@ class BambiDockWidget(QDockWidget):
 
     def rename_flight(self):
         """Rename the active flight, and its QGIS layer group with it."""
-        from .core import flights as flights_core
 
         flight = self._active_flight()
         if flight is None:
@@ -6603,28 +7089,11 @@ class BambiDockWidget(QDockWidget):
                 self, "Flight", "There is no flight to rename yet.")
             return
 
-        previous = flights_core.group_name(flight)
         name, ok = QInputDialog.getText(
             self, "Rename flight", "Flight name:", text=flight["name"])
         if not ok:
             return
-
-        try:
-            updated = flights_core.rename_flight(
-                self._flights(), self._active_flight_index, name)
-        except flights_core.FlightError as exc:
-            QMessageBox.warning(self, "Flight", str(exc))
-            return
-
-        self._flight_list = updated
-        self._refresh_flight_combo()
-
-        # Rename the group rather than leaving a stale one behind.
-        group = QgsProject.instance().layerTreeRoot().findGroup(previous)
-        if group is not None:
-            group.setName(flights_core.group_name(updated[
-                self._active_flight_index]))
-        self.log(f"Renamed flight to '{updated[self._active_flight_index]['name']}'")
+        self._rename_active_flight(name)
 
     def remove_flight(self):
         """Remove the active flight from the project, once confirmed."""
@@ -6653,9 +7122,10 @@ class BambiDockWidget(QDockWidget):
 
         # Drop the layer group; the layers only describe the flight that is
         # going away. The files they read stay where they are.
-        group = QgsProject.instance().layerTreeRoot().findGroup(name)
+        root = QgsProject.instance().layerTreeRoot()
+        group = root.findGroup(name)
         if group is not None:
-            group.parent().removeChildNode(group)
+            self._parent_group(group, root).removeChildNode(group)
 
         self._flight_list = updated
         self._active_flight_index = max(0, active)
@@ -7246,8 +7716,41 @@ class BambiDockWidget(QDockWidget):
         if self._fov_georef_click_tool is not None and new_tool is not self._fov_georef_click_tool:
             self._set_fov_georef_inspector_off()
 
+    def _push_stage_camera(self, index: int, step_combos):
+        """Set every step combo of a stage to the stage's selection.
+
+        Each step combo re-evaluates the step statuses when it changes; a
+        stage has up to six, so the statuses were scanned (and logged) six
+        times per switch. They are held back here and scanned once.
+        """
+        self._stage_push_depth = getattr(self, "_stage_push_depth", 0) + 1
+        changed = False
+        try:
+            for combo in step_combos:
+                if combo.currentIndex() != index:
+                    combo.setCurrentIndex(index)
+                    changed = True
+        finally:
+            self._stage_push_depth -= 1
+        if changed and self._stage_push_depth == 0:
+            self._on_step_camera_changed()
+
+    def _sync_stage_cameras(self):
+        """Bring the stage selectors and their step combos back into step
+        after values were set with signals blocked or one by one - e.g. a
+        project of an earlier version that stored a camera per step. The
+        stage takes its first step's camera (species for classification)."""
+        for stage_combo, lead, step_combos in getattr(
+                self, "_stage_cameras", []):
+            index = lead.currentIndex()
+            if stage_combo.currentIndex() != index:
+                stage_combo.setCurrentIndex(index)
+            self._push_stage_camera(index, step_combos)
+
     def _on_step_camera_changed(self):
         """Re-evaluate step statuses when a step's camera selection changes."""
+        if getattr(self, "_stage_push_depth", 0):
+            return  # a stage is setting its steps: scanned once afterwards
         if self.worker is not None:
             return  # don't clobber the status of a currently running step
         target_folder = self.target_folder_edit.text().strip()
@@ -7449,8 +7952,36 @@ class BambiDockWidget(QDockWidget):
             required.append("airdata_path")
         if not self.validate_inputs(required):
             return
+        if not self._confirm_duplicate_flag_change(config):
+            return
 
         self.start_worker("extract_thermal_frames")
+
+    def _confirm_duplicate_flag_change(self, config) -> bool:
+        """Re-extracting thermal video with the duplicated-frames setting
+        switched renumbers every frame; say so before it happens."""
+        from .core import poses
+
+        if config.get("input_mode") == "photo":
+            return True
+        before = poses.flag_setting(config.get("target_folder", ""), "t")
+        now = bool(config.get("flag_duplicate_frames"))
+        if before is None or before == now:
+            return True
+        was = "kept and flagged" if before else "dropped"
+        will = "kept and flagged" if now else "dropped"
+        answer = QMessageBox.question(
+            self, "Frame numbers will change",
+            f"The existing thermal frames were extracted with duplicated "
+            f"(frozen) frames {was}; this extraction has them {will}.\n\n"
+            "That shifts the frame numbers. Everything computed from the "
+            "current thermal frames - detections, tracks, labels, per-frame "
+            "corrections, field of view, GeoTIFFs, embeddings - refers to "
+            "the old numbers and has to be re-run (labels and frame-range "
+            "corrections have to be checked by hand).\n\nExtract anyway?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        return answer == QMessageBox.StandardButton.Yes
 
     def run_extract_rgb_frames(self):
         """Run frame extraction for RGB modality."""
@@ -7591,12 +8122,9 @@ class BambiDockWidget(QDockWidget):
         return _CLASSIFICATION_TASKS.index(task)
 
     def _ensure_classification_input_combos(self) -> dict:
-        """One Input combo per task, shown beside that task's step (C2–C5).
-
-        Beside the step rather than in the configuration table: it is the same
-        kind of choice as every other step's camera combo, and reading it off
-        the button you are about to press is what makes it obvious that each
-        classifier can read a different camera.
+        """One Input combo per task (C2-C5). Since 9.0.0 they are not shown:
+        the Classification stage has one "Input" selector that sets them
+        all, and these remain what the steps and the saved mapping read.
 
         Built on demand because the configuration tab and the processing tab
         both want them and are constructed in that order.
@@ -7673,6 +8201,8 @@ class BambiDockWidget(QDockWidget):
             table.item(row, 2).setText(spec.get("path", ""))
             self._on_classification_model_changed(task)
 
+        self._sync_stage_cameras()
+
     def _default_head_specs(self, projection: str):
         """``(task, projection, modality)`` for every task set to Default.
 
@@ -7703,6 +8233,16 @@ class BambiDockWidget(QDockWidget):
         config = self.get_config()
         models_dir = BambiProcessor._get_default_model_dir()
         projection = config.get("classification_projection", "non_geo")
+        if projection == "alfs":
+            self.download_models_status.setText(
+                "No default classifiers have been published for ALFS "
+                "imagery yet.")
+            QMessageBox.information(
+                self, "Download Models",
+                "There are no default classifiers for the ALFS projection "
+                "yet.\n\nUse a custom model or a custom implementation "
+                "with it, or choose another projection.")
+            return
         wanted = self._default_head_specs(projection)
 
         if not wanted:
@@ -7763,7 +8303,79 @@ class BambiDockWidget(QDockWidget):
         self.log(f"Downloaded {downloaded} classification model(s) into "
                  f"{models_dir}")
 
+    # ------------------------------------------------------------------
+    # Custom implementations (core.custom_models)
+    # ------------------------------------------------------------------
+
+    def _on_custom_implementation_changed(self):
+        """Mirror the boxes into the saved mapping."""
+        self._custom_implementations = {
+            key: box.spec() for key, box in
+            getattr(self, "_custom_boxes", {}).items()}
+        if "tracker" in self._custom_implementations and hasattr(
+                self, "custom_tracker_interpolate_check"):
+            self._custom_implementations["tracker"]["interpolate"] = \
+                self.custom_tracker_interpolate_check.isChecked()
+
+    def _apply_custom_implementations(self):
+        """Push the saved mapping back into the boxes after a config load."""
+        saved = getattr(self, "_custom_implementations", None) or {}
+        if not isinstance(saved, dict):
+            saved = {}
+        for key, box in getattr(self, "_custom_boxes", {}).items():
+            box.set_model_dir(BambiProcessor._get_default_model_dir())
+            box.set_spec(saved.get(key) or {})
+        if hasattr(self, "custom_tracker_interpolate_check"):
+            check = self.custom_tracker_interpolate_check
+            blocked = check.blockSignals(True)
+            check.setChecked(bool(
+                (saved.get("tracker") or {}).get("interpolate", True)))
+            check.blockSignals(blocked)
+        self._on_custom_implementation_changed()
+
+    def download_custom_samples(self):
+        from .bambi_custom_impl_widget import download_samples
+        written = download_samples(self)
+        if written:
+            self.log(f"Sample implementations written: "
+                     f"{os.path.dirname(written[0])}")
+
+    @staticmethod
+    def _custom_specs_for_step(step: str, config: dict) -> list:
+        """The custom implementations a step would run."""
+        custom = config.get("custom_implementations") or {}
+        if step == "detection":
+            camera = "t" if config.get("detection_camera", "T") == "T" else "w"
+            return [custom.get(f"detector_{camera}")]
+        if step in ("tracking", "trex_import"):
+            return [custom.get("tracker")]
+        if step.startswith("classif") or step == "life_stage":
+            specs = []
+            for spec in (config.get("classification_models") or {}).values():
+                specs.append(spec)
+                specs.extend((spec.get("species") or {}).values())
+            return specs
+        return []
+
     def _browse_classification_model(self, task: str):
+        row = self._task_row(task)
+        table = self.classification_models_table
+        from .core import custom_models
+        if table.cellWidget(row, 1).currentData() == custom_models.SOURCE:
+            # a custom implementation: file, class and options in a dialog
+            from .bambi_custom_impl_widget import CustomImplementationDialog
+            spec = self._classification_spec(task)
+            dialog = CustomImplementationDialog(
+                spec, custom_models.CLASSIFIER,
+                camera=spec.get("modality", "matched"), task=task,
+                model_dir=BambiProcessor._get_default_model_dir(),
+                parent=self)
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                spec.update(dialog.result())
+                self._set_classification_spec(task, spec)
+                table.item(row, 2).setText(spec.get("path", ""))
+                self._on_classification_model_changed(task)
+            return
         path, _filter = QFileDialog.getOpenFileName(
             self, f"Choose a {task} classifier", "",
             "TorchScript model (*.pt *.pth);;All files (*)")
@@ -7956,7 +8568,27 @@ class BambiDockWidget(QDockWidget):
             )
             return
 
-        if not self._confirm_ultralytics_license():
+        from .core import custom_models
+        suffix = "t" if camera == "T" else "w"
+        from .core import raster_sources
+        rasters = BambiProcessor._raster_source(
+            config, target_folder, suffix,
+            config.get("detection_projection", "perspective"))
+        if rasters is not None:
+            camera_name = "Thermal" if camera == "T" else "RGB"
+            if not rasters.frames():
+                QMessageBox.warning(
+                    self, "Missing Prerequisites",
+                    raster_sources.missing_message(
+                        rasters.kind, camera_name, "Detection"))
+                return
+            if not self.validate_inputs(["dem_path"]):
+                return
+        uses_custom = custom_models.is_custom(
+            (config.get("custom_implementations") or {}).get(
+                f"detector_{suffix}"))
+        # the Ultralytics licence concerns the built-in detector only
+        if not uses_custom and not self._confirm_ultralytics_license():
             return
 
         self.start_worker("detection")
@@ -8015,6 +8647,15 @@ class BambiDockWidget(QDockWidget):
 
         # If a TRex NPZ folder is configured, import the pre-computed tracklets
         # instead of running the classic tracker.
+        from .core import custom_models
+        if custom_models.is_custom(
+                (config.get("custom_implementations") or {}).get("tracker")):
+            # A custom tracker says itself whether it needs geo-referenced
+            # detections; the step reports what is missing.
+            if self.validate_inputs(["target_folder"]):
+                self.start_worker("tracking")
+            return
+
         if config.get("trex_npz_dir", "").strip():
             self.run_trex_import()
             return
@@ -8218,16 +8859,17 @@ class BambiDockWidget(QDockWidget):
 
             # An orthorectified projection crops the exported GeoTIFFs, so say
             # so here rather than letting the worker raise seconds in.
-            if geo_crops.is_geo(projection) and not geo_crops.available_frames(
-                    target_folder, suffix):
+            from .core import raster_sources
+            rasters = BambiProcessor._raster_source(
+                config, target_folder, suffix, projection)
+            if rasters is not None and not rasters.frames():
                 QMessageBox.warning(
-                    self, "Missing GeoTIFFs",
-                    "The classification projection is set to an orthorectified "
-                    f"variant, but no {camera_name} GeoTIFFs have been "
-                    "exported.\n\n"
-                    "Run 'Export Frames as GeoTIFF' for this camera, or set "
-                    "the projection to Perspective in the Classification tab."
-                )
+                    self, "Missing GeoTIFFs"
+                    if rasters.kind == raster_sources.GEOTIFF
+                    else "Missing ALFS Integrals",
+                    raster_sources.missing_message(
+                        rasters.kind, camera_name,
+                        "The classification projection"))
                 return
 
         # A gated repository is the usual failure, and finding out after the
@@ -8284,7 +8926,14 @@ class BambiDockWidget(QDockWidget):
         # each is its own pass over that camera's tracks.
         targets = sorted({m for name in enabled
                           for m in classification.targets_of(models[name])})
-        for suffix in targets:
+        # A custom implementation may read the cut-out boxes instead of
+        # embeddings, and only its setup() says which - so its stages are
+        # not held back here; the step reports missing embeddings itself.
+        from .core import custom_models
+        embedded_targets = sorted({
+            m for name in enabled if not custom_models.is_custom(models[name])
+            for m in classification.targets_of(models[name])})
+        for suffix in embedded_targets:
             if classification_store.active_embedding_run(
                     target_folder, suffix) is None:
                 QMessageBox.warning(
@@ -8689,6 +9338,52 @@ class BambiDockWidget(QDockWidget):
         if self._survey_prerequisites(survey, checks):
             self.start_worker("coverage_map")
 
+    def run_survey_orthomosaic(self):
+        """Merge the frame GeoTIFFs of every ticked flight into one
+        orthomosaic - the flight's orthomosaic step, across flights."""
+        survey = self._checked_survey(check_species=False)
+        if survey is None:
+            return
+
+        def checks(flight):
+            folder = os.path.join(flight.target_folder,
+                                  f"geotiffs_{survey.modality}")
+            if os.path.isdir(folder):
+                return []
+            return [f"{survey.camera_label} frame GeoTIFFs "
+                    "(run 'Export Frames as GeoTIFF' first)"]
+
+        if self._survey_prerequisites(survey, checks):
+            self.start_worker("survey_orthomosaic")
+
+    def add_survey_orthomosaic_to_qgis(self):
+        """Load the survey's orthomosaic into the survey layer group."""
+        survey = self.current_survey()
+        raster_file = os.path.join(survey.analytics_folder, "orthomosaic.tif")
+        if not os.path.exists(raster_file):
+            QMessageBox.warning(
+                self, "Missing Data",
+                "The survey orthomosaic has not been generated.\n"
+                "Please run 'Generate Survey Orthomosaic' first."
+            )
+            return
+
+        try:
+            self.update_status("add_survey_orthomosaic", "🟡 Loading...")
+            layer_name = f"BAMBI Survey Orthomosaic ({survey.camera_label})"
+            layer = QgsRasterLayer(raster_file, layer_name)
+            if not layer.isValid():
+                raise RuntimeError(f"Failed to load raster: {raster_file}")
+            self._add_layer_to_survey(layer)
+            self.update_status("add_survey_orthomosaic", "🟢 Added")
+            self.iface.mapCanvas().refresh()
+            self.log(f"Added survey orthomosaic layer: {layer_name}")
+        except Exception as e:
+            self.update_status("add_survey_orthomosaic", "🔴 Error")
+            self.log(f"Error adding survey orthomosaic: {e}")
+            QMessageBox.critical(
+                self, "Error", f"Failed to add survey orthomosaic: {e}")
+
     def add_coverage_map_to_qgis(self):
         """Load the survey's coverage raster with a graduated colour ramp."""
         survey = self.current_survey()
@@ -8791,9 +9486,8 @@ class BambiDockWidget(QDockWidget):
         chosen = dialog.selected_columns()
         self._inventory_columns = (
             [] if set(chosen) >= set(track_inventory.COLUMNS) else chosen)
-        self.log("Track inventory columns: "
-                 + (", ".join(self._inventory_columns)
-                    if self._inventory_columns else "all"))
+        columns = ", ".join(self._inventory_columns) if self._inventory_columns else "all"
+        self.log("Track inventory columns: " + columns)
 
     def show_track_inventory_report(self):
         """Open the live inventory of the survey's flights in a report."""
@@ -8862,8 +9556,7 @@ class BambiDockWidget(QDockWidget):
 
         def _columns_changed(columns):
             self._inventory_columns = list(columns)
-            self.log("Track inventory columns: "
-                     + (", ".join(columns) if columns else "all"))
+            self.log("Track inventory columns: " + (", ".join(columns) if columns else "all"))
 
         dialog = BambiTrackInventoryDialog(
             rows, camera_label,
@@ -9920,7 +10613,8 @@ class BambiDockWidget(QDockWidget):
     #: Survey Analytics steps: they run on config["survey"] (core.survey).
     _SURVEY_STEPS = frozenset({
         "census_summary", "track_inventory", "density_heatmap",
-        "coverage_map", "distance_sampling", "population_estimation"})
+        "coverage_map", "survey_orthomosaic", "distance_sampling",
+        "population_estimation"})
 
     def start_worker(self, step: str):
         """Start a background worker for the given step."""
@@ -9929,6 +10623,13 @@ class BambiDockWidget(QDockWidget):
             return
 
         config = self.get_config()
+        # Custom implementations are the user's own Python files: ask
+        # before one runs here for the first time (or changed since).
+        from .bambi_custom_impl_widget import confirm_specs
+        if not confirm_specs(self, self._custom_specs_for_step(step, config)):
+            self.log("Not started: the custom implementation was not "
+                     "approved to run.")
+            return
         if step in self._SURVEY_STEPS:
             if self.survey_area_panel.is_enabled() and \
                     not self.survey_area_panel.flush_edits():
@@ -10083,6 +10784,8 @@ class BambiDockWidget(QDockWidget):
             "distance_sampling": self.distance_sampling_status,
             "coverage_map": self.coverage_status,
             "add_coverage": self.add_coverage_status,
+            "survey_orthomosaic": self.survey_ortho_status,
+            "add_survey_orthomosaic": self.add_survey_ortho_status,
             "track_inventory": self.track_inventory_status,
             "census_summary": self.census_status,
             "add_track_inventory": self.add_track_inventory_status,
@@ -10124,6 +10827,9 @@ class BambiDockWidget(QDockWidget):
         if hasattr(self, 'coverage_btn'):
             self.coverage_btn.setEnabled(enabled)
             self.add_coverage_btn.setEnabled(enabled)
+        if hasattr(self, 'survey_ortho_btn'):
+            self.survey_ortho_btn.setEnabled(enabled)
+            self.add_survey_ortho_btn.setEnabled(enabled)
         if hasattr(self, 'population_btn'):
             self.population_btn.setEnabled(enabled)
             self.add_transect_areas_btn.setEnabled(enabled)
@@ -12703,6 +13409,8 @@ class BambiDockWidget(QDockWidget):
         # so the attribute is already loaded - the table it is edited in has to
         # be brought back into step with it.
         self._apply_classification_models_to_table()
+        self._sync_stage_cameras()
+        self._apply_custom_implementations()
 
         self.log("Configuration loaded from project")
 
@@ -12754,15 +13462,68 @@ class BambiDockWidget(QDockWidget):
             group = root.insertGroup(0, self.SURVEY_GROUP)
         return group
 
+    @staticmethod
+    def _insert_node(parent, node, name: str, at_top: bool = True):
+        """Put *node* into *parent* at its place in the plugin's fixed layer
+        order (:mod:`core.layer_order`); names the plugin does not order go
+        to the top (or bottom), and nothing already there is moved."""
+        from .core import layer_order
+        siblings = [child.name() for child in parent.children()]
+        parent.insertChildNode(
+            layer_order.insert_index(siblings, name, at_top), node)
+        return node
+
+    @staticmethod
+    def _insert_group(parent, name: str, at_top: bool = True):
+        """Create a group called *name* in *parent* at its place in the
+        fixed layer order.
+
+        Made with ``insertGroup`` rather than ``insertChildNode(
+        QgsLayerTreeGroup(...))``: a group built in Python comes back from
+        ``children()`` / ``parent()`` as a bare ``QgsLayerTreeNode`` once
+        its wrapper is gone, so it would no longer be recognised as a group.
+        """
+        from .core import layer_order
+        siblings = [child.name() for child in parent.children()]
+        return parent.insertGroup(
+            layer_order.insert_index(siblings, name, at_top), name)
+
+    @staticmethod
+    def _parent_group(node, fallback):
+        """*node*'s parent as a group (PyQGIS may hand back a bare
+        ``QgsLayerTreeNode``), or *fallback* when it has none."""
+        parent = node.parent()
+        if parent is None or not QgsLayerTree.isGroup(parent):
+            return fallback
+        return sip.cast(parent, QgsLayerTreeGroup)
+
+    def _camera_group(self, name: str, create: bool = True):
+        """The group a flight product called *name* belongs in: the flight's
+        "Thermal" / "RGB" subgroup when the name carries a camera label,
+        else the flight group itself.
+
+        Without a flight (the tree root) there are no camera subgroups.
+        """
+        from .core import layer_order
+        flight_group = self._flight_group(create=create)
+        root = QgsProject.instance().layerTreeRoot()
+        modality = layer_order.modality(name)
+        if modality is None or flight_group is root:
+            return flight_group
+        label = layer_order.MODALITY_GROUPS[modality]
+        for child in flight_group.children():
+            if QgsLayerTree.isGroup(child) and child.name() == label:
+                return sip.cast(child, QgsLayerTreeGroup)
+        if not create:
+            return flight_group
+        return self._insert_group(flight_group, label)
+
     def _add_layer_to_survey(self, layer, at_top: bool = True):
         """Add a survey-wide layer (density, coverage, inventory, survey
         area) to the survey group - it belongs to no single flight."""
         QgsProject.instance().addMapLayer(layer, False)
-        group = self._survey_group()
-        if at_top:
-            group.insertLayer(0, layer)
-        else:
-            group.addLayer(layer)
+        self._insert_node(self._survey_group(), QgsLayerTreeLayer(layer),
+                          layer.name(), at_top)
         return layer
 
     def _add_layer_to_flight(self, layer, at_top: bool = True):
@@ -12772,14 +13533,12 @@ class BambiDockWidget(QDockWidget):
         tree, outside the flight it belongs to - so the layer has to be added
         without a tree node first and then placed by hand. Use this for the
         products that are one layer and get no subgroup of their own
-        (orthomosaic, ALFS, density, coverage, merged FoV).
+        (orthomosaic, ALFS, merged FoV). A layer named for a camera goes
+        into that camera's subgroup, at its place in the fixed order.
         """
         QgsProject.instance().addMapLayer(layer, False)
-        group = self._flight_group()
-        if at_top:
-            group.insertLayer(0, layer)
-        else:
-            group.addLayer(layer)
+        self._insert_node(self._camera_group(layer.name()),
+                          QgsLayerTreeLayer(layer), layer.name(), at_top)
         return layer
 
     def _remove_layer_group(self, group_name: str) -> bool:
@@ -12787,6 +13546,8 @@ class BambiDockWidget(QDockWidget):
 
         Re-adding a group would otherwise duplicate it, and its layers hold
         their GeoPackages open - which on Windows blocks rewriting them.
+        Looked up anywhere below the flight group, so a group from before
+        the camera subgroups existed is found as well.
         """
         root = self._flight_group(create=False)
         group = root.findGroup(group_name)
@@ -12797,25 +13558,19 @@ class BambiDockWidget(QDockWidget):
                      if node.layerId()]
         if layer_ids:
             QgsProject.instance().removeMapLayers(layer_ids)
-        root.removeChildNode(group)
+        self._parent_group(group, root).removeChildNode(group)
         return True
 
     def _create_layer_group(self, group_name: str, at_top: bool = True) -> QgsLayerTreeGroup:
-        """Create a layer group, optionally at the top of the layer tree.
+        """Create a layer group in the active flight's group - in the
+        camera subgroup its name belongs to, at its place in the fixed order.
 
         :param group_name: Name for the new group
-        :param at_top: If True, insert at top of layer tree; if False, append at bottom
+        :param at_top: for names the plugin does not order: top or bottom
         :return: The created QgsLayerTreeGroup
         """
-        root = self._flight_group()
-        group = QgsLayerTreeGroup(group_name)
-
-        if at_top:
-            root.insertChildNode(0, group)
-        else:
-            root.addChildNode(group)
-
-        return group
+        return self._insert_group(self._camera_group(group_name), group_name,
+                                  at_top)
 
     def _persist_memory_layer(self, mem_layer: QgsVectorLayer, file_name: str,
                               subfolder: str = "qgis_layers",

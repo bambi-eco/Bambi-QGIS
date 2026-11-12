@@ -70,6 +70,8 @@ class BambiWildlifeDetection:
         self._transect_tool_dlg = None
         self.agl_tool_action = None
         self._agl_tool_dlg = None
+        self.flight_viewer_action = None
+        self._flight_viewer_dlg = None
         self.segmentation_tool_action = None
         self._segmentation_tool_dlg = None
 
@@ -237,6 +239,17 @@ class BambiWildlifeDetection:
                 'Show the flight altitude above the ground along the route, '
                 'with the height above ground level under the cursor'))
 
+        # 3D Flight Viewer: DEM, route, poses and replay in 3D
+        self.flight_viewer_action = self.add_action(
+            os.path.join(self.plugin_dir, 'icons', 'icon_flight_viewer.png'),
+            text=self.tr('3D Flight Viewer'),
+            callback=self._on_flight_viewer,
+            parent=self.iface.mainWindow(),
+            add_to_menu=True,
+            status_tip=self.tr(
+                'Replay the flight in 3D: frames, detections and live ALFS '
+                'draped on the DEM, correction factors and reconstruction'))
+
         # Segmentation: SAM3 / SAM 3.1 by text or point prompts on the frames
         self.segmentation_tool_action = self.add_action(
             os.path.join(self.plugin_dir, 'icons', 'icon_segmentation.png'),
@@ -335,6 +348,11 @@ class BambiWildlifeDetection:
         if self._agl_tool_dlg is not None:
             self._agl_tool_dlg.close()
             self._agl_tool_dlg = None
+
+        # Close the 3D flight viewer if open
+        if self._flight_viewer_dlg is not None:
+            self._flight_viewer_dlg.close()
+            self._flight_viewer_dlg = None
 
         # Close segmentation tool if open
         if self._segmentation_tool_dlg is not None:
@@ -507,6 +525,25 @@ class BambiWildlifeDetection:
         self._agl_tool_dlg.show()
         self._agl_tool_dlg.raise_()
         self._agl_tool_dlg.activateWindow()
+
+    def _on_flight_viewer(self):
+        """Toolbar action: open the 3D flight viewer (non-modal)."""
+        from .bambi_flight_viewer import FlightViewerDialog
+        self._ensure_dock_widget()
+        if self._flight_viewer_dlg is None:
+            self._flight_viewer_dlg = FlightViewerDialog(
+                self.iface,
+                dock_widget=self.dock_widget,
+                parent=self.iface.mainWindow(),
+            )
+            self._flight_viewer_dlg.finished.connect(
+                lambda _: setattr(self, '_flight_viewer_dlg', None)
+            )
+        else:
+            self._flight_viewer_dlg.apply_dock_defaults()
+        self._flight_viewer_dlg.show()
+        self._flight_viewer_dlg.raise_()
+        self._flight_viewer_dlg.activateWindow()
 
     def _on_transect_tool(self):
         """Toolbar action: open the transect splitting tool (non-modal)."""

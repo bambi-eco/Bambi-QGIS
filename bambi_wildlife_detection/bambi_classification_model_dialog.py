@@ -25,7 +25,10 @@ from .core import hf_access, label_store
 #: and this dialog agree on it.
 DEFAULT_SPECIES = hf_access.DEFAULT_HEAD_SPECIES
 
-_SOURCES = (("Off", "off"), ("Default", "default"), ("Custom…", "custom"))
+#: "Custom implementation…" is a class from the user's own .py file
+#: (core.custom_models) rather than a TorchScript head.
+_SOURCES = (("Off", "off"), ("Default", "default"), ("Custom…", "custom"),
+            ("Custom implementation…", "implementation"))
 
 #: Life stage's default is a measurement rather than a model, and takes the
 #: "Default" slot because that is what it is: no life-stage head has been
@@ -64,6 +67,12 @@ class BambiClassificationModelDialog(QDialog):
         self.spec = dict(spec or {})
         self.target_folder = target_folder
         self.task = task
+        #: species -> {"path", "class", "options"} of a custom implementation
+        self._implementations = {
+            name: {key: entry.get(key, "") for key in
+                   ("path", "class", "options")}
+            for name, entry in (self.spec.get("species") or {}).items()
+            if entry.get("model") == "implementation"}
         self._label = hf_access.TASK_LABELS.get(task, task).lower()
 
         self.setWindowTitle(f"{self._label.capitalize()} classifiers per species")
@@ -186,7 +195,7 @@ class BambiClassificationModelDialog(QDialog):
         item = self.table.item(row, 2)
         if item is None:
             return
-        if source == "custom":
+        if source in ("custom", "implementation"):
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
             if not item.text():
                 item.setText("(double-click to choose a file)")
@@ -207,9 +216,32 @@ class BambiClassificationModelDialog(QDialog):
         if item.column() != 2:
             return
         combo = self.table.cellWidget(item.row(), 1)
-        if combo is None or combo.currentData() != "custom":
+        if combo is None:
             return
-        self.browse_for(item.row())
+        if combo.currentData() == "implementation":
+            self.configure_implementation(item.row())
+        elif combo.currentData() == "custom":
+            self.browse_for(item.row())
+
+    def configure_implementation(self, row: int):
+        """File, class and options of a custom implementation for one
+        species."""
+        from .bambi_custom_impl_widget import CustomImplementationDialog
+        from .core import custom_models
+
+        name = self.table.item(row, 0).text()
+        current = dict(self._implementations.get(name) or {})
+        text = (self.table.item(row, 2).text() or "").strip()
+        if text and not text.startswith("("):
+            current["path"] = text
+        dialog = CustomImplementationDialog(
+            current, custom_models.CLASSIFIER,
+            camera=self.spec.get("modality", "matched"), task=self.task,
+            parent=self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._implementations[name] = dialog.result()
+            self.table.item(row, 2).setText(
+                self._implementations[name].get("path", ""))
 
     def browse_for(self, row: int):
         """Pick a custom model file for one species."""
@@ -233,6 +265,9 @@ class BambiClassificationModelDialog(QDialog):
             # switch it back on.
             entry = {"model": source}
             if source == "custom":
+                entry["path"] = (self.table.item(row, 2).text() or "").strip()
+            elif source == "implementation":
+                entry.update(self._implementations.get(name) or {})
                 entry["path"] = (self.table.item(row, 2).text() or "").strip()
             per_species[name] = entry
 

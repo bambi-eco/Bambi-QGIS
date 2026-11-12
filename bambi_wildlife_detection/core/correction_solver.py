@@ -258,8 +258,7 @@ class CorrectionSolver:
             # solution, keeping the better residual.
             for j, other in enumerate(candidates):
                 if (abs(other['tz'] - tz) <= self._DEDUP_TZ_M
-                        and abs(wrap_rad(other['rz'] - rz))
-                        <= self._DEDUP_RZ_RAD):
+                        and abs(wrap_rad(other['rz'] - rz)) <= self._DEDUP_RZ_RAD):  # noqa: W503
                     if err < other['residual']:
                         candidates[j] = cand
                     break
