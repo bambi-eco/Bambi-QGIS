@@ -56,7 +56,7 @@ changelog=Version 9.0.0
     - 3D Flight Viewer "Show orthomosaic": drapes the flight's orthomosaic onto the DEM as a static alternative to the trail.
     - Reconstruction quality: the dense surface comes from pairwise stereo between neighbouring keyframes (each pair oriented from its own images and scaled on the DEM's ground, merged by a median vote per ground cell), a high-resolution orthophoto texture is draped on it, and an optional step refines the keyframe poses (and the field of view) from the images before reconstructing.
     - AGL Profile: with a reconstruction from the 3D Flight Viewer, the reconstructed surface (DSM) is drawn above the DEM (DTM) with the camera's height above it (checkbox); the reconstruction also writes every camera position's nadir distance to surface and DEM as CSV.
-    - DEM detail in the 3D Flight Viewer (High / Medium / Low = all, 66 % or 33 % of the triangles) for faster draping and live ALFS on large DEMs, with the resulting height error shown; ray casting and all plugin products keep the full DEM.
+    - DEM detail in the 3D Flight Viewer (High / Medium / Low = all, 66 or 33 percent of the triangles) for faster draping and live ALFS on large DEMs, with the resulting height error shown; ray casting and all plugin products keep the full DEM.
     - Dependency Manager: optional "3D Flight Viewer" group with separate install buttons for PyOpenGL 3.1.10 and pyqtgraph 0.13.7.
     Fixed:
     - Dependency Manager: a CUDA build of the newest tested PyTorch release (e.g. torch 2.11.0+cu126, torchvision 0.26.0+cu126) was shown as "not tested". The local build tag (+cu126, +cpu) is not part of the release number, but was compared as if it made the version newer than the tested maximum.
