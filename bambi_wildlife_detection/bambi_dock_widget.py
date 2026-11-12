@@ -18,7 +18,7 @@ from qgis.PyQt.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QGroupBox, QPushButton, QLineEdit, QSpinBox, QDoubleSpinBox,
     QFileDialog, QLabel, QProgressBar, QTextEdit, QComboBox,
-    QCheckBox, QTabWidget, QMessageBox, QScrollArea,
+    QCheckBox, QMessageBox, QScrollArea,
     QFrame, QListWidget, QListWidgetItem, QDialog,
     QDialogButtonBox, QGridLayout, QToolButton,
     QRadioButton, QButtonGroup, QInputDialog, QAbstractItemView,
@@ -53,7 +53,7 @@ from .core import store as _store_kinds
 # Plugin scope for project settings storage. Defined in gui_utils so the
 # dependency manager can write its own entries under the same scope without
 # importing the dock.
-from .gui_utils import PLUGIN_SCOPE, read_alfs_selection  # noqa: E402
+from .gui_utils import FitTabWidget, PLUGIN_SCOPE, read_alfs_selection  # noqa: E402
 from . import gui_utils as gui_utils_hf
 
 
@@ -457,7 +457,11 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         main_layout.addWidget(scroll_area)
 
         # Create main tab widget
-        main_tabs = QTabWidget()
+        # Fitted to the page in front (gui_utils.FitTabWidget): a plain tab
+        # widget is as tall as its longest page, which put a long stretch of
+        # nothing between every shorter tab and the log below.
+        main_tabs = FitTabWidget()
+        self.main_tabs = main_tabs
         scroll_layout.addWidget(main_tabs)
 
         # =====================================================================
@@ -922,7 +926,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         geo_main_layout = QVBoxLayout(geo_group)
 
         # Tabs for different input methods
-        self.geo_input_tabs = QTabWidget()
+        self.geo_input_tabs = FitTabWidget()
         geo_main_layout.addWidget(self.geo_input_tabs)
 
         # ----- Tab 1: Mesh Input (manual GLTF/JSON selection) -----
@@ -1126,7 +1130,8 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         main_tabs.addTab(config_tab, "Configuration")
 
         # Create sub-tabs for configuration
-        config_sub_tabs = QTabWidget()
+        config_sub_tabs = FitTabWidget()
+        self.config_sub_tabs = config_sub_tabs
         config_layout.addWidget(config_sub_tabs)
 
         # ----- Sub-Tab: Project -----

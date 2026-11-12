@@ -2,7 +2,8 @@
 """Small Qt helpers shared by the plugin's dialogs."""
 
 from qgis.PyQt.QtGui import QCursor
-from qgis.PyQt.QtWidgets import QApplication
+from qgis.PyQt.QtCore import QEvent, QSize
+from qgis.PyQt.QtWidgets import QApplication, QStackedWidget, QTabWidget
 
 
 def fit_to_screen(widget, width: int, height: int):
@@ -94,3 +95,74 @@ def write_alfs_selection(engine, raycaster):
     project.writeEntry(PLUGIN_SCOPE, _ALFS_RAYCASTER_ENTRY,
                        alfs_runtime.resolve_raycaster(raycaster))
     project.setDirty(True)
+
+
+class FitTabWidget(QTabWidget):
+    """A tab widget as tall as the page it is showing.
+
+    A plain ``QTabWidget`` asks for the height of its *tallest* page whatever
+    page is in front, so inside a scroll area every short tab is followed by
+    the empty space of the longest one - on the dock, a long scroll past
+    nothing to reach the log. This one asks for the height of the current
+    page only and says so again whenever that changes: when another tab is
+    chosen, and when the page itself grows or shrinks (a nested tab widget
+    switching its own page, a section being shown or hidden).
+
+    The width stays that of the widest page, so the dock does not change
+    its width while clicking through the tabs.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.currentChanged.connect(self._refit)
+
+    def _refit(self, _index: int = 0) -> None:
+        self.updateGeometry()
+
+    def _fitted(self, full: QSize, page_hint, stack_hint) -> QSize:
+        """*full* (the hint for the tallest page) cut down to the current
+        page: everything around the pages - tab bar, frame - is kept."""
+        page = self.currentWidget()
+        stack = self.findChild(QStackedWidget)
+        if page is None or stack is None:
+            return full
+        around = full.height() - stack_hint(stack).height()
+        # A page without a layout has no hint of its own, only a minimum.
+        height = max(page_hint(page).height(), page.minimumHeight())
+        return QSize(full.width(), height + max(0, around))
+
+    def sizeHint(self) -> QSize:
+        return self._fitted(super().sizeHint(),
+                            lambda w: w.sizeHint(), lambda w: w.sizeHint())
+
+    def minimumSizeHint(self) -> QSize:
+        return self._fitted(super().minimumSizeHint(),
+                            lambda w: w.minimumSizeHint(),
+                            lambda w: w.minimumSizeHint())
+
+    def hasHeightForWidth(self) -> bool:
+        page = self.currentWidget()
+        return page is not None and page.hasHeightForWidth()
+
+    def heightForWidth(self, width: int) -> int:
+        """Height for *width* of the current page alone. The inherited
+        answer is again the tallest page's, and it is the one a scroll area
+        goes by when the pages hold word-wrapped text."""
+        page = self.currentWidget()
+        stack = self.findChild(QStackedWidget)
+        if page is None or stack is None or not page.hasHeightForWidth():
+            return self.sizeHint().height()
+        full = super().sizeHint()
+        stack_hint = stack.sizeHint()
+        around = max(0, full.height() - stack_hint.height())
+        beside = max(0, full.width() - stack_hint.width())
+        return page.heightForWidth(max(0, width - beside)) + around
+
+    def event(self, event) -> bool:
+        handled = super().event(event)
+        # A page whose own size changed tells its tab widget with a layout
+        # request, and a QTabWidget keeps that to itself; pass it on, or
+        # the layouts above would go on using the old height.
+        if event.type() == QEvent.Type.LayoutRequest:
+            self.updateGeometry()
+        return handled
