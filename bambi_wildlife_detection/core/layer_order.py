@@ -35,6 +35,7 @@ CATEGORIES = (
     ("coverage", ("Coverage Map",)),
     ("transects", ("Transect Areas",)),
     ("track_inventory", ("Track Inventory",)),
+    ("habitat", ("Habitat Tracks",)),
     ("matched_pairs", ("Matched Pairs",)),
     ("tracks", ("Wildlife Tracks",)),
     ("detections", ("Frame Detections", "Detections")),
@@ -47,6 +48,12 @@ CATEGORIES = (
 )
 
 _FIRST_MODALITY_RANK = 1000
+
+#: The environment rasters (satellite indices, land cover, terrain wetness)
+#: are base layers covering the whole flight: they go below everything else
+#: in a flight group, the camera subgroups included, or they would hide it.
+BASE_GROUPS = ("BAMBI Environment",)
+_BASE_RANK = 2000
 
 
 def category(name: str) -> Optional[str]:
@@ -75,6 +82,9 @@ def rank(name: str) -> Optional[int]:
     for i, group in enumerate(MODALITY_GROUPS.values()):
         if name == group:
             return _FIRST_MODALITY_RANK + i
+    for i, group in enumerate(BASE_GROUPS):
+        if name == group:
+            return _BASE_RANK + i
     key = category(name)
     if key is None:
         return None

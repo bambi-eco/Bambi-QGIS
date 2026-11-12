@@ -40,6 +40,8 @@ from .austria_dem_downloader import DEMDownloadWorker, GeoTIFFConversionWorker
 from .bambi_click_tool import BambiClickTool
 from .bambi_survey_area import SurveyAreaPanel
 from .bambi_survey_panel import CensusTableDialog, SurveyFlightsPanel
+from .bambi_environment import ENVIRONMENT_STEPS
+from .bambi_environment_panel import EnvironmentDockMixin
 # Built-in calibration presets live in bambi_calibrations.py (Qt-free module
 # so they are importable without QGIS, e.g. by the integration tests).
 from .bambi_calibrations import THERMAL_CALIBRATIONS, RGB_CALIBRATIONS  # noqa: F401
@@ -352,7 +354,7 @@ class FrameRangeDialog(QDialog):
         return start, end
 
 
-class BambiDockWidget(QDockWidget):
+class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
     """Main dock widget for the BAMBI Wildlife Detection plugin."""
 
     def __init__(self, iface, parent=None):
@@ -2951,6 +2953,9 @@ class BambiDockWidget(QDockWidget):
         ortho_tab_layout.addWidget(ortho_group)
         ortho_tab_layout.addStretch()
 
+        # ----- Sub-Tab: Environment (bambi_environment_panel) -----
+        self._build_environment_config_tab(config_sub_tabs)
+
         # =====================================================================
         # MAIN TAB 3: PROCESSING
         # =====================================================================
@@ -3533,6 +3538,9 @@ class BambiDockWidget(QDockWidget):
                 combo.currentIndexChanged.connect(stage_combo.setCurrentIndex)
 
         processing_layout.addWidget(steps_group)
+        # Satellite, land-cover, terrain and weather context of the flight -
+        # camera-independent, each source its own sub-step.
+        processing_layout.addWidget(self._build_environment_steps_group())
         processing_layout.addStretch()
 
         # =====================================================================
@@ -4196,6 +4204,7 @@ class BambiDockWidget(QDockWidget):
         pop_layout.addLayout(pop_add_row)
 
         analytics_tab_layout.addWidget(pop_group)
+        analytics_tab_layout.addWidget(self._build_habitat_group())
         analytics_tab_layout.addStretch()
 
     def _populate_tracker_backends(self):
@@ -4762,6 +4771,9 @@ class BambiDockWidget(QDockWidget):
             "pop_seed": (
                 self.pop_seed_spin.value()
                 if hasattr(self, 'pop_seed_spin') else 42),
+
+            # Environmental context and habitat summary
+            **self._environment_config(),
         }
 
     def _on_pop_study_area_mode_changed(self, checked: bool):
@@ -6348,6 +6360,7 @@ class BambiDockWidget(QDockWidget):
                 self.update_status(step, "⚪")
             for step in CLASSIFICATION_STATUS_STEPS:
                 self.update_status(step, "⚪ Not started")
+            self._refresh_environment_status(target_folder)
             self._check_existing_qgis_layers()
             return
 
@@ -6411,6 +6424,10 @@ class BambiDockWidget(QDockWidget):
             if state in labels:
                 self.update_status(step, labels[state])
                 classified += 1
+
+        # Environment sources: flight-level, read from their metadata files.
+        self._refresh_environment_status(target_folder)
+        self._refresh_habitat_status()
 
         if completed or classified:
             self.log(f"Detected {len(completed) + classified} completed "
@@ -10614,7 +10631,7 @@ class BambiDockWidget(QDockWidget):
     _SURVEY_STEPS = frozenset({
         "census_summary", "track_inventory", "density_heatmap",
         "coverage_map", "survey_orthomosaic", "distance_sampling",
-        "population_estimation"})
+        "population_estimation", "habitat_summary"})
 
     def start_worker(self, step: str):
         """Start a background worker for the given step."""
@@ -10635,6 +10652,16 @@ class BambiDockWidget(QDockWidget):
                     not self.survey_area_panel.flush_edits():
                 return
             config["survey"] = self._survey_config()
+        elif step in ENVIRONMENT_STEPS and \
+                self.survey_area_panel.is_enabled():
+            # The survey area widens the extent the environment is fetched
+            # for; a survey that is not set up yet is simply no area.
+            if not self.survey_area_panel.flush_edits():
+                return
+            try:
+                config["survey"] = self._survey_config()
+            except Exception:  # nosec B110 - no survey, no area
+                pass
 
         self.worker_thread = QThread()
         self.worker = ProcessingWorker(self.processor, step, config)
@@ -10683,6 +10710,9 @@ class BambiDockWidget(QDockWidget):
             if step == "census_summary":
                 self.show_census_table()
 
+            if step == "habitat_summary":
+                self.show_habitat_charts()
+
             # In photo mode, warn if 0 images were matched (likely a timezone issue)
             if step in ("extract_thermal_frames", "extract_rgb_frames"):
                 config = self.get_config()
@@ -10718,6 +10748,11 @@ class BambiDockWidget(QDockWidget):
             # Check if it was cancelled (worker would have logged it)
             self.update_status(step, "🔴 Cancelled/Failed")
 
+        # An environment source that failed must not stop the others: show
+        # what is on disk and go on with the next queued one.
+        if step in ENVIRONMENT_STEPS:
+            self._on_environment_step_finished(step)
+
     def on_worker_error(self, step: str, error_msg: str):
         """Handle worker error."""
         self.set_buttons_enabled(True)
@@ -10736,6 +10771,8 @@ class BambiDockWidget(QDockWidget):
         if self.worker is not None:
             self.log("Aborting current process...")
             self.abort_btn.setEnabled(False)  # Prevent multiple clicks
+            # Aborting stops the whole "Run All Four" queue, not one source.
+            self._environment_queue = []
             self.worker.cancel()
             # The worker will emit finished signal when it detects cancellation
 
@@ -10792,6 +10829,9 @@ class BambiDockWidget(QDockWidget):
             "population_estimation": self.population_status,
             "add_transect_areas": self.add_transect_areas_status,
         }
+        status_map.update({key: label for key, label in
+                           self._environment_status_map().items()
+                           if label is not None})
         if step in status_map:
             status_map[step].setText(status)
 
@@ -10833,6 +10873,7 @@ class BambiDockWidget(QDockWidget):
         if hasattr(self, 'population_btn'):
             self.population_btn.setEnabled(enabled)
             self.add_transect_areas_btn.setEnabled(enabled)
+        self._set_environment_buttons_enabled(enabled)
 
     def run_perpendicular(self):
         """Run perpendicular distance calculation step."""

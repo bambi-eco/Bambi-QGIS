@@ -13,6 +13,7 @@ from bambi_wildlife_detection.core import layer_order as lo
     ("BAMBI Coverage Map (RGB)", "coverage"),
     ("BAMBI Transect Areas (Thermal)", "transects"),
     ("BAMBI Track Inventory (Thermal)", "track_inventory"),
+    ("BAMBI Habitat Tracks (Thermal)", "habitat"),
     ("BAMBI Matched Pairs", "matched_pairs"),
     ("BAMBI Wildlife Tracks (RGB)", "tracks"),
     ("BAMBI Frame Detections (Thermal)", "detections"),
@@ -80,3 +81,13 @@ def test_a_reordered_group_is_respected():
 
 def test_empty_group():
     assert lo.insert_index([], "BAMBI ALFS (Thermal)") == 0
+
+
+def test_environment_rasters_go_below_the_camera_groups():
+    """They cover the whole flight, so anything under them would be hidden."""
+    names = lo.ordered(["BAMBI Environment", "RGB", "Thermal",
+                        "BAMBI Flight Route (Thermal)"])
+    assert names == ["BAMBI Flight Route (Thermal)", "Thermal", "RGB",
+                     "BAMBI Environment"]
+    assert lo.insert_index(["Thermal", "RGB"], "BAMBI Environment") == 2
+    assert lo.insert_index(["BAMBI Environment"], "Thermal") == 0

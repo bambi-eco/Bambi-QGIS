@@ -33,10 +33,27 @@ def _add_actions():
         if name.startswith("add_") and name.endswith("_to_qgis"))
 
 
+def _dock_sources():
+    """Source files the dock widget's methods live in: its own module first,
+    then the plugin modules of the mixins it inherits from (the environment
+    panel) - their ``add_*_to_qgis`` actions are held to the same rule."""
+    paths = [inspect.getsourcefile(dock_module)]
+    for base in dock_module.BambiDockWidget.__mro__:
+        if not base.__module__.startswith("bambi_wildlife_detection"):
+            continue
+        path = inspect.getsourcefile(base)
+        if path and path not in paths:
+            paths.append(path)
+    return paths
+
+
 def _bodies():
-    path = inspect.getsourcefile(dock_module)
-    with open(path, encoding="utf-8") as fh:
-        src = fh.read()
+    parts = []
+    for path in _dock_sources():
+        with open(path, encoding="utf-8") as fh:
+            parts.append(fh.read())
+    # One text, the dock module first so its line numbers stay true.
+    src = "\n".join(parts)
     tree = ast.parse(src)
     return src, tree, {n.name: n for n in ast.walk(tree)
                        if isinstance(n, ast.FunctionDef)}

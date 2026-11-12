@@ -250,6 +250,12 @@ CONFIG_ENTRIES: List[ConfigEntry] = [
     ConfigEntry("FlightRoute/TimeMarkerTypeIndex", "int_double", 0),
     ConfigEntry("FlightRoute/IncludeTimeStart", "bool", False),
     ConfigEntry("FlightRoute/CameraComboIndex", "int_double", 0),
+    # ===== Environmental context (core.environment) =====
+    ConfigEntry("Environment/WindowDays", "int_double", 10),
+    ConfigEntry("Environment/MinClearPercent", "int_double", 80),
+    ConfigEntry("Environment/BufferMetres", "int_double", 200),
+    ConfigEntry("Environment/IncludeSurveyArea", "bool", True),
+    ConfigEntry("Environment/SamplingRadius", "double", 30.0),
 ]
 
 CONFIG_KEYS = [entry.key for entry in CONFIG_ENTRIES]
@@ -399,6 +405,11 @@ WIDGET_BINDINGS: Dict[str, Tuple[str, str]] = {
     "FlightRoute/TimeMarkerTypeIndex": ("time_marker_type_combo", "combo_index"),
     "FlightRoute/IncludeTimeStart": ("time_marker_include_start_check", "check"),
     "FlightRoute/CameraComboIndex": ("flight_route_camera_combo", "combo_index"),
+    "Environment/WindowDays": ("environment_window_spin", "spin"),
+    "Environment/MinClearPercent": ("environment_clear_spin", "spin"),
+    "Environment/BufferMetres": ("environment_buffer_spin", "spin"),
+    "Environment/IncludeSurveyArea": ("environment_area_check", "check"),
+    "Environment/SamplingRadius": ("habitat_radius_spin", "spin"),
 }
 
 

@@ -122,7 +122,8 @@ Input tab shows the active one; **Rename…** renames it and 🗑 removes it.
 BAMBI Survey                 survey-wide layers (all flights)
 <flight name>
 ├── Thermal                  everything from the thermal camera
-└── RGB                      everything from the RGB camera
+├── RGB                      everything from the RGB camera
+└── BAMBI Environment        satellite, land-cover and terrain rasters
 ```
 
 Within a group the plugin's layers keep one fixed order, top to bottom,
@@ -134,7 +135,7 @@ whatever the order they were created in - overlays on top, rasters below:
 4. Density heatmaps
 5. Coverage map
 6. Transect areas
-7. Track inventory, matched RGB/thermal pairs
+7. Track inventory, habitat tracks, matched RGB/thermal pairs
 8. Wildlife tracks
 9. Detections
 10. Distance sampling (perpendicular distances)
@@ -143,6 +144,10 @@ whatever the order they were created in - overlays on top, rasters below:
 13. Orthomosaic
 14. ALFS
 15. Per-frame GeoTIFFs
+
+The [environment rasters](environment.md) are base layers that cover the whole
+flight, so their group goes below the camera groups and shows one raster at a
+time.
 
 A new layer is inserted at its place in this order; layers that already exist
 are never moved. So you can re-arrange the tree by hand and add your own

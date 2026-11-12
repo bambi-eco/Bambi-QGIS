@@ -134,6 +134,7 @@ The steps live on two tabs, split by what they depend on:
 | Tab | Steps | Depends on |
 |---|---|---|
 | **Pre-Processing** | P1 Extract Frames, P2 Generate Flight Route, P3 Calculate Field of View, P4 Generate ALFS, P5 Export Frames as GeoTIFF, P6 Generate Orthomosaic | the drone poses and the DEM - **no animals involved** |
+| **Pre-Processing** (*Environmental Context*) | E1 Satellite Indices, E2 Land Cover, E3 Terrain Wetness, E4 Weather - see [Environmental Context](environment.md) | the flight's extent and date; **camera-independent**, each source its own sub-step |
 | **Processing** | Three sections: *Detection and Tracking* (A1 Detect Animals with geo-referencing and perpendicular distances, A2 Track Animals Or Import, A3 Match RGB ↔ Thermal Tracks with label sync), *Classification* (C1 embeddings, C2 occlusion, C3 species, C4 sex, C5 age), and *Segmentation* (S1 opens the [Segmentation Tool](tools.md#segmentation-tool)) | the detections |
 
 The numbering is prefixed so a bare number cannot mean two different steps.
@@ -723,6 +724,10 @@ analytics_t/    # or analytics_w/, in the survey folder
 One row per tracked individual of the chosen camera, with everything the project knows about it side by side: species, sex and age with their votes, box and occlusion counts, confidences, first and last frame with their capture times, start and end position (project CRS and WGS84), path length, the matched track on the other camera, labelling-tool annotations and the distance to the flight line. **→ List Tracked Individuals** writes it as `analytics_t/track_inventory.csv` and `.json`; **→ Add to QGIS** loads it as a point layer at each animal's last position.
 
 **→ Show Report** opens the inventory as a sortable, filterable table built from the store as it stands now. Its first column, **Approved**, is your own verdict - a checkmark written to the track, so it survives, exports and appears in every later inventory. A click on a track's start or end frame opens the animal in the inspector at that frame, where the same facts are shown under the image and a wrong detection or track can be [deleted from the project](tools.md#detection--track-selection); the report follows what is done there. **Columns…** chooses which columns the table shows (saved with the QGIS project); the written CSV and JSON keep every column regardless.
+
+### Habitat context
+
+Environment values (satellite indices, land cover, tree cover, terrain wetness, weather) at the tracked animals, compared with the ground the flights monitored: a table per animal and per transect, and charts. Needs the *Environmental Context* steps of the Pre-Processing tab on each flight. See [Environmental Context](environment.md#habitat-context-survey-analytics).
 
 ## Input file formats
 

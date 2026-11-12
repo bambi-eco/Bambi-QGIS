@@ -50,6 +50,12 @@ STEP_TO_METHOD = {
     "census_summary": "run_census_summary",
     "track_inventory": "run_track_inventory",
     "population_estimation": "run_population_estimation",
+    # One sub-step per environment source, and the survey's habitat summary.
+    "env_sentinel2": "run_env_sentinel2",
+    "env_landcover": "run_env_landcover",
+    "env_terrain": "run_env_terrain",
+    "env_weather": "run_env_weather",
+    "habitat_summary": "run_habitat_summary",
 }
 
 

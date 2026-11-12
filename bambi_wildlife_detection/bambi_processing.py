@@ -20,6 +20,7 @@ from .core.heading import (
     resolve_heading_source)
 from .core.log_margin import resolve_margin_ms
 from .bambi_survey_analytics import SurveyAnalyticsMixin
+from .bambi_environment import ENVIRONMENT_STEPS, EnvironmentMixin
 
 # Progress callback receives a single int: percentage 0-100
 ProgressCallback = Callable[[int], None]
@@ -250,6 +251,16 @@ class ProcessingWorker(QObject):
                 self.processor.run_population_estimation(
                     self.config, self.progress.emit, self.log.emit, self.is_cancelled
                 )
+            elif self.step in ENVIRONMENT_STEPS:
+                # One sub-step per environment source, so each can fail or
+                # be re-run without touching the others.
+                getattr(self.processor, f"run_{self.step}")(
+                    self.config, self.progress.emit, self.log.emit,
+                    self.is_cancelled)
+            elif self.step == "habitat_summary":
+                self.processor.run_habitat_summary(
+                    self.config, self.progress.emit, self.log.emit,
+                    self.is_cancelled)
             else:
                 raise ValueError(f"Unknown step: {self.step}")
 
@@ -439,7 +450,7 @@ class CancelledException(Exception):
     pass
 
 
-class BambiProcessor(SurveyAnalyticsMixin):
+class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
     """Main processing class for BAMBI wildlife detection pipeline."""
 
     # Default detection models per modality: HuggingFace repo, path of the
