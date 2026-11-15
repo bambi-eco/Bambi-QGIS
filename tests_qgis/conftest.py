@@ -60,3 +60,19 @@ def flight_name_prompt(monkeypatch):
     from bambi_wildlife_detection.core import flights
     monkeypatch.setattr(BambiDockWidget, "_prompt_flight_name",
                         lambda self, folder: flights.default_name(folder))
+
+
+@pytest.fixture(autouse=True)
+def existing_folder_prompt(monkeypatch):
+    """A target folder that has been processed before is taken over only
+    after a confirmation - also for the first flight of a project and for a
+    flight pointed at another folder. Most tests build their stores first
+    and point the dock at the folder afterwards, so the tests answer "yes".
+    A test about the question itself patches ``_confirm_existing_flight``
+    again; the fixture's value is the real method, for a test of the dialog."""
+    from bambi_wildlife_detection.bambi_dock_widget import BambiDockWidget
+    real = BambiDockWidget._confirm_existing_flight
+    monkeypatch.setattr(
+        BambiDockWidget, "_confirm_existing_flight",
+        lambda self, folder, existing, leaving="": True)
+    return real

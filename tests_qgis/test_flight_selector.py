@@ -220,7 +220,8 @@ def test_a_processed_folder_is_adopted_from_the_target_folder_field(
     _add_named(dock, monkeypatch, "Forest")
     seen = []
     monkeypatch.setattr(type(dock), "_confirm_existing_flight",
-                        lambda self, folder, existing: seen.append(folder) or True)
+                        lambda self, folder, existing, leaving="":
+                        seen.append(folder) or True)
 
     dock.target_folder_edit.setText(b)
     dock._on_target_folder_changed()
@@ -238,7 +239,7 @@ def test_declining_a_processed_folder_leaves_the_flight_without_one(
     dock._on_target_folder_changed()
     _add_named(dock, monkeypatch, "Forest")
     monkeypatch.setattr(type(dock), "_confirm_existing_flight",
-                        lambda self, folder, existing: False)
+                        lambda self, folder, existing, leaving="": False)
 
     dock.target_folder_edit.setText(b)
     dock._on_target_folder_changed()
@@ -696,7 +697,7 @@ def _add_existing(dock, monkeypatch, folder, name, accept=True):
                         lambda *a, **k: folder)
     monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: (name, True))
     monkeypatch.setattr(type(dock), "_confirm_existing_flight",
-                        lambda self, folder, existing: accept)
+                        lambda self, folder, existing, leaving="": accept)
     dock.browse_and_add_flight()
 
 

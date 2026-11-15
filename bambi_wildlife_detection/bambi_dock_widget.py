@@ -4965,8 +4965,21 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         # A target folder typed in without a flight yet: name the flight now
         # (asks for the name), since every result belongs to a named flight.
         folder = self.target_folder_edit.text().strip()
-        if folder and self._active_flight() is None:
+        if folder and not self._flight_owns(folder):
             self._adopt_target_folder(folder)
+            if self.target_folder_edit.text().strip() != folder:
+                # The folder was declined or refused - and said so. No step
+                # starts in the folder the field has gone back to.
+                return False
+            if getattr(self, "_adoption_loaded_config", False):
+                # The form has just been replaced by what the folder had
+                # stored: nothing is started on settings nobody has seen.
+                QMessageBox.information(
+                    self, "Stored configuration loaded",
+                    "The target folder's stored configuration has been "
+                    "loaded.\n\nCheck the inputs and settings, then start "
+                    "the step again.")
+                return False
 
         config = self.get_config()
         missing = []
@@ -5120,9 +5133,10 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
                     self.log(f"Created target folder: {qgis_folder}")
                 except Exception as e:
                     self.log(f"Warning: Could not create qgis folder: {e}")
-            else:
-                # Check for existing outputs if folder already exists
-                self._check_existing_outputs(qgis_folder)
+            # The flight list follows, as when the folder is typed in: a
+            # folder that has been processed before is offered with its
+            # stored configuration instead of being written over.
+            self._on_target_folder_changed()
 
         # Try to auto-detect CRS from available sources
         self._try_auto_detect_crs_silent()
@@ -6390,9 +6404,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             self, "Select Target Folder")
         if folder:
             self.target_folder_edit.setText(folder)
-            self._check_existing_outputs(folder)
-            self._adopt_target_folder(folder)
-            self._refresh_migrate_button()
+            self._on_target_folder_changed()
 
     def browse_trex_npz_dir(self):
         folder = QFileDialog.getExistingDirectory(self, "Select TRex NPZ Folder")
@@ -6607,11 +6619,14 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             self.log(f"Detected {added_count} existing BAMBI layer(s) in QGIS project")
 
     def _on_target_folder_changed(self):
-        """Handle target folder path change from manual text editing."""
+        """The target folder field was given a folder - typed, browsed for
+        or filled in from the recordings' folder: the flight list follows,
+        and everything that describes the folder is shown again."""
+        if not getattr(self, "_switching_flight", False):
+            self._adopt_target_folder(self.target_folder_edit.text().strip())
+        # What the field holds now - a folder that was declined is gone.
         folder = self.target_folder_edit.text().strip()
         self._check_existing_outputs(folder)
-        if not getattr(self, "_switching_flight", False):
-            self._adopt_target_folder(folder)
         self._refresh_migrate_button()
         self.refresh_analytics_species()
         self._refresh_survey_area()
@@ -6786,6 +6801,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         if not folder or getattr(self, "_adopting_folder", False):
             return
         self._adopting_folder = True
+        self._adoption_loaded_config = False
         try:
             self._adopt_target_folder_now(folder)
         finally:
@@ -6802,7 +6818,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             name = self.flight_name_edit.text().strip() \
                 or self._prompt_flight_name(folder)
             try:
-                self._flight_list = flights_core.add_flight([], name, folder)
+                updated = flights_core.add_flight([], name, folder)
             except flights_core.FlightError as exc:
                 self._mark_flight_name()
                 if name:
@@ -6811,9 +6827,8 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
                     self.log("No flight yet: enter a flight name on the Input "
                              "tab.")
                 return
-            self._active_flight_index = 0
-            self.flight_name_edit.clear()
-            self._refresh_flight_combo()
+            if self._settle_into_folder(updated, 0, folder):
+                self.flight_name_edit.clear()
             return
 
         index = getattr(self, "_active_flight_index", 0)
@@ -6835,35 +6850,94 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             QMessageBox.warning(self, "Flight", str(exc))
             self._set_target_folder_text(previous)
             return
+        self._settle_into_folder(updated, index, folder, previous)
 
-        if not previous:
-            # The folder of a flight just added by name. One that has been
-            # processed before is adopted as it stands, once confirmed.
+    def _settle_into_folder(self, updated, index: int, folder: str,
+                            previous: str = "") -> bool:
+        """Make *updated* the flight list, whose flight at *index* now lives
+        in *folder* - it lived in *previous*, or had no folder yet.
+
+        **A folder that has been processed before is taken as it stands.**
+        The user confirms, and the configuration stored in it is loaded into
+        the form. That used to happen only for a flight just added by name:
+        the first flight of a project, and a flight pointed at another
+        folder, kept the form's values - and the next save, which saving the
+        QGIS project is, replaced what the folder had stored with them.
+
+        What the form shows when a flight leaves *previous* for a folder
+        with a configuration of its own is the configuration of *previous*,
+        and is stored there first, as when switching flights.
+
+        Returns False - nothing changed, and the folder field is back at
+        *previous* - when the user declines or the folder cannot be read.
+        """
+        from .core import flights as flights_core
+
+        try:
             found = flights_core.describe_existing(folder)
-            if found["is_flight"]:
-                if not self._confirm_existing_flight(folder, found):
-                    self._set_target_folder_text("")
-                    return
-                self._flight_list = updated
-                if found["configured"]:
-                    self._switching_flight = True
-                    try:
-                        self.load_config_from_project(restore_flights=False)
-                    finally:
-                        self._switching_flight = False
-                self._set_target_folder_text(folder)
-                self._refresh_flight_combo()
-                self.save_config_to_project()
-                return
-            self._flight_list = updated
-            self._refresh_flight_combo()
-            if os.path.isdir(folder):
-                # the configuration now has a home in the flight's folder
-                self.save_config_to_project()
-            return
+        except Exception as exc:  # noqa: BLE001 - a store that cannot be read
+            QMessageBox.warning(
+                self, "Flight",
+                f"{folder}\nholds results that cannot be read:\n\n{exc}\n\n"
+                "The flight was not pointed at this folder, and nothing in "
+                "it was changed.")
+            self._set_target_folder_text(previous)
+            return False
+
+        if found["is_flight"]:
+            if not self._confirm_existing_flight(folder, found,
+                                                 leaving=previous):
+                self._set_target_folder_text(previous)
+                return False
+            if found["configured"] and previous and os.path.isdir(previous):
+                self._store_form_config(previous)
 
         self._flight_list = updated
+        self._active_flight_index = index
+        if found["configured"]:
+            self._switching_flight = True
+            try:
+                self.load_config_from_project(restore_flights=False)
+            finally:
+                self._switching_flight = False
+            self._adoption_loaded_config = True
+            self.log(f"Loaded the configuration stored in {folder}")
+        self._set_target_folder_text(folder)
         self._refresh_flight_combo()
+        if previous:
+            self.log(f"Flight '{updated[index].get('name', '')}' now uses "
+                     f"{folder}")
+        # the configuration now has its home in the flight's folder
+        self.save_config_to_project()
+        return True
+
+    def _flight_owns(self, folder: str) -> bool:
+        """True when *folder* is the active flight's target folder."""
+        from .core import flights as flights_core
+
+        flight = self._active_flight()
+        if not flight or not (folder or "").strip():
+            return False
+        return flights_core.normalise(flight.get("target_folder") or "") == \
+            flights_core.normalise(folder)
+
+    def _store_form_config(self, folder: str) -> bool:
+        """Store the form's values as the configuration of *folder*, in its
+        ``project.gpkg``; False (and logged) when that could not be done."""
+        from .core import flights as flights_core
+        from .core.config_schema import save_config_entries
+
+        values = self._current_config_values()
+        values["Input/TargetFolder"] = folder
+        stored = {}
+        save_config_entries(values, *flights_core.config_writers(stored))
+        try:
+            flights_core.save_config(folder, stored)
+        except Exception as exc:  # noqa: BLE001 - never lose a save
+            self.log(f"Warning: could not save configuration to the "
+                     f"store: {exc}")
+            return False
+        return True
 
     def _set_target_folder_text(self, folder: str):
         """Set the target folder field without it being taken for an edit."""
@@ -7010,12 +7084,22 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             except flights_core.FlightError as exc:
                 QMessageBox.warning(self, "Flight", str(exc))
                 return
-            self._flight_list = updated
-            self._active_flight_index = 0
+            if folder:
+                # as when the folder is entered: one that has been
+                # processed before brings its stored configuration
+                self._adopting_folder = True
+                try:
+                    if not self._settle_into_folder(updated, 0, folder):
+                        return
+                finally:
+                    self._adopting_folder = False
+            else:
+                self._flight_list = updated
+                self._active_flight_index = 0
+                self._refresh_flight_combo()
+                self.save_config_to_project()
             self.flight_name_edit.clear()
-            self._refresh_flight_combo()
             self.log(f"Added flight '{updated[0]['name']}'")
-            self.save_config_to_project()
             return
 
         try:
@@ -7142,8 +7226,13 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         self.save_config_to_project()
         self._check_existing_outputs(folder)
 
-    def _confirm_existing_flight(self, folder: str, existing: dict) -> bool:
-        """Confirm adopting a folder that has been processed before."""
+    def _confirm_existing_flight(self, folder: str, existing: dict,
+                                 leaving: str = "") -> bool:
+        """Confirm adopting a folder that has been processed before.
+
+        *leaving* is the folder the flight is in now, when it is being
+        pointed at another one rather than added.
+        """
         if existing["results"]:
             items = "</li><li>".join(existing["results"])
             found = f"It already contains:<ul><li>{items}</li></ul>"
@@ -7153,19 +7242,24 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         if existing["configured"]:
             settings = ("Its stored configuration is loaded, so the inputs "
                         "and settings come back as they were.")
+            if leaving:
+                settings += (" The settings shown now stay with "
+                             f"<b>{leaving}</b>.")
         else:
             settings = ("It has no stored configuration, so the settings stay "
                         "as they are - check the inputs before running "
                         "anything.")
 
         box = QMessageBox(self)
-        box.setWindowTitle("Add existing flight")
+        box.setWindowTitle("Use existing folder" if leaving
+                           else "Add existing flight")
         box.setIcon(QMessageBox.Icon.Question)
         box.setText(f"<b>{folder}</b> has been processed before.")
         box.setInformativeText(
             f"{found}{settings}<br><br>Nothing is recomputed and nothing is "
             "overwritten. Steps that already ran are shown as done.")
-        add_btn = box.addButton("Add flight", QMessageBox.ButtonRole.AcceptRole)
+        add_btn = box.addButton("Use this folder" if leaving else "Add flight",
+                                QMessageBox.ButtonRole.AcceptRole)
         cancel = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
         box.setDefaultButton(add_btn)
         box.exec()
@@ -13560,27 +13654,27 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         The form values go to the flight's own ``project.gpkg``, so the folder
         is self-describing; the QGIS project keeps only the flight list and
         which one is active.
+
+        Only the active flight's own folder is written to. A folder that is
+        merely in the target folder field - no flight has it yet - keeps
+        what it has stored: this is also what runs when the QGIS project is
+        saved, and it replaced a processed folder's configuration with
+        whatever the form showed.
         """
-        from .core import flights as flights_core
-        from .core.config_schema import WIDGET_BINDINGS, save_config_entries
+        from .core.config_schema import save_config_entries
         project = QgsProject.instance()
 
-        values = {key: self._config_widget_value(attr, role)
-                  for key, (attr, role) in WIDGET_BINDINGS.items()}
+        values = self._current_config_values()
 
         target_folder = self.target_folder_edit.text().strip()
-        if target_folder and os.path.isdir(target_folder):
-            stored = {}
-            write = flights_core.config_writers(stored)
-            save_config_entries(values, *write)
-            try:
-                flights_core.save_config(target_folder, stored)
-            except Exception as exc:  # noqa: BLE001 - never lose a save
-                self.log(f"Warning: could not save configuration to the "
-                         f"store: {exc}")
+        if target_folder and os.path.isdir(target_folder) and \
+                self._flight_owns(target_folder):
+            self._store_form_config(target_folder)
         else:
             # No folder yet, so there is nowhere to put it - the QGIS project
-            # carries it until one is chosen.
+            # carries it until one is chosen. The same for a folder in the
+            # field that is not the active flight's: a folder's stored
+            # configuration is only ever replaced by its own flight.
             save_config_entries(
                 values,
                 lambda k, v: project.writeEntry(PLUGIN_SCOPE, k, v),
@@ -13654,6 +13748,13 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         for key, value in load_config_entries(read_str, read_double, read_bool):
             attr, role = WIDGET_BINDINGS[key]
             self._apply_config_value(attr, role, value)
+
+        if folder:
+            # The flight's folder is where this was read from. The path
+            # stored with the settings is the one the folder had when they
+            # were saved - another one once it has been moved, copied or
+            # handed on - and steps would run in that old place.
+            self._set_target_folder_text(folder)
 
         # Legacy migration: before 7.1 the heading was a checkbox
         # (Extraction/UseGimbalHeading); map it onto the heading source.

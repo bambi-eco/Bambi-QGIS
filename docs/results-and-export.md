@@ -109,9 +109,15 @@ Input tab shows the active one; **Rename…** renames it and 🗑 removes it.
   step runs before the flight is named. Projects saved by an earlier version
   keep the name they had (derived from the folder).
 - The **target folder field checks the folder**: one that another flight
-  already uses is refused, and for a flight just added by name a folder that
-  has been processed before is adopted with its stored configuration, after a
-  confirmation.
+  already uses is refused, and a folder that has been processed before is
+  taken over with its stored configuration, after a confirmation - for the
+  first flight of a project, for a flight just added by name and for a flight
+  you point at another folder alike (see
+  [below](#adding-a-flight-that-was-processed-before)). Decline, and the
+  field goes back to what it was.
+- A flight's settings are **written only to its own folder**. A folder that
+  is merely in the target folder field - there is no flight yet, because it
+  has no name - is not written to.
 - Only one flight at a time can be waiting for its target folder - a flight
   keeps its configuration in its folder, so set it before adding the next.
 
@@ -194,10 +200,12 @@ This is ordinary QGIS symbology - a rule-based style with a "Boxes" rule and a "
 ### Adding a flight that was processed before
 
 Because a target folder describes itself, a folder that has already been
-through the pipeline can simply be added back. Pick it with **Browse and Add…** (or enter it as
-the target folder of a flight just added with `+`): the plugin
-notices the `project.gpkg` and result stores, lists what it found, and asks
-before adding.
+through the pipeline can simply be added back. Pick it with **Browse and
+Add…**, or enter it as the target folder - of a new project's first flight,
+of a flight just added with `+`, or of the active flight, to point it there.
+Choosing the recordings counts as well: it fills in `<their folder>/qgis`.
+The plugin notices the `project.gpkg` and result stores, lists what it
+found, and asks before it takes the folder over.
 
 - Its **stored configuration is loaded**, so the inputs and settings come back
   as they were - the copy/default question is not asked, because neither
@@ -206,6 +214,21 @@ before adding.
 - A folder with results but no stored configuration (a migrated 5.x project,
   say) is still adopted; the settings are left as they are, so check the
   inputs before running anything.
+- **Pointing the active flight at a processed folder** loads that folder's
+  configuration; what the form showed is stored with the folder the flight
+  leaves, as when switching flights. A folder that is new takes the flight
+  with the settings shown.
+- If the question comes up as a step is started (the flight had no name
+  until then), the step does not start: look at what was loaded, then start
+  it again.
+- The flight shows the folder its settings were read from. The path saved
+  with them may be an older one - the folder was moved, copied or handed on -
+  and is not used.
+
+Before 9.1 only **Browse and Add…** and a flight just added by name loaded
+the stored configuration. Everywhere else the form's values stayed, and the
+next save - saving the QGIS project is one - replaced what the folder had
+stored with them.
 
 This is also what happens when you add back a flight you removed.
 
