@@ -35,6 +35,46 @@ ROUTE_FOLDERS = ("all", "valid", "invalid", "valid_kml", "valid_lines")
 _ROUTE_FILE = re.compile(r"^route_\d+(_transects)?\.(geojson|kml)$")
 
 
+def wgs84_transformer(target_crs) -> Transformer:
+    """Projected coordinates as the planner holds them - ``(x, y)`` =
+    (easting, northing), the order geopandas hands out - to WGS84
+    ``(longitude, latitude)``, the order GeoJSON and KML write.
+
+    ``always_xy`` is what makes both ends true. Without it pyproj uses each
+    CRS's official axis order, which for many national grids is *northing
+    first* (MGI / Austria Lambert and GK, DHDN Gauss-Kruger, ETRS89 LAEA
+    Europe): the easting was read as the northing, and every grid point,
+    transect and route was written some 200 km from the flight area. UTM is
+    easting first, so there it happened to come out right.
+    """
+    return Transformer.from_crs(target_crs, CRS.from_epsg(4326),
+                                always_xy=True)
+
+
+def meets_no_fly(line, invalid_areas) -> bool:
+    """True when *line* - a transect, or the way to or from a start point -
+    may not be flown because of a no-fly geometry.
+
+    A no-fly *area* blocks a line that runs through or along it (meeting it
+    in one point, a shared corner, does not). A no-fly *line* or *point* - a
+    power line, a mast - blocks every line that meets it: such a crossing
+    has no length, and measuring the length of the overlap, as was done for
+    all of them, let every one of them through.
+    """
+    if invalid_areas is None:
+        return False
+    for geometry in invalid_areas.geometry:
+        if geometry is None or geometry.is_empty:
+            continue
+        if not line.intersects(geometry):
+            continue
+        if geometry.geom_type not in ("Polygon", "MultiPolygon"):
+            return True
+        if line.intersection(geometry).length > 0:
+            return True
+    return False
+
+
 def _remove_quietly(path: str) -> None:
     try:
         os.remove(path)
@@ -129,6 +169,9 @@ class EvaluationFlightStrategy(abc.ABC):
             if invalid_areas.crs.srs != target_crs.srs:
                 invalid_areas = invalid_areas.to_crs(target_crs)
 
+        if len(flight_areas) == 0:
+            raise ValueError("The flight area file holds no geometry.")
+
         start_points_df = gpd.read_file(start_points_path)
         # TODO remove - in future all files should have a defined crs!...
         if start_points_df.crs is None:
@@ -138,6 +181,55 @@ class EvaluationFlightStrategy(abc.ABC):
             start_points_df = start_points_df.to_crs(target_crs)
 
         return flight_areas, start_points_df, invalid_areas
+
+    @staticmethod
+    def whole_area(flight_areas):
+        """The flight area as one geometry: every feature of the layer.
+        Only the first feature used to be planned for - a second meadow in
+        the same layer was left out without a word."""
+        geometries = [g for g in flight_areas.geometry
+                      if g is not None and not g.is_empty]
+        if len(geometries) == 1:
+            return geometries[0]
+        return shapely.unary_union(geometries)
+
+    @staticmethod
+    def release_try(grid, transects, visited_points, visited_transects) -> None:
+        """Give back what a discarded try at a route has used: its grid
+        points and its transects are free for the next one.
+
+        *grid* and *transects* are the copies the plan is being drawn on.
+        The transects used to be "freed" in the pristine dictionary, where
+        nothing is ever taken - in the copy they stayed used, so every
+        discarded try cost the later routes its transects.
+        """
+        for x, y in visited_points:
+            grid[x][y][3] = False
+        for key in visited_transects:
+            transects[key] = transects[key]._replace(already_visited=False)
+
+    @staticmethod
+    def blocked_leg(start_point, first_point, last_point, invalid_areas) -> str:
+        """Which leg between a start point and a route meets a no-fly
+        geometry: ``"start"`` (the way out to the route's first point),
+        ``"end"`` (the way back from its last) or ``""``.
+
+        A start point is ``[index, x, y]``; a route point starts with its
+        ``x, y``. The loop strategy built these legs from the start point's
+        first two entries - its *index* and its x - so the line it tested
+        began somewhere near the origin of the CRS and said nothing about
+        the leg that would be flown.
+        """
+        if invalid_areas is None:
+            return ""
+        here = tuple(start_point[1:3])
+        way_out = shapely.geometry.LineString([here, tuple(first_point[0:2])])
+        if meets_no_fly(way_out, invalid_areas):
+            return "start"
+        way_back = shapely.geometry.LineString([here, tuple(last_point[0:2])])
+        if meets_no_fly(way_back, invalid_areas):
+            return "end"
+        return ""
 
     def get_crs(self, epsg_code):
         target_crs = CRS.from_epsg(epsg_code)
@@ -150,16 +242,16 @@ class EvaluationFlightStrategy(abc.ABC):
         features = []
         # create a geojson for the route
         # region
-        pre_lng = None
-        pre_lat = None
+        previous = None
         for position_idx, position in enumerate(route):
-            lng, lat = transformer.transform(position[0], position[1])
-            coordinates.append((lat, lng))
+            # GeoJSON order: longitude, latitude (see wgs84_transformer)
+            lon, lat = transformer.transform(position[0], position[1])
+            coordinates.append((lon, lat))
             features.append(
                 {
                     "type": "Feature",
                     "properties": {"name": f"{position_idx}"},
-                    "geometry": {"coordinates": [lat, lng], "type": "Point"},
+                    "geometry": {"coordinates": [lon, lat], "type": "Point"},
                 }
             )
             if position_idx > 0:
@@ -169,13 +261,12 @@ class EvaluationFlightStrategy(abc.ABC):
                         "type": "Feature",
                         "properties": {"name": f"{transect_id}"},
                         "geometry": {
-                            "coordinates": [(pre_lat, pre_lng), (lat, lng)],
+                            "coordinates": [previous, (lon, lat)],
                             "type": "LineString",
                         },
                     }
                 )
-            pre_lat = lat
-            pre_lng = lng
+            previous = (lon, lat)
         features.append(
             {
                 "type": "Feature",
@@ -304,14 +395,15 @@ class EvaluationFlightStrategy(abc.ABC):
                 if is_valid:
                     valid_nodes.append(GridPosition(latitude, longitude, x, y))
                 row.append([latitude, longitude, is_valid, False])
-                # add the point to the grid geojsons
-                new_lng, new_lat = transformer.transform(latitude, longitude)
+                # add the point to the grid geojsons ("latitude" and
+                # "longitude" are this grid's x and y, in metres)
+                new_lon, new_lat = transformer.transform(latitude, longitude)
 
                 # region
                 feature = {
                     "type": "Feature",
                     "properties": {"name": f"{x}-{y}"},
-                    "geometry": {"coordinates": [new_lat, new_lng], "type": "Point"},
+                    "geometry": {"coordinates": [new_lon, new_lat], "type": "Point"},
                 }
                 all_grid_point_geojson["features"].append(feature)
                 if is_valid:
@@ -345,16 +437,11 @@ class EvaluationFlightStrategy(abc.ABC):
                         ratio > min_transect_overlap, False
                     )
 
-                    # if we have got no-go areas, we have to check them too
-                    if invalid_areas is not None:
-                        # check if there is any intersection between our transect and one of the no-go areas
-                        for geometry in invalid_areas.geometry:
-                            intersection = shapely.intersection(line, geometry)
-                            if intersection.length > 0:
-                                transects[f"{x}_{y}_{x}_{y + 1}"] = TransectStatus(
-                                    False, False
-                                )
-                                break
+                    # a transect that meets a no-go area is not flown
+                    if meets_no_fly(line, invalid_areas):
+                        transects[f"{x}_{y}_{x}_{y + 1}"] = TransectStatus(
+                            False, False
+                        )
                 # create vertical transects
                 if x + 1 < width:
                     # create the transect
@@ -369,16 +456,11 @@ class EvaluationFlightStrategy(abc.ABC):
                         ratio > min_transect_overlap, False
                     )
 
-                    # if we have got no-go areas, we have to check them too
-                    if invalid_areas is not None:
-                        # check if there is any intersection between our transect and one of the no-go areas
-                        for geometry in invalid_areas.geometry:
-                            intersection = shapely.intersection(line, geometry)
-                            if intersection.length > 0:
-                                transects[f"{x}_{y}_{x + 1}_{y}"] = TransectStatus(
-                                    False, False
-                                )
-                                break
+                    # a transect that meets a no-go area is not flown
+                    if meets_no_fly(line, invalid_areas):
+                        transects[f"{x}_{y}_{x + 1}_{y}"] = TransectStatus(
+                            False, False
+                        )
 
         # create geo jsons for the transect lines (all and valid)
         # region
@@ -388,14 +470,14 @@ class EvaluationFlightStrategy(abc.ABC):
         for key, value in transects.items():
             start_x, start_y, end_x, end_y = key.split("_")
             start_point = grid[int(start_x)][int(start_y)]
-            start_lng, start_lat = transformer.transform(start_point[0], start_point[1])
+            start_lon, start_lat = transformer.transform(start_point[0], start_point[1])
             end_point = grid[int(end_x)][int(end_y)]
-            end_lng, end_lat = transformer.transform(end_point[0], end_point[1])
+            end_lon, end_lat = transformer.transform(end_point[0], end_point[1])
             transect_line = {
                 "type": "Feature",
                 "properties": {"name": key},
                 "geometry": {
-                    "coordinates": [[start_lat, start_lng], [end_lat, end_lng]],
+                    "coordinates": [[start_lon, start_lat], [end_lon, end_lat]],
                     "type": "LineString",
                 },
             }
@@ -423,11 +505,11 @@ class EvaluationFlightStrategy(abc.ABC):
         # region
         start_geojson = {"type": "FeatureCollection", "features": []}
         for start_point_idx, start_point in enumerate(start_points):
-            lng, lat = transformer.transform(start_point[1], start_point[2])
+            lon, lat = transformer.transform(start_point[1], start_point[2])
             feature = {
                 "type": "Feature",
                 "properties": {"name": f"start-{start_point_idx}"},
-                "geometry": {"coordinates": [lat, lng], "type": "Point"},
+                "geometry": {"coordinates": [lon, lat], "type": "Point"},
             }
             start_geojson["features"].append(feature)
 
@@ -535,7 +617,7 @@ class RandomStrategy(EvaluationFlightStrategy):
         invalid_areas_path: Optional[str] = None,
     ) -> List:
         target_crs = self.get_crs(self.__target_crs_epsg)
-        transformer = Transformer.from_crs(target_crs, CRS.from_epsg(4326))
+        transformer = wgs84_transformer(target_crs)
 
         flight_areas, start_points_df, invalid_areas = self.read_data(
             area_path, start_points_path, target_crs, invalid_areas_path
@@ -554,7 +636,7 @@ class RandomStrategy(EvaluationFlightStrategy):
 
         # based on the flight area build up the evaluation grid
         grid, valid_nodes, transects, width, height = self.calculate_grid(
-            flight_areas.geometry[0],
+            self.whole_area(flight_areas),
             self.__grid_size,
             invalid_areas,
             transformer,
@@ -598,7 +680,22 @@ class RandomStrategy(EvaluationFlightStrategy):
 
             flights = []
             route_idx = 0
+            # Every route is drawn on a fresh copy of the grid, so there is
+            # always a point to start from: nothing but a valid route ended
+            # this loop. Where no route can have enough transects - a small
+            # area, a coarse grid, a no-fly zone through the middle - it ran
+            # for ever, writing to log.txt until the disk was full.
+            failed_in_a_row = 0
+            give_up_after = max(1, self.__number_of_retries)
             while len(flights) < self.__max_number_of_flights:
+                if failed_in_a_row >= give_up_after:
+                    logfile.write(
+                        f"\nStopping: {failed_in_a_row} routes in a row had "
+                        f"no more than {self.__min_transects_per_route} "
+                        "transect(s). The area holds too few connected "
+                        "transects for this grid size and minimum.\n"
+                    )
+                    break
                 grid_copy = copy.deepcopy(grid)
                 transects_copy = copy.deepcopy(transects)
                 possible_starts = []
@@ -726,6 +823,7 @@ class RandomStrategy(EvaluationFlightStrategy):
                     route.append(last_point)
                 num_transects = len(visited_transects)
                 if num_transects > self.__min_transects_per_route:
+                    failed_in_a_row = 0
                     logfile.write("-- Created valid route \n")
                     flights.append(
                         {
@@ -737,6 +835,7 @@ class RandomStrategy(EvaluationFlightStrategy):
                     )
                     route_idx += 1
                 else:
+                    failed_in_a_row += 1
                     logfile.write("-- Created invalid route. Too few transects. \n")
 
             logfile.write("\n-----------------------------------\n")
@@ -765,44 +864,17 @@ class RandomStrategy(EvaluationFlightStrategy):
                         )
                         continue  # go to next start point
 
-                    # if we have got no-go areas, we have to check them too
-                    if invalid_areas is not None:
-                        touching_invalid_area = False
-                        line = shapely.geometry.LineString(
-                            [start_point[1:3], first_point[0:2]]
+                    # the way out to the route and back must not meet a
+                    # no-go area either
+                    blocked = self.blocked_leg(
+                        start_point, first_point, last_point, invalid_areas)
+                    if blocked:
+                        logfile.write(
+                            f"-- Start point {start_point[0]} is invalid because of "
+                            f"intersection with no-fly area on route to {blocked} of "
+                            f"route {route_idx}\n"
                         )
-                        # check if there is any intersection between the start of the route and the
-                        # selected start point and one of the no-go areas
-                        for geometry in invalid_areas.geometry:
-                            intersection = shapely.intersection(line, geometry)
-                            if intersection.length > 0:
-                                logfile.write(
-                                    f"-- Start point {start_point[0]} is invalid because of "
-                                    f"intersection with no-fly area on route to start of "
-                                    f"route {route_idx}\n"
-                                )
-                                touching_invalid_area = True
-                                break
-                        if touching_invalid_area:
-                            continue  # go to next start point
-
-                        line = shapely.geometry.LineString(
-                            [start_point[1:3], last_point[0:2]]
-                        )
-                        # check if there is any intersection between the end of the route and the
-                        # selected start point and one of the no-go areas
-                        for geometry in invalid_areas.geometry:
-                            intersection = shapely.intersection(line, geometry)
-                            if intersection.length > 0:
-                                logfile.write(
-                                    f"-- Start point {start_point[0]} is invalid because of "
-                                    f"intersection with no-fly area on route to end of "
-                                    f"route {route_idx}\n"
-                                )
-                                touching_invalid_area = True
-                                break
-                        if touching_invalid_area:
-                            continue
+                        continue  # go to next start point
 
                     if (smallest_distance is None or distance + back_distance < smallest_distance):
                         # we have a valid start point
@@ -1090,7 +1162,7 @@ class RandomLoopStrategy(EvaluationFlightStrategy):
         :return: Valid routes__
         """
         target_crs = self.get_crs(self.__target_crs_epsg)
-        transformer = Transformer.from_crs(target_crs, CRS.from_epsg(4326))
+        transformer = wgs84_transformer(target_crs)
 
         flight_areas, start_points_df, invalid_areas = self.read_data(
             area_path, start_points_path, target_crs, invalid_areas_path
@@ -1104,7 +1176,7 @@ class RandomLoopStrategy(EvaluationFlightStrategy):
 
         # based on the flight area build up the evaluation grid
         grid, valid_nodes, transects, width, height = self.calculate_grid(
-            flight_areas.geometry[0],
+            self.whole_area(flight_areas),
             self.__grid_size,
             invalid_areas,
             transformer,
@@ -1320,13 +1392,12 @@ class RandomLoopStrategy(EvaluationFlightStrategy):
                             dead_end_stop = True
                         # move on in the flight pattern and start with the next direction for the next iteration
                         flight_pattern.append(flight_pattern.pop(0))
-                    if dead_end_stop and not length_stop:
-                        dead_end_counter += 1
-                    else:
-                        dead_end_counter = 0
-
                     num_transects = len(visited_transects)
                     if len(visited_transects) >= self.__min_transects_per_route:
+                        # A route: the count of failed tries starts again.
+                        # (It used to count dead ends instead, whether or
+                        # not the route was a valid one.)
+                        dead_end_counter = 0
                         logfile.write(
                             f"-- Created route {route_idx} with {num_transects} transects\n"
                         )
@@ -1334,18 +1405,18 @@ class RandomLoopStrategy(EvaluationFlightStrategy):
                         res.append(route)
                         res_transects.append(visited_transects)
                     else:
+                        # A try that led to nothing, however it ended. A
+                        # route cut off by the maximum distance before it
+                        # was long enough did not count, so a distance too
+                        # small for the minimum number of transects kept
+                        # this loop going for good.
+                        dead_end_counter += 1
                         logfile.write(
                             f"-- Created route {route_idx} is too short with "
                             f"{num_transects} transects - retrying...\n"
                         )
-                        for new_visited_point in new_visited_points:
-                            grid_copy[new_visited_point[0]][new_visited_point[1]][
-                                3
-                            ] = False
-                        for visited_transect in visited_transects:
-                            transects[visited_transect] = transects[
-                                visited_transect
-                            ]._replace(already_visited=False)
+                        self.release_try(grid_copy, transects_copy,
+                                         new_visited_points, visited_transects)
 
                 logfile.write("\nAssigning routes to closest start positions...\n")
 
@@ -1376,44 +1447,17 @@ class RandomLoopStrategy(EvaluationFlightStrategy):
                             )
                             continue
 
-                        # if we have got no-go areas, we have to check them too
-                        if invalid_areas is not None:
-                            touching_invalid_area = False
-                            line = shapely.geometry.LineString(
-                                [start_point[0:2], first_point[0:2]]
+                        # the way out to the route and back must not meet
+                        # a no-go area either
+                        blocked = self.blocked_leg(
+                            start_point, first_point, last_point, invalid_areas)
+                        if blocked:
+                            logfile.write(
+                                f"-- Start point {start_point[0]} is invalid because of "
+                                f"intersection with no-fly area on route to {blocked} of "
+                                f"route {route_idx}\n"
                             )
-                            # check if there is any intersection between the start of the route and
-                            # the selected start point and one of the no-go areas
-                            for geometry in invalid_areas.geometry:
-                                intersection = shapely.intersection(line, geometry)
-                                if intersection.length > 0:
-                                    logfile.write(
-                                        f"-- Start point {start_point[0]} is invalid because of "
-                                        f"intersection with no-fly area on route to start of "
-                                        f"route {route_idx}\n"
-                                    )
-                                    touching_invalid_area = True
-                                    break
-                            if touching_invalid_area:
-                                continue
-
-                            line = shapely.geometry.LineString(
-                                [start_point[0:2], last_point[0:2]]
-                            )
-                            # check if there is any intersection between the end of the route
-                            # and the selected start point and one of the no-go areas
-                            for geometry in invalid_areas.geometry:
-                                intersection = shapely.intersection(line, geometry)
-                                if intersection.length > 0:
-                                    logfile.write(
-                                        f"-- Start point {start_point[0]} is invalid because of "
-                                        f"intersection with no-fly area on route to end of "
-                                        f"route {route_idx}\n"
-                                    )
-                                    touching_invalid_area = True
-                                    break
-                            if touching_invalid_area:
-                                continue
+                            continue
 
                         average_distance = (distance + back_distance) / 2
                         if (smallest_distance is None or average_distance < smallest_distance):

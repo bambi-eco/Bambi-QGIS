@@ -10,9 +10,9 @@ The Random Flight Strategy Planner generates randomized transect-based survey ro
 
 | Input | Description |
 |-------|-------------|
-| **Monitoring Area** | Polygon layer or external file (GeoJSON, KML, Shapefile) defining the survey boundary |
+| **Monitoring Area** | Polygon layer or external file (GeoJSON, KML, Shapefile) defining the survey boundary. Every polygon of the layer belongs to the area (before 9.1 only the first one was planned for) |
 | **Start Points** | Point layer or external file with candidate take-off/landing positions |
-| **Invalid Areas** *(optional)* | Polygon layer or external file marking no-fly zones or exclusion areas |
+| **Invalid Areas** *(optional)* | Layer or external file marking what must not be flown over. **Polygons** are no-fly zones; **lines and points** work as well - a power line, a mast - and block every transect and every way to or from a start point that meets them (before 9.1 they were ignored). The way from the start point to a route and back is checked like the transects |
 | **Target Folder** | Output directory for all generated files |
 
 ## Strategy options
@@ -31,8 +31,8 @@ The Random Flight Strategy Planner generates randomized transect-based survey ro
 | **Min / Max transects** | Minimum (and optional maximum) number of transects per route |
 | **Max distance** | Maximum total route length (m) |
 | **Min transect overlap** | Minimum required overlap fraction between consecutive transects |
-| **Number of retries** | How many times to retry route generation before giving up |
-| **Target CRS (EPSG)** | UTM CRS for all spatial computations |
+| **Number of retries** | How many times to retry route generation before giving up. Planning always ends: the Random strategy stops collecting routes after this many tries in a row that gave none (an area too small for the grid, a minimum number of transects no route can reach), and says so in `log.txt` |
+| **Target CRS (EPSG)** | The metric CRS all distances are computed in - a UTM zone, or a national grid. Any projected CRS in metres works, whatever its official axis order (before 9.1 a plan in a CRS whose first axis is the northing - MGI / Austria Lambert and Gauss-Krüger, DHDN Gauss-Krüger, ETRS89-LAEA - was written some 200 km from the area) |
 | **Min transects per route** | Minimum transects required for a route to be considered valid |
 | **Offset X / Y** | Translate the grid in X and Y (m) |
 | **Padding** | Shrink the effective planning area by this many metres on each side |
@@ -40,7 +40,7 @@ The Random Flight Strategy Planner generates randomized transect-based survey ro
 | **Max overlapping transects** | Maximum number of transects allowed to overlap with already-planned ones |
 | **Max number of flights** | Maximum total number of valid routes to generate |
 | **Random search** | When enabled, transects are selected randomly rather than sequentially |
-| **Retries per route** | Number of attempts per individual route before skipping |
+| **Retries per route** | Random Loop: how many tries in a row may fail to give a route before the plan is taken as it stands. A try that was too short gives its grid points and transects back |
 
 All parameter values are **persisted across sessions**. Use the **Reset to Defaults** button to restore factory values.
 
