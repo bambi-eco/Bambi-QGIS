@@ -9,9 +9,9 @@ species, sex or age of a tracker's track, set by a person.
 **A person's word stands.** The classifiers write their calls onto the same
 fields (:mod:`core.apply_results`), every time they run. A field a person set
 is therefore marked - :data:`BY_HAND` in the track's attributes lists them -
-and the projection of the classifier results leaves a marked field alone. A
-label synced across from the other camera fills gaps only, so it never
-reaches a field that has a value either.
+and the projection of the classifier results leaves a marked field alone. So
+does a label synced across from the other camera (:mod:`core.label_sync`):
+it fills gaps, and "not known", said by a person, is not a gap.
 
 **Species is written on the boxes too**, as the classifiers do: the exports
 read a box's species, the survey tools the animal's.

@@ -16,7 +16,9 @@ Three rules, and they are the whole of it:
 * **Fill, never replace.** A track that already carries an answer keeps it,
   whoever put it there. Sync is for the gaps.
 * **Hand annotations are untouchable**, on both sides: a manual run is never
-  written to, and never read past.
+  written to, and never read past. Nor is what a reviewer said of a tracker's
+  track (:mod:`core.track_review`) - also where they said "not known", which
+  looks like a gap and is an answer.
 
 Only pairs of the active matching run are considered; an animal one camera
 never saw has no partner and is left alone.
@@ -24,7 +26,7 @@ never saw has no partner and is left alone.
 
 import json
 import os
-from typing import Dict, Optional
+from typing import Dict, Optional, Set
 
 from . import store
 
@@ -57,21 +59,51 @@ def _identified(species_id) -> bool:
 
 
 def _read_tracks(target_folder: str, modality: str) -> Dict[int, dict]:
-    """``{track_id: {"species_id", "attributes", "manual"}}``."""
+    """``{track_id: {"species_id", "attributes", "manual", "by_hand"}}``."""
+    from . import track_review
+
     path = store.stage_path(target_folder, store.TRACKS, modality)
     if not os.path.isfile(path):
         return {}
     manual_run = _manual_run_id(target_folder, modality)
     conn = store.open_store(path, store.TRACKS, modality)
     try:
-        return {
-            int(row["track_id"]): {
+        tracks = {}
+        for row in conn.execute(
+                "SELECT track_id, run_id, species_id, attributes FROM tracks"):
+            attributes = _load_json(row["attributes"])
+            tracks[int(row["track_id"])] = {
                 "species_id": row["species_id"],
-                "attributes": _load_json(row["attributes"]),
+                "attributes": attributes,
                 "manual": manual_run is not None and row["run_id"] == manual_run,
+                # the fields a reviewer decided: not for sync to fill
+                "by_hand": track_review.by_hand(attributes),
             }
-            for row in conn.execute(
-                "SELECT track_id, run_id, species_id, attributes FROM tracks")}
+        return tracks
+    finally:
+        conn.close()
+
+
+def _boxes_named_by_hand(target_folder: str, modality: str) -> Set[int]:
+    """The boxes of the tracks whose species a reviewer set: they carry what
+    the reviewer said, also where that is "no species"."""
+    from . import track_review
+
+    path = store.stage_path(target_folder, store.TRACKS, modality)
+    if not os.path.isfile(path):
+        return set()
+    conn = store.open_store(path, store.TRACKS, modality)
+    try:
+        named = [int(row["track_id"]) for row in conn.execute(
+            "SELECT track_id, attributes FROM tracks "
+            "WHERE attributes LIKE ?", (f"%{track_review.BY_HAND}%",))
+            if track_review.SPECIES in track_review.by_hand(row["attributes"])]
+        boxes: Set[int] = set()
+        for track_id in named:
+            boxes.update(int(row["detection_id"]) for row in conn.execute(
+                "SELECT detection_id FROM track_members WHERE track_id = ?",
+                (track_id,)))
+        return boxes
     finally:
         conn.close()
 
@@ -101,8 +133,11 @@ def sync_tracks(target_folder: str, source: str, destination: str,
                 if have is None or want is None or want["manual"]:
                     continue
 
+                decided = want["by_hand"]
                 species = have["species_id"]
-                if _identified(species) and not _identified(want["species_id"]):
+                open_species = not _identified(want["species_id"])
+                if _identified(species) and open_species and \
+                        "species" not in decided:
                     conn.execute(
                         "UPDATE tracks SET species_id = ? WHERE track_id = ?",
                         (int(species), destination_id))
@@ -114,6 +149,8 @@ def sync_tracks(target_folder: str, source: str, destination: str,
                     value = have["attributes"].get(field)
                     if value is None or attributes.get(field) is not None:
                         continue
+                    if field in decided:
+                        continue        # "not known", said by a person
                     attributes[field] = value
                     counts[field] += 1
                     changed = True
@@ -140,7 +177,10 @@ def sync_detections(target_folder: str, source: str, destination: str,
     """
     from . import match_store
 
-    partners = match_store.partner_detections(target_folder, source)
+    # each box of the destination camera -> the box it was paired with on
+    # the camera the labels come from (the cameras number their boxes each
+    # for itself, so the direction matters)
+    partners = match_store.partner_detections(target_folder, destination)
     if not partners:
         return {"occlusion": 0, "species": 0}
 
@@ -159,6 +199,7 @@ def sync_detections(target_folder: str, source: str, destination: str,
     finally:
         conn.close()
 
+    decided = _boxes_named_by_hand(target_folder, destination)
     counts = {"occlusion": 0, "species": 0}
     conn = store.open_store(dest_path, store.DETECTIONS, destination)
     try:
@@ -168,12 +209,14 @@ def sync_detections(target_folder: str, source: str, destination: str,
                     "FROM detections"):
                 detection_id = int(row["detection_id"])
                 partner = partners.get(detection_id)
-                source_row = have.get(partner) if partner else None
+                source_row = None if partner is None else have.get(partner)
                 if source_row is None:
                     continue
                 species, attributes_in = source_row
 
-                if _identified(species) and not _identified(row["species_id"]):
+                open_species = not _identified(row["species_id"])
+                if _identified(species) and open_species and \
+                        detection_id not in decided:
                     conn.execute(
                         "UPDATE detections SET species_id = ? "
                         "WHERE detection_id = ?", (int(species), detection_id))

@@ -235,3 +235,122 @@ def test_it_is_idempotent(flight):
 
     assert second["species"] == 0
     assert _tracks(flight, "t")[1][0] == RED_DEER
+
+
+# ---------------------------------------------------------------------------
+# What a reviewer said stands
+# ---------------------------------------------------------------------------
+
+def test_a_reviewer_who_said_not_known_is_not_overruled(flight):
+    """Sync fills gaps - but "nobody can tell", said by a person who looked,
+    is an answer and not a gap."""
+    from bambi_wildlife_detection.core import track_review
+
+    _set_track(flight, "w", 1, attributes={"sex": 3, "age": 7})
+    track_review.set_attribute(flight, "t", 1, "sex", None)
+
+    counts = label_sync.sync_all(flight, "w", "t")
+
+    _species, attributes = _tracks(flight, "t")[1]
+    assert "sex" not in attributes and attributes["age"] == 7
+    assert (counts["sex"], counts["age"]) == (0, 1)
+
+
+def test_a_species_left_open_by_hand_stays_open_on_track_and_boxes(flight):
+    from bambi_wildlife_detection.core import track_review
+
+    for track, species, boxes in ((1, RED_DEER, (1, 2)),
+                                  (2, ROE_DEER, (3, 4))):
+        _set_track(flight, "w", track, species=species)
+        for box in boxes:
+            _set_detection(flight, "w", box, species=species)
+    track_review.set_species(flight, "t", 1, store.FALLBACK_SPECIES_ID)
+
+    counts = label_sync.sync_all(flight, "w", "t")
+
+    tracks = _tracks(flight, "t")
+    assert tracks[1][0] == store.FALLBACK_SPECIES_ID
+    assert tracks[2][0] == ROE_DEER              # nobody said anything of it
+    boxes = _detections(flight, "t")
+    assert [boxes[box][0] for box in (1, 2, 3, 4)] == [
+        store.FALLBACK_SPECIES_ID, store.FALLBACK_SPECIES_ID,
+        ROE_DEER, ROE_DEER]
+    assert (counts["species"], counts["species_detections"]) == (1, 2)
+
+
+def test_what_a_reviewer_said_travels_like_any_other_answer(flight):
+    from bambi_wildlife_detection.core import track_review
+
+    track_review.set_attribute(flight, "w", 1, "sex", 3)
+
+    label_sync.sync_all(flight, "w", "t")
+
+    # the answer goes across; the mark stays with the camera it was set on
+    assert _tracks(flight, "t")[1][1] == {"sex": 3}
+
+
+# ---------------------------------------------------------------------------
+# The cameras number their boxes each for itself
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def lopsided(tmp_path):
+    """The RGB detector found four things the thermal one did not, before
+    the two animals: RGB boxes 5-8 are thermal boxes 1-4."""
+    root = str(tmp_path)
+    store.open_store(store.project_path(root), store.PROJECT).close()
+    for suffix, count in (("t", 4), ("w", 8)):
+        conn = store.open_store(
+            store.stage_path(root, store.DETECTIONS, suffix),
+            store.DETECTIONS, suffix)
+        with store.transaction(conn):
+            for detection_id in range(1, count + 1):
+                conn.execute(
+                    "INSERT INTO detections (frame, x1, y1, x2, y2, "
+                    "confidence, species_id, source_id) "
+                    "VALUES (?, 0, 0, 10, 10, 0.9, 0, 1)", (detection_id - 1,))
+        conn.close()
+    track_store.record_tracks(root, "t", [
+        {"track_id": 1 + (d > 2), "detection_id": d} for d in range(1, 5)])
+    track_store.record_tracks(root, "w", [
+        {"track_id": 1 + (d > 6), "detection_id": d} for d in range(5, 9)])
+    match_store.record_matches(root, [
+        {"track_id_t": track, "track_id_w": track, "shared": 2,
+         "median_dist": 1.0, "conf_t": 0.9, "conf_w": 0.9,
+         "pairs": [{"frame_t": d - 1, "frame_w": d + 3,
+                    "detection_id_t": d, "detection_id_w": d + 4,
+                    "dist": 1.0}
+                   for d in ((1, 2) if track == 1 else (3, 4))]}
+        for track in (1, 2)])
+    return root
+
+
+def test_a_box_gets_what_its_own_partner_carries(lopsided):
+    """Up to 9.0 the pairs were looked up the wrong way round: right only
+    where both cameras happened to number their boxes alike."""
+    for box in (5, 6):                               # the first animal
+        _set_detection(lopsided, "w", box, species=RED_DEER,
+                       attributes={"occlusion": 1})
+    for box in (1, 2, 3, 4):                         # nothing the other saw
+        _set_detection(lopsided, "w", box, species=ROE_DEER,
+                       attributes={"occlusion": 0})
+
+    counts = label_sync.sync_detections(lopsided, "w", "t")
+
+    boxes = _detections(lopsided, "t")
+    assert [boxes[box] for box in (1, 2)] == [
+        (RED_DEER, {"occlusion": 1})] * 2
+    assert [boxes[box] for box in (3, 4)] == [(0, {})] * 2
+    assert counts == {"occlusion": 2, "species": 2}
+
+
+def test_and_from_the_other_side(lopsided):
+    _set_detection(lopsided, "t", 3, species=ROE_DEER,
+                   attributes={"occlusion": 1})
+
+    counts = label_sync.sync_detections(lopsided, "t", "w")
+
+    boxes = _detections(lopsided, "w")
+    assert boxes[7] == (ROE_DEER, {"occlusion": 1})
+    assert all(boxes[box] == (0, {}) for box in (1, 2, 3, 4, 5, 6, 8))
+    assert counts == {"occlusion": 1, "species": 1}
