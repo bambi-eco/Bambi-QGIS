@@ -117,6 +117,11 @@ def corrected_pose(meta: dict, t_corr: Optional[dict],
       rotation correction (radians), applied once, turned into a camera
       rotation by ``quaternion_from_drone_pose`` (heading about world up -
       correct for tilted cameras too)
+    * the heading is measured from true north and the map's north is not
+      true north: a pose that knows the difference where it was taken
+      (``grid_convergence``, degrees - see ``core.grid_north``) has it taken
+      from its heading. Poses extracted up to 9.0 know none and are used as
+      they were
     * a 4-element rotation is taken as a ready quaternion (only the
       translation correction applies)
 
@@ -144,9 +149,12 @@ def corrected_pose(meta: dict, t_corr: Optional[dict],
     rotation = list(meta.get("rotation", [0.0, 0.0, 0.0]))
     if len(rotation) == 4:
         return position, Quaternion([float(v) for v in rotation])
+    from . import grid_north
+    rotation = [float(v) for v in rotation[:3]]
+    rotation[2] -= grid_north.of_pose(meta)      # a bearing on the map
     # Corrections are stored in radians; the pose itself is in degrees.
     rotation_eulers = (
-        Vector3([np.deg2rad(float(v) % 360.0) for v in rotation[:3]]) - cor_r
+        Vector3([np.deg2rad(v % 360.0) for v in rotation]) - cor_r
     )
     return position, quaternion_from_drone_pose(np.degrees(rotation_eulers))
 

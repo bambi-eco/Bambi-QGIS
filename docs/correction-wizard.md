@@ -5,6 +5,8 @@ The Correction Calibration Wizard helps you find and store the positional and ro
 ![Correction Wizard Toolbar Button](../images/correction_wizard_toolbar.png)
 
 > **Prerequisite**: Frames must be extracted first ([P1](pipeline.md#p1-extract-frames)) so that `poses_t.json` / `poses_w.json` exist in the target folder.
+>
+> **Headings and the map's north**: frames extracted with *Turn headings from true north to the map's north* (the default) already have the grid convergence taken from their headings; the rotation correction found here then only has to make up for the compass. A *z* rotation calibrated on frames extracted with 9.0 or earlier contains that angle - see [Headings and the map's north](pipeline.md#headings-and-the-maps-north).
 
 ## Step 1: Select corresponding ground points
 

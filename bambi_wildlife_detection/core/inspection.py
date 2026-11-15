@@ -20,6 +20,18 @@ import json
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 
+def _map_north(meta: dict) -> str:
+    """How a pose's heading relates to the map, for the inspector."""
+    from . import grid_north
+
+    if grid_north.KEY not in (meta or {}):
+        return "heading used as a bearing on the map (extracted up to 9.0)"
+    angle = grid_north.of_pose(meta)
+    side = "east" if angle >= 0 else "west"
+    return (f"{abs(angle):.2f} deg {side} of true north - taken from the "
+            "heading")
+
+
 def _noop_log(message: str, level: str = "info") -> None:
     pass
 
@@ -647,6 +659,7 @@ def project_map_point(
             f"  Local point    : x={point[0, 0]:.3f}  y={point[0, 1]:.3f}  z={local_z:.3f} ({elev_src})\n"
             f"  Cam location   : {list(meta['location'])}\n"
             f"  Cam rotation   : {list(rot_vals)}\n"
+            f"  Map north      : {_map_north(meta)}\n"
             f"  fovy={fovy}  img={img_width}x{img_height}\n"
             f"  Correction t   : {dict(t_corr)}  r: {dict(r_corr)}\n"
             f"  Projected pixel: px={px:.1f}  py={py:.1f}  in_bounds={in_bounds}"

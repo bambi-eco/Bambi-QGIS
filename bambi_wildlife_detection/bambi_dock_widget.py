@@ -1279,6 +1279,29 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         frame_ext_layout.addRow("Duplicates (thermal video):",
                                 self.flag_duplicates_check)
 
+        self.grid_convergence_check = QCheckBox(
+            "Turn headings from true north to the map's north")
+        self.grid_convergence_check.setChecked(True)
+        self.grid_convergence_check.setToolTip(
+            "A drone reports where its camera looks as a heading from true "
+            "north. The north of the map - of the project's CRS - is true "
+            "north on the projection's central meridian only; away from it "
+            "the two differ by the grid convergence: 1.4 degrees at "
+            "Salzburg and 3.9 degrees in Vorarlberg in UTM zone 33.\n\n"
+            "Ticked: every frame's pose gets the angle at its position, "
+            "and its heading is used as what it is. The log of the "
+            "extraction says how large the angle is.\n\n"
+            "Unticked: the heading is used as a bearing on the map, as up "
+            "to 9.0 - everything is then turned by that angle about the "
+            "point below the drone (1.4 m at the corner of a frame from "
+            "80 m up, for two degrees).\n\n"
+            "A rotation correction (z) that was calibrated on frames "
+            "extracted without this contains the angle and has to be "
+            "reduced by it; the extraction's log names the value.\n\n"
+            "Takes effect when frames are extracted; frames extracted "
+            "before keep their headings.")
+        frame_ext_layout.addRow("Headings:", self.grid_convergence_check)
+
         self.preserve_aspect_ratio_check = QCheckBox("Preserve original aspect ratio (otherwise square 1:1 format)")
         self.preserve_aspect_ratio_check.setChecked(False)
         self.preserve_aspect_ratio_check.setToolTip(
@@ -4541,6 +4564,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             "no_images": self.no_images_check.isChecked(),
             "flag_duplicate_frames": (
                 self.flag_duplicates_check.isChecked() and self.video_mode_check.isChecked()),
+            "correct_grid_convergence": self.grid_convergence_check.isChecked(),
 
             # Thermal visualisation
             "thermal_photo_colormap": (

@@ -1208,6 +1208,7 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
                     log_fn(f"{n_duplicated} duplicated (shutter) frames "
                            "flagged - kept in the frame list, skipped by the "
                            "image-based steps")
+            self._headings_to_the_map(target_poses_t, config, log_fn)
             with open(target_poses_t, 'r') as f:
                 poses_t = json.load(f)
             thermal_frames = len(poses_t.get("images", []))
@@ -1422,6 +1423,7 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
 
         # Log frame count from poses file
         if os.path.exists(target_poses_w):
+            self._headings_to_the_map(target_poses_w, config, log_fn)
             with open(target_poses_w, 'r') as f:
                 poses_w = json.load(f)
             rgb_frames = len(poses_w.get("images", []))
@@ -1746,7 +1748,8 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
             fovy = fovy[0]
         fovy = float(fovy)
 
-        yaw_deg = float(image_metadata.get("rotation", [0, 0, 0])[2]) % 360.0
+        from .core import grid_north
+        yaw_deg = grid_north.map_heading(image_metadata)
 
         half_h = altitude * math.tan(math.radians(fovy / 2.0))
         fov_x = 2.0 * math.atan(aspect_ratio * math.tan(math.radians(fovy / 2.0)))
@@ -4648,6 +4651,57 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
         return alfs_runtime.apply_selection(config, log_fn=log_fn)
 
     @staticmethod
+    def _headings_to_the_map(poses_path, config, log_fn=None) -> None:
+        """After an extraction: give every pose the angle between the map's
+        north and true north where it was taken, so that its heading -
+        measured from true north - is used as what it is (core.grid_north).
+
+        Off with ``correct_grid_convergence`` unticked: the headings are
+        then used as bearings on the map, as up to 9.0.
+        """
+        from .core import grid_north
+
+        if not config.get("correct_grid_convergence", True):
+            if log_fn:
+                log_fn("Headings are used as bearings on the map (grid "
+                       "convergence not taken into account).")
+            return
+        epsg = config.get("target_epsg", 32633)
+        try:
+            angle = grid_north.record(poses_path, epsg)
+        except Exception as exc:  # noqa: BLE001 - the poses stay as they are
+            if log_fn:
+                log_fn(f"Warning: the grid convergence could not be worked "
+                       f"out ({exc}); headings are used as bearings on the "
+                       "map.")
+            return
+        if log_fn is None:
+            return
+        if angle is None:
+            log_fn("The frames carry no geographic position: headings are "
+                   "used as bearings on the map.")
+            return
+        log_fn(f"{grid_north.describe(angle, epsg)}; the headings are "
+               "turned accordingly.")
+        z = (config.get("rotation") or {}).get("z", 0.0)
+        hint = grid_north.correction_hint(z, angle)
+        if hint:
+            log_fn(hint)
+
+    @staticmethod
+    def _say_if_headings_are_true_north(poses, config, log_fn=None) -> None:
+        """One line in the log for poses extracted before headings were
+        turned to the map's north."""
+        from .core import grid_north
+
+        if log_fn is None:
+            return
+        note = grid_north.note_for_older_poses(
+            poses, config.get("target_epsg", 32633))
+        if note:
+            log_fn(note)
+
+    @staticmethod
     def _say_if_the_mesh_is_shifted(dem_json, log_fn=None) -> None:
         """One line in the log for an elevation mesh made before its
         heights were put at the cell centres (core.dem_mesh)."""
@@ -4722,6 +4776,7 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
         poses_file = os.path.join(target_folder, f"poses_{camera_suffix}.json")
         with open(poses_file, 'r') as f:
             poses = json.load(f)
+        self._say_if_headings_are_true_north(poses, config, log_fn)
 
         # Get input resolution from first extracted frame
         input_resolution = None
@@ -5345,6 +5400,7 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
         poses_file = os.path.join(target_folder, f"poses_{camera_suffix}.json")
         with open(poses_file, 'r') as f:
             poses = json.load(f)
+        self._say_if_headings_are_true_north(poses, config, log_fn)
 
         # Get input resolution from first extracted frame
         input_resolution = None
@@ -6549,6 +6605,7 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
         poses_file = os.path.join(target_folder, f"poses_{camera_suffix}.json")
         with open(poses_file, 'r') as f:
             poses = json.load(f)
+        self._say_if_headings_are_true_north(poses, config, log_fn)
 
         # Get input resolution from first extracted frame
         input_resolution = None
@@ -8678,6 +8735,7 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
         poses_file = os.path.join(target_folder, f"poses_{camera_suffix}.json")
         with open(poses_file, 'r') as f:
             poses = json.load(f)
+        self._say_if_headings_are_true_north(poses, config, log_fn)
 
         # Get input resolution from first extracted frame
         input_resolution = None

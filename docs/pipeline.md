@@ -89,6 +89,7 @@ The **Extraction** sub-tab provides fine-grained control over which frames are p
 | **Limit** | Cap the total number of frames processed (enable the checkbox to activate). |
 | **Sampling rate** *(video only)* | Take every N-th frame (e.g. 5 = every 5th frame). Reduces processing time for long recordings. |
 | **Keep duplicated thermal frames (flagged)** *(thermal video only, on by default)* | A thermal camera closes its shutter now and then to recalibrate; while it is closed the video repeats the previous image. Ticked, these frozen frames stay in `poses_t.json`, marked `"duplicated": true`, so the frame index equals the video's frame number (one video, no skip or sampling). Unticked, they are dropped as before 9.0.0 and all later frames move up. See [Duplicated frames](#duplicated-frozen-thermal-frames). |
+| **Turn headings from true north to the map's north** *(on by default)* | A drone reports where its camera looks as a heading from **true north**. The north of the map - of the project's CRS - is true north on the projection's central meridian only; away from it the two differ by the *grid convergence*, about (longitude - central meridian) x sin(latitude): 1.4 degrees at Salzburg and 3.9 degrees in Vorarlberg in UTM zone 33, up to 2.2 degrees at the edge of a UTM zone in Austria. Ticked, every pose in `poses_*.json` gets the angle at its position (`"grid_convergence"`) and its heading is used as what it is; the log of the extraction names the angle. Unticked, the heading is used as a bearing on the map as up to 9.0, which turns everything by that angle about the point below the drone (1.4 m at the corner of a frame taken from 80 m up, for two degrees). See [Headings and the map's north](#headings-and-the-maps-north). |
 
 **Thermal visualisation** (requires the DJI Thermal SDK, installable via the [Dependency Manager](installation.md#dependency-manager); the group is greyed out when the SDK is not detected):
 
@@ -119,6 +120,24 @@ setting asks for confirmation, and everything computed from the previous
 frames is marked out of date. Labels and frame-range corrections refer to the
 old numbers and have to be checked by hand. Flights extracted before 9.0.0
 had their frozen frames dropped.
+
+### Headings and the map's north
+
+The drone's heading is an angle from true north; the plugin's results lie in a projected map whose north is true north only on the projection's central meridian. The difference is the grid convergence of the place in the project's CRS:
+
+| Place | CRS | The map's north lies |
+|-------|-----|----------------------|
+| Vienna | UTM 33N (EPSG:32633) | 1.0 degree east of true north |
+| Salzburg | UTM 33N | 1.4 degrees west |
+| Bregenz | UTM 33N | 3.9 degrees west |
+| Bregenz | UTM 32N (EPSG:32632) | 0.6 degrees east |
+| Salzburg | Austria Lambert (EPSG:31287) | 0.2 degrees west |
+
+Frames extracted with **Turn headings from true north to the map's north** carry the angle in their poses, and every tool - geo-referencing, field of view, ALFS, GeoTIFFs, the wizards, the 3D viewer, the box projector - subtracts it from the heading through the plugin's one camera model. The extraction's log says how large it is.
+
+**Flights extracted with 9.0 or earlier** have no such entry and are used exactly as before: their results do not change by themselves. The geo-referencing steps write a note with the angle into the log. To include it, extract the frames again and run the steps that follow.
+
+**Rotation corrections.** A rotation correction about the vertical (*z*) that was calibrated in the Correction Wizard on frames extracted with 9.0 or earlier absorbed the convergence together with the compass's own error. After extracting again it would count twice: reduce the correction by the angle (the extraction's log names the value it should then have) or calibrate it again. The same holds for correction values carried over from another flight.
 
 ### TRex tracklet import
 

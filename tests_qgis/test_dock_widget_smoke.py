@@ -320,3 +320,16 @@ def test_the_detection_is_not_repeated_for_every_query(dock, tmp_path,
                      "2026-06-15 00:45:00\n")
     dock.get_config()
     assert len(calls) == 2
+
+
+def test_headings_are_turned_to_the_maps_north_unless_unticked(dock):
+    """The extraction setting for the grid convergence (core.grid_north):
+    ticked for a new flight, and part of what a step is given."""
+    assert dock.grid_convergence_check.isChecked()
+    assert dock.get_config()["correct_grid_convergence"] is True
+
+    dock.grid_convergence_check.setChecked(False)
+    try:
+        assert dock.get_config()["correct_grid_convergence"] is False
+    finally:
+        dock.grid_convergence_check.setChecked(True)

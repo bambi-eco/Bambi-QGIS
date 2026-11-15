@@ -120,6 +120,11 @@ CONFIG_ENTRIES: List[ConfigEntry] = [
     # 9.0.0: frozen thermal frames are kept and marked "duplicated"
     # (core.poses). On by default, also for projects saved before it existed.
     ConfigEntry("Extraction/FlagDuplicates", "bool", True),
+    # Headings are measured from true north; the map's north differs by the
+    # grid convergence (core.grid_north). On by default, also for projects
+    # saved before it existed: it acts when frames are extracted, and frames
+    # extracted before keep their headings.
+    ConfigEntry("Extraction/GridConvergence", "bool", True),
     # ===== Common Inputs =====
     ConfigEntry("Input/AirdataPath", "str"),
     ConfigEntry("Input/DemPath", "str"),
@@ -317,6 +322,7 @@ WIDGET_BINDINGS: Dict[str, Tuple[str, str]] = {
     "Extraction/AirdataPaddingSeconds": ("airdata_padding_spin", "spin"),
     "Extraction/AirdataPaddingAuto": ("airdata_padding_auto_check", "check"),
     "Extraction/FlagDuplicates": ("flag_duplicates_check", "check"),
+    "Extraction/GridConvergence": ("grid_convergence_check", "check"),
     "Input/AirdataPath": ("airdata_path_edit", "line"),
     "Input/DemPath": ("dem_path_edit", "line"),
     "Input/DemMetadataPath": ("dem_metadata_path_edit", "line"),

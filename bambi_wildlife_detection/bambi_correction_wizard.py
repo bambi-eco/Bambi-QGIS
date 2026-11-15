@@ -1140,7 +1140,9 @@ class _LightFieldRenderWorker(QThread):
             # the geo-referencing uses - so the preview shows what the
             # correction does to the results.
             cam_pos, cam_rot = shot_pose(
-                {'location': loc, 'rotation': rot}, cor_t, cor_r)
+                {'location': loc, 'rotation': rot,
+                 'grid_convergence': fi.get('grid_convergence', 0.0)},
+                cor_t, cor_r)
 
             # The shot has the shape of its image (see above).
             from .core import poses as poses_core
@@ -2351,6 +2353,8 @@ class BambiCorrectionWizard(ClosesOnce, QDialog):
                         'location': pose.get('location', [0.0, 0.0, 0.0]),
                         'rotation': pose.get('rotation', [0.0, 0.0, 0.0]),
                         'fovy': pose.get('fovy', 50.0),
+                        # what the heading is measured from (core.grid_north)
+                        'grid_convergence': pose.get('grid_convergence', 0.0),
                     })
                     break   # use first available type for each index
         return frames_info
