@@ -17,6 +17,14 @@ more wooded than the area at large is the signal; a value on its own is not.
 footprints, inside the survey area when one is set): an animal could only be
 found where somebody looked.
 
+Both sides are measured **at the same grain**. An animal's value is the mean
+(or the most common class) within the radius around it, so the ground is
+described the same way: every monitored cell by the mean, or most common
+class, within that radius around *it*. Comparing neighbourhood values at the
+animals with single cells of the ground would show "selection" for animals
+placed at random - a 10 m road is never the most common class within 30 m,
+so it would look avoided whatever the animals did.
+
 **Per transect** - the mean of each layer over a transect's monitored area,
 as covariates for whatever model the user fits outside the plugin.
 
@@ -26,6 +34,7 @@ left in each flight's folder.
 
 import csv
 import json
+import math
 import os
 from collections import Counter
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
@@ -145,6 +154,76 @@ def sample_classes(array, grid: Grid, points: Sequence[Tuple[float, float]],
         result.append((int(classes[best]),
                        float(counts[best]) / float(counts.sum())))
     return result
+
+
+def disc_offsets(radius_cells: float) -> List[Tuple[int, int]]:
+    """``(row, column)`` offsets of the cells whose centre lies within
+    *radius_cells* of a cell's own centre - at least the cell itself."""
+    reach = int(math.floor(max(0.0, radius_cells)))
+    limit = radius_cells * radius_cells
+    return [(d_row, d_col)
+            for d_row in range(-reach, reach + 1)
+            for d_col in range(-reach, reach + 1)
+            if d_row * d_row + d_col * d_col <= limit] or [(0, 0)]
+
+
+def disc_sum(values, radius_cells: float):
+    """Sum of *values* over the disc of :func:`disc_offsets` around every
+    cell, cells outside the array counting as zero.
+
+    A disc is one run of cells per row, and a run's sum is the difference of
+    two prefix sums - so the cost grows with the radius, not with its
+    square (500 m on a 10 m grid is 101 rows, not 7 845 cells).
+    """
+    import numpy as np
+
+    values = np.asarray(values)
+    half_width: Dict[int, int] = {}
+    for d_row, d_col in disc_offsets(radius_cells):
+        half_width[d_row] = max(half_width.get(d_row, 0), d_col)
+    reach = max(half_width)
+    rows, cols = values.shape
+    prefix = np.zeros((rows + 2 * reach, cols + 2 * reach + 1),
+                      dtype=values.dtype)
+    np.cumsum(np.pad(values, reach), axis=1, out=prefix[:, 1:])
+    total = np.zeros(values.shape, dtype=values.dtype)
+    for d_row, half in half_width.items():
+        band = prefix[reach + d_row:reach + d_row + rows]
+        right = reach + half + 1
+        left = reach - half
+        total += band[:, right:right + cols] - band[:, left:left + cols]
+    return total
+
+
+def focal_mean(array, radius_cells: float):
+    """Every cell's mean over the valid cells within *radius_cells* of it -
+    the ground measured the way :func:`sample_mean` measures an animal's
+    surroundings. NaN where no valid cell is in reach."""
+    import numpy as np
+
+    values = np.asarray(array, dtype=np.float64)
+    finite = np.isfinite(values)
+    total = disc_sum(np.where(finite, values, 0.0), radius_cells)
+    count = disc_sum(finite.astype(np.int32), radius_cells)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where(count > 0, total / count, np.nan)
+
+
+def focal_majority(array, radius_cells: float, nodata=0):
+    """Every cell's most common class within *radius_cells* of it (the
+    lowest value on a tie, as :func:`sample_classes` breaks one); *nodata*
+    where no mapped cell is in reach."""
+    import numpy as np
+
+    classes = np.asarray(array)
+    best = np.full(classes.shape, nodata, dtype=classes.dtype)
+    best_count = np.zeros(classes.shape, dtype=np.int32)
+    for value in np.unique(classes[classes != nodata]):
+        count = disc_sum((classes == value).astype(np.int32), radius_cells)
+        better = count > best_count
+        best[better] = value
+        best_count[better] = count[better]
+    return best
 
 
 def geometry_mask(grid: Grid, geometry):
@@ -380,7 +459,8 @@ def summarise_flight(name: str, target_folder: str, modality: str,
     """Everything the survey summary needs from one flight.
 
     :return: ``{"flight", "tracks": [row], "transects": [row],
-        "available": {layer: values inside the monitored ground},
+        "available": {layer: values of the monitored ground, each cell
+        measured over the same radius as the animals},
         "sources": {…}, "missing": [source titles]}``
     """
     import numpy as np
@@ -407,13 +487,18 @@ def summarise_flight(name: str, target_folder: str, modality: str,
         row.update(weather)
         rows.append(row)
 
+    # The ground, at the grain of the animals' values: each monitored cell
+    # is described by its surroundings within the same radius.
     geometry = monitored_geometry(target_folder, modality, area)
     available = {}
     for key, (array, grid) in layers.items():
-        values = np.asarray(array)[geometry_mask(grid, geometry)]
+        reach = radius / grid.resolution
+        monitored = geometry_mask(grid, geometry)
         if environment.LAYERS_BY_KEY[key].kind == CATEGORICAL:
+            values = focal_majority(array, reach)[monitored]
             available[key] = values[values != 0]
         else:
+            values = focal_mean(array, reach)[monitored]
             available[key] = values[np.isfinite(values)]
 
     transects = [dict(row, flight=name)
@@ -450,10 +535,25 @@ def summarise_flight(name: str, target_folder: str, modality: str,
 def selection_ratio(used_share: Optional[float],
                     available_share: Optional[float]) -> Optional[float]:
     """Share of the animals in a class over the share of the ground it
-    covers: above 1 the class is used more than its area would suggest."""
+    covers (Manly's selection ratio): above 1 the class is used more than
+    its area would suggest."""
     if used_share is None or not available_share:
         return None
     return round(used_share / available_share, 3)
+
+
+def selection_ratio_se(used_share: Optional[float],
+                       available_share: Optional[float],
+                       n_used: int) -> Optional[float]:
+    """Standard error of :func:`selection_ratio` for *n_used* animals, with
+    the ground's share taken as known (Manly et al. 2002, design I):
+    ``sqrt(o (1 - o) / (n pi^2))``. With a handful of animals it is large -
+    which is the point of reporting it."""
+    if used_share is None or not available_share or n_used <= 0:
+        return None
+    variance = used_share * (1.0 - used_share) / (
+        n_used * available_share * available_share)
+    return round(math.sqrt(variance), 3)
 
 
 def build_summary(flights: Sequence[dict], radius: float, modality: str,
@@ -511,6 +611,8 @@ def build_summary(flights: Sequence[dict], radius: float, modality: str,
                                else round(used_share, 4)),
                 "selection_ratio": selection_ratio(
                     used_share, available_share),
+                "selection_ratio_se": selection_ratio_se(
+                    used_share, available_share, n_used),
             })
         landcover = {"n_tracks": n_used, "classes": classes}
 
@@ -531,10 +633,12 @@ def build_summary(flights: Sequence[dict], radius: float, modality: str,
         "layers": document_layers,
         "landcover": landcover,
         "note": (
-            "Track values are the mean of each layer within radius_m of the "
-            "track's position; 'available' is the monitored ground of the "
-            "flights. Satellite cells are 10-20 m: the values describe the "
-            "patch an animal was in, not the spot it stood on."),
+            "Track values are the mean of each layer (for land cover the "
+            "most common class) within radius_m of the track's position; "
+            "'available' is the monitored ground of the flights, every cell "
+            "measured over the same radius, so the two are comparable. "
+            "Satellite cells are 10-20 m: the values describe the patch an "
+            "animal was in, not the spot it stood on."),
     }
 
 

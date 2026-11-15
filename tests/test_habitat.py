@@ -86,6 +86,132 @@ class TestSampling:
         assert habitat.selection_ratio(None, 0.2) is None
         assert habitat.selection_ratio(0.5, 0.0) is None
 
+    def test_selection_ratio_standard_error(self):
+        # Manly: sqrt(o (1 - o) / (n pi^2)), the ground's share taken as known
+        assert habitat.selection_ratio_se(0.6, 0.2, 100) == pytest.approx(
+            (0.6 * 0.4 / (100 * 0.04)) ** 0.5, abs=1e-3)
+        # four times the animals, half the uncertainty
+        assert habitat.selection_ratio_se(0.6, 0.2, 400) == pytest.approx(
+            habitat.selection_ratio_se(0.6, 0.2, 100) / 2.0, abs=1e-3)
+        assert habitat.selection_ratio_se(None, 0.2, 10) is None
+        assert habitat.selection_ratio_se(0.5, 0.0, 10) is None
+        assert habitat.selection_ratio_se(0.5, 0.2, 0) is None
+
+
+class TestSameGrain:
+    """The ground is measured the way the animals are: every cell by its
+    surroundings within the radius."""
+
+    def _patchy(self):
+        rng = np.random.default_rng(7)
+        values = rng.normal(0.4, 0.2, GRID.shape).astype(np.float32)
+        values[3, 4] = np.nan
+        classes = np.full(GRID.shape, 30, dtype=np.uint8)
+        classes[:, 12:] = 10
+        classes[5:8, 2:5] = 20
+        classes[:, 9] = 50            # a road one cell wide
+        classes[0, 0] = 0
+        return values, classes
+
+    def test_disc_offsets(self):
+        assert habitat.disc_offsets(0.0) == [(0, 0)]
+        assert habitat.disc_offsets(0.4) == [(0, 0)]
+        assert sorted(habitat.disc_offsets(1.0)) == [
+            (-1, 0), (0, -1), (0, 0), (0, 1), (1, 0)]
+        assert len(habitat.disc_offsets(3.0)) == 29
+
+    @pytest.mark.parametrize("reach", [0.0, 1.0, 2.5, 3.0, 7.3])
+    def test_disc_sum_adds_up_the_cells_of_the_disc(self, reach):
+        rng = np.random.default_rng(3)
+        values = rng.integers(0, 9, (11, 17)).astype(np.int32)
+        expected = np.zeros_like(values)
+        for d_row, d_col in habitat.disc_offsets(reach):
+            for row in range(values.shape[0]):
+                for col in range(values.shape[1]):
+                    r, c = row + d_row, col + d_col
+                    if 0 <= r < values.shape[0] and 0 <= c < values.shape[1]:
+                        expected[row, col] += values[r, c]
+        assert np.array_equal(habitat.disc_sum(values, reach), expected)
+
+    def test_a_radius_wider_than_the_raster(self):
+        values = np.arange(12, dtype=np.float32).reshape(3, 4)
+        assert np.allclose(habitat.focal_mean(values, 40.0), values.mean())
+        classes = np.array([[10, 10, 30], [10, 30, 30]], dtype=np.uint8)
+        # three cells each: the lower class wins the tie everywhere
+        assert (habitat.focal_majority(classes, 40.0) == 10).all()
+
+    def test_the_largest_radius_stays_quick(self):
+        import time
+        rng = np.random.default_rng(5)
+        classes = rng.choice([10, 20, 30, 40, 50, 60, 80, 90],
+                             (400, 400)).astype(np.uint8)
+        start = time.perf_counter()
+        habitat.focal_majority(classes, 50.0)      # 500 m on a 10 m grid
+        habitat.focal_mean(classes.astype(np.float32), 50.0)
+        assert time.perf_counter() - start < 20.0
+
+    @pytest.mark.parametrize("radius", [0.0, 10.0, 30.0, 45.0])
+    def test_a_cell_gets_what_an_animal_at_its_centre_gets(self, radius):
+        values, classes = self._patchy()
+        xs, ys = GRID.cell_centres()
+        mean = habitat.focal_mean(values, radius / GRID.resolution)
+        majority = habitat.focal_majority(classes, radius / GRID.resolution)
+        for row, col in [(0, 0), (3, 4), (6, 3), (10, 9), (19, 19), (8, 12)]:
+            point = [(float(xs[col]), float(ys[row]))]
+            (at_animal,) = habitat.sample_mean(values, GRID, point, radius)
+            if at_animal is None:
+                assert np.isnan(mean[row, col])
+            else:
+                assert mean[row, col] == pytest.approx(at_animal)
+            (found,) = habitat.sample_classes(classes, GRID, point, radius)
+            assert majority[row, col] == (0 if found is None else found[0])
+
+    def test_animals_placed_at_random_show_no_selection(self, tmp_path,
+                                                        monkeypatch):
+        """The check on the whole comparison: with animals scattered
+        uniformly over the monitored ground every class has to come out near
+        1. Measured against single cells of the ground, small patches and
+        narrow strips looked avoided (0.6 and 0.0) whatever the animals did -
+        they are rarely the most common class around a point."""
+        from bambi_wildlife_detection.core import env_landcover
+
+        grid = env.make_grid((500000.0, 5300000.0, 502000.0, 5302000.0),
+                             32633, 0.0)
+        rng = np.random.default_rng(11)
+        classes = np.full(grid.shape, 30, dtype=np.uint8)       # grassland
+        classes[:, 120:] = 10                                    # forest
+        for _ in range(60):                                      # shrub patches
+            row, col = rng.integers(0, 190), rng.integers(0, 110)
+            classes[row:row + 4, col:col + 4] = 20
+        classes[:, 60] = 50                                      # a 10 m road
+        classes[100, :] = 80                                     # a 10 m stream
+        root = str(tmp_path)
+        env.write_raster(env.layer_path(root, "landcover"), classes, grid,
+                         nodata=0)
+        env.write_metadata(root, env.LANDCOVER, {"files": ["landcover.tif"]})
+
+        points = rng.uniform([500000.0, 5300000.0], [502000.0, 5302000.0],
+                             size=(6000, 2))
+        monkeypatch.setattr(habitat, "flight_tracks", lambda *a, **k: [
+            {"track_id": i, "species": "roe deer", "sex": "", "age": "",
+             "x": float(x), "y": float(y)} for i, (x, y) in enumerate(points)])
+        monkeypatch.setattr(habitat, "monitored_geometry",
+                            lambda *a, **k: None)
+        flight = habitat.summarise_flight("A", root, "t", 30.0)
+        summary = habitat.build_summary([flight], 30.0, "t")
+
+        rows = {c["name"]: c for c in summary["landcover"]["classes"]}
+        assert {"Grassland", "Tree cover", "Shrubland"} <= set(rows)
+        for name, row in rows.items():
+            if row["available_share"] < 0.01:
+                continue          # too rare at this grain to say anything
+            ratio, error = row["selection_ratio"], row["selection_ratio_se"]
+            assert abs(ratio - 1.0) < max(0.1, 4.0 * error), (name, row)
+        # the one-cell road and stream are no patch's most common class - on
+        # either side, so they do not show up as "avoided"
+        for name in (env_landcover.class_name(50), env_landcover.class_name(80)):
+            assert name not in rows or rows[name]["available_share"] < 0.01
+
 
 def _flight(root, positions, species="roe deer"):
     """A flight with one track per position, an FoV covering the west half

@@ -180,7 +180,7 @@ class LandCoverChart(QWidget):
 
     ROW_HEIGHT = 30
     LABEL_WIDTH = 170
-    NOTE_WIDTH = 170
+    NOTE_WIDTH = 210
 
     def __init__(self, classes: List[dict], parent=None):
         super().__init__(parent)
@@ -194,7 +194,14 @@ class LandCoverChart(QWidget):
             "Grey: share of the monitored ground a class covers. Colour: "
             "share of the animals found in it. The ratio of the two is the "
             "selection ratio - above 1 the class is used more than its area "
-            "would suggest.")
+            "would suggest.\n\n"
+            "Both sides are the most common class within the radius, so a "
+            "class that only occurs in small patches or strips has no share "
+            "on either side.\n\n"
+            "\u00b1 is the ratio's standard error with the animals taken as "
+            "independent. Animals in a group are not, so read it as the "
+            "least the uncertainty can be: a ratio within about two standard "
+            "errors of 1 says nothing.")
 
     def set_used(self, used: dict) -> None:
         """``class name -> (share of the animals, number of animals)``."""
@@ -219,13 +226,14 @@ class LandCoverChart(QWidget):
         painter.drawText(QRectF(8, 20, self.width() - 16, 16),
                          Qt.AlignmentFlag.AlignLeft,
                          "grey: monitored ground      colour: animals      "
-                         "right: selection ratio")
+                         "right: selection ratio \u00b1 standard error")
 
         bar_left = self.LABEL_WIDTH
         bar_width = max(20, self.width() - self.LABEL_WIDTH - self.NOTE_WIDTH)
         shares = [c.get("available_share") or 0.0 for c in self._classes]
         shares += [share or 0.0 for share, _n in self._used.values()]
         top = max(shares + [0.01])
+        animals = sum(count for _share, count in self._used.values())
 
         for index, entry in enumerate(self._classes):
             y = 42 + index * self.ROW_HEIGHT
@@ -246,9 +254,12 @@ class LandCoverChart(QWidget):
                 painter.drawRect(QRectF(bar_left, y + 13,
                                         bar_width * used_share / top, 10))
             ratio = habitat.selection_ratio(used_share, ground)
+            error = habitat.selection_ratio_se(used_share, ground, animals)
             note = (f"{ground * 100:.0f}% | "
                     f"{_fmt(None if used_share is None else used_share * 100, 0, '%')}"
                     f" ({count})   ×{_fmt(ratio, 2)}")
+            if error is not None:
+                note += f" \u00b1{error:.2f}"
             painter.setPen(TEXT_COLOR)
             painter.drawText(QRectF(bar_left + bar_width + 6, y,
                                     self.NOTE_WIDTH - 8,
