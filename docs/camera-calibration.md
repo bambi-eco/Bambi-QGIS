@@ -50,6 +50,7 @@ Calibrates a paired RGB and thermal camera system by optimising the thermal came
 **Algorithm:**
 1. An initial homography (RANSAC, 15 px threshold) maps thermal points into RGB space
 2. Nelder-Mead optimisation (10 × 50 000 iterations) refines the thermal intrinsics (fx, fy, cx, cy, and 5 distortion coefficients) by minimising the mean-squared reprojection error
+3. The fit is repeated with a part of the point pairs left out, and the points left out are used to check it (see [How good is the result?](#how-good-is-the-result))
 
 ![Camera Calibration Wizard: Stereo Setup](../images/camera_calib_stereo_setup.png)
 
@@ -67,6 +68,8 @@ After input is configured, the annotation page shows the RGB and thermal frames 
 - Either image can be clicked first to start a point pair; the other image then becomes active to complete it
 - Enable the **Magnifier** (checkbox or press `M`) to show a circular loupe under the cursor for sub-pixel precision
 - Use **Save Points…** / **Load Points…** to persist and reload annotation work between sessions
+
+**How many points, and where.** Nine numbers are fitted for the thermal camera, and a point pair gives two equations. At least **6 pairs** are needed to run the calibration; **12 or more** are recommended, and the counter under the images says so until they are placed. Where they are matters as much as how many: lens distortion shows towards the edges of the frame, so place points in all four corners, along the edges and in the centre. Points in one part of the frame calibrate that part and leave the rest a guess.
 
 **With calibrations loaded.** If a calibration is loaded for a camera, its frames are shown *undistorted* with it, which makes features easier to pick. The thermal calibration that is saved is nevertheless the calibration of the thermal camera's **raw** frames - the loaded one refined, with the camera's whole distortion. (Up to 9.0 only the distortion left over after the loaded calibration was saved, as if it were all there is; such a file undistorts raw thermal frames by a fraction of what they need. If you ran a stereo calibration on top of a loaded thermal calibration with 9.0 or earlier, run it again.)
 
@@ -95,3 +98,24 @@ After input is configured, the annotation page shows the RGB and thermal frames 
 ```
 
 ![Camera Calibration Wizard: Stereo Results](../images/camera_calib_stereo_results.png)
+
+### How good is the result?
+
+The results page shows, next to the two calibrations:
+
+| Line | Meaning |
+|------|---------|
+| Point pairs | How many pairs the fit was made from |
+| Fit, its own points (RMS) | How far, in RGB pixels, the thermal points end up from their RGB partners with the fitted calibration. Small is necessary, but says little by itself: nine numbers bend to go through a handful of points whatever the camera is |
+| Fit, points left out (RMS) | The same, for points the fit has **not** seen: the calibration is fitted three or four more times, each time without a third or a quarter of the pairs, and those are measured. This is the number to go by. It needs at least 9 pairs; with fewer the line reads *not checked* |
+
+The box turns from green to amber, and says why, when the calibration should not be relied on as it is:
+
+- **fewer than 12 point pairs**;
+- the points span **less than half of the frame's width or height**;
+- points left out of the fit are off by **more than three times** the error of the fit (and more than 3 px): the calibration holds for its own points only;
+- the fit arrived at numbers no lens has: a distortion `k1` beyond ±1, an optical centre outside the frame, or a focal length more than 30 % away from the one it started from (only when that came from a loaded calibration or a field of view, not from the frame size alone).
+
+The calibration can still be saved - the warnings are a judgement, not an error. The remedy is always the same: go back, place more points, spread over the whole frame, and run it again.
+
+> Up to 9.0 four point pairs were enough to run the calibration, and nothing was said about the result. Four pairs are eight equations for nine numbers: with a pixel of imprecision in placing them the fit showed an error below one pixel while points elsewhere in the frame were off by 15 to 30. A stereo calibration made from fewer than about 10 pairs is worth running again.

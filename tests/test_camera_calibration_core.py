@@ -259,10 +259,15 @@ def _initial_calib(perturb=1.05):
 
 class TestRunStereoCalibration:
     def test_too_few_points(self):
-        with pytest.raises(RuntimeError, match="at least 4 point"):
-            cc.run_stereo_calibration({
-                "T_points": [[0, 0]] * 3, "W_points": [[0, 0]] * 3,
-                "initial_calibration": _initial_calib()})
+        """Nine numbers are fitted and a pair gives two equations: four
+        pairs - the old minimum - cannot even determine them."""
+        assert cc._MIN_STEREO_POINTS == 6
+        for n in (3, 4, 5):
+            with pytest.raises(RuntimeError, match="at least 6 point"):
+                cc.run_stereo_calibration({
+                    "T_points": _thermal_points()[:n],
+                    "W_points": W_POINTS[:n],
+                    "initial_calibration": _initial_calib()})
 
     def test_missing_thermal_section(self):
         with pytest.raises(RuntimeError, match="must contain both"):
@@ -397,3 +402,223 @@ class TestStereoWithALoadedThermalCalibration:
             "initial_calibration": _initial_calib(),
             "th_pre_undistorted": True})
         assert result["optimized_mse"] < 1.0
+
+
+# ---------------------------------------------------------------------------
+# A stereo calibration that cannot be relied on says so
+# ---------------------------------------------------------------------------
+
+class TestStereoFitChecks:
+    """A fit of nine numbers to a handful of points goes through them
+    whatever the camera is. The error of the fit does not show that; these
+    do."""
+
+    FRAME = (640, 512)
+    GOOD = [800.0, 820.0, 300.0, 240.0, -0.25, 0.08, 0.0, 0.0, 0.0]
+
+    def _warnings(self, n=20, spread=(0.9, 0.9), fit=0.8, held_out=1.0,
+                  fitted=None, focal=(800.0, 820.0)):
+        return cc.stereo_fit_warnings(
+            n, spread, fit, held_out, fitted or self.GOOD, self.FRAME,
+            initial_focal=focal)
+
+    def test_a_sound_calibration_has_nothing_to_say(self):
+        assert self._warnings() == []
+
+    def test_few_points_are_said(self):
+        (warning,) = self._warnings(n=8)
+        assert "Only 8 point pairs" in warning and "12 or more" in warning
+        assert "cannot even be checked" not in warning
+
+    def test_points_that_cannot_be_checked_are_said(self):
+        (warning,) = self._warnings(n=6, held_out=None)
+        assert "cannot even be checked" in warning
+
+    def test_points_in_one_part_of_the_frame_are_said(self):
+        (warning,) = self._warnings(spread=(0.9, 0.3))
+        assert "90 % of the frame's width and 30 % of its height" in warning
+
+    def test_a_fit_that_does_not_hold_for_other_points_is_said(self):
+        (warning,) = self._warnings(fit=0.5, held_out=14.0)
+        assert "0.5 px" in warning and "14.0 px" in warning
+        assert "does not hold across the frame" in warning
+
+    def test_a_little_worse_on_left_out_points_is_normal(self):
+        assert self._warnings(fit=1.0, held_out=2.5) == []
+        assert self._warnings(fit=2.0, held_out=5.0) == []
+
+    def test_numbers_no_lens_has_are_said(self):
+        odd = [1300.0, 820.0, 700.0, 240.0, -2.1, 0.0, 0.0, 0.0, 0.0]
+        (warning,) = self._warnings(fitted=odd)
+        assert "k1 = -2.10" in warning
+        assert "optical centre outside the frame" in warning
+        assert "focal length 62 % away" in warning
+
+    # -- how the points are split for the check ------------------------------
+
+    def test_too_few_points_are_not_split(self):
+        assert cc.stereo_folds(6) == []
+        assert cc.stereo_folds(8) == []
+
+    @pytest.mark.parametrize("n, rounds", [(9, 3), (12, 3), (16, 4), (31, 4)])
+    def test_every_point_is_left_out_once(self, n, rounds):
+        folds = cc.stereo_folds(n)
+        assert len(folds) == rounds
+        assert sorted(i for fold in folds for i in fold) == list(range(n))
+        assert all(n - len(fold) >= cc._MIN_STEREO_POINTS for fold in folds)
+
+    def test_the_spread_of_the_points(self):
+        assert cc.point_spread([[64, 51.2], [384, 307.2]], (640, 512)) == \
+            pytest.approx((0.5, 0.5))
+        assert cc.point_spread([[10, 10]], (640, 512)) == (0.0, 0.0)
+        assert cc.point_spread([], (640, 512)) == (0.0, 0.0)
+
+    # -- the whole calibration -------------------------------------------------
+
+    @staticmethod
+    def _camera(wide, noise, seed=0):
+        """Where a barrel-distorted thermal camera sees the RGB points, with
+        *noise* px of imprecision in placing them."""
+        import cv2
+
+        rays = np.column_stack([(wide[:, 0] - K_W[0, 2]) / K_W[0, 0],
+                                (wide[:, 1] - K_W[1, 2]) / K_W[1, 1],
+                                np.ones(len(wide))])
+        raw, _j = cv2.projectPoints(
+            rays.reshape(-1, 1, 3), np.zeros(3), np.zeros(3), K_T_TRUE,
+            np.array([[-0.25, 0.08, 0.0, 0.0, 0.0]]))
+        return raw.reshape(-1, 2) + np.random.default_rng(seed).normal(
+            0.0, noise, (len(wide), 2))
+
+    def test_six_points_in_a_corner_come_with_warnings(self):
+        wide = np.array([[60.0, 50.0], [150.0, 60.0], [70.0, 140.0],
+                         [160.0, 150.0], [110.0, 100.0], [90.0, 70.0]])
+        logs = []
+        result = cc.run_stereo_calibration({
+            "T_points": self._camera(wide, 0.5).tolist(),
+            "W_points": wide.tolist(),
+            "initial_calibration": _initial_calib()}, log_fn=logs.append)
+
+        assert result["n_points"] == 6
+        assert result["held_out_rms_px"] is None
+        text = " ".join(result["warnings"])
+        assert "Only 6 point pairs" in text
+        assert "Spread the points over the whole frame" in text
+        assert any(line.startswith("WARNING:") for line in logs)
+
+    def test_many_points_all_over_the_frame_are_checked_and_pass(self):
+        wide = np.array([[x, y] for x in np.linspace(50, 590, 7)
+                         for y in np.linspace(40, 470, 6)])
+        result = cc.run_stereo_calibration({
+            "T_points": self._camera(wide, 0.3).tolist(),
+            "W_points": wide.tolist(),
+            "initial_calibration": _initial_calib()})
+
+        assert result["n_points"] == 42
+        assert result["fit_rms_px"] == pytest.approx(
+            result["optimized_mse"] ** 0.5)
+        assert result["held_out_rms_px"] is not None
+        assert result["held_out_rms_px"] < 3.0
+        assert result["warnings"] == []
+
+    def test_the_check_can_be_cancelled(self):
+        wide = np.array([[x, y] for x in np.linspace(50, 590, 4)
+                         for y in np.linspace(40, 470, 3)])
+        calls = {"n": 0}
+
+        def cancel_during_the_check():
+            calls["n"] += 1
+            return calls["n"] > 12          # after the ten restarts
+
+        result = cc.run_stereo_calibration({
+            "T_points": self._camera(wide, 0.3).tolist(),
+            "W_points": wide.tolist(),
+            "initial_calibration": _initial_calib()},
+            cancel_check=cancel_during_the_check)
+        assert result == {}
+
+    def test_a_guessed_focal_length_is_not_held_against_the_fit(self):
+        """Without a calibration or a field of view the fit starts from a
+        focal length guessed from the frame size. Ending far from a guess
+        says nothing; ending far from a known one does."""
+        wide = np.array([[x, y] for x in np.linspace(50, 590, 5)
+                         for y in np.linspace(40, 470, 4)])
+        thermal = self._camera(wide, 0.2).tolist()
+        guessed = _initial_calib()
+        guessed["Thermal"]["mtx"] = [[430.0, 0.0, 320.0], [0.0, 430.0, 256.0],
+                                     [0.0, 0.0, 1.0]]
+        params = {"T_points": thermal, "W_points": wide.tolist(),
+                  "initial_calibration": guessed}
+
+        as_a_guess = cc.run_stereo_calibration(dict(params))
+        as_known = cc.run_stereo_calibration(
+            dict(params, initial_focal_known=True))
+
+        assert not any("focal length" in w for w in as_a_guess["warnings"])
+        assert any("focal length" in w for w in as_known["warnings"])
+
+    def test_the_frame_size_decides_what_spread_means(self):
+        """Points over a whole 640 px frame cover a quarter of one that is
+        2560 px wide."""
+        wide = np.array([[x, y] for x in np.linspace(50, 590, 5)
+                         for y in np.linspace(40, 470, 4)])
+        params = {"T_points": self._camera(wide, 0.2).tolist(),
+                  "W_points": wide.tolist(),
+                  "initial_calibration": _initial_calib()}
+
+        own = cc.run_stereo_calibration(dict(params))
+        larger = cc.run_stereo_calibration(
+            dict(params, th_image_size=(2560, 2048)))
+
+        assert not any("Spread the points" in w for w in own["warnings"])
+        assert any("Spread the points" in w for w in larger["warnings"])
+
+
+class TestStereoSummary:
+    """What the wizard shows of a stereo calibration."""
+
+    RESULT = {"mode": "stereo", "homography_mse": 3.21137,
+              "optimized_mse": 0.64, "n_points": 14, "fit_rms_px": 0.8,
+              "held_out_rms_px": 1.234, "warnings": []}
+
+    def test_a_sound_result(self):
+        text = cc.stereo_summary(self.RESULT)
+        assert text.splitlines() == [
+            "Stereo calibration complete",
+            "  Point pairs                : 14",
+            "  Homography MSE (px²)       : 3.2114",
+            "  Optimised MSE (px²)        : 0.640000",
+            "  Fit, its own points (RMS)  : 0.80 px",
+            "  Fit, points left out (RMS) : 1.23 px",
+        ]
+
+    def test_a_result_that_could_not_be_checked(self):
+        text = cc.stereo_summary(dict(self.RESULT, held_out_rms_px=None))
+        assert "points left out (RMS) : not checked - too few point pairs" \
+            in text
+
+    def test_warnings_are_part_of_the_result(self):
+        text = cc.stereo_summary(dict(
+            self.RESULT, warnings=["Only 7 point pairs.", "Spread them."]))
+        assert text.endswith(
+            "\n\nNot to be relied on as it is:\n"
+            "  - Only 7 point pairs.\n  - Spread them.")
+
+    def test_a_result_of_an_earlier_version_still_shows(self):
+        text = cc.stereo_summary({"homography_mse": 1.0, "optimized_mse": 0.5})
+        assert text.splitlines() == [
+            "Stereo calibration complete",
+            "  Homography MSE (px²)       : 1.0000",
+            "  Optimised MSE (px²)        : 0.500000",
+        ]
+
+    @pytest.mark.parametrize("total, hint", [
+        (0, "at least 6 needed, 12 or more recommended"),
+        (5, "at least 6 needed, 12 or more recommended"),
+        (6, "12 or more recommended"),
+        (11, "12 or more recommended"),
+        (12, ""),
+        (40, ""),
+    ])
+    def test_the_hint_next_to_the_number_of_pairs(self, total, hint):
+        assert cc.stereo_points_hint(total) == hint

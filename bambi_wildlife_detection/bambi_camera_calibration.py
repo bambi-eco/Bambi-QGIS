@@ -1867,9 +1867,12 @@ class CameraCalibrationWizard(QDialog):
             min(len(p["rgb_pts"]), len(p["th_pts"]))
             for p in self._pairs_annot
         )
+        from .core.camera_calibration import stereo_points_hint
+
+        hint = stereo_points_hint(total)
+        hint = f"  ({hint})" if hint else ""
         self._pt_count_lbl.setText(
-            f"Points this pair: {n_complete}  |  Total: {total}"
-        )
+            f"Points this pair: {n_complete}  |  Total: {total}{hint}")
 
     def _on_rgb_point_placed(self, x: int, y: int) -> None:
         # Guard is redundant with set_accepting but kept as safety net
@@ -1953,11 +1956,15 @@ class CameraCalibrationWizard(QDialog):
                 return
 
             # Build initial calibration - loaded file > FoV spec > image-size heuristic
+            # A focal length from the frame size alone is a guess: a fit
+            # ending far from it says nothing about the fit.
+            focal_known = True
             if self._rgb_calib_data:
                 rgb_init = self._rgb_calib_data
             else:
                 rgb_img = _load_image_or_video_central(self._rgb_paths[0])
                 rgb_fov = self._rgb_fov_spin.value()
+                focal_known = rgb_img is not None and rgb_fov > 0
                 if rgb_img is not None and rgb_fov > 0:
                     h, w = rgb_img.shape[:2]
                     rgb_init = {
@@ -1972,11 +1979,12 @@ class CameraCalibrationWizard(QDialog):
                     }
             rgb_init["name"] = "Wide"
 
+            th_img = _load_image_or_video_central(self._th_paths[0])
             if self._th_calib_data:
                 th_init = self._th_calib_data
             else:
-                th_img = _load_image_or_video_central(self._th_paths[0])
                 th_fov = self._th_fov_spin.value()
+                focal_known = focal_known and th_img is not None and th_fov > 0
                 if th_img is not None and th_fov > 0:
                     h, w = th_img.shape[:2]
                     th_init = {
@@ -1999,6 +2007,11 @@ class CameraCalibrationWizard(QDialog):
                 "initial_calibration": init_calib,
                 "rgb_pre_undistorted": bool(self._rgb_calib_data),
                 "th_pre_undistorted": bool(self._th_calib_data),
+                # for judging the result: where the points lie in the
+                # frame, and whether the starting focal lengths are known
+                "th_image_size": ((th_img.shape[1], th_img.shape[0])
+                                  if th_img is not None else None),
+                "initial_focal_known": bool(focal_known),
             }
 
         self._worker = _CalibWorker(self._mode, params)
@@ -2084,6 +2097,7 @@ class CameraCalibrationWizard(QDialog):
                 f"  Mean reprojection  : {ret_str}"
             )
             self._result_metrics_lbl.setText(metrics)
+            self._mark_result_metrics(False)
 
             mtx = result["mtx"]
             dist = result["dist"]
@@ -2111,14 +2125,10 @@ class CameraCalibrationWizard(QDialog):
             self._save_stereo_widget.setVisible(False)
 
         else:  # stereo
-            hom_mse = result.get("homography_mse", 0.0)
-            opt_mse = result.get("optimized_mse", 0.0)
-            metrics = (
-                f"Stereo calibration complete\n"
-                f"  Homography MSE (px²) : {hom_mse:.4f}\n"
-                f"  Optimised MSE (px²)  : {opt_mse:.6f}"
-            )
-            self._result_metrics_lbl.setText(metrics)
+            from .core.camera_calibration import stereo_summary
+
+            self._result_metrics_lbl.setText(stereo_summary(result))
+            self._mark_result_metrics(bool(result.get("warnings")))
 
             th = result["Thermal"]
             wi = result["Wide"]
@@ -2147,6 +2157,14 @@ class CameraCalibrationWizard(QDialog):
             self._save_rgb_path_edit.setPlaceholderText("calibration_rgb.json")
 
         QTimer.singleShot(50, lambda: self._populate_result_preview(result))
+
+    def _mark_result_metrics(self, doubtful: bool) -> None:
+        """Green for a result, amber for one that comes with warnings."""
+        colours = ("background: #3a2f1e; color: #ffcc66;" if doubtful
+                   else "background: #1e3a1e; color: #88ff88;")
+        self._result_metrics_lbl.setStyleSheet(
+            f"{colours} padding: 6px; border-radius: 3px; "
+            "font-family: monospace;")
 
     # ------------------------------------------------------------------
 

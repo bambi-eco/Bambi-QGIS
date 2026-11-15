@@ -23,7 +23,17 @@ from typing import List, Optional
 _IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff'}
 _VIDEO_EXTS = {'.mp4', '.avi', '.mov', '.mkv', '.wmv', '.m4v', '.mpg', '.mpeg'}
 _MIN_SFM_IMAGES = 3
-_MIN_STEREO_POINTS = 4
+#: The stereo fit finds nine numbers for the thermal camera (fx, fy, cx, cy
+#: and five distortion terms), and a point pair gives two equations. Four
+#: pairs - the old minimum, what a homography needs - are eight equations
+#: for nine unknowns: the fit goes through the points whatever the camera
+#: is. Six leave something to judge it by.
+_MIN_STEREO_POINTS = 6
+#: Below this the fit is reported as weak: a pixel of imprecision in
+#: placing a point moves the result noticeably.
+_RECOMMENDED_STEREO_POINTS = 12
+#: How much of the frame's width and height the points should span.
+_MIN_STEREO_SPREAD = 0.5
 _DEFAULT_SFM_FRAMES = 20
 
 
@@ -320,8 +330,144 @@ def _raw_points(points, camera_matrix, distortion):
     return raw.reshape(-1, 1, 2)
 
 
+def stereo_folds(n: int) -> List[List[int]]:
+    """How *n* point pairs are split to check a stereo fit on points it was
+    not fitted to: each list is left out once, and the rest - never fewer
+    than the fit needs - is fitted. ``[]`` when there are too few pairs to
+    leave any out."""
+    rounds = 4 if n >= 16 else 3
+    if n - math.ceil(n / rounds) < _MIN_STEREO_POINTS:
+        return []
+    return [list(range(start, n, rounds)) for start in range(rounds)]
+
+
+def point_spread(points, frame_size) -> tuple:
+    """``(across, down)``: the share of the frame's width and height that
+    *points* span."""
+    xs = [float(point[0]) for point in points]
+    ys = [float(point[1]) for point in points]
+    width, height = float(frame_size[0]), float(frame_size[1])
+    if not xs or width <= 0 or height <= 0:
+        return 0.0, 0.0
+    return (min(1.0, (max(xs) - min(xs)) / width),
+            min(1.0, (max(ys) - min(ys)) / height))
+
+
+def stereo_fit_warnings(n: int, spread: tuple, fit_rms: float,
+                        held_out_rms: Optional[float], fitted, frame_size,
+                        initial_focal=None) -> List[str]:
+    """What makes a stereo calibration one not to rely on, in words.
+
+    A fit of nine numbers to a handful of points can go through every one of
+    them and still be wrong across the frame; the error of the fit does not
+    show it. These are the signs that do: too few points, points in one part
+    of the frame, points left out of the fit landing far off, and numbers no
+    lens has.
+
+    :param spread: :func:`point_spread` of the thermal points
+    :param fitted: fx, fy, cx, cy and the five distortion terms
+    :param frame_size: ``(width, height)`` of the thermal frame
+    """
+    warnings = []
+    if n < _RECOMMENDED_STEREO_POINTS:
+        text = (f"Only {n} point pairs. Nine numbers are fitted from them, "
+                "so a pixel of imprecision in placing one point changes the "
+                f"result noticeably. Place {_RECOMMENDED_STEREO_POINTS} or "
+                "more.")
+        if held_out_rms is None:
+            text += (" With so few, the fit cannot even be checked on points "
+                     "left out of it.")
+        warnings.append(text)
+    across, down = spread
+    if min(across, down) < _MIN_STEREO_SPREAD:
+        warnings.append(
+            f"The points span {across * 100:.0f} % of the frame's width and "
+            f"{down * 100:.0f} % of its height. Lens distortion shows towards "
+            "the edges; where there are no points the calibration is a "
+            "guess. Spread the points over the whole frame.")
+    if held_out_rms is not None and held_out_rms > max(3.0, 3.0 * fit_rms):
+        warnings.append(
+            f"The calibration fits its own points to {fit_rms:.1f} px, but "
+            f"points left out of the fit are off by {held_out_rms:.1f} px: "
+            "it does not hold across the frame. Place more points, spread "
+            "over the whole frame.")
+
+    fx, fy, cx, cy = (float(value) for value in fitted[:4])
+    k1 = float(fitted[4])
+    width, height = float(frame_size[0]), float(frame_size[1])
+    odd = []
+    if abs(k1) > 1.0:
+        odd.append(f"a distortion (k1 = {k1:.2f}) stronger than lenses have")
+    if not (0.0 <= cx <= width and 0.0 <= cy <= height):
+        odd.append("an optical centre outside the frame")
+    if initial_focal:
+        change = max(abs(fx / float(initial_focal[0]) - 1.0),
+                     abs(fy / float(initial_focal[1]) - 1.0))
+        if change > 0.3:
+            odd.append(f"a focal length {change * 100:.0f} % away from the "
+                       "one it started from")
+    if odd:
+        warnings.append(
+            "The fit arrived at " + ", ".join(odd) + " - a sign that the "
+            "points do not pin the camera down.")
+    return warnings
+
+
+def stereo_points_hint(total: int) -> str:
+    """What to say next to the number of point pairs placed so far."""
+    if total < _MIN_STEREO_POINTS:
+        return (f"at least {_MIN_STEREO_POINTS} needed, "
+                f"{_RECOMMENDED_STEREO_POINTS} or more recommended")
+    if total < _RECOMMENDED_STEREO_POINTS:
+        return f"{_RECOMMENDED_STEREO_POINTS} or more recommended"
+    return ""
+
+
+def stereo_summary(result: dict) -> str:
+    """The result of a stereo calibration in a few lines: how many point
+    pairs, how well it fits them, how well it fits points left out of the
+    fit - and, when there is one, why it should not be relied on as it is.
+    """
+    lines = ["Stereo calibration complete"]
+    if result.get("n_points") is not None:
+        lines.append(f"  Point pairs                : {result['n_points']}")
+    lines.append("  Homography MSE (px²)       : "
+                 f"{result.get('homography_mse', 0.0):.4f}")
+    lines.append("  Optimised MSE (px²)        : "
+                 f"{result.get('optimized_mse', 0.0):.6f}")
+    if result.get("fit_rms_px") is not None:
+        lines.append("  Fit, its own points (RMS)  : "
+                     f"{result['fit_rms_px']:.2f} px")
+        held_out = result.get("held_out_rms_px")
+        lines.append("  Fit, points left out (RMS) : " + (
+            f"{held_out:.2f} px" if held_out is not None
+            else "not checked - too few point pairs"))
+    warnings = result.get("warnings") or []
+    if warnings:
+        lines.append("")
+        lines.append("Not to be relied on as it is:")
+        lines.extend(f"  - {warning}" for warning in warnings)
+    return "\n".join(lines)
+
+
 def run_stereo_calibration(params: dict, log_fn=None, progress_fn=None,
                            cancel_check=None) -> dict:
+    """Fit the thermal camera to the RGB one from pairs of points.
+
+    *params*: ``T_points`` / ``W_points`` (the pairs, thermal and RGB),
+    ``initial_calibration`` (``{"Wide": ..., "Thermal": ...}``),
+    ``rgb_pre_undistorted`` / ``th_pre_undistorted`` (the points were placed
+    on frames undistorted with the calibration given), and for judging the
+    result ``th_image_size`` (``(width, height)`` of the thermal frame;
+    taken from the optical centre when missing) and ``initial_focal_known``
+    (both starting focal lengths are a calibration's or a data sheet's
+    rather than a guess from the frame size - only then does a fit that ends
+    far from them say something).
+
+    The result carries, next to the two calibrations, ``n_points``,
+    ``fit_rms_px``, ``held_out_rms_px`` (``None`` when there were too few
+    pairs to leave any out) and ``warnings`` (:func:`stereo_fit_warnings`).
+    """
     log = log_fn or _noop
     progress = progress_fn or _noop
     cancelled = cancel_check or _never_cancelled
@@ -420,32 +566,76 @@ def run_stereo_calibration(params: dict, log_fn=None, progress_fn=None,
         p = np.array(pts, dtype=np.float32).reshape(-1, 1, 2)
         return cv2.undistortPoints(p, cm, dc.reshape(1, -1), P=new_cm).reshape(-1, 1, 2)
 
-    def mse_func(x):
-        th_fx, th_fy, th_cx, th_cy = x[0], x[1], x[2], x[3]
-        th_d = np.array(x[4:9])
-        th_cm = np.array([[th_fx, 0.0, th_cx], [0.0, th_fy, th_cy], [0.0, 0.0, 1.0]])
-        w_w = _warp(W_pts, rgb_mtx, rgb_dist_warp)
-        t_w = _warp(T_pts, th_cm, th_d)
+    def squared_misfit(x, thermal, wide):
+        """Per pair: the squared distance, in RGB pixels, between a point
+        of the RGB camera and its partner of the thermal one as *x* (fx, fy,
+        cx, cy, five distortion terms) maps it."""
+        th_cm = np.array([[x[0], 0.0, x[2]], [0.0, x[1], x[3]], [0.0, 0.0, 1.0]])
+        w_w = _warp(wide, rgb_mtx, rgb_dist_warp)
+        t_w = _warp(thermal, th_cm, np.array(x[4:9]))
         stacked = np.concatenate([w_w, t_w], axis=1)
-        return float(np.sum(np.diff(stacked, axis=1) ** 2, axis=2).mean())
+        return np.sum(np.diff(stacked, axis=1) ** 2, axis=2).ravel()
 
-    x0 = [th_mtx[0, 0], th_mtx[1, 1], th_mtx[0, 2], th_mtx[1, 2]] + th_dist_x0.tolist()
+    def fit(thermal, wide, restarts, report=None):
+        """Nelder-Mead from the initial calibration, restarted *restarts*
+        times from where it stopped. ``None`` when cancelled."""
+        x = [th_mtx[0, 0], th_mtx[1, 1], th_mtx[0, 2], th_mtx[1, 2]] \
+            + th_dist_x0.tolist()
+        found = None
+        for i in range(restarts):
+            if cancelled():
+                return None
+            if report:
+                report(i)
+            found = scipy_minimize(
+                lambda v: float(squared_misfit(v, thermal, wide).mean()),
+                x, method="Nelder-Mead",
+                options={"maxiter": 50000, "disp": False}, tol=1e-4,
+            )
+            x = found.x.tolist()
+        return found
 
     log("Optimising thermal intrinsics (Nelder-Mead, 10 iterations)…")
     n_iters = 10
-    res = None
-    for i in range(n_iters):
-        if cancelled():
-            return {}
-        progress(30 + int(60 * i / n_iters))
-        res = scipy_minimize(
-            mse_func, x0, method="Nelder-Mead",
-            options={"maxiter": 50000, "disp": False}, tol=1e-4,
-        )
-        x0 = res.x.tolist()
+    res = fit(T_pts, W_pts, n_iters,
+              lambda i: progress(30 + int(50 * i / n_iters)))
+    if res is None:
+        return {}
 
     opt_mse = float(res.fun)
+    fit_rms = math.sqrt(max(opt_mse, 0.0))
     log(f"Optimisation complete.  MSE: {opt_mse:.6f}")
+
+    # Does the calibration hold for points it was not fitted to? With few
+    # points, or points in one part of the frame, the nine numbers bend to
+    # go through them - the fit looks perfect and is wrong everywhere else.
+    held_out_rms = None
+    folds = stereo_folds(n)
+    if folds:
+        log(f"Checking the fit on points left out of it ({len(folds)} "
+            "rounds)…")
+        squared = []
+        for round_index, held in enumerate(folds):
+            progress(80 + int(18 * round_index / len(folds)))
+            used = [i for i in range(n) if i not in held]
+            part = fit(T_pts[used], W_pts[used], 3)
+            if part is None:
+                return {}
+            squared.extend(squared_misfit(
+                part.x, T_pts[held], W_pts[held]).tolist())
+        held_out_rms = math.sqrt(sum(squared) / len(squared))
+        log(f"Fitted points: {fit_rms:.2f} px RMS; points left out: "
+            f"{held_out_rms:.2f} px RMS")
+
+    frame_size = params.get("th_image_size") or (
+        2.0 * th_mtx[0, 2], 2.0 * th_mtx[1, 2])
+    warnings = stereo_fit_warnings(
+        n, point_spread(T_pts.reshape(-1, 2), frame_size), fit_rms,
+        held_out_rms, res.x, frame_size,
+        initial_focal=((th_mtx[0, 0], th_mtx[1, 1])
+                       if params.get("initial_focal_known") else None))
+    for warning in warnings:
+        log(f"WARNING: {warning}")
     progress(100)
 
     opt_th_mtx = [
@@ -459,6 +649,11 @@ def run_stereo_calibration(params: dict, log_fn=None, progress_fn=None,
         "mode": "stereo",
         "homography_mse": hom_mse,
         "optimized_mse": opt_mse,
+        "n_points": n,
+        "fit_rms_px": fit_rms,
+        # points left out of the fit: None when there were too few to try
+        "held_out_rms_px": held_out_rms,
+        "warnings": warnings,
         "Thermal": {
             "ret": opt_mse,
             "mtx": opt_th_mtx,
