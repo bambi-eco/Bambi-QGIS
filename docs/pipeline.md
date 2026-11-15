@@ -306,6 +306,19 @@ Associates detections across frames into continuous tracks using the selected tr
 - Tracks with a single detection (no movement) are fully supported and appear as a bounding box without a movement line
 - Multi-detection tracks show both the movement path and the final bounding box
 
+**The built-in tracker** works on the geo-referenced boxes, frame by frame: each box of a frame either continues a track or opens a new one. How boxes and tracks are matched is the **Tracker Mode** (Configuration → Tracking):
+
+| Mode | Boxes and tracks are matched |
+|------|------------------------------|
+| `GREEDY` | by overlap (IoU), the best pair first |
+| `HUNGARIAN` (default) | by overlap, taking the assignment with the most overlap in all |
+| `CENTER` | by the distance between the box centres, nearest first |
+| `HUNGARIAN_CENTER` | as `HUNGARIAN`, then as `CENTER` for what overlap could not pair |
+
+**IoU Threshold** is the smallest overlap that joins a box to a track (the three overlap modes); **Max Center Distance** the largest distance between the centres, in metres on the ground (the two centre modes) - the form enables the one the mode uses. The centre modes are for animals whose consecutive boxes do not overlap: a small animal, a low frame rate, a jump in the position. **Max Age** ends a track that went unmatched for more than that many frames; only frames that have boxes count, so the thermal camera's shutter does not end tracks. **Class Aware** never joins boxes of different species, and **Interpolate Missing** fills the frames a track skipped with boxes in between (in the text output; they are not detections).
+
+**Abort** stops a tracker between two frames, before anything is written: the previous tracks stay.
+
 **Outputs:**
 ```
 tracks_t/    # or tracks_w/, follows the detection camera selection

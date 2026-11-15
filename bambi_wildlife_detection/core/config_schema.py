@@ -159,7 +159,7 @@ CONFIG_ENTRIES: List[ConfigEntry] = [
     ConfigEntry("Tracking/TrackerParams", "str"),
     ConfigEntry("Tracking/IouThreshold", "double", 0.3),
     ConfigEntry("Tracking/MaxAge", "int_double", -1),
-    ConfigEntry("Tracking/MaxCenterDist", "double", 0.2),
+    ConfigEntry("Tracking/MaxCenterDist", "double", 2.0),
     ConfigEntry("Tracking/TrackerMode", "int_double", 1),
     ConfigEntry("Tracking/ClassAware", "bool", True),
     ConfigEntry("Tracking/Interpolate", "bool", True),

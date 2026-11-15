@@ -376,6 +376,12 @@ def _only_labelled_boxes(target_folder: str, modality: str,
     return bool(labelled)
 
 
+def _is_detection_id(value) -> bool:
+    """True for the id of a stored detection - not ``None``, and not the -1
+    an interpolated box carries."""
+    return value is not None and int(value) >= 0
+
+
 def _note_labelled_boxes(target_folder: str, modality: str,
                          log_fn=None) -> None:
     """Say that the hand-labelled boxes were left out of a tracker's input."""
@@ -5651,10 +5657,12 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
                                       progress_fn, log_fn, cancel_check)
         elif tracker_id == "builtin":
             # Use existing built-in tracking implementation
-            self._run_builtin_tracking(config, progress_fn, log_fn)
+            self._run_builtin_tracking(config, progress_fn, log_fn,
+                                       cancel_check)
         else:
             # Use advanced tracker (BoxMOT or GeoRef)
-            self._run_advanced_tracking(config, tracker_manager, progress_fn, log_fn)
+            self._run_advanced_tracking(config, tracker_manager, progress_fn,
+                                        log_fn, cancel_check)
 
         # Ensure a pixel-space tracks file exists regardless of backend, so
         # downstream tools (e.g. the Video Creator) have a consistent
@@ -5895,19 +5903,16 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
             log_fn(f"Wrote pixel-space tracks: {pixel_file} ({len(rows)} rows)")
         return pixel_file
 
-    def _run_builtin_tracking(self, config: Dict[str, Any], progress_fn=None, log_fn=None):
-        """Run the built-in Hungarian IoU tracker.
-
-        This is the original tracking implementation.
-        """
+    def _run_builtin_tracking(self, config: Dict[str, Any], progress_fn=None,
+                              log_fn=None, cancel_check=None):
+        """Run the built-in tracker (core.builtin_tracker) on the
+        geo-referenced boxes of the selected camera."""
         from collections import defaultdict
         from dataclasses import dataclass
-        from enum import Enum
         from typing import List, Tuple
 
-        from scipy.optimize import linear_sum_assignment
+        from .core import builtin_tracker
 
-        # Import tracking classes from bambi or define locally
         @dataclass
         class Detection:
             source_id: int
@@ -5922,51 +5927,29 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
             cls: int
             interpolated: int = 0
 
-        @dataclass
-        class Track:
-            tid: int
-            cls: int
-            x1: float
-            y1: float
-            z1: float
-            x2: float
-            y2: float
-            z2: float
-            last_frame: int
-            age: int = 0
-            hits: int = 0
-
-        class TrackerMode(Enum):
-            GREEDY = 1
-            HUNGARIAN = 2
-            CENTER = 3
-            HUNGARIAN_CENTER = 4
-
-        def iou(a, b) -> float:
-            ax1, ay1, ax2, ay2 = a
-            bx1, by1, bx2, by2 = b
-            ix1, iy1 = max(ax1, bx1), max(ay1, by1)
-            ix2, iy2 = min(ax2, bx2), min(ay2, by2)
-            iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
-            inter = iw * ih
-            if inter <= 0.0:
-                return 0.0
-            a_area = max(0.0, (ax2 - ax1)) * max(0.0, (ay2 - ay1))
-            b_area = max(0.0, (bx2 - bx1)) * max(0.0, (by2 - by1))
-            denom = a_area + b_area - inter
-            return inter / denom if denom > 0 else 0.0
-
         target_folder = config["target_folder"]
+
+        # Get parameters. The mode and the centre distance used to be read
+        # and then ignored: the tracker matched by overlap with the Hungarian
+        # assignment whatever was selected.
         iou_threshold = config.get("iou_threshold", 0.3)
         max_age = config.get("max_age", -1)
-        tracker_mode_str = config.get("tracker_mode", "HUNGARIAN")
+        tracker_mode = builtin_tracker.normalise_mode(
+            config.get("tracker_mode", builtin_tracker.DEFAULT_MODE))
+        max_center_distance = float(config.get("max_center_distance", 2.0))
         class_aware = config.get("class_aware", True)
         interpolate = config.get("interpolate", True)
         camera = config.get("tracking_camera", "T")
         camera_suffix = "t" if camera == "T" else "w"
 
         if log_fn:
-            log_fn(f"Running built-in tracking with mode: {tracker_mode_str}")
+            rules = []
+            if tracker_mode in builtin_tracker.OVERLAP_MODES:
+                rules.append(f"overlap of at least {iou_threshold:g}")
+            if tracker_mode in builtin_tracker.CENTER_MODES:
+                rules.append(f"centres within {max_center_distance:g} m")
+            log_fn(f"Running built-in tracking with mode: {tracker_mode} "
+                   f"({', then '.join(rules)})")
 
         frames: Dict[int, List[Detection]] = defaultdict(list)
 
@@ -6005,91 +5988,26 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
         if progress_fn:
             progress_fn(20)
 
-        # Run tracking
-        all_frames = sorted(frames.keys())
-        active_tracks: List[Track] = []
-        next_tid = 1
-        results: List[Tuple[int, int, Detection]] = []
+        # Run tracking. Abort is asked for before every frame - and nothing
+        # has been written yet, so an aborted run leaves the previous tracks.
+        try:
+            track_ids = builtin_tracker.track(
+                {frame: [(d.x1, d.y1, d.x2, d.y2) for d in dets]
+                 for frame, dets in frames.items()},
+                {frame: [d.cls for d in dets]
+                 for frame, dets in frames.items()},
+                mode=tracker_mode, iou_threshold=iou_threshold,
+                max_center_distance=max_center_distance, max_age=max_age,
+                class_aware=class_aware, cancel_check=cancel_check,
+                progress=(None if progress_fn is None else
+                          lambda share: progress_fn(20 + int(share * 65))))
+        except builtin_tracker.Cancelled as exc:
+            raise CancelledException(str(exc)) from exc
 
-        for fidx, f in enumerate(all_frames):
-            dets = frames[f]
-
-            # Simple Hungarian matching on IoU
-            nD, nT = len(dets), len(active_tracks)
-            matches = []
-            unmatched_dets = list(range(nD))
-            unmatched_trks = list(range(nT))
-
-            if nD > 0 and nT > 0:
-                import numpy as np
-                IoU = np.zeros((nD, nT), dtype=np.float32)
-
-                for di, d in enumerate(dets):
-                    for ti, t in enumerate(active_tracks):
-                        if class_aware and t.cls is not None and d.cls != t.cls:
-                            continue
-                        IoU[di, ti] = iou(
-                            (d.x1, d.y1, d.x2, d.y2),
-                            (t.x1, t.y1, t.x2, t.y2)
-                        )
-
-                # Hungarian assignment
-                cost = 1.0 - IoU
-                LARGE = 1e6
-                cost[IoU < iou_threshold] = LARGE
-
-                row_ind, col_ind = linear_sum_assignment(cost)
-
-                det_used = set()
-                trk_used = set()
-
-                for di, ti in zip(row_ind, col_ind):
-                    if IoU[di, ti] >= iou_threshold and cost[di, ti] < LARGE:
-                        matches.append((di, ti))
-                        det_used.add(di)
-                        trk_used.add(ti)
-
-                unmatched_dets = [i for i in range(nD) if i not in det_used]
-                unmatched_trks = [i for i in range(nT) if i not in trk_used]
-
-            # Update matched tracks
-            for di, ti in matches:
-                d = dets[di]
-                t = active_tracks[ti]
-                t.x1, t.y1, t.z1 = d.x1, d.y1, d.z1
-                t.x2, t.y2, t.z2 = d.x2, d.y2, d.z2
-                t.last_frame = f
-                t.hits += 1
-                t.age = 0
-                results.append((f, t.tid, d))
-
-            # Create new tracks for unmatched detections
-            for di in unmatched_dets:
-                d = dets[di]
-                t = Track(
-                    tid=next_tid,
-                    cls=d.cls if class_aware else None,
-                    x1=d.x1, y1=d.y1, z1=d.z1,
-                    x2=d.x2, y2=d.y2, z2=d.z2,
-                    last_frame=f,
-                    age=0, hits=1
-                )
-                active_tracks.append(t)
-                results.append((f, t.tid, d))
-                next_tid += 1
-
-            # Age unmatched tracks
-            survivors = []
-            for ti in range(len(active_tracks)):
-                if ti in unmatched_trks:
-                    active_tracks[ti].age += 1
-                if max_age < 0 or active_tracks[ti].age <= max_age:
-                    survivors.append(active_tracks[ti])
-            active_tracks = survivors
-
-            if progress_fn and fidx % 50 == 0:
-                progress = 20 + int((fidx / len(all_frames)) * 60)
-                progress_fn(min(progress, 85))
+        results: List[Tuple[int, int, Detection]] = [
+            (frame, track_ids[frame][index], d)
+            for frame in sorted(frames)
+            for index, d in enumerate(frames[frame])]
 
         # Sort results
         results.sort(key=lambda r: (r[0], r[1]))
@@ -6100,6 +6018,8 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
                 log_fn("Interpolating missing frames...")
             results = self._interpolate_tracks(results, Detection)
 
+        if cancel_check and cancel_check():
+            raise CancelledException("Tracking cancelled")
         if progress_fn:
             progress_fn(90)
 
@@ -6118,14 +6038,17 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
 
         # Record the run in the store. Membership comes straight from the
         # tracker's own output - the detection_id travelled through as
-        # ``source_id`` - so nothing is matched back by coordinates.
+        # ``source_id`` - so nothing is matched back by coordinates. A box
+        # that was interpolated across a gap is no detection: it has no id
+        # (-1), and recording it as a member gave every track one member
+        # that refers to nothing.
         track_store.record_tracks(
             target_folder, camera_suffix,
             [{"track_id": tid, "detection_id": d.source_id,
               "interpolated": int(getattr(d, "interpolated", 0))}
              for _frame, tid, d in results
-             if getattr(d, "source_id", None) is not None],
-            kind="builtin", tracker=tracker_mode_str, log_fn=log_fn)
+             if _is_detection_id(getattr(d, "source_id", None))],
+            kind="builtin", tracker=tracker_mode, log_fn=log_fn)
         orphans = track_store.track_orphans(target_folder, camera_suffix)
         if orphans and log_fn:
             log_fn(f"Warning: {len(orphans)} track member(s) reference a "
@@ -6143,7 +6066,9 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
         if progress_fn:
             progress_fn(100)
 
-    def _run_advanced_tracking(self, config: Dict[str, Any], tracker_manager, progress_fn=None, log_fn=None):
+    def _run_advanced_tracking(self, config: Dict[str, Any], tracker_manager,
+                               progress_fn=None, log_fn=None,
+                               cancel_check=None):
         """Run advanced tracking with BoxMOT or GeoRef backends in pixel space.
 
         This method:
@@ -6329,6 +6254,12 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
         pixel_tracks = []  # List of PixelTrack
 
         for fidx, frame_num in enumerate(all_frames):
+            # Abort used not to reach the trackers at all: the run went on
+            # to the end, was written, and only then reported as cancelled.
+            # Nothing is written before this loop is through.
+            if cancel_check and cancel_check():
+                raise CancelledException("Tracking cancelled")
+
             # Load the frame image
             frame_path = frame_to_path.get(frame_num)
             img = None

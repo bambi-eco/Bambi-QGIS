@@ -2073,30 +2073,54 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         self.iou_threshold_spin.setRange(0.0, 1.0)
         self.iou_threshold_spin.setSingleStep(0.05)
         self.iou_threshold_spin.setValue(0.3)
-        self.iou_threshold_spin.setToolTip("IoU threshold for track matching")
+        self.iou_threshold_spin.setToolTip(
+            "Smallest overlap (IoU) of a box with a track's last box for "
+            "the two to be joined.\nUsed by the modes GREEDY, HUNGARIAN and "
+            "HUNGARIAN_CENTER.")
         builtin_layout.addRow("IoU Threshold:", self.iou_threshold_spin)
 
         self.max_age_spin = QSpinBox()
         self.max_age_spin.setRange(-1, 100)
         self.max_age_spin.setValue(-1)
-        self.max_age_spin.setToolTip("Max frames without detection (-1 = unlimited)")
+        self.max_age_spin.setToolTip(
+            "Frames in which a track may go unmatched before it ends "
+            "(-1 = never).\nOnly frames that have boxes count: a stretch "
+            "without any box - the thermal camera's shutter - does not end "
+            "a track.")
         builtin_layout.addRow("Max Age:", self.max_age_spin)
 
         self.max_center_dist_spin = QDoubleSpinBox()
         self.max_center_dist_spin.setRange(0.0, 100.0)
-        self.max_center_dist_spin.setValue(0.2)
-        self.max_center_dist_spin.setToolTip("Max center distance for matching (meters)")
+        self.max_center_dist_spin.setSingleStep(0.5)
+        self.max_center_dist_spin.setValue(2.0)
+        self.max_center_dist_spin.setSuffix(" m")
+        self.max_center_dist_spin.setToolTip(
+            "Largest distance between the centre of a box and of a track's "
+            "last box for the two to be joined, in metres on the ground.\n"
+            "Used by the modes CENTER and HUNGARIAN_CENTER.")
         builtin_layout.addRow("Max Center Distance:", self.max_center_dist_spin)
 
+        from .core import builtin_tracker
         self.tracker_mode_combo = QComboBox()
-        self.tracker_mode_combo.addItems([
-            "GREEDY",
-            "HUNGARIAN",
-            "CENTER",
-            "HUNGARIAN_CENTER"
-        ])
-        self.tracker_mode_combo.setCurrentIndex(1)
+        self.tracker_mode_combo.addItems(list(builtin_tracker.MODES))
+        self.tracker_mode_combo.setCurrentIndex(
+            builtin_tracker.MODES.index(builtin_tracker.DEFAULT_MODE))
+        self.tracker_mode_combo.setToolTip(
+            "How the boxes of a frame are matched to the tracks so far:\n"
+            "GREEDY - by overlap, the best pair first\n"
+            "HUNGARIAN - by overlap, the assignment with the most overlap "
+            "in all\n"
+            "CENTER - by the distance between the box centres, nearest "
+            "first\n"
+            "HUNGARIAN_CENTER - HUNGARIAN, then CENTER for what overlap "
+            "could not pair\n\n"
+            "The centre modes join an animal whose consecutive boxes do not "
+            "overlap: a small animal, a low frame rate, a jump in the "
+            "position.")
+        self.tracker_mode_combo.currentTextChanged.connect(
+            self._on_tracker_mode_changed)
         builtin_layout.addRow("Tracker Mode:", self.tracker_mode_combo)
+        self._on_tracker_mode_changed(self.tracker_mode_combo.currentText())
 
         self.class_aware_check = QCheckBox()
         self.class_aware_check.setChecked(True)
@@ -6885,6 +6909,15 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
                 self._active_flight_index]))
         self.log(f"Renamed flight to '{updated[self._active_flight_index]['name']}'")
         return True
+
+    def _on_tracker_mode_changed(self, mode: str) -> None:
+        """Enable the threshold each built-in tracker mode actually uses."""
+        from .core import builtin_tracker
+
+        self.iou_threshold_spin.setEnabled(
+            mode in builtin_tracker.OVERLAP_MODES)
+        self.max_center_dist_spin.setEnabled(
+            mode in builtin_tracker.CENTER_MODES)
 
     def _step_is_running(self) -> bool:
         """True while a background step runs.
