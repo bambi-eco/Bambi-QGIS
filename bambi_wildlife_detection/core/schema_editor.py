@@ -86,7 +86,8 @@ _VOCABULARY_KEYS = {
     "field_schema": ("name", "scope"),
     "class_mapping": ("source_id", "source_class"),
 }
-_VOCABULARY_META = ("species_high_water", "species_colours")
+_VOCABULARY_META = ("species_high_water", "species_colours",
+                    "species_group_distances")
 
 #: Tables carrying a ``species_id``, per store kind.
 _SPECIES_TABLES = {
@@ -330,6 +331,39 @@ class SchemaEditor:
         except ValueError as exc:
             raise SchemaError(str(exc)) from exc
 
+    def species_group_distances(self) -> Dict[int, float]:
+        """``species_id -> metres``: how far apart two animals of a species
+        may be and still belong to one group - the project's own choice
+        where it made one, the default otherwise (:mod:`core.groups`)."""
+        from . import groups
+
+        overrides = groups.stored_distances(self.conn)
+        return {row["species_id"]: overrides.get(row["species_id"],
+                                                 groups.DEFAULT_DISTANCE_M)
+                for row in self.species()}
+
+    def has_own_group_distance(self, species_id: int) -> bool:
+        """True when the project set this species' group distance itself."""
+        from . import groups
+        return int(species_id) in groups.stored_distances(self.conn)
+
+    def set_species_group_distance(self, species_id: int,
+                                   metres: Optional[float]) -> None:
+        """Set the group distance of a species in metres; ``0`` = never
+        grouped, ``None`` goes back to the default. Any species, the base
+        classes included: it changes how its animals are counted together,
+        not what they are."""
+        from . import groups
+
+        if self.conn.execute(
+                "SELECT 1 FROM species WHERE species_id = ?",
+                (species_id,)).fetchone() is None:
+            raise SchemaError(f"No species with id {species_id}.")
+        try:
+            groups.store_distance(self.conn, species_id, metres)
+        except ValueError as exc:
+            raise SchemaError(str(exc)) from exc
+
     def species_by_name(self, name: str) -> Optional[dict]:
         row = self.conn.execute(
             "SELECT species_id, name, protected, scientific_name, taxon_rank, "
@@ -451,14 +485,20 @@ class SchemaEditor:
                 f"'{row['name']}' is still in use ({where}). Reassign those "
                 "first, or rename the species instead of deleting it.")
         self.conn.execute("DELETE FROM species WHERE species_id = ?", (species_id,))
-        # Its colour goes with it: ids are never reused, but a stale entry
-        # would still be exported with the project.
+        # Its colour and group distance go with it: ids are never reused,
+        # but a stale entry would still be exported with the project.
         self._drop_colour(species_id)
+        self._drop_group_distance(species_id)
 
     def _drop_colour(self, species_id: int) -> None:
         from . import map_symbols
         if int(species_id) in map_symbols.stored_colours(self.conn):
             map_symbols.store_colour(self.conn, species_id, None)
+
+    def _drop_group_distance(self, species_id: int) -> None:
+        from . import groups
+        if int(species_id) in groups.stored_distances(self.conn):
+            groups.store_distance(self.conn, species_id, None)
 
     # ------------------------------------------------------------------
     # Enums

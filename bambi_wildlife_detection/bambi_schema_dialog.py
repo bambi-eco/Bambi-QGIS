@@ -27,7 +27,7 @@ from qgis.PyQt.QtWidgets import (
 )
 from qgis.PyQt.QtGui import QColor, QIcon, QPixmap
 
-from .core import store
+from .core import groups, store
 from .core.schema_editor import SchemaEditor, SchemaError
 
 
@@ -90,7 +90,9 @@ class BambiSchemaDialog(QDialog):
         layout.addWidget(QLabel(
             "Species available throughout the project. The three base classes "
             "are part of every project and cannot be changed. The colour is "
-            "how a species is drawn on the map."))
+            "how a species is drawn on the map; the group distance is how "
+            "far apart two animals of a species may be and still count as "
+            "one group in the survey analytics."))
 
         self.species_list = QListWidget()
         self.species_list.itemSelectionChanged.connect(self._sync_species_buttons)
@@ -113,6 +115,17 @@ class BambiSchemaDialog(QDialog):
         self.species_colour_btn.clicked.connect(self._choose_species_colour)
         self.species_colour_reset_btn.clicked.connect(
             self._reset_species_colour)
+        self.species_group_btn = QPushButton("Group Distance…")
+        self.species_group_btn.setToolTip(
+            "Two animals of this species no further apart than this, seen "
+            "on the same pass of the drone, belong to one group - and so "
+            "does everything that is joined to them in the same way. The "
+            "census reports the groups, and distance sampling counts a "
+            "group as one observation.\n\n"
+            f"{groups.DEFAULT_DISTANCE_M:g} m unless set here; 0 for a "
+            "species that is never grouped.")
+        self.species_group_btn.clicked.connect(
+            self._choose_species_group_distance)
         self.species_add_btn.clicked.connect(self._add_species)
         self.species_rename_btn.clicked.connect(self._rename_species)
         self.species_taxonomy_btn.clicked.connect(self._edit_taxonomy)
@@ -124,10 +137,19 @@ class BambiSchemaDialog(QDialog):
         row.addWidget(self.species_taxonomy_btn)
         row.addWidget(self.species_delete_btn)
         row.addStretch()
+        row.addWidget(self.species_group_btn)
         row.addWidget(self.species_colour_btn)
         row.addWidget(self.species_colour_reset_btn)
         layout.addLayout(row)
         return tab
+
+    @staticmethod
+    def _group_note(metres: float) -> str:
+        """What the species list says about a group distance the project
+        set itself."""
+        if metres <= 0:
+            return "never grouped"
+        return f"groups within {metres:g} m"
 
     @staticmethod
     def _swatch(colour: str) -> QIcon:
@@ -139,6 +161,7 @@ class BambiSchemaDialog(QDialog):
         selected = self._selected_species_id()
         self.species_list.clear()
         colours = self.editor.species_colours()
+        distances = self.editor.species_group_distances()
         for species in self.editor.species():
             label = f"{species['species_id']:>3}  {species['name']}"
             if species["protected"]:
@@ -147,6 +170,9 @@ class BambiSchemaDialog(QDialog):
                 label += f"   - {species['scientific_name']}"
                 if species.get("gbif_taxon_key"):
                     label += f" [GBIF {species['gbif_taxon_key']}]"
+            if self.editor.has_own_group_distance(species["species_id"]):
+                label += "   · " + self._group_note(
+                    distances[species["species_id"]])
             item = QListWidgetItem(
                 self._swatch(colours[species["species_id"]]), label)
             item.setData(Qt.ItemDataRole.UserRole, species["species_id"])
@@ -172,6 +198,34 @@ class BambiSchemaDialog(QDialog):
         self.species_colour_btn.setEnabled(species_id is not None)
         own = species_id is not None and self.editor.has_own_colour(species_id)
         self.species_colour_reset_btn.setEnabled(own)
+        # ... and so does the group distance: undetermined animals stand
+        # together like any others.
+        self.species_group_btn.setEnabled(species_id is not None)
+
+    def _choose_species_group_distance(self) -> None:
+        species_id = self._selected_species_id()
+        if species_id is None:
+            return
+        name = next(row["name"] for row in self.editor.species()
+                    if row["species_id"] == species_id)
+        current = self.editor.species_group_distances()[species_id]
+        metres, ok = QInputDialog.getDouble(
+            self, "Group distance",
+            f"How far apart may two animals of '{name}' be and still belong "
+            "to one group?\n\nIn metres; 0 = never grouped. "
+            f"The plugin's own value is {groups.DEFAULT_DISTANCE_M:g} m.",
+            current, 0.0, groups.MAX_DISTANCE_M, 1)
+        if not ok:
+            return
+        try:
+            # the plugin's own value is not a choice of the project's
+            self.editor.set_species_group_distance(
+                species_id,
+                None if metres == groups.DEFAULT_DISTANCE_M else metres)
+        except SchemaError as exc:
+            self._warn(exc)
+            return
+        self._reload_species()
 
     def _choose_species_colour(self) -> None:
         species_id = self._selected_species_id()

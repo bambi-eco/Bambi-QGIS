@@ -1265,12 +1265,57 @@ class ConfigurationTabMixin:
                 "project.")
             return False
 
+        from ..core import groups
+
+        distances_before = groups.species_distances(folder)
         dialog = BambiSchemaDialog(folder, parent=self, initial_tab=initial_tab)
         accepted = dialog.exec() == QDialog.DialogCode.Accepted
         if accepted:
             # A species may have a new colour: the layers on the map follow.
             self.restyle_animal_layers(quiet=True)
+            if groups.differ(distances_before,
+                             groups.species_distances(folder)):
+                self._offer_group_distances_to_other_flights(folder)
         return accepted
+
+    def _offer_group_distances_to_other_flights(self, folder: str) -> None:
+        """The schema belongs to a flight, and a survey takes every
+        flight's own group distances - so one that was just changed here
+        applies to this flight only, unless it is carried over."""
+        import sqlite3
+        from ..core import flights as flights_core
+        from ..core import groups
+
+        here = flights_core.normalise(folder)
+        others = []
+        for flight in self._flights():
+            other = flight.get("target_folder") or ""
+            if not other or flights_core.normalise(other) == here:
+                continue
+            if os.path.isdir(other):
+                others.append(other)
+        if not others:
+            return
+        answer = QMessageBox.question(
+            self, "Group distances",
+            "The group distances of this flight were changed. A survey takes "
+            "each flight's own.\n\nUse them for the other "
+            f"{len(others)} flight(s) of this project as well?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes)
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            changed = groups.copy_distances(folder, others)
+        except sqlite3.OperationalError as exc:
+            QMessageBox.warning(
+                self, "Group distances",
+                "A flight's files are in use - a step is probably writing "
+                f"its results - so not every flight was changed ({exc}). "
+                "Try again in a moment.")
+            return
+        self.log(f"Group distances carried over to {len(changed)} other "
+                 "flight(s).")
 
     def _refresh_thermal_sdk_status(self):
         """Re-check DJI Thermal SDK availability and update the Thermal Visualisation group."""

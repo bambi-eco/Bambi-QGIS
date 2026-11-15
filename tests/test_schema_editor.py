@@ -982,3 +982,86 @@ def test_a_value_that_looks_like_the_name_is_not_a_key(tmp_path):
         editor.rename_field("Größe", "track", "size")
         editor.commit()
     assert _track_attributes(root) == {"note": "Größe"}
+
+
+# ---------------------------------------------------------------------------
+# Group distance of a species (core.groups)
+# ---------------------------------------------------------------------------
+
+def test_every_species_has_the_default_group_distance(editor):
+    distances = editor.species_group_distances()
+
+    assert set(distances) == {row["species_id"] for row in editor.species()}
+    assert set(distances.values()) == {50.0}
+    assert not editor.has_own_group_distance(0)
+
+
+def test_a_group_distance_is_saved_with_the_schema(editor, tmp_path):
+    from bambi_wildlife_detection.core import groups
+
+    roe = editor.species_by_name("roe deer")["species_id"]
+    editor.set_species_group_distance(roe, 20)
+    assert editor.species_group_distances()[roe] == 20.0
+    assert editor.has_own_group_distance(roe)
+    # ... and nothing is in the project until it is saved
+    assert groups.species_distances(str(tmp_path))["roe deer"] == 50.0
+
+    editor.commit()
+
+    assert groups.species_distances(str(tmp_path))["roe deer"] == 20.0
+    assert groups.species_distances(str(tmp_path))["red deer"] == 50.0
+
+
+def test_zero_means_never_grouped_and_none_the_default(editor):
+    fox = editor.species_by_name("fox")["species_id"]
+
+    editor.set_species_group_distance(fox, 0)
+    assert editor.species_group_distances()[fox] == 0.0
+    assert editor.has_own_group_distance(fox)
+
+    editor.set_species_group_distance(fox, None)
+    assert editor.species_group_distances()[fox] == 50.0
+    assert not editor.has_own_group_distance(fox)
+
+
+@pytest.mark.parametrize("value", [-5, "far", 99999])
+def test_what_is_no_distance_is_refused(editor, value):
+    with pytest.raises(SchemaError):
+        editor.set_species_group_distance(1, value)
+
+
+def test_a_species_that_is_not_there_has_no_group_distance(editor):
+    with pytest.raises(SchemaError, match="No species"):
+        editor.set_species_group_distance(4242, 30)
+
+
+def test_a_deleted_species_takes_its_group_distance_along(editor, tmp_path):
+    from bambi_wildlife_detection.core import groups
+
+    wolf = editor.add_species("wolf")
+    editor.set_species_group_distance(wolf, 300)
+    editor.commit()
+    editor.delete_species(wolf)
+    editor.commit()
+
+    conn = store.open_store(store.project_path(str(tmp_path)), store.PROJECT)
+    try:
+        assert groups.stored_distances(conn) == {}
+    finally:
+        conn.close()
+
+
+def test_a_group_distance_set_elsewhere_meanwhile_is_not_overwritten(
+        editor, tmp_path):
+    """Like every other part of the vocabulary: two editors, one wins, the
+    other is told."""
+    other = SchemaEditor(str(tmp_path))
+    try:
+        other.set_species_group_distance(1, 80)
+        other.commit()
+    finally:
+        other.close()
+
+    editor.set_species_group_distance(1, 10)
+    with pytest.raises(SchemaError, match="changed by something else"):
+        editor.commit()
