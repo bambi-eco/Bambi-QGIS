@@ -539,7 +539,7 @@ The box at the top of the tab defines the survey every tool below works on:
 | **Flights** | Tick the processed flights of this QGIS project that make up the survey. Their counts, areas and distances are pooled; the census summary also lists them one by one. A flight that has not been processed, or whose folder is missing, cannot be ticked. |
 | **Camera** | Thermal or RGB - whose detections, tracks, footprints and transects are analysed. The flights must have been processed for it. (This is the survey's own selector; it is independent of the stage selectors on the processing tabs.) |
 | **Count** | What every tool on the tab counts. **Animals (tracks)** - the default - counts each tracked animal once, at the centre of its boxes, with the species, sex and age of the track. **Boxes (detections)** counts every geo-referenced box: what a still-photo survey without tracking has - an animal on two photos counts twice. |
-| **Survey folder** | Where the survey results (`analytics_t/` / `analytics_w/`) and the survey area are stored. Empty = `bambi_survey` next to the QGIS project. |
+| **Survey folder** | Where the survey results (`analytics_t/` / `analytics_w/`) and the survey area are stored. Empty = `bambi_survey` next to the QGIS project - next to the first ticked flight while the project has not been saved. **A survey folder that holds results stays where it is**: when saving the project (for the first time, or somewhere else) or ticking another flight first would move the default, the folder used so far is entered in the field instead, and the log says so. Empty the field to go to the new default, or enter another folder, to move the survey yourself. |
 
 Four things hold for every tool:
 

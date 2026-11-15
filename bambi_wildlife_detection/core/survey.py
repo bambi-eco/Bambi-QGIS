@@ -33,8 +33,61 @@ SOURCES = (TRACKS, DETECTIONS)
 SOURCE_LABELS = {TRACKS: "Animals (tracks)", DETECTIONS: "Boxes (detections)"}
 
 
+#: Name of the survey folder that is used when none was chosen.
+DEFAULT_FOLDER_NAME = "bambi_survey"
+
+
 class SurveyError(RuntimeError):
     """The survey cannot be analysed as configured."""
+
+
+# ---------------------------------------------------------------------------
+# The survey folder
+# ---------------------------------------------------------------------------
+
+def default_folder(project_home: str, flight_folders: Sequence[str]) -> str:
+    """Where a survey keeps its results when no folder was chosen:
+    ``bambi_survey`` next to the QGIS project - or, while the project has
+    not been saved anywhere, next to the first flight of the survey.
+    ``""`` when there is neither."""
+    if project_home:
+        return os.path.join(project_home, DEFAULT_FOLDER_NAME)
+    for folder in flight_folders:
+        if folder:
+            parent = os.path.dirname(os.path.normpath(folder))
+            return os.path.join(parent, DEFAULT_FOLDER_NAME)
+    return ""
+
+
+def holds_results(folder: str) -> bool:
+    """True when *folder* exists and something is in it - a survey has
+    written there (results, the survey area)."""
+    try:
+        return bool(folder) and os.path.isdir(folder) and \
+            bool(os.listdir(folder))
+    except OSError:
+        return False
+
+
+def folder_to_keep(in_use: str, default: str) -> str:
+    """The folder a survey stays in although its default has moved.
+
+    The default depends on where the QGIS project is saved and, before it
+    is, on which flight is ticked first - so saving the project for the
+    first time moved it. Everything written until then (results, the survey
+    area, the transects' distances) stayed where it was while the tools went
+    on in the new, empty folder: one survey in two places.
+
+    :param in_use: the default folder used so far
+    :param default: the default folder as it would be now
+    :return: *in_use* when it holds results and *default* is another
+        folder - the survey keeps it; ``""`` when nothing has to be kept
+    """
+    if not in_use or not holds_results(in_use):
+        return ""
+    same = default and os.path.normcase(os.path.abspath(default)) == \
+        os.path.normcase(os.path.abspath(in_use))
+    return "" if same else in_use
 
 
 @dataclass

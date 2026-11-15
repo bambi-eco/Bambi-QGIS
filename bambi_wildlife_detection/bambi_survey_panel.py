@@ -30,7 +30,7 @@ ENTRY_FLIGHTS = "Survey/Flights"
 ENTRY_CAMERA = "Survey/Camera"
 ENTRY_FOLDER = "Survey/Folder"
 ENTRY_SOURCE = "Survey/Source"
-DEFAULT_FOLDER_NAME = "bambi_survey"
+DEFAULT_FOLDER_NAME = survey_core.DEFAULT_FOLDER_NAME
 
 _FOLDER_ROLE = Qt.ItemDataRole.UserRole
 _ALIGN = Qt.AlignmentFlag
@@ -50,6 +50,9 @@ class SurveyFlightsPanel(QGroupBox):
         #: Normalised folders of the ticked flights; ``None`` = not chosen
         #: yet, in which case the active flight is ticked.
         self._selected = None
+        #: The default survey folder handed out so far. Should the default
+        #: move while this one holds results, it is kept (see :meth:`folder`).
+        self._default_in_use = ""
 
         layout = QVBoxLayout(self)
         desc = QLabel(
@@ -114,8 +117,11 @@ class SurveyFlightsPanel(QGroupBox):
         self.folder_edit.setToolTip(
             "Where the survey results (analytics_t / analytics_w) and the "
             "survey area are stored. Empty = 'bambi_survey' next to the QGIS "
-            "project.")
-        self.folder_edit.editingFinished.connect(self._emit_changed)
+            "project - next to the first ticked flight while the project "
+            "has not been saved.\nOnce that folder holds results it is "
+            "kept: it is entered here when saving the project elsewhere "
+            "would move it.")
+        self.folder_edit.editingFinished.connect(self._on_folder_edited)
         folder_row.addWidget(self.folder_edit)
         browse = QPushButton("…")
         browse.setMaximumWidth(30)
@@ -232,21 +238,49 @@ class SurveyFlightsPanel(QGroupBox):
             self, "Survey Folder", start)
         if folder:
             self.folder_edit.setText(folder)
-            self._emit_changed()
+            self._on_folder_edited()
+
+    def _on_folder_edited(self):
+        """The user chose the folder - or emptied the field to go back to
+        the default, wherever that is now."""
+        self._default_in_use = ""
+        self._emit_changed()
 
     def default_folder(self) -> str:
-        home = QgsProject.instance().homePath()
-        if home:
-            return os.path.join(home, DEFAULT_FOLDER_NAME)
-        chosen = self.selected_flights()
-        if chosen and chosen[0].get("target_folder"):
-            parent = os.path.dirname(os.path.normpath(
-                chosen[0]["target_folder"]))
-            return os.path.join(parent, DEFAULT_FOLDER_NAME)
-        return ""
+        """``bambi_survey`` next to the QGIS project; next to the first
+        ticked flight while the project has not been saved."""
+        return survey_core.default_folder(
+            QgsProject.instance().homePath(),
+            [flight.get("target_folder", "")
+             for flight in self.selected_flights()])
 
     def folder(self) -> str:
-        return self.folder_edit.text().strip() or self.default_folder()
+        """The survey folder: the one entered, else the default.
+
+        A default that holds results does not move. Saving the QGIS project
+        for the first time, saving it somewhere else or ticking another
+        flight first all change where the default *would* be - the folder
+        used so far is then entered in the field and stays the survey's
+        (:func:`core.survey.folder_to_keep`).
+        """
+        explicit = self.folder_edit.text().strip()
+        if explicit:
+            return explicit
+        default = self.default_folder()
+        keep = survey_core.folder_to_keep(self._default_in_use, default)
+        if keep:
+            self._default_in_use = ""
+            blocked = self.folder_edit.blockSignals(True)
+            self.folder_edit.setText(keep)
+            self.folder_edit.blockSignals(blocked)
+            self.dock.log(
+                f"Survey folder kept at {keep}: it holds this survey's "
+                "results. Change it in the Survey box to move the survey.")
+            return keep
+        # Remembered whether or not anything is in it yet: a tool that runs
+        # now writes there, and the project may be saved right after.
+        self._default_in_use = default
+        return default
 
     def _emit_changed(self):
         self._update_status()
@@ -327,6 +361,9 @@ class SurveyFlightsPanel(QGroupBox):
     # ------------------------------------------------------------------ #
 
     def save(self, project):
+        # Saving the project may be what moves the default folder: the one
+        # in use is entered in the field before the field is written.
+        self.folder()
         folders = [f["target_folder"] for f in self.selected_flights()]
         project.writeEntry(PLUGIN_SCOPE, ENTRY_FLIGHTS, json.dumps(folders))
         project.writeEntry(PLUGIN_SCOPE, ENTRY_CAMERA, self.modality())
@@ -346,11 +383,13 @@ class SurveyFlightsPanel(QGroupBox):
         folder, _ok = project.readEntry(PLUGIN_SCOPE, ENTRY_FOLDER, "")
         source, _ok = project.readEntry(
             PLUGIN_SCOPE, ENTRY_SOURCE, survey_core.TRACKS)
+        self._default_in_use = ""
         self._set_quietly(1 if camera == "w" else 0, folder or "", source)
         self.refresh()
 
     def reset(self):
         self._selected = None
+        self._default_in_use = ""
         self._set_quietly(0, "", survey_core.TRACKS)
         self.refresh()
 

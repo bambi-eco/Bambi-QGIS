@@ -314,3 +314,118 @@ def test_habitat_use_asks_for_what_the_survey_counts(dock, quiet,
     text = _warnings(quiet)
     assert "Geo-Reference Detections" in text
     assert "Track Animals" not in text
+
+
+# ---------------------------------------------------------------------------
+# One survey, one folder
+# ---------------------------------------------------------------------------
+
+def _write_a_result(folder):
+    os.makedirs(os.path.join(folder, "analytics_t"), exist_ok=True)
+    with open(os.path.join(folder, "analytics_t",
+                           "census_summary_tracks.csv"), "w") as handle:
+        handle.write("species,count\n")
+
+
+def _save_project(tmp_path, name="projects"):
+    home = str(tmp_path / name)
+    os.makedirs(home, exist_ok=True)
+    assert QgsProject.instance().write(os.path.join(home, "survey.qgz"))
+    return home
+
+
+def test_saving_the_project_does_not_move_a_survey_with_results(
+        dock, two_flights, tmp_path):
+    """Until the QGIS project is saved the default is next to the first
+    flight; saved, it is next to the project. The results written before
+    stayed behind and the tools went on in an empty folder."""
+    panel = dock.survey_panel
+    before = panel.folder()
+    assert before == os.path.join(str(tmp_path / "meadow"), "bambi_survey")
+    _write_a_result(before)
+
+    _save_project(tmp_path)
+
+    assert panel.folder() == before
+    assert panel.folder_edit.text() == before
+    stored, _ok = QgsProject.instance().readEntry(
+        "BambiWildlifeDetection", "Survey/Folder", "")
+    assert stored == before
+    assert "Survey folder kept" in dock.log_text.toPlainText()
+
+
+def test_a_result_written_just_before_saving_is_enough(dock, two_flights,
+                                                       tmp_path):
+    """The folder is empty when a tool asks for it and full when it has
+    finished - nothing asks again before the project is saved."""
+    panel = dock.survey_panel
+    before = dock.current_survey().folder      # what a tool is given
+    _write_a_result(before)
+
+    _save_project(tmp_path)
+
+    assert dock.current_survey().folder == before
+
+
+def test_a_survey_without_results_follows_the_project(dock, two_flights,
+                                                      tmp_path):
+    panel = dock.survey_panel
+    assert panel.folder().startswith(str(tmp_path / "meadow"))
+
+    home = _save_project(tmp_path)
+
+    assert panel.folder() == os.path.join(home, "bambi_survey")
+    assert panel.folder_edit.text() == ""
+
+
+def test_ticking_another_flight_first_does_not_move_the_survey(
+        dock, two_flights, tmp_path):
+    panel = dock.survey_panel
+    before = panel.folder()
+    _write_a_result(before)
+
+    panel._tick_all(True)
+    panel.flights_list.item(0).setCheckState(0)      # only "Forest" is left
+
+    assert [f["name"] for f in panel.selected_flights()] == ["Forest"]
+    assert panel.folder() == before
+
+
+def test_saving_the_project_elsewhere_keeps_the_survey_folder(
+        dock, two_flights, tmp_path):
+    panel = dock.survey_panel
+    first_home = _save_project(tmp_path, "first")
+    survey_folder = panel.folder()
+    assert survey_folder == os.path.join(first_home, "bambi_survey")
+    _write_a_result(survey_folder)
+
+    _save_project(tmp_path, "second")
+
+    assert panel.folder() == survey_folder
+
+
+def test_emptying_the_field_goes_back_to_the_default(dock, two_flights,
+                                                     tmp_path):
+    """The folder was kept for the user, not against them."""
+    panel = dock.survey_panel
+    before = panel.folder()
+    _write_a_result(before)
+    home = _save_project(tmp_path)
+    assert panel.folder() == before
+
+    panel.folder_edit.setText("")
+    panel._on_folder_edited()
+
+    assert panel.folder() == os.path.join(home, "bambi_survey")
+    assert panel.folder_edit.text() == ""
+
+
+def test_a_new_project_does_not_inherit_the_kept_folder(dock, two_flights,
+                                                        tmp_path):
+    panel = dock.survey_panel
+    _write_a_result(panel.folder())
+
+    QgsProject.instance().clear()
+
+    assert panel.folder() == ""
+    assert panel.folder_edit.text() == ""
