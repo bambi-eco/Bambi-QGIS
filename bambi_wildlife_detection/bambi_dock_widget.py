@@ -2593,7 +2593,10 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             "classifier is set to 'matched'.\n\n"
             "The matched classifiers were trained on real pairs and cannot "
             "take a blank for the missing camera, so this has to be an "
-            "explicit choice."
+            "explicit choice.\n\n"
+            "Fall back: the animal is called by the published classifier of "
+            "that one camera for the same task. A model file of your own "
+            "has no such counterpart; its unmatched animals are skipped."
         )
         vote_layout.addRow("Unmatched animals:",
                            self.classification_unmatched_combo)

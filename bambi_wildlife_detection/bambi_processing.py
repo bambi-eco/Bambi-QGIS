@@ -590,6 +590,52 @@ def _plugin_version() -> str:
     return ""
 
 
+class _SingleCameraHead:
+    """The classifier for the animals only one camera saw, when the task's
+    classifier reads both cameras ("matched") and the user chose "Fall back
+    to RGB / thermal".
+
+    A matched classifier takes both cameras' vectors side by side - twice
+    the width of one. The fallback used to hand it the one vector there was,
+    which it refuses, and the refusal ended the whole classification run. An
+    animal one camera saw is a question for the classifier of that camera,
+    so this opens the task's single-camera classifier - on first use, since
+    most flights have no such animal - and remembers a failure rather than
+    repeating it.
+    """
+
+    def __init__(self, open_head, modality: str, task: str, log_fn=None):
+        self._open = open_head
+        self.modality = modality
+        self._task = task
+        self._log = log_fn
+        self._head = None
+        self._tried = False
+        self.frames = 0
+
+    def get(self):
+        """The head, or ``None`` when there is none to fall back on."""
+        if not self._tried:
+            self._tried = True
+            try:
+                self._head = self._open()
+            except (ValueError, OSError, RuntimeError) as exc:
+                if self._log:
+                    self._log(
+                        f"{self._task}: no {self.modality} classifier to "
+                        f"fall back on for animals only one camera saw "
+                        f"({exc}) - they are skipped")
+        return self._head
+
+    def close(self) -> None:
+        if self._head is not None and hasattr(self._head, "close"):
+            self._head.close()
+        if self.frames and self._log:
+            self._log(f"{self._task}: {self.frames} frame(s) of animals only "
+                      f"one camera saw were classified by the "
+                      f"{self.modality} classifier")
+
+
 class CancelledException(Exception):
     """Exception raised when a processing step is cancelled."""
     pass
@@ -3181,15 +3227,31 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
     _HEAD_BATCH = {"embeddings": 1024, "crops": 64}
 
     def _predict_in_batches(self, head, resolver, detection_ids, modality_in,
-                            unmatched, progress=None, cancel_check=None):
+                            unmatched, progress=None, cancel_check=None,
+                            fallback=None, via=None):
         """Per-frame calls for *detection_ids*, a batch at a time.
 
+        :param fallback: a :class:`_SingleCameraHead` for the animals only
+            one camera saw (see there); ``None`` skips them
+        :param via: filled with ``detection_id -> (modality, model file)``
+            for every frame the fallback classified, so the record of a
+            frame names what actually called it
         :return: ``(usable ids, calls)`` - the detections that had an input
             (a vector or a crop), and their ``(class_index, probability)``
+            in terms of *head*'s classes
         """
+        from .core import classification
+
         size = self._HEAD_BATCH.get(getattr(head, "input", "embeddings"),
                                     1024)
-        usable, calls = [], []
+        # A built-in matched head takes pairs only; what has no pair is
+        # the fallback's (a custom implementation is handed what there is,
+        # as its contract says).
+        reads_vectors = getattr(head, "input", "embeddings") == "embeddings"
+        built_in = not hasattr(head, "implementation")
+        pairs_only = modality_in == "matched" and built_in and reads_vectors
+        rule = classification.UNMATCHED_SKIP if pairs_only else unmatched
+        usable, calls, without_pair = [], [], []
         total = len(detection_ids)
         for start in range(0, total, size):
             if cancel_check and cancel_check():
@@ -3197,8 +3259,10 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
             ids, features = [], []
             for detection_id in detection_ids[start:start + size]:
                 vector = self._head_input(head, resolver, detection_id,
-                                          modality_in, unmatched)
+                                          modality_in, rule)
                 if vector is None:
+                    if pairs_only:
+                        without_pair.append(detection_id)
                     continue
                 ids.append(detection_id)
                 features.append(vector)
@@ -3207,7 +3271,78 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
                 usable.extend(ids)
             if progress is not None and total:
                 progress(min(1.0, (start + size) / total))
+
+        if without_pair and fallback is not None:
+            ids, more = self._predict_single_camera(
+                head, resolver, without_pair, fallback, size, via,
+                cancel_check)
+            usable.extend(ids)
+            calls.extend(more)
         return usable, calls
+
+    @staticmethod
+    def _predict_single_camera(head, resolver, detection_ids, fallback, size,
+                               via=None, cancel_check=None):
+        """Calls of the single-camera classifier for *detection_ids*, in
+        terms of *head*'s classes (matched by name - the two classifiers
+        need not list them in the same order; a class *head* does not know
+        is no call)."""
+        ids, vectors = [], []
+        for detection_id in detection_ids:
+            vector = resolver.resolve(detection_id, fallback.modality)
+            if vector is not None:
+                ids.append(detection_id)
+                vectors.append(vector)
+        other = fallback.get() if ids else None
+        if other is None:
+            return [], []
+
+        index_of = {label: index for index, label in enumerate(head.classes)}
+        model = os.path.basename(getattr(other, "path", "") or "")
+        usable, calls = [], []
+        for start in range(0, len(ids), size):
+            if cancel_check and cancel_check():
+                raise CancelledException("Classification cancelled")
+            chunk = ids[start:start + size]
+            for detection_id, (index, probability) in zip(
+                    chunk, other.predict(vectors[start:start + size])):
+                label = (other.classes[index]
+                         if index < len(other.classes) else None)
+                if label not in index_of:
+                    continue
+                usable.append(detection_id)
+                calls.append((index_of[label], probability))
+                if via is not None:
+                    via[detection_id] = (fallback.modality, model)
+        fallback.frames += len(usable)
+        return usable, calls
+
+    def _single_camera_fallback(self, config, task, spec, modality_in,
+                                unmatched, projection, log_fn=None):
+        """A :class:`_SingleCameraHead` for *task*, or ``None`` when the
+        task's classifier does not read both cameras, the user chose to
+        skip unmatched animals, or the classifier is a file or an
+        implementation of the user's own - which has no single-camera
+        counterpart to fall back on."""
+        from .core import classification, custom_models
+
+        if modality_in != "matched" or unmatched not in (
+                classification.UNMATCHED_RGB, classification.UNMATCHED_THERMAL):
+            return None
+        source = spec.get("model", "default")
+        if source == custom_models.SOURCE:
+            return None       # handed what there is, as its contract says
+        if source == "custom":
+            if log_fn:
+                log_fn(f"{task}: 'fall back to {unmatched}' needs the "
+                       "published single-camera classifier; with a model "
+                       "file of your own, animals only one camera saw are "
+                       "skipped")
+            return None
+        return _SingleCameraHead(
+            lambda: self._open_head(config, task, spec, unmatched,
+                                    projection, log_fn)[0],
+            unmatched, task, log_fn)
 
     def _run_head(self, config, target_folder, suffix, task, spec,
                   detection_ids, resolver, unmatched, projection, log_fn,
@@ -3225,11 +3360,16 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
                 f"{task} is a per-frame call. Use a frame-level classifier "
                 "for it.")
 
+        fallback = self._single_camera_fallback(
+            config, task, spec, modality_in, unmatched, projection, log_fn)
+        via: Dict[int, tuple] = {}
         usable, calls = self._predict_in_batches(
             head, resolver, list(detection_ids), modality_in, unmatched,
-            progress, cancel_check)
+            progress, cancel_check, fallback=fallback, via=via)
         if hasattr(head, "close"):
             head.close()
+        if fallback is not None:
+            fallback.close()
 
         if not usable:
             if log_fn:
@@ -3241,11 +3381,12 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
         for detection_id, (index, probability) in zip(usable, calls):
             label = classes[index] if index < len(classes) else str(index)
             labels[detection_id] = label
+            called_by = via.get(
+                detection_id, (modality_in, os.path.basename(head.path)))
             predictions.append({
                 "detection_id": detection_id, "label": label,
                 "class_index": index, "prob": probability,
-                "modality_in": modality_in,
-                "model": os.path.basename(head.path),
+                "modality_in": called_by[0], "model": called_by[1],
             })
 
         classification_store.record_frame_predictions(
@@ -3278,6 +3419,10 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
         # Sex is chosen per species, so its heads are opened lazily and cached
         # - a flight with three species uses three different classifiers.
         heads: Dict[str, Any] = {}
+        # ... and with each, the single-camera classifier for the animals
+        # only one camera saw; which of the two called a frame is recorded.
+        fallbacks: Dict[str, Any] = {}
+        via: Dict[int, tuple] = {}
 
         for position, (track_id, members) in enumerate(
                 sorted(by_track.items())):
@@ -3314,6 +3459,9 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
                 heads[key] = self._open_head(
                     config, task, spec_for_track, modality_in, projection,
                     log_fn)
+                fallbacks[key] = self._single_camera_fallback(
+                    config, task, spec_for_track, modality_in, unmatched,
+                    projection, log_fn)
             head, _dim = heads[key]
 
             track_level = getattr(head, "level", "frame") == "track"
@@ -3330,7 +3478,8 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
             else:
                 usable, calls = self._predict_in_batches(
                     head, resolver, list(chosen), modality_in, unmatched,
-                    cancel_check=cancel_check)
+                    cancel_check=cancel_check, fallback=fallbacks.get(key),
+                    via=via)
             if not usable:
                 continue
 
@@ -3361,11 +3510,12 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
             for detection_id, (index, probability) in zip(usable, calls):
                 label = classes[index] if index < len(classes) else str(index)
                 per_frame.append((index, label))
+                called_by = via.get(
+                    detection_id, (modality_in, os.path.basename(head.path)))
                 frame_rows.append({
                     "detection_id": detection_id, "label": label,
                     "class_index": index, "prob": probability,
-                    "modality_in": modality_in,
-                    "model": os.path.basename(head.path),
+                    "modality_in": called_by[0], "model": called_by[1],
                 })
 
             vote = classification.quorum_vote(per_frame, quorum, min_frames)
@@ -3389,6 +3539,9 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
         for opened, _dim in heads.values():
             if hasattr(opened, "close"):
                 opened.close()
+        for fallback in fallbacks.values():
+            if fallback is not None:
+                fallback.close()
 
         classification_store.record_frame_predictions(
             target_folder, suffix, task, frame_rows)
