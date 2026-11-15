@@ -45,6 +45,9 @@ COLUMN_HINTS = {
     "sex": "Sex on the track", "sex_vote_fraction": "Share of frames agreeing",
     "sex_model": "Classifier file the sex came from",
     "age": "Life stage on the track", "age_source": "Model or size estimate",
+    "group": "The group the animal was in: the lowest track number among "
+             "the animals that were together",
+    "group_size": "Animals in that group (1 = alone)",
     "n_boxes": "Detections in the track",
     "n_occluded": "Detections the occlusion classifier called occluded",
     "n_clear": "Detections called clear",

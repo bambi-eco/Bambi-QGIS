@@ -71,9 +71,8 @@ class TestRows:
              "records": [_record("red deer", 1), _record("red deer", 1),
                          _record("red deer", 1), _record("red deer", 9)]}]
         result = census.build(flights)
-        total = next(row for row in result["rows"]
-                     if row["flight"] == census.ALL_FLIGHTS
-                     and row["species"] == "red deer")
+        total = next(row for row in result["rows"] if (
+            row["flight"], row["species"]) == (census.ALL_FLIGHTS, "red deer"))
 
         assert (total["inside"], total["groups"],
                 total["largest_group"]) == (6, 3, 3)
@@ -281,3 +280,103 @@ def test_boxes_are_grouped_by_frame(tmp_path):
     assert (red["inside"], red["groups"], red["largest_group"]) == (3, 2, 2)
     assert "in the same frame" in result["notes"]
     assert sorted(row["size"] for row in table["groups"]) == [1, 2]
+
+
+# ---------------------------------------------------------------------------
+# The track inventory says which group an animal was in
+# ---------------------------------------------------------------------------
+
+class TestInventory:
+    def test_every_animal_has_its_group_and_the_groups_size(self, herd):
+        from bambi_wildlife_detection.core import track_inventory
+
+        rows = track_inventory.build_inventory(herd, "t", epsg=EPSG)
+
+        assert [(row["track_id"], row["group"], row["group_size"])
+                for row in rows] == [
+            (1, 1, 3), (2, 1, 3), (3, 1, 3), (4, 4, 2), (5, 4, 2),
+            (6, 6, 2), (7, 6, 2), (8, 8, 1)]
+        assert track_inventory.COLUMNS.index("group") == \
+            track_inventory.COLUMNS.index("age_source") + 1
+
+    def test_one_track_asked_for_is_still_in_its_whole_group(self, herd):
+        """The inspector asks for the track it shows."""
+        from bambi_wildlife_detection.core import track_inventory
+
+        rows = track_inventory.build_inventory(herd, "t", track_ids=[2])
+
+        assert [(row["track_id"], row["group"], row["group_size"])
+                for row in rows] == [(2, 1, 3)]
+
+    def test_a_species_filter_does_not_change_the_groups(self, herd):
+        from bambi_wildlife_detection.core import label_store, track_inventory
+
+        roe = label_store.vocabulary(herd)["species_by_name"]["roe deer"]
+        rows = track_inventory.build_inventory(herd, "t", species_ids=[roe])
+
+        assert [(row["track_id"], row["group"], row["group_size"])
+                for row in rows] == [(6, 6, 2), (7, 6, 2)]
+
+    def test_a_false_positive_is_in_no_group(self, tmp_path):
+        from bambi_wildlife_detection.core import track_inventory
+
+        folder = make_flight(str(tmp_path / "rocks"), [
+            {"id": 1, "species": "red deer", "at": (0, 0), "frames": (1, 5)},
+            {"id": 2, "species": "not-an-animal", "at": (5, 0),
+             "frames": (1, 5)}])
+        rows = {row["track_id"]: row
+                for row in track_inventory.build_inventory(folder, "t")}
+
+        assert (rows[1]["group"], rows[1]["group_size"]) == (1, 1)
+        if 2 in rows:
+            assert (rows[2]["group"], rows[2]["group_size"]) == (None, None)
+
+    def test_the_inspector_says_who_it_was_with(self, herd):
+        from bambi_wildlife_detection.core import track_inventory
+
+        rows = {row["track_id"]: row
+                for row in track_inventory.build_inventory(herd, "t")}
+
+        assert ("Group", "with 2 others (group 1)") in \
+            track_inventory.describe_track(rows[2])
+        assert ("Group", "with 1 other (group 4)") in \
+            track_inventory.describe_track(rows[5])
+        assert ("Group", "alone") in track_inventory.describe_track(rows[8])
+        assert not any(label == "Group" for label, _text in
+                       track_inventory.describe_track({"track_id": 1}))
+
+    def test_the_summary_counts_the_groups(self, herd):
+        from bambi_wildlife_detection.core import track_inventory
+
+        rows = track_inventory.build_inventory(herd, "t")
+
+        assert "3 group(s) of two or more animals (largest 3), " \
+            "1 animal(s) alone" in track_inventory.summarise(rows)
+
+    def test_two_flights_with_the_same_group_ids_are_not_one_group(self, herd):
+        from bambi_wildlife_detection.core import track_inventory
+
+        rows = track_inventory.build_inventory(herd, "t")
+        both = [dict(row, flight=name) for name in ("A", "B") for row in rows]
+
+        assert "6 group(s) of two or more animals (largest 3), " \
+            "2 animal(s) alone" in track_inventory.summarise(both)
+
+    def test_the_columns_are_in_the_survey_csv(self, tmp_path, herd):
+        survey_folder = str(tmp_path / "survey")
+        survey = Survey(folder=survey_folder, modality="t", flights=[
+            SurveyFlight(name="Meadow", target_folder=herd, epsg=EPSG)])
+        log = []
+        BambiProcessor().run_track_inventory(
+            {"survey": survey.to_dict()}, log_fn=log.append)
+        with open(os.path.join(survey_folder, "analytics_t",
+                               "track_inventory.csv"), newline="",
+                  encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+
+        assert [(row["track_id"], row["group"], row["group_size"])
+                for row in rows[:4]] == [
+            ("1", "1", "3"), ("2", "1", "3"), ("3", "1", "3"),
+            ("4", "4", "2")]
+        assert any("3 group(s) of two or more animals" in line
+                   for line in log)

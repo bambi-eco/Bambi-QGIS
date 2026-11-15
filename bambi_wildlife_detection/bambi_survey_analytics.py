@@ -1177,6 +1177,7 @@ class SurveyAnalyticsMixin:
 
         distance_arrays = []
         line_arrays = []
+        size_arrays = []
         lines = []
         effort_kinds = []
         n_off_effort = 0
@@ -1186,6 +1187,7 @@ class SurveyAnalyticsMixin:
             loaded = self._load_distance_sampling_project(
                 flight, survey, source, names, log_fn, area=area)
             distance_arrays.append(loaded["distances"])
+            size_arrays.append(loaded["sizes"])
             line_arrays.append(loaded["line"] + len(lines))
             lines.extend(dict(line, flight=flight.name)
                          for line in loaded["lines"])
@@ -1196,6 +1198,7 @@ class SurveyAnalyticsMixin:
                 "name": flight.name,
                 "target_folder": flight.target_folder,
                 "n": int(loaded["distances"].size),
+                "n_animals": int(loaded["sizes"].sum()),
                 "transect_length_m": loaded["length"],
                 "effort": loaded["effort"],
                 "n_lines": len(loaded["lines"]),
@@ -1213,6 +1216,8 @@ class SurveyAnalyticsMixin:
                      else np.asarray([], dtype=np.float64))
         line_index = (np.concatenate(line_arrays) if line_arrays
                       else np.asarray([], dtype=np.int64))
+        sizes = (np.concatenate(size_arrays) if size_arrays
+                 else np.asarray([], dtype=np.int64))
         transect_length = float(sum(line["length_m"] for line in lines))
         if distances.size < 2:
             raise RuntimeError(
@@ -1236,12 +1241,29 @@ class SurveyAnalyticsMixin:
             raise RuntimeError("Truncation distance leaves too few observations.")
         line_counts = np.bincount(
             line_index[kept], minlength=len(lines)).tolist()
-        for line, count in zip(lines, line_counts):
+        line_animals = np.bincount(
+            line_index[kept], weights=sizes[kept],
+            minlength=len(lines)).tolist()
+        for line, count, animals in zip(lines, line_counts, line_animals):
             line["n"] = int(count)
+            line["animals"] = int(round(animals))
+
+        # An observation is a group (core.distance_effort): n counts groups,
+        # and the animals come back in through the mean group size.
+        group_sizes = sizes[kept]
+        n_animals = int(group_sizes.sum())
+        size = distance_effort.group_size(group_sizes.tolist())
+        grouped = n_animals > n
+        bias = distance_effort.size_bias(x.tolist(), group_sizes.tolist()) \
+            if grouped else None
 
         if log_fn:
             log_fn(f"n={n} observations, transect length L={transect_length:.1f} m, "
                    f"truncation w={w:.2f} m")
+            if grouped:
+                log_fn(f"The {n} observations are groups of {n_animals} "
+                       f"animals: mean group size {size['mean']:.2f} "
+                       f"(SE {size['se']:.2f}), largest {size['largest']}")
         if progress_fn:
             progress_fn(40)
 
@@ -1263,7 +1285,8 @@ class SurveyAnalyticsMixin:
         # ---- Density / abundance ----------------------------------------- #
         esw = best["esw"]          # effective strip half-width (m)
         p = esw / w                # average detection probability
-        density_m2 = n / (2.0 * esw * transect_length)
+        group_density_m2 = n / (2.0 * esw * transect_length)
+        density_m2 = group_density_m2 * size["mean"]
         density_km2 = density_m2 * 1e6
         covered_area_m2 = 2.0 * w * transect_length
         abundance_covered = density_m2 * covered_area_m2  # == n / p
@@ -1276,7 +1299,9 @@ class SurveyAnalyticsMixin:
         if cv_n is None:
             cv_n, variance_method = 1.0 / math.sqrt(n), distance_effort.POISSON
         cv_esw = best["cv_esw"]
-        cv_density = math.sqrt(cv_n * cv_n + cv_esw * cv_esw)
+        cv_size = size["cv"] or 0.0
+        cv_density = math.sqrt(
+            cv_n * cv_n + cv_esw * cv_esw + cv_size * cv_size)
         ci_d = self._lognormal_ci(density_km2, cv_density)
         ci_n = self._lognormal_ci(abundance_covered, cv_density)
 
@@ -1308,6 +1333,21 @@ class SurveyAnalyticsMixin:
                 "approximation (CV = 1/sqrt(n)), which is too small when "
                 "animals are clumped - define transects, or pool several "
                 "flights, to measure it. ")
+        if grouped:
+            notes += (
+                f"Animals that were together are one observation: the "
+                f"detection function is fitted to the {n} groups, at the "
+                "distance of the middle of each, and the density of animals "
+                "is the density of groups times the mean group size "
+                f"({size['mean']:.2f}, SE {size['se']:.2f}), whose "
+                "uncertainty is part of the interval. ")
+            if bias and bias["suspected"]:
+                notes += (
+                    "Larger groups were seen from further away (r = "
+                    f"{bias['correlation']:.2f}, p = {bias['p_value']:.2f}): "
+                    "near the limit of the strip a large group is noticed "
+                    "more easily than a small one, so the mean group size - "
+                    "and with it the density - may be too high. ")
         notes += (
             "Abundance is reported for the covered strip area 2*w*L. Multiply "
             "density by your study-area size for a study-area abundance "
@@ -1329,6 +1369,15 @@ class SurveyAnalyticsMixin:
             "crs": f"EPSG:{target_epsg}",
             "n": n,
             "n_before_truncation": int(distances.size),
+            # what the n observations are: groups, and the animals in them
+            "n_groups": n,
+            "n_animals": n_animals,
+            "mean_group_size": size["mean"],
+            "group_size_se": size["se"],
+            "group_size_cv": size["cv"],
+            "largest_group": size["largest"],
+            "group_density_per_km2": group_density_m2 * 1e6,
+            "group_size_bias": bias,
             "n_projects": len(project_folders),
             "flights": [f.name for f in project_folders],
             "projects": projects_summary,
@@ -1336,7 +1385,8 @@ class SurveyAnalyticsMixin:
             "effort": effort_kinds,
             "n_lines": n_lines,
             "lines": [{"flight": line["flight"], "name": line["name"],
-                       "length_m": line["length_m"], "n": line["n"]}
+                       "length_m": line["length_m"], "n": line["n"],
+                       "animals": line["animals"]}
                       for line in lines],
             "n_off_effort": n_off_effort,
             "encounter_rate_cv": cv_n,
@@ -1412,11 +1462,14 @@ class SurveyAnalyticsMixin:
         """One flight's surveyed lines and the perpendicular distances of the
         animals seen from them.
 
-        Returns ``{"distances", "line", "lines", "length", "effort",
-        "off_effort"}``: the finite, non-negative distances and, aligned
-        with them, the index of the line each was seen from; the lines
-        (``core.distance_effort.flight_lines``) with their summed length; how
-        the lines were found; and how many observations lay on no line.
+        Returns ``{"distances", "line", "sizes", "lines", "length",
+        "effort", "off_effort"}``. An observation is a group of animals that
+        were together (``core.groups``; an animal alone is a group of one):
+        the distance of each group's middle from the line and, aligned with
+        it, the index of the line the group was seen from and the number of
+        animals in it; the lines (``core.distance_effort.flight_lines``)
+        with their summed length; how the lines were found; and how many
+        animals lay on no line.
         Errors name the flight so a pooled run can say which one is at fault.
 
         With a survey *area*, observations whose position lies outside it are
@@ -1482,22 +1535,33 @@ class SurveyAnalyticsMixin:
             raise RuntimeError(
                 f"The survey lines of {flight.name} have zero length{where}.")
 
-        # ---- The animals seen from them ----------------------------------- #
-        distances, line_index, off_effort = [], [], 0
+        # ---- The animals seen from them, group by group -------------------- #
+        id_key = "track_id" if source == "tracks" else "det_idx"
+
+        def place(entry, key):
+            point = entry.get(key) or []
+            return (point[0], point[1]) if len(point) >= 2 else None
+
+        seen = []
         for entry in entries:
             distance = float(entry[dist_key])
             if not (np.isfinite(distance) and distance >= 0):
                 continue
             if effort == distance_effort.TRANSECTS:
                 index = distance_effort.line_of_frame(
-                    lines, entry.get(frame_key))
-                if index is None:
-                    off_effort += 1         # seen in transit
-                    continue
+                    lines, entry.get(frame_key))     # None: seen in transit
             else:
                 index = 0
-            distances.append(distance)
-            line_index.append(index)
+            seen.append({"id": entry.get(id_key), "distance_m": distance,
+                         "line": index,
+                         "centre": place(entry, "detection_center"),
+                         "foot": place(entry, "foot_point")})
+        found = self._flight_groups(survey, flight, source, log_fn)
+        observations, off_effort = distance_effort.group_observations(
+            seen, None if found is None else found.of)
+        distances = [o["distance_m"] for o in observations]
+        line_index = [o["line"] for o in observations]
+        sizes = [o["size"] for o in observations]
 
         length = float(sum(line["length_m"] for line in lines))
         if log_fn:
@@ -1506,12 +1570,17 @@ class SurveyAnalyticsMixin:
                        "observation(s) outside dropped")
             note = (f", {off_effort} seen outside the transect legs not "
                     "counted" if off_effort else "")
-            log_fn(f"  {flight.name}: {len(distances)} distance(s) on "
+            animals = sum(sizes)
+            what = (f"{len(distances)} group(s) of {animals} animals"
+                    if animals > len(distances)
+                    else f"{len(distances)} distance(s)")
+            log_fn(f"  {flight.name}: {what} on "
                    f"{len(lines)} line(s), L={length:.1f} m "
                    f"({distance_effort.EFFORT_TEXT[effort]}){note}")
         return {
             "distances": np.asarray(distances, dtype=np.float64),
             "line": np.asarray(line_index, dtype=np.int64),
+            "sizes": np.asarray(sizes, dtype=np.int64),
             "lines": lines,
             "length": length,
             "effort": effort,

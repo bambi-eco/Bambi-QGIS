@@ -177,3 +177,43 @@ def test_the_census_table_shows_the_groups(dock):
     assert headers[11:14] == ["Groups", "Mean group size", "Largest group"]
     assert [table.item(0, c).text() for c in (11, 12, 13)] == [
         "2", "2.00", "3"]
+
+
+# ---------------------------------------------------------------------------
+# Distance sampling: what the result dialog says
+# ---------------------------------------------------------------------------
+
+_RESULT = {
+    "source": "tracks", "n": 9, "n_before_truncation": 10,
+    "transect_length_m": 1000.0, "n_lines": 2, "truncation_m": 50.0,
+    "best_model": "half-normal", "effective_strip_width_m": 31.4,
+    "detection_probability": 0.63, "density_per_km2": 254.8,
+    "density_ci95": [120.0, 541.0], "abundance_in_covered_area": 25.5,
+    "abundance_ci95": [12.0, 54.1], "covered_area_km2": 0.1, "models": [],
+    "notes": "",
+}
+
+
+def test_the_distance_sampling_result_shows_the_groups(dock):
+    result = dict(_RESULT, n_groups=9, n_animals=16,
+                  mean_group_size=16 / 9, group_size_se=0.36,
+                  largest_group=4, group_density_per_km2=143.3)
+
+    html = dock._distance_sampling_html(result, "result.json")
+
+    assert "9 groups" in html
+    assert "<b>Animals in them</b></td><td align='right'>16<" in html
+    assert "1.78 (SE 0.36, largest 4)" in html
+    assert "<b>Density of groups</b></td><td align='right'>143.300 /km²" in html
+    assert "<b>Density of animals</b>" in html
+
+
+def test_a_result_of_animals_alone_reads_as_it_always_did(dock):
+    alone = dict(_RESULT, n_groups=9, n_animals=9, mean_group_size=1.0,
+                 group_size_se=0.0, largest_group=1,
+                 group_density_per_km2=254.8)
+
+    for result in (alone, _RESULT):             # ... or written before 9.1
+        html = dock._distance_sampling_html(result, "result.json")
+        assert "groups" not in html and "Animals in them" not in html
+        assert "<b>Density</b>" in html

@@ -640,12 +640,40 @@ animals inside a survey area and outside every exclusion zone, and use only
 that ground as the surveyed area. Unticked, they cover the whole flights. The
 survey orthomosaic is never clipped.
 
+### Groups
+
+Many animals do not stand alone - a herd of red deer, a sounder of wild boar,
+a doe with her fawns. The survey tools therefore know which animals were
+together:
+
+- **Same species, close enough.** Two animals of one species no further apart
+  than the species' **group distance** belong together, and so does everything
+  joined to them in the same way: a herd strung out along a forest edge is one
+  herd although its ends are far apart. The distance is **50 m** unless the
+  [Project Schema](results-and-export.md#species) sets another one for the
+  species; `0` means the species is never grouped.
+- **Seen together.** A flight crosses the same ground more than once -
+  neighbouring legs overlap - and an animal near the border of two legs is
+  counted on both. Two sightings minutes apart are not a group of two: tracked
+  animals are only joined when the drone saw them within **60 seconds** of each
+  other, and boxes (when the survey's **Count** setting is *Boxes*) only
+  within the same frame. Where a frame has no capture time, distance alone
+  decides.
+
+Animals whose species is not determined (`animal`, `unknown`) are grouped among
+themselves, like any species; an animal without a geo-referenced position is on
+its own. The animals of a flight are divided once, all of them, so a group is
+the same in every tool: the [census](#census-summary) counts the groups, the
+[track inventory](#track-inventory) says which group each animal was in, and
+[distance sampling](#distance-sampling) takes a group as one observation.
+
 ### Census summary
 
 The plain census figures a survey report starts from: how many of each
 species were counted, how many of them inside the survey area, how many per
-km², and how they split by sex and age - per flight and for the survey as a
-whole. No detection-function model is involved; these are minimum counts.
+km², how they split by sex and age, and how many [groups](#groups) they formed
+- per flight and for the survey as a whole. No detection-function model is
+involved; these are minimum counts.
 
 What is counted - animals or boxes - is the survey's **Count** setting.
 
@@ -663,11 +691,22 @@ An animal without a geo-referenced position is counted, but with a survey
 area it is reported as *unplaced* rather than inside. **→ Show Census Table**
 opens the result as a table.
 
+The last three columns are the **groups** of the animals counted inside, their
+**mean size** and the **largest**. A group counts with its members that are
+counted: nine deer of which six stand inside the survey area are a group of
+six. The groups themselves are listed one row each - flight, species, size,
+members counted, position, radius, first and last time seen, and the track
+(or detection) ids of the members - and **→ Add Groups to QGIS** draws every
+group of two or more as an outline around its members, in the colour of the
+species and with the number of animals in it.
+
 **Outputs:**
 ```
 analytics_t/    # or analytics_w/, in the survey folder
 ├── census_summary_tracks.csv    # or census_summary_detections.csv
-└── census_summary_tracks.json
+├── census_summary_tracks.json
+├── groups_tracks.csv            # or groups_detections.csv: one row per group
+└── groups_tracks.json
 ```
 
 ### Density heatmap
@@ -712,13 +751,15 @@ The tool fits both a **half-normal** and a **hazard-rate** detection function by
 
 Up to 9.0 the whole flight log counted - take-off, the transit to the first transect, the way home - which made the line too long and the density too low.
 
+**What is observed: groups.** Whoever sees one animal of a herd sees the herd, so animals that were [together](#groups) are **one observation**: the detection function is fitted to the groups, each at the distance of its middle from the line (two animals either side of the line have their middle on it), and the density of animals is the density of groups times the **mean group size** - whose own uncertainty is part of the confidence interval (Buckland et al. 2001, section 3.5). Twelve deer in one meadow counted as twelve sightings would claim a precision the survey does not have. A group seen from a line counts with all its members. With nothing but animals on their own - or a group distance of `0` - the result is the one for individual animals. If the larger groups were the ones seen from further away, the result says so: near the limit of the strip a large group is noticed more easily than a small one, which makes the mean group size, and with it the density, too high.
+
 **How sure the encounter rate is.** Animals are clumped and lines cross different ground, so the number seen per metre varies from line to line by more than chance alone. With two or more lines - transect legs, or several flights - that variation is measured between them (Buckland et al. 2001); a Poisson figure, which assumes evenly spread animals and is too small otherwise, is used only when there is a single line. The report says which was used, and lists every line with its length and count.
 
 | Setting | Description |
 |---------|-------------|
 | **Truncation (m)** | Discard observations beyond this perpendicular distance. `0` = automatic (95th percentile) |
 
-On completion a results dialog summarises n, the length of surveyed line, truncation, the selected model, ESW, detection probability, density and abundance with CIs, plus the model-comparison (AIC) table.
+On completion a results dialog summarises n (the number of groups, with the animals in them and the mean group size where animals were together), the length of surveyed line, truncation, the selected model, ESW, detection probability, density and abundance with CIs, plus the model-comparison (AIC) table.
 
 **Outputs:**
 ```
@@ -726,7 +767,7 @@ analytics_t/    # or analytics_w/
 └── distance_sampling_tracks.json   # or distance_sampling_detections.json
 ```
 
-The JSON also stores the fitted detection-function curve and the distance histogram for external plotting. Abundance is reported for the covered strip area (2·w·L); multiply the density estimate by your study-area size for a study-area abundance.
+The JSON also stores the fitted detection-function curve and the distance histogram for external plotting, and what the observations were: `n_groups`, `n_animals`, `mean_group_size` with its standard error and CV, `largest_group`, `group_density_per_km2` and the size-bias check (`group_size_bias`). Abundance is reported for the covered strip area (2·w·L); multiply the density estimate by your study-area size for a study-area abundance.
 
 ### Coverage map
 
@@ -826,7 +867,7 @@ analytics_t/    # or analytics_w/, in the survey folder
 
 ### Track inventory
 
-One row per tracked individual of the chosen camera, with everything the project knows about it side by side: species (as every survey tool counts it), sex and age with their votes, box and occlusion counts, confidences, first and last frame with their capture times, start and end position (project CRS and WGS84), path length, the matched track on the other camera, labelling-tool annotations and the distance to the flight line. **→ List Tracked Individuals** writes it as `analytics_t/track_inventory.csv` and `.json`; **→ Add to QGIS** loads it as a point layer at each animal's last position.
+One row per tracked individual of the chosen camera, with everything the project knows about it side by side: species (as every survey tool counts it), sex and age with their votes, the [group](#groups) it was in (named after the lowest track number among its members) and that group's size, box and occlusion counts, confidences, first and last frame with their capture times, start and end position (project CRS and WGS84), path length, the matched track on the other camera, labelling-tool annotations and the distance to the flight line. **→ List Tracked Individuals** writes it as `analytics_t/track_inventory.csv` and `.json`; **→ Add to QGIS** loads it as a point layer at each animal's last position.
 
 **→ Show Report** opens the inventory as a sortable, filterable table built from the store as it stands now. Its first column, **Approved**, is your own verdict - a checkmark written to the track, so it survives, exports and appears in every later inventory. A click on a track's start or end frame opens the animal in the inspector at that frame, where the same facts are shown under the image and a wrong detection or track can be [deleted from the project](tools.md#detection--track-selection); the report follows what is done there. **Columns…** chooses which columns the table shows (saved with the QGIS project); the written CSV and JSON keep every column regardless.
 

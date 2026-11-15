@@ -1438,11 +1438,31 @@ class AnalyticsTabMixin:
                 f"<tr><td><b>Encounter-rate CV</b></td><td align='right'>"
                 f"{r['encounter_rate_cv'] * 100:.0f} % ({how})</td></tr>")
 
+        # An observation is a group of animals that were together
+        # (core.groups); results written before 9.1 know nothing of them.
+        grouped = (r.get("n_animals") or 0) > (r.get("n") or 0)
+        groups_rows = ""
+        if grouped:
+            groups_rows = (
+                "<tr><td><b>Animals in them</b></td><td align='right'>"
+                f"{r['n_animals']}</td></tr>"
+                "<tr><td><b>Mean group size</b></td><td align='right'>"
+                f"{r.get('mean_group_size') or 0:.2f} "
+                f"(SE {r.get('group_size_se') or 0:.2f}, largest "
+                f"{r.get('largest_group')})</td></tr>")
+        group_density_row = (
+            "<tr><td><b>Density of groups</b></td><td align='right'>"
+            f"{r.get('group_density_per_km2') or 0:.3f} /km²</td></tr>"
+            if grouped else "")
+        what = " groups" if grouped else ""
+        of_animals = " of animals" if grouped else ""
+
         html = f"""
         <h3>Distance-Sampling Estimate ({r.get('source', '')})</h3>
         <table cellpadding='4'>
-          <tr><td><b>Observations (n)</b></td><td align='right'>{r.get('n', 0)}
+          <tr><td><b>Observations (n)</b></td><td align='right'>{r.get('n', 0)}{what}
               (of {r.get('n_before_truncation', 0)})</td></tr>
+          {groups_rows}
           <tr><td><b>Surveyed line (L)</b></td>
               <td align='right'>{r.get('transect_length_m', 0):.0f} m{lines_text}</td></tr>
           {transit_row}
@@ -1454,7 +1474,8 @@ class AnalyticsTabMixin:
               <td align='right'>{r.get('effective_strip_width_m', 0):.2f} m</td></tr>
           <tr><td><b>Detection probability (p)</b></td>
               <td align='right'>{r.get('detection_probability', 0):.3f}</td></tr>
-          <tr><td><b>Density</b></td>
+          {group_density_row}
+          <tr><td><b>Density{of_animals}</b></td>
               <td align='right'>{r.get('density_per_km2', 0):.3f} /km²
               (95% CI {d_ci[0]:.3f}–{d_ci[1]:.3f})</td></tr>
           <tr><td><b>Abundance in covered area</b></td>

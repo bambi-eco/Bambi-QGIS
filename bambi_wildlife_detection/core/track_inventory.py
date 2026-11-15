@@ -29,6 +29,9 @@ COLUMNS = [
     "species", "species_vote_fraction", "species_votes", "species_model",
     "sex", "sex_vote_fraction", "sex_model",
     "age", "age_source",
+    # the animals it was with (core.groups): the group is named after its
+    # member with the lowest track id
+    "group", "group_size",
     "n_boxes", "n_occluded", "n_clear", "n_occlusion_unknown",
     "n_interpolated", "n_georeferenced",
     "mean_confidence", "min_confidence", "max_confidence",
@@ -236,6 +239,13 @@ def build_inventory(target_folder: str, modality: str,
         partners = match_store.partner_tracks(target_folder, modality)
     except Exception:  # nosec B110 - no match store is no partner
         partners = {}
+    # The whole flight is divided, whichever tracks are listed: a group is
+    # the same thing in every tool.
+    from . import analytics_source, groups
+    try:
+        together = groups.for_flight(target_folder, modality)
+    except analytics_source.AnalyticsError:
+        together = None
     # Annotations reach a row two ways: a label track imported from a
     # pipeline track (origin) that was not materialised, or one that was -
     # then the materialised track is the animal of record and the original
@@ -339,6 +349,10 @@ def build_inventory(target_folder: str, modality: str,
             "age": attributes.get("age", ""),
             "age_source": ((age_vote or {}).get("evidence") or {}).get(
                 "source", (age_vote or {}).get("model", "")),
+            "group": None if together is None else together.of(track_id),
+            "group_size": None if together is None or together.of(
+                track_id) is None else together.size_of(
+                together.of(track_id)),
             "n_boxes": len(members),
             "n_occluded": n_occluded,
             "n_clear": n_clear,
@@ -436,6 +450,14 @@ def describe_track(row: dict) -> List[Tuple[str, str]]:
         if row.get("age_source"):
             text += f" ({row['age_source']})"
         facts.append(("Age", text))
+    if row.get("group_size"):
+        others = int(row["group_size"]) - 1
+        if others:
+            facts.append(("Group", f"with {others} other"
+                          f"{'s' if others != 1 else ''} "
+                          f"(group {row.get('group')})"))
+        else:
+            facts.append(("Group", "alone"))
 
     if row.get("n_boxes") is not None:
         parts = [f"{row['n_boxes']} box(es)"]
@@ -522,6 +544,14 @@ def summarise(inventory: List[dict]) -> List[str]:
     lines.append(f"{sexed} sexed, {aged} aged, {matched} matched with the "
                  f"other camera, {placed} with a ground position")
     lines.append(f"{approved} of {len(inventory)} approved")
+    # one group per flight and group id; the size is the whole group's
+    sizes = {(row.get("flight"), row["group"]): row.get("group_size") or 0
+             for row in inventory if row.get("group") is not None}
+    larger = [size for size in sizes.values() if size > 1]
+    if larger:
+        lines.append(f"{len(larger)} group(s) of two or more animals "
+                     f"(largest {max(larger)}), "
+                     f"{len(sizes) - len(larger)} animal(s) alone")
     return lines
 
 

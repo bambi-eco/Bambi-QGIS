@@ -298,6 +298,8 @@ stayed behind under the old name).
 
 Each species also has a map colour, set here with **Colour…** - see [How animals are drawn](#how-animals-are-drawn).
 
+**Group Distance…** sets how far apart two animals of the species may be and still belong to one [group](pipeline.md#groups) in the survey analytics: 50 m unless set, `0` for a species that is never grouped. A distance the project set itself is shown in the list ("groups within 20 m", "never grouped"). Like the rest of the schema it belongs to the flight, and a survey takes each flight's own - so after a change the plugin offers to use the group distances for the other flights of the project as well.
+
 Every project has three base classes that cannot be renamed or removed:
 
 | Species | Meaning |
