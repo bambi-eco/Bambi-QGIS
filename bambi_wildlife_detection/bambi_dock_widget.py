@@ -470,6 +470,17 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         self.main_tabs = main_tabs
         scroll_layout.addWidget(main_tabs)
 
+        # One builder per tab, in the order of the tabs. Each makes its
+        # widgets as attributes of this dock widget, as they always were.
+        self._build_input_tab(main_tabs)
+        self._build_configuration_tab(main_tabs)
+        self._build_step_tabs(main_tabs)
+        self._build_run_panel(scroll_layout)
+        self._build_analytics_tab(main_tabs)
+
+    def _build_input_tab(self, main_tabs):
+        """The Input tab: videos or photos, flight log, calibrations, the
+        elevation model and the target folder."""
         # =====================================================================
         # MAIN TAB 1: INPUT
         # =====================================================================
@@ -1128,6 +1139,8 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         input_layout.addWidget(geo_group)
         input_layout.addStretch()
 
+    def _build_configuration_tab(self, main_tabs):
+        """The Configuration tab: one sub-tab per group of settings."""
         # =====================================================================
         # MAIN TAB 2: CONFIGURATION (with sub-tabs)
         # =====================================================================
@@ -1140,6 +1153,21 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         self.config_sub_tabs = config_sub_tabs
         config_layout.addWidget(config_sub_tabs)
 
+        self._build_project_settings(config_sub_tabs)
+        self._build_extraction_settings(config_sub_tabs)
+        self._build_flight_route_settings(config_sub_tabs)
+        self._build_detection_settings(config_sub_tabs)
+        self._build_correction_settings(config_sub_tabs)
+        self._build_tracking_settings(config_sub_tabs)
+        self._build_classification_settings(config_sub_tabs)
+        self._build_fov_settings(config_sub_tabs)
+        self._build_alfs_settings(config_sub_tabs)
+        self._build_orthomosaic_settings(config_sub_tabs)
+        # ----- Sub-Tab: Environment (bambi_environment_panel) -----
+        self._build_environment_config_tab(config_sub_tabs)
+
+    def _build_project_settings(self, config_sub_tabs):
+        """Configuration > Project."""
         # ----- Sub-Tab: Project -----
         # Settings that describe the survey rather than one processing step,
         # so they come before the steps that consume them.
@@ -1207,6 +1235,8 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         project_tab_layout.addWidget(symbols_group)
         project_tab_layout.addStretch()
 
+    def _build_extraction_settings(self, config_sub_tabs):
+        """Configuration > Extraction."""
         # ----- Sub-Tab: Extraction -----
         extraction_tab = QWidget()
         extraction_tab_layout = QVBoxLayout(extraction_tab)
@@ -1544,6 +1574,8 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         self._refresh_thermal_sdk_status()
         extraction_tab_layout.addStretch()
 
+    def _build_flight_route_settings(self, config_sub_tabs):
+        """Configuration > Flight Route."""
         # ----- Sub-Tab 7: Flight Route Visualization -----
         flight_route_tab = QWidget()
         flight_route_tab_layout = QVBoxLayout(flight_route_tab)
@@ -1684,6 +1716,8 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         flight_route_tab_layout.addWidget(time_markers_group)
         flight_route_tab_layout.addStretch()
 
+    def _build_detection_settings(self, config_sub_tabs):
+        """Configuration > Detection."""
         # ----- Sub-Tab 1: Detection -----
         detect_tab = QWidget()
         detect_tab_layout = QVBoxLayout(detect_tab)
@@ -1860,6 +1894,8 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
 
         detect_tab_layout.addStretch()
 
+    def _build_correction_settings(self, config_sub_tabs):
+        """Configuration > Position Correction."""
         # ----- Sub-Tab 2: Position Correction -----
         correction_tab = QWidget()
         correction_tab_layout = QVBoxLayout(correction_tab)
@@ -2002,6 +2038,8 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
 
         correction_tab_layout.addStretch()
 
+    def _build_tracking_settings(self, config_sub_tabs):
+        """Configuration > Tracking."""
         # ----- Sub-Tab 3: Tracking -----
         tracking_tab = QWidget()
         tracking_tab_layout = QVBoxLayout(tracking_tab)
@@ -2176,6 +2214,9 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         tracking_layout.addRow(self.builtin_params_widget)
 
         tracking_tab_layout.addWidget(tracking_group)
+
+        from .bambi_custom_impl_widget import CustomImplementationBox
+        from .core import custom_models as _custom_models
 
         custom_trk_box = CustomImplementationBox(
             "Custom tracker", _custom_models.TRACKER)
@@ -2357,6 +2398,8 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
 
         tracking_tab_layout.addStretch()
 
+    def _build_classification_settings(self, config_sub_tabs):
+        """Configuration > Classification."""
         # ----- Sub-Tab: Classification -----
         classification_tab = QWidget()
         classification_tab_layout = QVBoxLayout(classification_tab)
@@ -2763,6 +2806,8 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         # than by load_config_from_project.
         self._load_hf_token()
 
+    def _build_fov_settings(self, config_sub_tabs):
+        """Configuration > Field of View."""
         # ----- Sub-Tab 4: Field of View -----
         fov_tab = QWidget()
         fov_tab_layout = QVBoxLayout(fov_tab)
@@ -2843,6 +2888,8 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         fov_tab_layout.addWidget(fov_group)
         fov_tab_layout.addStretch()
 
+    def _build_alfs_settings(self, config_sub_tabs):
+        """Configuration > ALFS/GeoTiff."""
         # ----- Sub-Tab 5: ALFS -----
         alfs_tab = QWidget()
         alfs_tab_layout = QVBoxLayout(alfs_tab)
@@ -3010,6 +3057,8 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         alfs_tab_layout.addWidget(geotiff_group)
         alfs_tab_layout.addStretch()
 
+    def _build_orthomosaic_settings(self, config_sub_tabs):
+        """Configuration > Orthomosaic."""
         # ----- Sub-Tab 6: Orthomosaic (merge exported frame GeoTIFFs) -----
         ortho_tab = QWidget()
         ortho_tab_layout = QVBoxLayout(ortho_tab)
@@ -3074,9 +3123,13 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         ortho_tab_layout.addWidget(ortho_group)
         ortho_tab_layout.addStretch()
 
-        # ----- Sub-Tab: Environment (bambi_environment_panel) -----
-        self._build_environment_config_tab(config_sub_tabs)
+    def _build_step_tabs(self, main_tabs):
+        """The Pre-Processing and the Processing tab: the step buttons with
+        their status marks and "Add ... to QGIS" buttons, and the export.
 
+        Both in one place because their steps are made in the order of the
+        pipeline, which alternates between the two tabs.
+        """
         # =====================================================================
         # MAIN TAB 3: PROCESSING
         # =====================================================================
@@ -3747,6 +3800,9 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         self._on_export_format_changed()
         animal_layout.addStretch()
 
+    def _build_run_panel(self, scroll_layout):
+        """What is below the tabs whichever tab is in front: refresh and
+        reset, and the log."""
         # ---------------------------------------------------------------------
         # Shared run panel - below the tabs, so the log is visible whichever
         # tab a step was started from (the progress bar sits above the tabs).
@@ -3796,6 +3852,8 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         run_layout.addWidget(log_group)
         scroll_layout.addWidget(run_panel)
 
+    def _build_analytics_tab(self, main_tabs):
+        """The Survey Analytics tab."""
         # =====================================================================
         # MAIN TAB 4: SURVEY ANALYTICS
         # =====================================================================
