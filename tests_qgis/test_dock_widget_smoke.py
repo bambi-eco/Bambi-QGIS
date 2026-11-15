@@ -244,3 +244,64 @@ def test_flight_log_margin_info_explains_why_and_auto(dock, monkeypatch):
     text = shown[0]
     assert "Why it is needed" in text and "extrapolated" in text
     assert "Auto" in text and "plus 1 s" in text
+
+
+# ---------------------------------------------------------------------------
+# The detected time zone
+# ---------------------------------------------------------------------------
+
+def _night_flight(tmp_path):
+    """A thermal video from 00:30 local (UTC+2) and its flight log."""
+    from datetime import datetime, timedelta
+
+    local, utc = datetime(2026, 6, 15, 0, 30), datetime(2026, 6, 14, 22, 30)
+    srt, rows = [], ["time,isVideo,datetime(utc)"]
+    for second in range(0, 600, 20):
+        step = timedelta(seconds=second)
+        srt += [str(second), "00:00:00,000 --> 00:00:00,033",
+                (local + step).strftime("%Y-%m-%d %H:%M:%S"), ""]
+        rows.append(f"1,1,{(utc + step).strftime('%Y-%m-%dT%H:%M:%SZ')}")
+    srt_path = tmp_path / "DJI_0001_T.SRT"
+    srt_path.write_text("\n".join(srt))
+    log_path = tmp_path / "airdata.csv"
+    log_path.write_text("\n".join(rows))
+    return str(srt_path), str(log_path)
+
+
+def test_the_time_zone_of_a_thermal_night_flight_is_detected(dock, tmp_path):
+    """Only the RGB SRT files were read, and the times of day compared:
+    a thermal-only flight had no detection, and after midnight it was
+    UTC-22."""
+    srt, log = _night_flight(tmp_path)
+    dock.thermal_srt_paths_edit.setText(srt)
+    dock.airdata_path_edit.setText(log)
+
+    assert dock._compute_auto_timezone_offset() == 2.0
+    assert dock.get_config()["timezone_offset_hours"] == 2.0
+    dock._refresh_auto_timezone_offset()
+    assert dock.tz_auto_result_label.text() == "Detected offset: UTC+2h"
+
+
+def test_the_detection_is_not_repeated_for_every_query(dock, tmp_path,
+                                                       monkeypatch):
+    """Every get_config() read all SRT files and the flight log again."""
+    from bambi_wildlife_detection.core import timezone_detection
+
+    srt, log = _night_flight(tmp_path)
+    dock.thermal_srt_paths_edit.setText(srt)
+    dock.airdata_path_edit.setText(log)
+    calls = []
+    real = timezone_detection.detect_offset
+    monkeypatch.setattr(
+        timezone_detection, "detect_offset",
+        lambda *a, **k: (calls.append(1), real(*a, **k))[1])
+
+    for _ in range(5):
+        assert dock.get_config()["timezone_offset_hours"] == 2.0
+    assert len(calls) == 1
+
+    with open(srt, "a") as handle:                   # the file changes
+        handle.write("\n999\n00:00:00,000 --> 00:00:00,033\n"
+                     "2026-06-15 00:45:00\n")
+    dock.get_config()
+    assert len(calls) == 2

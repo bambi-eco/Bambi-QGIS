@@ -160,3 +160,125 @@ class TestOffsetFromExif:
         airdata = _write_airdata(
             tmp_path, flag="isPhoto", rows=[("1", "2023-09-20T08:30:00Z")])
         assert offset_from_exif(str(photos), airdata) is None
+
+
+# ---------------------------------------------------------------------------
+# Night flights
+# ---------------------------------------------------------------------------
+
+class TestNightFlights:
+    """The offset was the difference between the mean *times of day* of the
+    video and of the log. That goes wrong exactly when wildlife is flown."""
+
+    @staticmethod
+    def _flight(tmp_path, local_start, utc_start, minutes=30, name="video"):
+        """A video of *minutes* and the log rows flagged as it, a second
+        apart at the start of every minute."""
+        from datetime import datetime, timedelta
+
+        local = datetime.strptime(local_start, "%Y-%m-%d %H:%M:%S")
+        utc = datetime.strptime(utc_start, "%Y-%m-%d %H:%M:%S")
+        stamps, rows = [], []
+        for minute in range(minutes):
+            for second in (0, 30):
+                step = timedelta(minutes=minute, seconds=second)
+                stamps.append((local + step).strftime("%Y-%m-%d %H:%M:%S"))
+                rows.append(("1", (utc + step).strftime("%Y-%m-%dT%H:%M:%SZ")))
+        folder = tmp_path / name
+        folder.mkdir()
+        return _write_srt(folder, stamps), _write_airdata(folder, rows=rows)
+
+    def test_a_flight_across_midnight(self, tmp_path):
+        """23:45 to 00:15 local: the mean time of day is about noon, and
+        the answer was UTC-10."""
+        srt, airdata = self._flight(
+            tmp_path, "2026-06-14 23:45:00", "2026-06-14 21:45:00")
+        assert offset_from_srt([srt], airdata) == 2.0
+
+    def test_a_flight_after_midnight(self, tmp_path):
+        """00:30 local is still yesterday, 22:30, in UTC: it came out as
+        UTC-22."""
+        srt, airdata = self._flight(
+            tmp_path, "2026-06-15 00:30:00", "2026-06-14 22:30:00")
+        assert offset_from_srt([srt], airdata) == 2.0
+
+    def test_a_flight_before_dawn_west_of_greenwich(self, tmp_path):
+        """22:00 local in Denver is 04:00 the next day in UTC."""
+        srt, airdata = self._flight(
+            tmp_path, "2026-06-14 22:00:00", "2026-06-15 04:00:00")
+        assert offset_from_srt([srt], airdata) == -6.0
+
+    @pytest.mark.parametrize("local, utc, offset", [
+        ("2026-01-10 16:15:00", "2026-01-10 10:45:00", 5.5),     # India
+        ("2026-01-10 16:30:00", "2026-01-10 10:45:00", 5.75),    # Nepal
+        ("2026-01-10 21:15:00", "2026-01-10 10:45:00", 10.5),    # Adelaide
+        ("2026-01-11 01:00:00", "2026-01-10 12:00:00", 13.0),    # Tonga
+    ])
+    def test_offsets_that_are_no_whole_hours(self, tmp_path, local, utc,
+                                             offset):
+        """Rounding to whole hours put such a flight half an hour off."""
+        srt, airdata = self._flight(tmp_path, local, utc)
+        assert offset_from_srt([srt], airdata) == offset
+
+    def test_one_video_of_a_longer_log(self, tmp_path):
+        """The log flags 40 minutes, the SRT at hand covers ten of them.
+        Several offsets put it inside; the whole hour is the time zone."""
+        from datetime import datetime, timedelta
+
+        _srt, airdata = self._flight(
+            tmp_path, "2026-06-14 23:40:00", "2026-06-14 21:40:00",
+            minutes=40)
+        start = datetime(2026, 6, 14, 23, 55)
+        part = _write_srt(tmp_path, [
+            (start + timedelta(seconds=30 * i)).strftime("%Y-%m-%d %H:%M:%S")
+            for i in range(20)])
+        assert offset_from_srt([part], airdata) == 2.0
+
+    def test_a_camera_clock_on_another_date_goes_by_the_clock_face(
+            self, tmp_path):
+        """Nothing coincides - the camera thinks it is 2020. The times of
+        day are then compared the short way round: 23:45 and 21:45 are two
+        hours apart, also when both run across midnight."""
+        srt, airdata = self._flight(
+            tmp_path, "2020-01-01 23:45:00", "2026-06-14 21:45:00")
+        assert offset_from_srt([srt], airdata) == 2.0
+
+    def test_the_day_flight_is_what_it_was(self, tmp_path):
+        srt, airdata = self._flight(
+            tmp_path, "2023-09-20 10:30:00", "2023-09-20 08:30:00")
+        assert offset_from_srt([srt], airdata) == 2.0
+
+    def test_nothing_to_compare_is_no_answer(self):
+        from bambi_wildlife_detection.core import timezone_detection as tz
+
+        assert tz.best_offset([], []) is None
+        assert tz.detect_offset([], [], "", True) is None
+
+
+class TestDetectOffset:
+    def test_either_cameras_srt_will_do(self, tmp_path):
+        """Only the RGB files were read: a thermal-only flight had no
+        detection at all."""
+        from bambi_wildlife_detection.core import timezone_detection as tz
+
+        srt, airdata = TestNightFlights._flight(
+            tmp_path, "2026-06-15 00:30:00", "2026-06-14 22:30:00")
+        assert tz.detect_offset([srt], [], airdata, video_mode=True) == 2.0
+        assert tz.detect_offset(["", srt], [], airdata, True) == 2.0
+        assert tz.detect_offset([srt], [], airdata, video_mode=False) is None
+
+    def test_the_signature_changes_with_the_files(self, tmp_path):
+        import os
+        from bambi_wildlife_detection.core import timezone_detection as tz
+
+        srt, airdata = TestNightFlights._flight(
+            tmp_path, "2026-06-15 00:30:00", "2026-06-14 22:30:00")
+        folder = str(tmp_path / "photos")
+        os.makedirs(folder)
+        before = tz.inputs_signature([srt, folder, airdata, "", "/nope"])
+        assert before == tz.inputs_signature(
+            [srt, folder, airdata, "", "/nope"])
+        with open(srt, "a") as handle:
+            handle.write("\n2026-06-15 01:10:00\n")
+        assert tz.inputs_signature([srt, folder, airdata]) != before[:3]
+

@@ -13,7 +13,7 @@ import math
 import tempfile
 from collections import defaultdict
 from typing import Optional, Dict, Any, List
-from qgis.PyQt.QtCore import Qt, QThread
+from qgis.PyQt.QtCore import Qt, QThread, QTimer
 from qgis.PyQt.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QGroupBox, QPushButton, QLineEdit, QSpinBox, QDoubleSpinBox,
@@ -1406,6 +1406,22 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         tz_group_layout.addRow("Timezone:", self.tz_manual_widget)
 
         self.timezone_combo.currentTextChanged.connect(self._update_timezone_offset_label)
+
+        # The detected offset follows the files it is read from. It was
+        # only worked out when "auto" was ticked, so the label kept showing
+        # the previous flight's offset after other files were chosen.
+        self._tz_refresh_timer = QTimer(self)
+        self._tz_refresh_timer.setSingleShot(True)
+        self._tz_refresh_timer.setInterval(400)
+        self._tz_refresh_timer.timeout.connect(
+            self._refresh_auto_timezone_offset)
+        for edit in (self.rgb_srt_paths_edit, self.thermal_srt_paths_edit,
+                     self.airdata_path_edit, self.thermal_photo_dir_edit,
+                     self.rgb_photo_dir_edit):
+            edit.textChanged.connect(
+                lambda _text: self._tz_refresh_timer.start())
+        self.video_mode_check.toggled.connect(
+            lambda _on: self._tz_refresh_timer.start())
 
         self.tz_manual_hint = QLabel(
             'Timezone of camera/drone clock when recordings were made '
@@ -5163,6 +5179,8 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
 
     def _refresh_auto_timezone_offset(self):
         """Recompute the auto-detected offset and update the result label."""
+        if not self.tz_auto_check.isChecked():
+            return
         offset = self._compute_auto_timezone_offset()
         if offset is not None:
             sign = "+" if offset >= 0 else ""
@@ -5180,31 +5198,43 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             self.log("Warning: Auto timezone detection failed, falling back to manual timezone")
         return self._compute_timezone_offset(self.timezone_combo.currentText().strip()) or 0.0
 
+    def _timezone_inputs(self):
+        """``(srt paths, photo folders, flight log, video mode)`` - what the
+        offset is detected from. The SRT files of *either* camera: only the
+        RGB ones used to be read, so a thermal-only flight had no detection
+        at all."""
+        def paths(edit):
+            return [p.strip() for p in edit.text().split(",") if p.strip()]
+
+        srt = paths(self.rgb_srt_paths_edit) + paths(self.thermal_srt_paths_edit)
+        photos = [folder for folder in (
+            self.thermal_photo_dir_edit.text().strip(),
+            self.rgb_photo_dir_edit.text().strip()) if folder]
+        return (srt, photos, self.airdata_path_edit.text().strip(),
+                self.video_mode_check.isChecked())
+
     def _compute_auto_timezone_offset(self) -> Optional[float]:
         """Auto-detect timezone offset.
 
         In video mode: compares SRT frame timestamps with AirData isVideo UTC timestamps.
         In photo mode (or as fallback): compares photo EXIF timestamps with AirData isPhoto UTC timestamps.
-        Returns the offset in whole hours or None if detection fails.
+        Returns the offset in hours or None if detection fails.
+
+        The answer is kept until one of the files it was read from changes:
+        every query of the form asks for it, and reading all SRT files and
+        the flight log each time made the form sluggish.
         """
-        if self.video_mode_check.isChecked():
-            offset = self._compute_auto_tz_from_srt()
-            if offset is not None:
-                return offset
-        return self._compute_auto_tz_from_exif()
+        from .core import timezone_detection
 
-    def _compute_auto_tz_from_srt(self) -> Optional[float]:
-        """Match SRT local timestamps against AirData isVideo UTC timestamps."""
-        from .core.timezone_detection import offset_from_srt
-        srt_text = self.rgb_srt_paths_edit.text().strip()
-        srt_paths = [p.strip() for p in srt_text.split(",") if p.strip()]
-        return offset_from_srt(srt_paths, self.airdata_path_edit.text().strip())
-
-    def _compute_auto_tz_from_exif(self) -> Optional[float]:
-        """Match photo EXIF timestamps against AirData isPhoto UTC timestamps."""
-        from .core.timezone_detection import offset_from_exif
-        photo_dir = (self.thermal_photo_dir_edit.text().strip() or self.rgb_photo_dir_edit.text().strip())
-        return offset_from_exif(photo_dir, self.airdata_path_edit.text().strip())
+        srt, photos, airdata, video_mode = self._timezone_inputs()
+        signature = (video_mode,) + timezone_detection.inputs_signature(
+            srt + photos + [airdata])
+        cached = getattr(self, "_timezone_cache", None)
+        if cached is None or cached[0] != signature:
+            cached = (signature, timezone_detection.detect_offset(
+                srt, photos, airdata, video_mode))
+            self._timezone_cache = cached
+        return cached[1]
 
     def _collect_airdata_hours(self, flag_column_lower: str) -> Optional[list]:
         """Read UTC hours from AirData rows where the flag column is truthy."""

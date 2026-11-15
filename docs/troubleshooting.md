@@ -32,6 +32,12 @@ A download arrived, but it is not the model that was published - it was cut off,
 - Enter the correct CRS in the **Source CRS** field (e.g. `EPSG:3006` for SWEREF99TM) before converting
 - Verify the correct CRS by loading the file in QGIS and checking its reported coordinate system
 
+## Frames do not line up with the flight log (time zone)
+
+The cameras write local time, the flight log UTC; **Timezone → Auto** finds the offset between them by looking for the one - any quarter of an hour from UTC-12 to UTC+14 - under which the recording falls on the log rows flagged as video (or photo). It reads the SRT files of either camera, and the photos' EXIF times where there are none, and shows what it found as *Detected offset*; the label follows the files you choose.
+
+Up to 9.0 the offset was the difference between the mean *times of day* of the two, rounded to whole hours. That failed at night: a video across midnight came out as UTC-10, one after midnight as UTC-22 (where UTC+2 was right), and the frames were then matched to the wrong part of the log, or to none of it. Offsets that are no whole hours (India, Nepal, parts of Australia) were half an hour off. If the detected offset looks wrong - a camera clock that was never set, say - untick **Auto** and choose the time zone by name.
+
 ## Photo mode: images not matched to GPS
 
 - Ensure image timestamps (EXIF) are in UTC or that the correct timezone offset is configured in the **Configuration** tab
