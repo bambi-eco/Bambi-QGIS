@@ -67,15 +67,31 @@ def write_poses(folder: str, n_frames: int, modality: str = "t",
     return path
 
 
+def write_footprints(folder: str, boxes, modality: str = "t") -> None:
+    """The ground the camera saw: one footprint per *box* ``(min x, min y,
+    max x, max y)`` in metres from :data:`ORIGIN`, as the frames 0, 1, ..."""
+    from bambi_wildlife_detection.core import fov_store
+
+    polygons = {}
+    for frame, (x0, y0, x1, y1) in enumerate(boxes):
+        polygons[frame] = [
+            (ORIGIN[0] + x, ORIGIN[1] + y, 0.0)
+            for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1))]
+    fov_store.record_fov(folder, modality, polygons)
+
+
 def make_flight(folder: str, tracks, modality: str = "t",
                 seconds_per_frame: float = 1.0, timed: bool = True,
-                loose_boxes=(), n_frames=None, locations=None) -> str:
+                loose_boxes=(), n_frames=None, locations=None,
+                seen=None) -> str:
     """A processed flight: detections, their places, the tracks.
 
     :param tracks: ``{"id", "species", "at": (x, y) | None, "frames":
         (first, last)}``; ``at`` ``None`` = never geo-referenced. Optional
         ``"sex"`` / ``"age"`` labels and ``"approved"``.
     :param loose_boxes: ``{"species", "at", "frame"}`` - boxes of no track
+    :param seen: the ground the camera saw (:func:`write_footprints`);
+        ``None`` = no field-of-view footprints at all
     :return: *folder*
     """
     os.makedirs(folder, exist_ok=True)
@@ -155,4 +171,6 @@ def make_flight(folder: str, tracks, modality: str = "t",
     last = max([frame for frame, _t, _p, _s in boxes] or [0])
     write_poses(folder, n_frames or last + 1, modality, seconds_per_frame,
                 timed, locations)
+    if seen is not None:
+        write_footprints(folder, seen, modality)
     return folder
