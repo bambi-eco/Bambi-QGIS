@@ -2434,6 +2434,10 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
                            "in the backbone) and will be recomputed")
 
         boxes = {row["detection_id"]: row for row in rows}
+        ids_of_frame: Dict[int, set] = {}
+        for row in rows:
+            ids_of_frame.setdefault(row["frame"], set()).add(
+                int(row["detection_id"]))
         pending = classification_store.pending_ids(
             target_folder, suffix, run_id,
             [row["detection_id"] for row in rows])
@@ -2525,10 +2529,12 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
                 for offset, vector in enumerate(embedded):
                     vectors[ids[start + offset]] = vector
 
+            # Beside the vectors the frame already has: only what was
+            # pending is computed, and writing those alone dropped the rest.
             embedding_files.write_frame(
                 embedding_files.frame_path(
                     target_folder, suffix, projection, frame, imagefile),
-                vectors)
+                vectors, keep=ids_of_frame.get(frame, ()))
             # Recorded per frame, so an interrupted run resumes from exactly
             # what it finished rather than starting again.
             classification_store.record_embedded(

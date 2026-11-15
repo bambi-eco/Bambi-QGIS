@@ -193,6 +193,45 @@ def test_only_the_missing_detections_are_recomputed(flight):
     assert any("missing from disk" in line for line in logs)
 
 
+def _add_a_box_to_frame_0(root):
+    """A detection added later - a hand label, say - joining track 2."""
+    conn = store.open_store(
+        store.stage_path(root, store.DETECTIONS, "t"), store.DETECTIONS, "t")
+    with store.transaction(conn):
+        new = conn.execute(
+            "INSERT INTO detections (frame, x1, y1, x2, y2, confidence, "
+            "species_id, source_id) VALUES (0, 100, 80, 130, 110, 0.7, 0, 1)"
+        ).lastrowid
+    conn.close()
+    conn = store.open_store(
+        store.stage_path(root, store.TRACKS, "t"), store.TRACKS, "t")
+    with store.transaction(conn):
+        conn.execute("INSERT INTO track_members (track_id, detection_id, "
+                     "interpolated) VALUES (2, ?, 0)", (new,))
+    conn.close()
+    return int(new)
+
+
+def test_a_box_added_later_keeps_the_frames_other_vectors(flight):
+    """Only the new box is embedded - and its vector used to replace the
+    frame's archive, so boxes 1 and 2 lost theirs while the store still
+    listed them. The run after that recomputed those and dropped the new
+    one: every run undid part of the one before."""
+    _run(flight)
+    new = _add_a_box_to_frame_0(flight)
+
+    _run(flight)
+    assert FakeBackbone.last.embedded == 1
+
+    archive = embedding_files.read_frame(embedding_files.frame_path(
+        flight, "t", "non_geo", 0, "frame_000000.jpg"))
+    assert set(archive) == {1, 2, new}
+
+    logs = _run(flight)                     # and it stays that way
+    assert FakeBackbone.last.embedded == 0
+    assert not any("missing from disk" in line for line in logs)
+
+
 def test_an_interrupted_run_keeps_what_it_finished(flight):
     calls = {"n": 0}
 

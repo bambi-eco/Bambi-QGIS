@@ -94,20 +94,58 @@ def frame_path(target_folder: str, modality: str, projection: str,
 # Writing
 # ---------------------------------------------------------------------------
 
-def write_frame(path: str, vectors: Dict[int, "object"]) -> int:
-    """Write one frame's vectors, replacing whatever was there.
+def write_frame(path: str, vectors: Dict[int, "object"],
+                keep: Optional[Iterable[int]] = None) -> int:
+    """Write vectors into a frame's archive, beside those it already holds.
 
-    *vectors* maps ``detection_id`` onto a 1-D float32 array. Written whole
-    rather than appended to: a frame is embedded in one pass, and a partial
-    archive that looked complete would be worse than one that is absent.
+    *vectors* maps ``detection_id`` onto a 1-D float32 array.
+
+    A frame is not always embedded in one pass: a box added later - a hand
+    label - or a vector that has to be computed again comes on its own. This
+    used to write the archive with those vectors alone, so the vectors of
+    the frame's other detections were gone while the store still listed
+    them; the next run noticed, computed *them* again and dropped the first
+    in turn, and classification in between saw half the frame.
+
+    The vectors already there are therefore kept: all of them, or with
+    *keep* only those of the detections named (the frame's detections as
+    they are now - so the vectors of boxes that no longer exist do not
+    accumulate). A stored vector that is not finite is never kept; it is
+    what a reduced-precision overflow leaves behind, and worse than none.
+
+    The archive is written beside the old one and then moved over it, so an
+    interrupted write leaves what was there rather than a truncated file.
+
+    :return: the number of vectors written by this call (those kept do not
+        count)
     """
     import numpy as np
 
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     payload = {array_key(detection_id): np.asarray(vector, dtype=np.float32)
                for detection_id, vector in vectors.items()}
-    np.savez(path, **payload)
-    return len(payload)
+    written = len(payload)
+
+    wanted = None if keep is None else {int(i) for i in keep}
+    for detection_id, vector in read_frame(path).items():
+        key = array_key(detection_id)
+        if key in payload:
+            continue
+        if wanted is not None and detection_id not in wanted:
+            continue
+        vector = np.asarray(vector, dtype=np.float32)
+        if np.isfinite(vector).all():
+            payload[key] = vector
+
+    temporary = f"{path}.tmp"
+    try:
+        with open(temporary, "wb") as handle:
+            np.savez(handle, **payload)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.remove(temporary)
+    return written
 
 
 # ---------------------------------------------------------------------------

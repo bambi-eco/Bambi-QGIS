@@ -96,11 +96,59 @@ class TestRoundTrip:
         ef.write_frame(path, {1: _vector(0)})
         assert os.path.isfile(path)
 
-    def test_rewriting_a_frame_replaces_it(self, folder):
+    def test_writing_again_keeps_the_frames_other_vectors(self, folder):
+        """A box added later is embedded on its own. Writing its vector
+        used to replace the archive, so the frame's other vectors were gone
+        while the store still listed them."""
         path = os.path.join(folder, "f.npz")
         ef.write_frame(path, {1: _vector(0), 2: _vector(10)})
+        written = ef.write_frame(path, {3: _vector(20)})
+
+        assert written == 1
+        archive = ef.read_frame(path)
+        assert set(archive) == {1, 2, 3}
+        assert np.array_equal(archive[2], _vector(10))
+
+    def test_a_vector_computed_again_replaces_the_old_one(self, folder):
+        path = os.path.join(folder, "f.npz")
+        ef.write_frame(path, {1: _vector(0), 2: _vector(10)})
+        ef.write_frame(path, {2: _vector(50)})
+        archive = ef.read_frame(path)
+        assert np.array_equal(archive[1], _vector(0))
+        assert np.array_equal(archive[2], _vector(50))
+
+    def test_vectors_of_boxes_that_are_gone_do_not_accumulate(self, folder):
+        path = os.path.join(folder, "f.npz")
+        ef.write_frame(path, {1: _vector(0), 2: _vector(10)})
+        ef.write_frame(path, {3: _vector(20)}, keep={2, 3})
+        assert set(ef.read_frame(path)) == {2, 3}
+        ef.write_frame(path, {4: _vector(30)}, keep=())
+        assert set(ef.read_frame(path)) == {4}
+
+    def test_an_unusable_vector_is_not_kept(self, folder):
+        path = os.path.join(folder, "f.npz")
+        bad = _vector(0)
+        bad[1] = np.nan
+        ef.write_frame(path, {1: bad, 2: _vector(10)})
         ef.write_frame(path, {3: _vector(20)})
-        assert set(ef.read_frame(path)) == {3}
+        assert set(ef.read_frame(path)) == {2, 3}
+
+    def test_an_interrupted_write_leaves_the_archive_as_it_was(
+            self, folder, monkeypatch):
+        path = os.path.join(folder, "f.npz")
+        ef.write_frame(path, {1: _vector(0)})
+
+        def fail(handle, **_arrays):
+            handle.write(b"half an archive")
+            raise OSError("disk full")
+
+        monkeypatch.setattr(np, "savez", fail)
+        with pytest.raises(OSError):
+            ef.write_frame(path, {2: _vector(10)})
+        monkeypatch.undo()
+
+        assert set(ef.read_frame(path)) == {1}
+        assert os.listdir(folder) == ["f.npz"]       # nothing left behind
 
     def test_an_absent_file_reads_as_empty(self, folder):
         assert ef.read_frame(os.path.join(folder, "nope.npz")) == {}
