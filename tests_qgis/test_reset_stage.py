@@ -29,6 +29,18 @@ def project_folder(tmp_path):
     return root
 
 
+def _choose(monkeypatch, label):
+    """Answer the step picker with *label*; returns what it offered."""
+    offered = []
+
+    def get_item(_parent, _title, _prompt, items, *_args, **_kwargs):
+        offered.extend(items)
+        return label, True
+
+    monkeypatch.setattr(QInputDialog, "getItem", get_item)
+    return offered
+
+
 @pytest.fixture
 def quiet(monkeypatch):
     """Stub the modal dialogs - they abort a headless run."""
@@ -63,9 +75,7 @@ def test_reports_when_there_is_nothing_to_reset(dock, quiet, tmp_path):
 
 
 def test_resets_the_chosen_stage(dock, quiet, monkeypatch, project_folder):
-    monkeypatch.setattr(
-        QInputDialog, "getItem",
-        lambda *a, **k: (dock.STAGE_LABELS["tracking"], True))
+    _choose(monkeypatch, "Track Animals - Thermal")
 
     dock.target_folder_edit.setText(project_folder)
     dock.reset_stage()
@@ -74,12 +84,81 @@ def test_resets_the_chosen_stage(dock, quiet, monkeypatch, project_folder):
     assert stages.has_output(project_folder, "detection", "t")
 
 
+@pytest.fixture
+def both_cameras(project_folder):
+    for kind in (store.DETECTIONS, store.TRACKS):
+        store.open_store(
+            store.stage_path(project_folder, kind, "w"), kind, "w").close()
+    store.open_store(
+        store.matches_path(project_folder), store.MATCHES).close()
+    return project_folder
+
+
+def test_the_picker_offers_each_cameras_steps(dock, quiet, monkeypatch,
+                                              both_cameras):
+    offered = _choose(monkeypatch, "nothing of that name")
+
+    dock.target_folder_edit.setText(both_cameras)
+    dock.reset_stage()
+
+    assert offered == [
+        "Detect Animals - Thermal", "Detect Animals - RGB",
+        "Geo-Reference Detections - Thermal",
+        "Match RGB ↔ Thermal Tracks - both cameras",
+        "Track Animals - Thermal", "Track Animals - RGB"]
+
+
+@pytest.mark.parametrize("camera", ["t", "w"])
+def test_the_rgb_camera_can_be_reset(dock, quiet, monkeypatch, both_cameras,
+                                     camera):
+    """The camera was read off a combo box in a way that always gave
+    thermal: the RGB results could not be reset, and with the RGB camera
+    selected the thermal ones were."""
+    dock.detection_camera_combo.setCurrentIndex(1 if camera == "w" else 0)
+    _choose(monkeypatch, "Track Animals - RGB")
+
+    dock.target_folder_edit.setText(both_cameras)
+    dock.reset_stage()
+
+    assert not stages.has_output(both_cameras, "tracking", "w")
+    assert stages.has_output(both_cameras, "tracking", "t")
+    assert stages.has_output(both_cameras, "detection", "w")
+
+
+def test_the_question_names_what_depends_on_the_step(dock, quiet, monkeypatch,
+                                                     both_cameras):
+    _choose(monkeypatch, "Detect Animals - RGB")
+
+    dock.target_folder_edit.setText(both_cameras)
+    dock.reset_stage()
+
+    (question,) = quiet["question"]
+    text = question[2]
+    assert "'Detect Animals - RGB'" in text
+    assert "Track Animals - RGB" in text
+    assert "Match RGB ↔ Thermal Tracks - both cameras" in text
+    assert "Thermal\n" not in text and not text.endswith("Thermal")
+
+
+def test_the_match_of_both_cameras_is_reset_once(dock, quiet, monkeypatch,
+                                                 both_cameras):
+    stages.set_state(both_cameras, "track_matching", stages.CROSS_MODAL,
+                     stages.COMPLETE)
+    _choose(monkeypatch, "Match RGB ↔ Thermal Tracks - both cameras")
+
+    dock.target_folder_edit.setText(both_cameras)
+    dock.reset_stage()
+
+    assert not os.path.exists(store.matches_path(both_cameras))
+    assert stages.states(both_cameras, stages.CROSS_MODAL)[
+        "track_matching"]["state"] == stages.PENDING
+    assert stages.has_output(both_cameras, "tracking", "t")
+
+
 def test_dependents_are_kept_but_flagged(dock, quiet, monkeypatch,
                                          project_folder):
     stages.mark_complete(project_folder, "tracking", "t")
-    monkeypatch.setattr(
-        QInputDialog, "getItem",
-        lambda *a, **k: (dock.STAGE_LABELS["detection"], True))
+    _choose(monkeypatch, "Detect Animals - Thermal")
 
     dock.target_folder_edit.setText(project_folder)
     dock.reset_stage()
@@ -100,9 +179,7 @@ def test_cancelling_the_picker_changes_nothing(dock, quiet, monkeypatch,
 
 def test_a_locked_file_is_explained(dock, quiet, monkeypatch, project_folder):
     """Windows locks a file open in the QGIS Browser (§13, Q1)."""
-    monkeypatch.setattr(
-        QInputDialog, "getItem",
-        lambda *a, **k: (dock.STAGE_LABELS["tracking"], True))
+    _choose(monkeypatch, "Track Animals - Thermal")
 
     def refuse(_path):
         raise OSError(13, "Permission denied")

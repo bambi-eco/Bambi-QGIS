@@ -7480,6 +7480,24 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         QMessageBox.information(
             self, "Export", f"{label} written to:\n{output}")
 
+    def _resettable_steps(self, folder: str):
+        """``(label, stage, modality)`` of every step that has output in
+        *folder*, per camera; a step that belongs to both cameras once."""
+        from .core import stages
+
+        entries = []
+        for stage in stages.known_stages():
+            name = self.STAGE_LABELS.get(stage, stage)
+            if stage in stages.STAGE_SHARED_STORE_KIND:
+                if stages.has_output(folder, stage, stages.CROSS_MODAL):
+                    entries.append((f"{name} - both cameras", stage,
+                                    stages.CROSS_MODAL))
+                continue
+            for modality, camera in (("t", "Thermal"), ("w", "RGB")):
+                if stages.has_output(folder, stage, modality):
+                    entries.append((f"{name} - {camera}", stage, modality))
+        return entries
+
     def reset_stage(self):
         """Delete one step's outputs and flag what depended on it.
 
@@ -7495,34 +7513,34 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
                                 "Select a target folder first.")
             return
 
-        modality = self.detection_camera_combo.currentText()[:1].lower() \
-            if hasattr(self, "detection_camera_combo") else "t"
-        modality = "w" if modality == "r" else "t"
-
-        present = [s for s in stages.known_stages()
-                   if stages.has_output(folder, s, modality)]
-        if not present:
+        # Every step with output, for each camera: the camera used to be
+        # read off a combo box in a way that always gave "thermal", so the
+        # RGB results could not be reset at all - and a thermal step was
+        # reset when the RGB one was meant.
+        entries = self._resettable_steps(folder)
+        if not entries:
             QMessageBox.information(
                 self, "Reset Step",
                 "This project has no step outputs to reset.")
             return
 
-        labels = [f"{self.STAGE_LABELS.get(s, s)}" for s in present]
+        labels = [label for label, _stage, _modality in entries]
         choice, ok = QInputDialog.getItem(
             self, "Reset Step", "Step to reset:", labels, 0, False)
-        if not ok:
+        if not ok or choice not in labels:
             return
-        stage = present[labels.index(choice)]
+        _label, stage, modality = entries[labels.index(choice)]
 
-        affected = stages.dependents(stage)
-        affected_present = [s for s in affected
-                            if stages.has_output(folder, s, modality)]
+        depending = set(stages.dependents(stage))
+        cameras = (modality, stages.CROSS_MODAL)
+        affected_present = [
+            label for label, other, other_modality in entries
+            if other in depending if other_modality in cameras]
         message = (f"Delete the outputs of '{choice}'?\n\n"
                    "The files are removed and the step runs from scratch "
                    "next time.")
         if affected_present:
-            names = "\n".join(
-                f"  • {self.STAGE_LABELS.get(s, s)}" for s in affected_present)
+            names = "\n".join(f"  • {label}" for label in affected_present)
             message += ("\n\nThese depend on it and will be marked out of "
                         f"date (their files are kept):\n{names}")
 

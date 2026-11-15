@@ -339,7 +339,9 @@ flag on every step it applies to (🟠 *Out of date*), for the camera selected
 for that step, until the step has run again.
 
 **Reset Step…** (next to Refresh Status) deletes one step's outputs so it runs
-from scratch. It names what depended on the step before doing anything.
+from scratch. The list offers every step that has results, separately for the
+thermal and the RGB camera (the thermal/RGB track match once, for both), and
+it names what depended on the step before doing anything.
 
 Results that are kept can never be mistaken for the new ones: a box and a
 track are numbered once and for all. When a step is reset - or its file is
