@@ -354,13 +354,13 @@ def test_switching_is_blocked_while_a_step_runs(dock, quiet, monkeypatch,
     dock._on_target_folder_changed()
     _add(dock, monkeypatch, b, "Forest")
 
-    dock.current_worker = object()
+    dock.worker = object()
     try:
         dock.flight_combo.setCurrentIndex(0)
         assert dock._active_flight()["name"] == "Forest"   # unchanged
         assert quiet["info"]
     finally:
-        dock.current_worker = None
+        dock.worker = None
 
 
 # ---------------------------------------------------------------------------
@@ -650,12 +650,12 @@ def test_removing_is_refused_while_a_step_runs(dock, quiet, monkeypatch,
     a, _b = two_flights
     dock.target_folder_edit.setText(a)
     dock._on_target_folder_changed()
-    dock.current_worker = object()
+    dock.worker = object()
     _confirm(monkeypatch, dock, True)
     try:
         dock.remove_flight()
     finally:
-        dock.current_worker = None
+        dock.worker = None
 
     assert len(dock._flights()) == 1
     assert quiet["info"]
@@ -861,3 +861,125 @@ def test_a_flight_without_a_target_folder_shows_nothing_processed(
                   dock.orthomosaic_status, dock.embeddings_status,
                   dock.perpendicular_status):
         assert "Completed" not in label.text()
+
+
+# ---------------------------------------------------------------------------
+# While a step runs
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def running(dock, monkeypatch):
+    """A step that has been started the way the dock starts one - but never
+    finishes. The guards used to look at an attribute nothing set, which the
+    tests set by hand; this goes through start_worker instead."""
+    from bambi_wildlife_detection import bambi_dock_widget
+
+    class Idle:
+        def __init__(self, *args, **kwargs):
+            self.finished = self.error = self.progress = self.log = self
+            self.started = self
+
+        def connect(self, *_args):
+            pass
+
+        def moveToThread(self, *_args):
+            pass
+
+        def start(self):
+            pass
+
+        def run(self):
+            pass
+
+        def quit(self):
+            pass
+
+        def deleteLater(self):
+            pass
+
+    monkeypatch.setattr(bambi_dock_widget, "ProcessingWorker", Idle)
+    monkeypatch.setattr(bambi_dock_widget, "QThread", Idle)
+
+    def start():
+        dock.start_worker("flight_route")
+        assert dock._step_is_running()
+
+    yield start
+    dock.worker = None
+
+
+def test_a_started_step_blocks_switching(dock, quiet, monkeypatch,
+                                         two_flights, running):
+    a, b = two_flights
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    _add(dock, monkeypatch, b, "Forest")
+    running()
+
+    dock.flight_combo.setCurrentIndex(0)
+
+    assert dock._active_flight()["name"] == "Forest"
+    assert dock.flight_combo.currentIndex() == 1
+    assert quiet["info"]
+
+
+def test_a_started_step_blocks_adding_a_flight(dock, quiet, monkeypatch,
+                                               two_flights, running):
+    a, b = two_flights
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    running()
+
+    _add(dock, monkeypatch, b, "Forest")            # browse and add
+    dock.flight_name_edit.setText("Ridge")
+    dock.add_flight()                                # by name
+
+    assert len(dock._flights()) == 1
+    assert len(quiet["info"]) == 2
+
+
+def test_a_started_step_blocks_removing_the_flight(dock, quiet, monkeypatch,
+                                                   two_flights, running):
+    a, _b = two_flights
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    _confirm(monkeypatch, dock, True)
+    running()
+
+    dock.remove_flight()
+
+    assert len(dock._flights()) == 1
+    assert quiet["info"]
+
+
+def test_a_started_step_keeps_the_flight_in_its_folder(dock, quiet,
+                                                       monkeypatch,
+                                                       two_flights, running):
+    """Typing another target folder moves the flight; under a running step
+    the results would be reported against a folder they are not in."""
+    a, b = two_flights
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    running()
+
+    dock.target_folder_edit.setText(b)
+    dock._on_target_folder_changed()
+
+    assert dock._active_flight()["target_folder"] == a
+    assert dock.target_folder_edit.text() == a
+    assert quiet["info"]
+
+
+def test_once_the_step_has_finished_flights_can_be_switched(
+        dock, quiet, monkeypatch, two_flights, running):
+    a, b = two_flights
+    dock.target_folder_edit.setText(a)
+    dock._on_target_folder_changed()
+    _add(dock, monkeypatch, b, "Forest")
+    running()
+    dock.on_worker_finished("flight_route", False)
+
+    dock.flight_combo.setCurrentIndex(0)
+
+    assert dock._active_flight()["target_folder"] == a
+

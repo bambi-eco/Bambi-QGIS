@@ -203,7 +203,7 @@ folder again picks up exactly where it left off. To delete the results
 themselves, delete the folder in a file manager, or reset individual stages
 with **Reset Step**.
 
-Switching and removing flights are blocked while a step is running.
+Switching, adding and removing flights, and pointing a flight at another folder, are blocked while a step is running.
 
 Projects from earlier versions become a single flight named after their target
 folder, and behave exactly as before.

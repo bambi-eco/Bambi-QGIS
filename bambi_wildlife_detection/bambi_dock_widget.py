@@ -6785,6 +6785,13 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             if 0 <= index < len(existing) else ""
         if flights_core.normalise(previous) == flights_core.normalise(folder):
             return
+        if self._step_is_running():
+            QMessageBox.information(
+                self, "Flight",
+                "A step is running. Wait for it to finish before pointing "
+                "the flight at another folder.")
+            self._set_target_folder_text(previous)
+            return
         try:
             # refuses a folder another flight already uses
             updated = flights_core.set_folder(existing, index, folder)
@@ -6879,13 +6886,23 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         self.log(f"Renamed flight to '{updated[self._active_flight_index]['name']}'")
         return True
 
+    def _step_is_running(self) -> bool:
+        """True while a background step runs.
+
+        ``worker`` is what :meth:`start_worker` sets. The flight guards used
+        to look at an attribute nothing ever set, so they never held: flights
+        could be switched, added and removed under a running step, whose log
+        and status then described a flight no longer shown.
+        """
+        return self.worker is not None
+
     def _on_flight_changed(self, index: int):
         """Switch flights: save the current configuration, load the new one."""
         if index < 0 or index >= len(self._flights()):
             return
         if getattr(self, "_switching_flight", False):
             return
-        if getattr(self, "current_worker", None) is not None:
+        if self._step_is_running():
             QMessageBox.information(
                 self, "Flight",
                 "A step is running. Wait for it to finish before switching "
@@ -6915,7 +6932,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         from .core import flights as flights_core
         from .core.config_schema import WIDGET_BINDINGS
 
-        if getattr(self, "current_worker", None) is not None:
+        if self._step_is_running():
             QMessageBox.information(
                 self, "Flight",
                 "A step is running. Wait for it to finish before adding a "
@@ -6999,6 +7016,13 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         """Add a flight by its target folder - meant for a folder that has
         been processed before - and switch to it."""
         from .core import flights as flights_core
+
+        if self._step_is_running():
+            QMessageBox.information(
+                self, "Flight",
+                "A step is running. Wait for it to finish before adding a "
+                "flight.")
+            return
 
         folder = QFileDialog.getExistingDirectory(
             self, "Target folder of the flight to add")
@@ -7182,7 +7206,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             QMessageBox.information(
                 self, "Flight", "There is no flight to remove.")
             return
-        if getattr(self, "current_worker", None) is not None:
+        if self._step_is_running():
             QMessageBox.information(
                 self, "Flight",
                 "A step is running. Wait for it to finish before removing a "
