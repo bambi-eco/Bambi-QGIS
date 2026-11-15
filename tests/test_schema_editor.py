@@ -7,6 +7,7 @@ so renames are free; fields are referenced by name so renames rewrite rows; and
 nothing that is still referenced may be deleted.
 """
 import json
+import os
 
 import pytest
 
@@ -394,6 +395,211 @@ def test_field_usage_reports_where(editor_with_data):
 
 
 # ---------------------------------------------------------------------------
+# Nothing is changed, and nothing is locked, until the edits are saved
+# ---------------------------------------------------------------------------
+
+def _detection_source(root):
+    project = store.open_store(store.project_path(root), store.PROJECT)
+    project.execute(
+        "INSERT INTO detection_sources (source_id, kind, created_at) "
+        "VALUES (1, 'detector', '')")
+    project.commit()
+    project.close()
+
+
+def _attributes(root, kind, table):
+    conn = store.open_store(store.stage_path(root, kind, "t"), kind, "t")
+    try:
+        return [json.loads(row["attributes"]) for row in conn.execute(
+            f"SELECT attributes FROM {table}")]
+    finally:
+        conn.close()
+
+
+def _species_names(root):
+    project = store.open_store(store.project_path(root), store.PROJECT)
+    try:
+        return {row["name"] for row in project.execute(
+            "SELECT name FROM species")}
+    finally:
+        project.close()
+
+
+def test_an_open_editor_does_not_lock_the_project(editor, tmp_path):
+    """The editor kept its edits in an open transaction until the dialog was
+    closed. A step that finished meanwhile could not record its results:
+    "database is locked"."""
+    import sqlite3
+
+    editor.add_species("wolf")                       # an edit is pending
+
+    other = sqlite3.connect(store.project_path(str(tmp_path)), timeout=0.2)
+    try:
+        other.execute("INSERT OR REPLACE INTO bambi_meta (key, value) "
+                      "VALUES ('a step finished', 'yes')")
+        other.commit()
+    finally:
+        other.close()
+    editor.commit()                                  # ... and is still saved
+
+    project = store.open_store(store.project_path(str(tmp_path)),
+                               store.PROJECT)
+    assert store.get_meta(project, "a step finished") == "yes"
+    project.close()
+    assert "wolf" in _species_names(str(tmp_path))
+
+
+def test_closing_without_saving_changes_nothing(editor_with_data, tmp_path):
+    """Cancelling rolled the field's name back - but its stored rows had
+    been renamed already, and those of a field deleted with its values were
+    gone."""
+    root = str(tmp_path)
+    editor_with_data.add_species("lynx")
+    editor_with_data.rename_field("collar_id", "track", "collar")
+    editor_with_data.delete_field("collar", "track", force=True)
+    editor_with_data.close()
+
+    assert "lynx" not in _species_names(root)
+    assert _attributes(root, store.LABELS, "label_tracks") == [
+        {"collar_id": "R-114", "sex": 1}]
+    with SchemaEditor(root) as again:
+        assert [f["name"] for f in again.fields("track")
+                if not f["protected"]] == ["collar_id"]
+
+
+def test_a_rename_reaches_the_stored_rows_when_it_is_saved(editor_with_data,
+                                                           tmp_path):
+    root = str(tmp_path)
+    assert editor_with_data.rename_field("collar_id", "track", "collar") == 1
+    assert _attributes(root, store.LABELS, "label_tracks")[0].get(
+        "collar_id") == "R-114"                       # not yet
+    editor_with_data.commit()
+    assert _attributes(root, store.LABELS, "label_tracks") == [
+        {"collar": "R-114", "sex": 1}]
+
+
+def test_a_field_renamed_twice_is_rewritten_once(editor_with_data, tmp_path):
+    editor_with_data.rename_field("collar_id", "track", "collar")
+    assert editor_with_data.rename_field("collar", "track", "tag") == 1
+    assert editor_with_data.field_usage("tag", "track") == {"label_tracks": 1}
+    editor_with_data.commit()
+    assert _attributes(str(tmp_path), store.LABELS, "label_tracks") == [
+        {"tag": "R-114", "sex": 1}]
+
+
+def test_a_deleted_fields_values_go_when_it_is_saved(editor_with_data,
+                                                     tmp_path):
+    root = str(tmp_path)
+    assert editor_with_data.delete_field("collar_id", "track", force=True) == 1
+    assert "collar_id" in _attributes(root, store.LABELS, "label_tracks")[0]
+    editor_with_data.commit()
+    assert _attributes(root, store.LABELS, "label_tracks") == [{"sex": 1}]
+
+
+def test_a_field_of_another_scope_keeps_its_values(editor_with_data,
+                                                   tmp_path):
+    """A field is its name *and* its scope. Renaming the track field also
+    renamed the values of the detection field of the same name."""
+    root = str(tmp_path)
+    det = store.open_store(
+        store.stage_path(root, store.DETECTIONS, "t"), store.DETECTIONS, "t")
+    det.execute("UPDATE detections SET attributes = ?",
+                (json.dumps({"collar_id": "seen", "occlusion": 1}),))
+    det.commit()
+    det.close()
+    editor_with_data.add_field("collar_id", "string", "detection")
+
+    assert editor_with_data.field_usage("collar_id", "track") == {
+        "label_tracks": 1}
+    assert editor_with_data.field_usage("collar_id", "detection") == {
+        "detections": 1}
+    editor_with_data.rename_field("collar_id", "track", "collar")
+    editor_with_data.commit()
+
+    assert _attributes(root, store.LABELS, "label_tracks") == [
+        {"collar": "R-114", "sex": 1}]
+    assert _attributes(root, store.DETECTIONS, "detections") == [
+        {"collar_id": "seen", "occlusion": 1}]
+
+
+def test_two_fields_can_swap_names(tmp_path):
+    root = str(tmp_path)
+    with SchemaEditor(root) as editor:
+        editor.add_field("a", "string", "track")
+        editor.add_field("b", "string", "track")
+        editor.commit()
+    labels = store.open_store(
+        store.stage_path(root, store.LABELS, "t"), store.LABELS, "t")
+    labels.execute(
+        "INSERT INTO label_tracks (label_track_id, species_id, attributes) "
+        "VALUES (1, 0, ?)", (json.dumps({"a": "was a", "b": "was b"}),))
+    labels.commit()
+    labels.close()
+
+    with SchemaEditor(root) as editor:
+        editor.rename_field("a", "track", "tmp")
+        editor.rename_field("b", "track", "a")
+        editor.rename_field("tmp", "track", "b")
+        editor.commit()
+
+    assert _attributes(root, store.LABELS, "label_tracks") == [
+        {"a": "was b", "b": "was a"}]
+
+
+def test_a_change_made_elsewhere_is_not_overwritten(editor, tmp_path):
+    root = str(tmp_path)
+    editor.add_species("wolf")
+    with SchemaEditor(root) as other:
+        other.add_species("lynx")
+        other.commit()
+
+    with pytest.raises(SchemaError, match="changed by something else"):
+        editor.commit()
+    assert _species_names(root) >= {"lynx"}
+    assert "wolf" not in _species_names(root)
+
+
+def test_a_busy_store_refuses_the_save_and_takes_the_renames_back(
+        editor_with_data, tmp_path, monkeypatch):
+    import sqlite3
+
+    def busy(self, real):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(SchemaEditor, "_write_back", busy)
+    editor_with_data.rename_field("collar_id", "track", "collar")
+    with pytest.raises(SchemaError, match="in use"):
+        editor_with_data.commit()
+    assert _attributes(str(tmp_path), store.LABELS, "label_tracks") == [
+        {"collar_id": "R-114", "sex": 1}]
+
+
+def test_saving_twice_is_saving_once(editor, tmp_path):
+    editor.add_species("wolf")
+    editor.commit()
+    editor.add_species("lynx")
+    editor.commit()
+    assert _species_names(str(tmp_path)) >= {"wolf", "lynx"}
+
+
+def test_the_working_copy_is_removed(tmp_path):
+    with SchemaEditor(str(tmp_path)) as editor:
+        folder = editor._folder
+        assert os.path.isdir(folder)
+    assert not os.path.exists(folder)
+
+
+def test_the_base_classes_stay_guarded_through_a_save(editor, tmp_path):
+    """The store's own triggers apply to what was edited - and a save that
+    edits nothing about them touches none of them."""
+    editor.set_species_colour(0, "#123456")
+    editor.add_species("wolf")
+    editor.commit()
+    assert {"animal", "unknown", "not-an-animal"} <= _species_names(
+        str(tmp_path))
+
+
+# ---------------------------------------------------------------------------
 # Detector class mapping
 # ---------------------------------------------------------------------------
 
@@ -414,14 +620,14 @@ def test_mapping_to_a_missing_species_is_rejected(editor):
 
 def test_reapply_mapping_updates_existing_detections(editor_with_data, tmp_path):
     """A corrected mapping is applied to stored rows, not re-detected (§3.1)."""
-    lynx = editor_with_data.add_species("lynx")
-    editor_with_data.conn.execute(
-        "INSERT INTO detection_sources (source_id, kind, created_at) "
-        "VALUES (1, 'detector', '')")
-    editor_with_data.set_class_mapping(1, "7", lynx)
-    editor_with_data.commit()
-
-    assert editor_with_data.reapply_class_mapping(1) == 1
+    # The detector is on record before its classes are mapped, as it is
+    # once a detection has run.
+    _detection_source(str(tmp_path))
+    with SchemaEditor(str(tmp_path)) as editor:
+        lynx = editor.add_species("lynx")
+        editor.set_class_mapping(1, "7", lynx)
+        editor.commit()
+        assert editor.reapply_class_mapping(1) == 1
 
     conn = store.open_store(
         store.stage_path(str(tmp_path), store.DETECTIONS, "t"),

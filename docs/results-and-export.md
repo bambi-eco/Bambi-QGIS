@@ -233,6 +233,16 @@ from the flight itself. See
 labelling tool's gear button and from *Manage species…* beside any species
 list) edits three things that belong to the whole project.
 
+Nothing changes until you press **OK**: the dialog works on a copy of the
+project's vocabulary, so **Cancel** discards everything - a renamed field
+and its stored values included - and a step that finishes while the dialog is
+open can record its results (up to 9.0 the open dialog locked the project
+file, and such a step failed with "database is locked"). If the vocabulary
+was changed elsewhere in the meantime, or a step is writing just now, OK says
+so and the dialog stays open. A custom field is its name *and* its scope:
+renaming or deleting a track field leaves a detection field of the same name,
+and its values, alone.
+
 ### Species
 
 Each species also has a map colour, set here with **Colour…** - see [How animals are drawn](#how-animals-are-drawn).

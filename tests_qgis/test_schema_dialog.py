@@ -235,3 +235,47 @@ def test_the_detection_settings_are_untouched(dock):
     detection = tabs.widget(names.index("Detection"))
     assert detection.isAncestorOf(dock.confidence_spin)
     assert detection.isAncestorOf(dock.thermal_model_path_edit)
+
+
+# ---------------------------------------------------------------------------
+# The project is not locked while the dialog is open
+# ---------------------------------------------------------------------------
+
+def test_a_step_can_record_its_results_while_the_dialog_is_open(
+        dialog, project_folder):
+    """The dialog kept its edits in an open transaction until it was
+    closed; a step that finished meanwhile got "database is locked"."""
+    import sqlite3
+
+    dialog.editor.add_species("lynx")                 # an edit is pending
+    step = sqlite3.connect(store.project_path(project_folder), timeout=0.2)
+    try:
+        step.execute("INSERT OR REPLACE INTO bambi_meta (key, value) "
+                     "VALUES ('a step', 'finished')")
+        step.commit()
+    finally:
+        step.close()
+
+    dialog.accept()
+    assert dialog.result() == QDialog.DialogCode.Accepted
+    assert "lynx" in _species_names(project_folder)
+
+
+def test_a_save_that_is_refused_keeps_the_dialog_open(dialog, project_folder,
+                                                      monkeypatch):
+    from qgis.PyQt.QtWidgets import QMessageBox
+
+    warned = []
+    monkeypatch.setattr(QMessageBox, "warning",
+                        lambda *a, **k: warned.append(a))
+    dialog.editor.add_species("lynx")
+    with SchemaEditor(project_folder) as elsewhere:
+        elsewhere.add_species("wolf")
+        elsewhere.commit()
+
+    dialog.accept()
+
+    assert warned and "changed by something else" in str(warned[0])
+    assert dialog.result() != QDialog.DialogCode.Accepted
+    assert "lynx" not in _species_names(project_folder)
+    assert dialog.editor.conn is not None             # still editable

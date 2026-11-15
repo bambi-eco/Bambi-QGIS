@@ -17,14 +17,33 @@ meaning behind the user's back:
 * renaming a *field* does rewrite stored rows, because ``attributes`` is keyed
   by field name - a deliberate trade for readable attribute blobs (§5.1).
 
+**Edits are made on a private copy and written back in one go.** The editor
+used to open the project store and keep its edits in an open transaction
+until the dialog was closed - which holds a write lock on ``project.gpkg``
+for as long as the dialog is open. A step that finished meanwhile could not
+record its results ("database is locked"). And a field rename rewrote the
+stored rows at once, in the other stores, before the vocabulary was saved:
+cancelling the dialog rolled the name back but left the rows renamed - or,
+for a field deleted with its values, gone.
+
+:class:`SchemaEditor` therefore copies the store when it is opened and edits
+the copy. :meth:`~SchemaEditor.commit` writes the vocabulary back in one
+short transaction and only then touches stored rows; closing without it
+changes nothing anywhere. If something else changed the vocabulary in the
+meantime, the commit is refused rather than overwriting it.
+
 Headless: the Qt dialog in ``bambi_schema_dialog.py`` is a thin shell over this.
 """
 
+import hashlib
 import json
 import os
-from typing import Dict, List, Optional
+import shutil
+import sqlite3
+import tempfile
+from typing import Dict, List, Optional, Tuple
 
-from . import store
+from . import gpkg, store
 
 #: Names a custom field may not take - they are already columns or reserved
 #: keys in the label model. Mirrors ``core.labelling.RESERVED_FIELD_NAMES``.
@@ -43,6 +62,32 @@ _ATTRIBUTE_TABLES = {
     store.SEGMENTATION: ("segments",),
 }
 
+#: Where the values of a field of a given scope are stored. A field is
+#: identified by name *and* scope - a track field and a detection field may
+#: share a name - so renaming or deleting one must leave the other's values
+#: alone. Scopes not listed here have no table of their own; they are looked
+#: for everywhere, as every field used to be.
+_SCOPE_TABLES = {
+    "track": {store.TRACKS: ("tracks",), store.LABELS: ("label_tracks",)},
+    "detection": {store.DETECTIONS: ("detections",),
+                  store.LABELS: ("label_keyframes",),
+                  store.SEGMENTATION: ("segments",)},
+}
+
+#: The tables and settings that make up the vocabulary - what the editor
+#: changes, and so what a commit writes back. Children first: that is the
+#: order they are emptied in.
+_VOCABULARY_TABLES = ("class_mapping", "field_schema", "enum_values",
+                      "enums", "species")
+_VOCABULARY_KEYS = {
+    "species": ("species_id",),
+    "enums": ("enum_id",),
+    "enum_values": ("enum_id", "value_id"),
+    "field_schema": ("name", "scope"),
+    "class_mapping": ("source_id", "source_class"),
+}
+_VOCABULARY_META = ("species_high_water", "species_colours")
+
 #: Tables carrying a ``species_id``, per store kind.
 _SPECIES_TABLES = {
     store.DETECTIONS: ("detections",),
@@ -55,16 +100,58 @@ class SchemaError(ValueError):
     """A vocabulary edit that would break one of the rules above."""
 
 
+_IN_USE = ("The project's files are in use - a step is probably writing its "
+           "results - so the changes could not be saved ({}). Nothing was "
+           "changed; try again in a moment.")
+
+
+def _fingerprint(conn) -> str:
+    """A digest of the vocabulary in *conn*: equal exactly when the species,
+    enums, fields, class mappings and their settings are."""
+    digest = hashlib.sha256()
+    for table in sorted(_VOCABULARY_TABLES):
+        columns = [row[1] for row in conn.execute(
+            f"PRAGMA table_info({table})")]  # nosec B608 - fixed names
+        rows = conn.execute(
+            f"SELECT * FROM {table} "  # nosec B608 - fixed names
+            f"ORDER BY {', '.join(columns)}").fetchall()
+        digest.update(repr((table, [tuple(row) for row in rows])).encode())
+    for key in _VOCABULARY_META:
+        digest.update(repr((key, store.get_meta(conn, key))).encode())
+    return digest.hexdigest()
+
+
 class SchemaEditor:
     """Vocabulary of one project, with the stage files available for checks.
 
-    Usable as a context manager; the underlying connections are closed on exit.
+    Works on a private copy of the project store (see the module docstring):
+    nothing is changed, and nothing is locked, until :meth:`commit`.
+    Usable as a context manager; the copy is discarded on exit.
     """
 
     def __init__(self, target_folder: str):
         self.target_folder = target_folder
-        self.conn = store.open_store(
-            store.project_path(target_folder), store.PROJECT)
+        self._path = store.project_path(target_folder)
+        # Creates and seeds the store of a folder that has none yet.
+        store.open_store(self._path, store.PROJECT).close()
+
+        self._folder = tempfile.mkdtemp(prefix="bambi_schema_")
+        self._work = os.path.join(self._folder, "project.gpkg")
+        source = gpkg.connect(self._path, create=False)
+        target = sqlite3.connect(self._work)
+        try:
+            source.backup(target)       # a consistent copy, even mid-run
+        finally:
+            target.close()
+            source.close()
+        self.conn = store.open_store(self._work, store.PROJECT)
+        self._base = _fingerprint(self.conn)
+        #: ``(scope, name now) -> name the stored rows carry``, for fields
+        #: renamed since the copy was taken.
+        self._stored_as: Dict[Tuple[str, str], str] = {}
+        #: ``(scope, stored name)`` of fields deleted together with their
+        #: values.
+        self._dropped: List[Tuple[str, str]] = []
 
     def __enter__(self) -> "SchemaEditor":
         return self
@@ -73,10 +160,120 @@ class SchemaEditor:
         self.close()
 
     def close(self) -> None:
-        self.conn.close()
+        """Discard the working copy. Edits not committed are gone."""
+        if self.conn is not None:
+            self.conn.close()
+            self.conn = None
+        shutil.rmtree(self._folder, ignore_errors=True)
 
     def commit(self) -> None:
+        """Write the edits into the project - the vocabulary in one short
+        transaction, then the stored rows of renamed and deleted fields.
+
+        :raises SchemaError: when the project's vocabulary was changed by
+            something else since this editor was opened, or a store is in
+            use by a running step. Nothing has been changed then.
+        """
         self.conn.commit()
+        renames = [(scope, stored, name)
+                   for (scope, name), stored in self._stored_as.items()
+                   if stored != name]
+        try:
+            real = store.open_store(self._path, store.PROJECT)
+        except sqlite3.OperationalError as exc:
+            raise SchemaError(_IN_USE.format(exc)) from exc
+        applied: List[Tuple[str, str, Optional[str]]] = []
+        try:
+            if _fingerprint(real) != self._base:
+                raise SchemaError(
+                    "The species, enums, fields or class mappings of this "
+                    "project were changed by something else while they were "
+                    "being edited here. Nothing was saved - open the editor "
+                    "again to work on the current state.")
+            try:
+                for step in self._rename_steps(renames):
+                    self._rewrite_attribute_key(*step)
+                    applied.append(step)
+                self._write_back(real)
+            except sqlite3.OperationalError as exc:
+                # Take the renames back, so that names and rows still agree.
+                for scope, old, new in reversed(applied):
+                    try:
+                        self._rewrite_attribute_key(scope, new, old)
+                    except sqlite3.OperationalError:  # nosec B110
+                        pass
+                raise SchemaError(_IN_USE.format(exc)) from exc
+        finally:
+            real.close()
+
+        # Values of deleted fields go last: should a store be busy now, they
+        # stay behind under a name no field has any more - which is harmless,
+        # where dropping them before the field was gone would not be.
+        for scope, stored in self._dropped:
+            try:
+                self._rewrite_attribute_key(scope, stored, None)
+            except sqlite3.OperationalError:  # nosec B110
+                pass
+        self._stored_as.clear()
+        self._dropped = []
+        self._base = _fingerprint(self.conn)
+
+    def _write_back(self, real) -> None:
+        """Bring the vocabulary of *real* in line with the working copy's,
+        row by row: what the copy no longer has is deleted, what it has new
+        is inserted, and of a row both have only the columns that differ
+        are written - the store's own guards (a base species cannot be
+        renamed or deleted, ids are never renumbered) apply to exactly what
+        was edited, and to nothing that was not."""
+        with store.transaction(real):
+            # A parent and its children change in one go; the references
+            # only have to hold at the end.
+            real.execute("PRAGMA defer_foreign_keys = ON")
+            for table in _VOCABULARY_TABLES:
+                self._sync_rows(real, table, deletions=True)
+            for table in reversed(_VOCABULARY_TABLES):
+                self._sync_rows(real, table, deletions=False)
+            for key in _VOCABULARY_META:
+                value = store.get_meta(self.conn, key)
+                if value is None:
+                    real.execute(
+                        "DELETE FROM bambi_meta WHERE key = ?", (key,))
+                elif value != store.get_meta(real, key):
+                    store.set_meta(real, key, value)
+
+    def _sync_rows(self, real, table: str, deletions: bool) -> None:
+        keys = _VOCABULARY_KEYS[table]
+        where = " AND ".join(f"{column} = ?" for column in keys)
+
+        def rows(conn):
+            found = conn.execute(
+                f"SELECT * FROM {table}").fetchall()  # nosec B608 - fixed
+            return {tuple(row[column] for column in keys): row
+                    for row in found}
+
+        have, want = rows(real), rows(self.conn)
+        if deletions:
+            for key in have.keys() - want.keys():
+                real.execute(
+                    f"DELETE FROM {table} WHERE {where}",  # nosec B608 - fixed
+                    key)
+            return
+        for key, row in want.items():
+            columns = row.keys()
+            if key not in have:
+                marks = ", ".join("?" for _ in columns)
+                real.execute(
+                    f"INSERT INTO {table} ({', '.join(columns)}) "  # nosec B608
+                    f"VALUES ({marks})", tuple(row))
+                continue
+            changed = [column for column in columns
+                       if column not in keys and row[column] != have[key][column]]
+            if changed:
+                assignments = ", ".join(f"{column} = ?" for column in changed)
+                real.execute(
+                    f"UPDATE {table} SET {assignments} "  # nosec B608 - fixed
+                    f"WHERE {where}",
+                    tuple(row[column] for column in changed) + key)
 
     # -- stage files -----------------------------------------------------
 
@@ -339,14 +536,22 @@ class SchemaEditor:
 
     def enum_value_usage(self, enum_id: int, value_id: int) -> Dict[str, int]:
         """Rows still holding this value, per table."""
-        fields = [row["name"] for row in self.conn.execute(
-            "SELECT name FROM field_schema WHERE enum_id = ?", (enum_id,))]
-        if not fields:
-            return {}
-        return self._attribute_usage(
-            lambda attributes: any(
-                attributes.get(name) == value_id for name in fields),
-            fields)
+        usage: Dict[str, int] = {}
+        for row in self.conn.execute(
+                "SELECT name, scope FROM field_schema WHERE enum_id = ?",
+                (enum_id,)).fetchall():
+            # under the name the rows carry, in the tables of the field's
+            # scope - a field of another scope and the same name is another
+            # field, with an enum of its own
+            stored = self._stored_as.get((row["scope"], row["name"]),
+                                         row["name"])
+            found = self._attribute_usage(
+                lambda attributes, key=stored:
+                    attributes.get(key) == value_id,
+                [stored], row["scope"])
+            for table, count in found.items():
+                usage[table] = usage.get(table, 0) + count
+        return usage
 
     def delete_enum_value(self, enum_id: int, value_id: int) -> None:
         row = self.conn.execute(
@@ -404,11 +609,13 @@ class SchemaEditor:
             "VALUES (?, ?, ?, ?)", (name, type, scope, enum_id))
 
     def rename_field(self, name: str, scope: str, new_name: str) -> int:
-        """Rename a field **and rewrite the stored rows that use it**.
+        """Rename a field **and the stored rows that use it**.
 
         Unlike every other rename here this touches data, because ``attributes``
-        is a JSON object keyed by field name (§5.1). Returns the number of rows
-        rewritten.
+        is a JSON object keyed by field name (§5.1). The rows are rewritten
+        when the edits are committed; the number that will be is returned.
+        Only the tables of the field's own scope are touched - a detection
+        field of the same name keeps its values.
         """
         new_name = (new_name or "").strip()
         if not new_name:
@@ -430,19 +637,29 @@ class SchemaEditor:
             raise SchemaError(
                 f"A '{scope}' field called '{new_name}' already exists.")
 
-        rewritten = self._rewrite_attribute_key(name, new_name)
+        stored = self._stored_as.pop((scope, name), name)
+        self._stored_as[(scope, new_name)] = stored
         self.conn.execute(
             "UPDATE field_schema SET name = ? WHERE name = ? AND scope = ?",
             (new_name, name, scope))
-        return rewritten
+        return sum(self._key_usage(scope, stored).values())
 
-    def field_usage(self, name: str) -> Dict[str, int]:
-        return self._attribute_usage(lambda attributes: name in attributes, [name])
+    def field_usage(self, name: str, scope: str = "") -> Dict[str, int]:
+        """Rows holding a value of the field, per table. With *scope*, in
+        the tables of that scope only - and under the name the rows still
+        carry, for a field renamed in this session."""
+        stored = self._stored_as.get((scope, name), name)
+        return self._key_usage(scope, stored)
+
+    def _key_usage(self, scope: str, stored: str) -> Dict[str, int]:
+        return self._attribute_usage(
+            lambda attributes: stored in attributes, [stored], scope)
 
     def delete_field(self, name: str, scope: str, force: bool = False) -> int:
-        """Remove a field; with *force*, its stored values go too.
+        """Remove a field; with *force*, its stored values go too - when the
+        edits are committed.
 
-        Returns the number of rows whose attributes were rewritten.
+        Returns the number of rows whose attributes will be rewritten.
         """
         row = self.conn.execute(
             "SELECT protected FROM field_schema WHERE name = ? AND scope = ?",
@@ -452,30 +669,38 @@ class SchemaEditor:
         if row["protected"]:
             raise SchemaError(
                 f"'{name}' is a built-in field and cannot be deleted.")
-        usage = self.field_usage(name)
+        usage = self.field_usage(name, scope)
         if usage and not force:
             where = ", ".join(f"{n} in {table}" for table, n in sorted(usage.items()))
             raise SchemaError(
                 f"'{name}' still holds values ({where}). Deleting it discards "
                 "them; pass force=True to confirm.")
-        rewritten = self._rewrite_attribute_key(name, None) if usage else 0
+        stored = self._stored_as.pop((scope, name), name)
+        if usage:
+            self._dropped.append((scope, stored))
         self.conn.execute(
             "DELETE FROM field_schema WHERE name = ? AND scope = ?",
             (name, scope))
-        return rewritten
+        return sum(usage.values())
 
     # ------------------------------------------------------------------
     # Attribute-blob helpers
     # ------------------------------------------------------------------
 
-    def _attribute_usage(self, predicate, names: List[str]) -> Dict[str, int]:
+    @staticmethod
+    def _tables_of(scope: str) -> Dict[str, tuple]:
+        """``store kind -> tables`` holding the values of *scope* fields."""
+        return _SCOPE_TABLES.get(scope, _ATTRIBUTE_TABLES)
+
+    def _attribute_usage(self, predicate, names: List[str],
+                         scope: str = "") -> Dict[str, int]:
         """Count rows whose ``attributes`` satisfy *predicate*.
 
         Rows are pre-filtered in SQL with a cheap ``LIKE`` on the field names and
         confirmed in Python, so this works on SQLite builds without JSON1.
         """
         usage: Dict[str, int] = {}
-        for kind, tables in _ATTRIBUTE_TABLES.items():
+        for kind, tables in self._tables_of(scope).items():
             for path in self._stage_files(kind):
                 conn = store.open_store(path, kind)
                 try:
@@ -499,10 +724,30 @@ class SchemaEditor:
             f"SELECT rowid AS _rid, attributes FROM {table} "  # nosec B608
             f"WHERE attributes IS NOT NULL AND ({clause})", patterns).fetchall()
 
-    def _rewrite_attribute_key(self, name: str, new_name: Optional[str]) -> int:
-        """Rename (or drop, when *new_name* is None) a key in every attributes blob."""
+    @staticmethod
+    def _rename_steps(renames: List[Tuple[str, str, str]]
+                      ) -> List[Tuple[str, str, str]]:
+        """The key rewrites that carry out *renames* ``(scope, from, to)``.
+
+        One rename is one rewrite. Several go through names nothing else
+        uses, so that swapping two fields - A to B and B to A - does not pour
+        both into one.
+        """
+        if len(renames) < 2:
+            return list(renames)
+        # plain characters only: the rows are searched as JSON text, where
+        # anything else is written as an escape
+        parked = [(scope, old, f"__bambi_renaming_{index}__")
+                  for index, (scope, old, _new) in enumerate(renames)]
+        return parked + [(scope, park, new) for (scope, _old, park),
+                         (_s, _o, new) in zip(parked, renames)]
+
+    def _rewrite_attribute_key(self, scope: str, name: str,
+                               new_name: Optional[str]) -> int:
+        """Rename (or drop, when *new_name* is None) a key in the attributes
+        of every row of the tables *scope* fields are stored in."""
         rewritten = 0
-        for kind, tables in _ATTRIBUTE_TABLES.items():
+        for kind, tables in self._tables_of(scope).items():
             for path in self._stage_files(kind):
                 conn = store.open_store(path, kind)
                 try:

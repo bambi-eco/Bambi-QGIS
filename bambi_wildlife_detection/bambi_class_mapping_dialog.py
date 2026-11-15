@@ -98,6 +98,8 @@ class BambiClassMappingDialog(QDialog):
             self.editor.commit()
             changed = self.editor.reapply_class_mapping(source_id)
         except SchemaError as exc:
+            # Also when the project is in use or was changed elsewhere: the
+            # dialog stays open, nothing is lost.
             QMessageBox.warning(self, "Class Mapping", str(exc))
             return
 

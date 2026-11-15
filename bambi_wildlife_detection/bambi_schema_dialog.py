@@ -12,8 +12,10 @@ All logic lives in :mod:`core.schema_editor`; this is a shell over it, so the
 rules - protected base classes, append-only ids, no deleting what is still
 referenced - are enforced whether or not the dialog is involved.
 
-Edits are committed when the dialog is accepted and rolled back when it is
-cancelled, so a half-finished taxonomy is never persisted.
+Edits are made on a private copy of the vocabulary and written into the
+project when the dialog is accepted, so a half-finished taxonomy is never
+persisted - and the project is not locked while the dialog is open, so a step
+that finishes meanwhile can record its results.
 """
 
 from qgis.PyQt.QtCore import Qt
@@ -60,12 +62,20 @@ class BambiSchemaDialog(QDialog):
     # -- lifecycle -------------------------------------------------------
 
     def accept(self):
-        self.editor.commit()
+        # The edits were made on a private copy; this writes them into the
+        # project. It can be refused - a step is writing just now, or the
+        # vocabulary was changed elsewhere - and then the dialog stays open
+        # with nothing lost.
+        try:
+            self.editor.commit()
+        except SchemaError as exc:
+            self._warn(exc)
+            return
         self.editor.close()
         super().accept()
 
     def reject(self):
-        # Nothing was committed, so closing the connection discards the edits.
+        # Nothing was written, so discarding the copy discards the edits.
         self.editor.close()
         super().reject()
 
@@ -544,22 +554,22 @@ class BambiSchemaDialog(QDialog):
         if rewritten:
             QMessageBox.information(
                 self, "Field renamed",
-                f"Renamed '{name}' to '{new_name}' and updated {rewritten} "
-                "stored value(s).")
+                f"Renamed '{name}' to '{new_name}'. Its {rewritten} stored "
+                "value(s) follow when you press OK.")
 
     def _delete_field(self) -> None:
         selected = self._selected_field()
         if selected is None:
             return
         name, scope, _ = selected
-        usage = self.editor.field_usage(name)
+        usage = self.editor.field_usage(name, scope)
         if usage:
             total = sum(usage.values())
             standard = QMessageBox.StandardButton
             answer = QMessageBox.question(
                 self, "Delete field",
                 f"'{name}' still holds {total} value(s). Deleting the field "
-                "discards them. Continue?",
+                "discards them when you press OK. Continue?",
                 standard.Ok | standard.Cancel, standard.Cancel)
             if answer != standard.Ok:
                 return
