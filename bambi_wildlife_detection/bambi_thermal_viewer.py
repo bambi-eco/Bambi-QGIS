@@ -26,7 +26,7 @@ from qgis.PyQt.QtGui import QPixmap, QImage
 from qgis.PyQt.QtCore import Qt
 
 from .bambi_curve_widget import CurveEditorPanel
-from .gui_utils import ClosesOnce
+from .gui_utils import ClosesOnce, mouse_xy
 
 
 _COLORMAPS = ['white-hotspot', 'black-hotspot', 'plasma', 'inferno', 'magma', 'viridis', 'jet']
@@ -108,7 +108,7 @@ class _ThermalLabel(QLabel):
         # QLabel with AlignCenter centres the pixmap inside the widget
         ox = (self.width() - pw) // 2
         oy = (self.height() - ph) // 2
-        mx, my = event.x(), event.y()
+        mx, my = mouse_xy(event)
 
         if mx < ox or my < oy or mx >= ox + pw or my >= oy + ph:
             self._hover_cb(None, None, None)

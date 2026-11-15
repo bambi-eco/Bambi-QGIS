@@ -57,7 +57,7 @@ from qgis.PyQt.QtGui import (
 
 # Angle wrapping and circle-intersection helpers moved to
 # core.correction_solver; re-exported under their old names.
-from .gui_utils import ClosesOnce
+from .gui_utils import ClosesOnce, mouse_xy
 from .core.correction_solver import (  # noqa: F401 - re-exported API
     circles_intersect as _circles_intersect,
     wrap_deg as _wrap_deg,
@@ -192,8 +192,9 @@ class ClickableImageLabel(QLabel):
             return
         if self._img_rect is None or self._src_pixmap is None:
             return
-        ix = event.x() - self._img_rect.left()
-        iy = event.y() - self._img_rect.top()
+        x, y = mouse_xy(event)
+        ix = x - self._img_rect.left()
+        iy = y - self._img_rect.top()
         if not (0 <= ix < self._img_rect.width() and 0 <= iy < self._img_rect.height()):
             return
         norm_x = ix / self._img_rect.width()
@@ -638,7 +639,7 @@ class CirclePlotWidget(QWidget):
         if event.button() != Qt.MouseButton.LeftButton:
             super().mousePressEvent(event)
             return
-        side = self._near_point(event.x(), event.y())
+        side = self._near_point(*mouse_xy(event))
         if side is None:
             super().mousePressEvent(event)
             return
@@ -658,13 +659,13 @@ class CirclePlotWidget(QWidget):
     def mouseMoveEvent(self, event):
         if self._drag_side is not None:
             if self._tf is not None:
-                self._drag_cur_world = self._screen_to_world(event.x(), event.y())
+                self._drag_cur_world = self._screen_to_world(*mouse_xy(event))
                 self._update_drag_preview()
                 self.update()
             event.accept()
             return
         # Hover cursor feedback
-        side = self._near_point(event.x(), event.y())
+        side = self._near_point(*mouse_xy(event))
         self.setCursor(Qt.CursorShape.OpenHandCursor if side is not None else Qt.CursorShape.ArrowCursor)
 
     def mouseReleaseEvent(self, event):

@@ -1768,7 +1768,7 @@ class SegmentationToolDialog(ClosesOnce, QDialog):
             QMessageBox.warning(self, "Add to QGIS",
                                 "Set the target CRS in the plugin panel first.")
             return
-        from qgis.PyQt.QtCore import QVariant
+        from .qgis_compat import FieldType
         from qgis.core import (QgsCoordinateReferenceSystem, QgsFeature,
                                QgsField, QgsFillSymbol, QgsGeometry,
                                QgsLayerTreeGroup, QgsPointXY, QgsProject,
@@ -1834,12 +1834,12 @@ class SegmentationToolDialog(ClosesOnce, QDialog):
                                            name, "memory")
                     provider = layer.dataProvider()
                     provider.addAttributes([
-                        QgsField("prompt", QVariant.String),
-                        QgsField("prompt_type", QVariant.String),
-                        QgsField("object_id", QVariant.Int),
-                        QgsField("frame", QVariant.Int),
-                        QgsField("confidence", QVariant.Double),
-                        QgsField("polygon_idx", QVariant.Int),
+                        QgsField("prompt", FieldType.String),
+                        QgsField("prompt_type", FieldType.String),
+                        QgsField("object_id", FieldType.Int),
+                        QgsField("frame", FieldType.Int),
+                        QgsField("confidence", FieldType.Double),
+                        QgsField("polygon_idx", FieldType.Int),
                     ])
                     layer.updateFields()
                     features = []

@@ -184,6 +184,19 @@ uploaded plugin version, using the official
 docker compose run --rm qt6-check
 ```
 
+The checker finds what can be read off the source - enums, classes that
+moved. It does not find calls that only fail when they happen: `event.x()`
+in a mouse handler is an `AttributeError` at the first mouse move under
+Qt 6. `tests_qt6/` therefore imports every GUI module with `qgis.PyQt`
+standing for the real PyQt6, builds the main panel and the tools, and sends
+their widgets mouse, wheel and key events (`qgis.core` / `qgis.gui` are
+stand-ins - what needs a running QGIS stays with `tests_qgis/`):
+
+```bash
+pip install PyQt6 PyQt6-QScintilla      # next to the unit test dependencies
+bash run_qt6_tests.sh
+```
+
 ## Citation
 
 If you use this plugin in your research, please cite one of the associated papers.

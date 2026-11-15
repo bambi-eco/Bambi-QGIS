@@ -25,7 +25,7 @@ from qgis.core import (
     QgsFeature, QgsField, QgsGeometry, QgsPointXY, QgsRasterLayer,
     QgsVectorLayer,
 )
-from qgis.PyQt.QtCore import QVariant
+from .qgis_compat import FieldType
 from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import (
     QCheckBox, QDoubleSpinBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
@@ -678,12 +678,12 @@ class EnvironmentDockMixin:
                 sample = next((r[column] for r in rows
                                if r.get(column) is not None), None)
                 if isinstance(sample, bool):
-                    return QgsField(column, QVariant.Bool)
+                    return QgsField(column, FieldType.Bool)
                 if isinstance(sample, int):
-                    return QgsField(column, QVariant.LongLong)
+                    return QgsField(column, FieldType.LongLong)
                 if isinstance(sample, float):
-                    return QgsField(column, QVariant.Double)
-                return QgsField(column, QVariant.String)
+                    return QgsField(column, FieldType.Double)
+                return QgsField(column, FieldType.String)
 
             provider.addAttributes([_field(column) for column in columns])
             layer.updateFields()

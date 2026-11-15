@@ -32,7 +32,7 @@ from qgis.core import (
     QgsVectorLayerSimpleLabeling, QgsTextBufferSettings, QgsLayerTreeGroup,
     QgsLayerTreeLayer, QgsLayerTree
 )
-from qgis.PyQt.QtCore import QVariant
+from .qgis_compat import FieldType
 from qgis.PyQt import sip
 
 from .bambi_processing import BambiProcessor, ProcessingWorker
@@ -9426,12 +9426,12 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
                 f"LineString?crs=EPSG:{epsg}", "BAMBI Matched Pairs", "memory")
             provider = layer.dataProvider()
             provider.addAttributes([
-                QgsField("track_t", QVariant.Int),
-                QgsField("track_w", QVariant.Int),
-                QgsField("shared", QVariant.Int),
-                QgsField("median_dist", QVariant.Double),
-                QgsField("conf_t", QVariant.Double),
-                QgsField("conf_w", QVariant.Double),
+                QgsField("track_t", FieldType.Int),
+                QgsField("track_w", FieldType.Int),
+                QgsField("shared", FieldType.Int),
+                QgsField("median_dist", FieldType.Double),
+                QgsField("conf_t", FieldType.Double),
+                QgsField("conf_w", FieldType.Double),
             ])
             layer.updateFields()
 
@@ -10037,12 +10037,12 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
                 sample = next((r[name] for r in rows
                                if r.get(name) is not None), None)
                 if isinstance(sample, bool):
-                    return QgsField(name, QVariant.Bool)
+                    return QgsField(name, FieldType.Bool)
                 if isinstance(sample, int):
-                    return QgsField(name, QVariant.LongLong)
+                    return QgsField(name, FieldType.LongLong)
                 if isinstance(sample, float):
-                    return QgsField(name, QVariant.Double)
-                return QgsField(name, QVariant.String)
+                    return QgsField(name, FieldType.Double)
+                return QgsField(name, FieldType.String)
 
             provider.addAttributes([_field(name) for name in columns])
             layer.updateFields()
@@ -10756,13 +10756,13 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             "Point?crs=" + target_crs.authid(), "Tracks", "memory")
         provider = layer.dataProvider()
         provider.addAttributes([
-            QgsField("track_id", QVariant.Int),
-            QgsField("transect_id", QVariant.Int),
-            QgsField("transect", QVariant.String),
-            QgsField("last_frame", QVariant.Int),
-            QgsField("class_id", QVariant.Int),
-            QgsField("distance_m", QVariant.Double),
-            QgsField("in_frame_range", QVariant.Int),
+            QgsField("track_id", FieldType.Int),
+            QgsField("transect_id", FieldType.Int),
+            QgsField("transect", FieldType.String),
+            QgsField("last_frame", FieldType.Int),
+            QgsField("class_id", FieldType.Int),
+            QgsField("distance_m", FieldType.Double),
+            QgsField("in_frame_range", FieldType.Int),
         ])
         layer.updateFields()
 
@@ -10896,10 +10896,10 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             "Polygon?crs=" + target_crs.authid(), "Field of View", "memory")
         provider = layer.dataProvider()
         provider.addAttributes([
-            QgsField("transect_id", QVariant.Int),
-            QgsField("name", QVariant.String),
-            QgsField("area_ha", QVariant.Double),
-            QgsField("count", QVariant.Int),
+            QgsField("transect_id", FieldType.Int),
+            QgsField("name", FieldType.String),
+            QgsField("area_ha", FieldType.Double),
+            QgsField("count", FieldType.Int),
         ])
         layer.updateFields()
 
@@ -10968,11 +10968,11 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             "LineString?crs=" + target_crs.authid(), "Flight Route", "memory")
         provider = layer.dataProvider()
         provider.addAttributes([
-            QgsField("transect_id", QVariant.Int),
-            QgsField("name", QVariant.String),
-            QgsField("start_frame", QVariant.Int),
-            QgsField("end_frame", QVariant.Int),
-            QgsField("length_m", QVariant.Double),
+            QgsField("transect_id", FieldType.Int),
+            QgsField("name", FieldType.String),
+            QgsField("start_frame", FieldType.Int),
+            QgsField("end_frame", FieldType.Int),
+            QgsField("length_m", FieldType.Double),
         ])
         layer.updateFields()
         provider.addFeatures(qgs_features)
@@ -11382,11 +11382,11 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             )
             provider = layer.dataProvider()
             provider.addAttributes([
-                QgsField("det_idx", QVariant.Int),
-                QgsField("frame", QVariant.Int),
-                QgsField("confidence", QVariant.Double),
-                QgsField("class_id", QVariant.Int),
-                QgsField("distance_m", QVariant.Double),
+                QgsField("det_idx", FieldType.Int),
+                QgsField("frame", FieldType.Int),
+                QgsField("confidence", FieldType.Double),
+                QgsField("class_id", FieldType.Int),
+                QgsField("distance_m", FieldType.Double),
             ])
             layer.updateFields()
 
@@ -11536,12 +11536,12 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             )
             provider = layer.dataProvider()
             provider.addAttributes([
-                QgsField("track_id", QVariant.Int),
-                QgsField("last_frame", QVariant.Int),
-                QgsField("last_image", QVariant.String),
-                QgsField("confidence", QVariant.Double),
-                QgsField("class_id", QVariant.Int),
-                QgsField("distance_m", QVariant.Double),
+                QgsField("track_id", FieldType.Int),
+                QgsField("last_frame", FieldType.Int),
+                QgsField("last_image", FieldType.String),
+                QgsField("confidence", FieldType.Double),
+                QgsField("class_id", FieldType.Int),
+                QgsField("distance_m", FieldType.Double),
             ])
             layer.updateFields()
 
@@ -11728,11 +11728,11 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
                     )
                     path_provider = path_layer.dataProvider()
                     path_provider.addAttributes([
-                        QgsField("track_id", QVariant.Int),
-                        QgsField("start_frame", QVariant.Int),
-                        QgsField("end_frame", QVariant.Int),
-                        QgsField("num_detections", QVariant.Int),
-                        QgsField("avg_confidence", QVariant.Double)
+                        QgsField("track_id", FieldType.Int),
+                        QgsField("start_frame", FieldType.Int),
+                        QgsField("end_frame", FieldType.Int),
+                        QgsField("num_detections", FieldType.Int),
+                        QgsField("avg_confidence", FieldType.Double)
                     ] + animal_fields())
                     path_layer.updateFields()
 
@@ -11762,10 +11762,10 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
                 )
                 bbox_provider = bbox_layer.dataProvider()
                 bbox_provider.addAttributes([
-                    QgsField("track_id", QVariant.Int),
-                    QgsField("frame", QVariant.Int),
-                    QgsField("confidence", QVariant.Double),
-                    QgsField("class_id", QVariant.Int)
+                    QgsField("track_id", FieldType.Int),
+                    QgsField("frame", FieldType.Int),
+                    QgsField("confidence", FieldType.Double),
+                    QgsField("class_id", FieldType.Int)
                 ] + animal_fields())
                 bbox_layer.updateFields()
 
@@ -12011,8 +12011,8 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
 
             # Add fields
             provider.addAttributes([
-                QgsField("frame", QVariant.Int),
-                QgsField("num_points", QVariant.Int)
+                QgsField("frame", FieldType.Int),
+                QgsField("num_points", FieldType.Int)
             ])
             layer.updateFields()
 
@@ -12063,8 +12063,8 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
 
         # Add fields
         provider.addAttributes([
-            QgsField("frame", QVariant.Int),
-            QgsField("num_points", QVariant.Int)
+            QgsField("frame", FieldType.Int),
+            QgsField("num_points", FieldType.Int)
         ])
         layer.updateFields()
 
@@ -12185,9 +12185,9 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
 
             # Add fields
             provider.addAttributes([
-                QgsField("num_frames", QVariant.Int),
-                QgsField("area_m2", QVariant.Double),
-                QgsField("area_ha", QVariant.Double)
+                QgsField("num_frames", FieldType.Int),
+                QgsField("area_m2", FieldType.Double),
+                QgsField("area_ha", FieldType.Double)
             ])
             layer.updateFields()
 
@@ -12357,10 +12357,10 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
 
             # Add fields
             provider.addAttributes([
-                QgsField("det_id", QVariant.Int),
-                QgsField("frame", QVariant.Int),
-                QgsField("confidence", QVariant.Double),
-                QgsField("class_id", QVariant.Int)
+                QgsField("det_id", FieldType.Int),
+                QgsField("frame", FieldType.Int),
+                QgsField("confidence", FieldType.Double),
+                QgsField("class_id", FieldType.Int)
             ] + animal_fields())
             layer.updateFields()
 
@@ -12421,10 +12421,10 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
 
         # Add fields
         provider.addAttributes([
-            QgsField("det_id", QVariant.Int),
-            QgsField("frame", QVariant.Int),
-            QgsField("confidence", QVariant.Double),
-            QgsField("class_id", QVariant.Int)
+            QgsField("det_id", FieldType.Int),
+            QgsField("frame", FieldType.Int),
+            QgsField("confidence", FieldType.Double),
+            QgsField("class_id", FieldType.Int)
         ] + animal_fields())
         layer.updateFields()
 

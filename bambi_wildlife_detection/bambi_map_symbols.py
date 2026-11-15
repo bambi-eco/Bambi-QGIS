@@ -31,7 +31,9 @@ from qgis.core import (
     QgsSimpleMarkerSymbolLayer, QgsSingleSymbolRenderer, QgsSvgMarkerSymbolLayer,
     QgsSymbolLayer,
 )
-from qgis.PyQt.QtCore import QPointF, QVariant
+from qgis.PyQt.QtCore import QPointF
+
+from .qgis_compat import FieldType
 from qgis.PyQt.QtGui import QColor, QFont
 
 from .core import map_symbols
@@ -67,7 +69,7 @@ def pin_svg_path() -> str:
 
 def animal_fields() -> List[QgsField]:
     """The fields a styled layer carries (see ``core.map_symbols.FIELDS``)."""
-    return [QgsField(name, QVariant.String) for name in map_symbols.FIELDS]
+    return [QgsField(name, FieldType.String) for name in map_symbols.FIELDS]
 
 
 def animal_values(attributes: Optional[Dict[str, str]]) -> List[str]:

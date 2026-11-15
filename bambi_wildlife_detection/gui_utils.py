@@ -30,6 +30,18 @@ def fit_to_screen(widget, width: int, height: int):
     widget.move(max(avail.left(), frame.left()), max(avail.top(), frame.top()))
 
 
+def mouse_xy(event):
+    """``(x, y)`` of a mouse event, in whole pixels of the widget it went to.
+
+    Qt 6 has no ``QMouseEvent.x()`` / ``.y()`` (nor ``globalPos()``,
+    ``localPos()``): the position is ``position()``, a point with fractions.
+    Qt 5 has no ``position()``. This is the one place that knows.
+    """
+    position = getattr(event, "position", None)
+    point = position().toPoint() if callable(position) else event.pos()
+    return point.x(), point.y()
+
+
 #: Scope the plugin's settings live under in a QGIS project file.
 PLUGIN_SCOPE = "BambiWildlifeDetection"
 

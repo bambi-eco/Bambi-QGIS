@@ -45,6 +45,7 @@ from qgis.PyQt.QtWidgets import QMessageBox
 
 from .bambi_feature_viewer import FeatureViewerDialog
 from .core import inspection
+from .gui_utils import mouse_xy
 
 TRACK_TYPES = {"track_final", "track_path"}
 DETECTION_TYPE = "detection"
@@ -151,9 +152,10 @@ class BambiClickTool(QgsMapToolIdentify):
             return
 
         # Collect ALL results so we can apply mode-specific priority.
+        x, y = mouse_xy(event)
         results = self.identify(
-            event.x(),
-            event.y(),
+            x,
+            y,
             bambi_layers,
             QgsMapToolIdentify.IdentifyMode.TopDownAll,
         )
@@ -183,7 +185,7 @@ class BambiClickTool(QgsMapToolIdentify):
                             return
                     # Convert canvas pixel → map coordinate for click projection.
                     map_pt = self.canvas().getCoordinateTransform().toMapCoordinates(
-                        event.x(), event.y()
+                        x, y
                     )
                     click_xy = (map_pt.x(), map_pt.y())
                 else:
