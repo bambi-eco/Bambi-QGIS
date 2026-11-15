@@ -555,3 +555,28 @@ class TestTheUncertaintyOfTheSum:
         as_it_was = math.sqrt(n * fitted * fitted * variance) / 60.0 * HA_PER_KM2
         assert se == pytest.approx(as_it_was * math.sqrt(n), rel=1e-4)
         assert interval[0] < 100.0 < interval[1]
+
+
+class TestFewTransects:
+    """The standard error rests on large-sample theory. With a handful of
+    transects the interval is not to be relied on, and the result says so."""
+
+    def _fit(self, n):
+        rng = np.random.default_rng(n)
+        areas = rng.uniform(0.5, 3.0, size=n)
+        counts = rng.negative_binomial(5, 5 / (5 + np.exp(0.2 + areas)))
+        counts = np.where(rng.random(n) < 0.3, 0, counts)
+        return estimate_zinb(counts.tolist(), areas.tolist())
+
+    def test_a_handful_of_transects_comes_with_a_warning(self):
+        result = self._fit(12)
+        assert result["density_per_100ha"] is not None
+        assert "only 12 transects" in result["error"]
+        assert "bootstrap" in result["error"]
+
+    def test_enough_transects_come_without(self):
+        from bambi_wildlife_detection.core import population
+
+        result = self._fit(population.FEW_TRANSECTS)
+        assert "transects for a model" not in (result["error"] or "")
+

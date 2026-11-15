@@ -345,6 +345,13 @@ def estimate_bootstrap(counts: Sequence[float], areas_ha: Sequence[float],
 LOG_THETA_BOUND = 20.0
 GAMMA_BOUND = 20.0
 
+#: Below this many transects the ZINB result says that its interval is not
+#: to be relied on. The standard error rests on large-sample theory, and four
+#: parameters want more than a handful of transects: in simulations the 95 %
+#: interval held the true density about 6 times in 10 with 12 transects, 8
+#: in 10 with 20 and 9 in 10 with 40.
+FEW_TRANSECTS = 30
+
 
 def _zinb_nll(params, y, x):
     """Negative log-likelihood of the ZINB model (NB2, constant inflation)."""
@@ -530,6 +537,12 @@ def estimate_zinb(counts: Sequence[float],
         nll, params, grad, total_ha, density, fixed=fixed)
     if se_error:
         warnings.append(se_error)
+    elif y.size < FEW_TRANSECTS:
+        warnings.append(
+            f"only {y.size} transects for a model with four parameters - "
+            "the interval is likely too narrow still (in simulations it held "
+            "the true density about 6 times in 10 with 12 transects and 8 in "
+            "10 with 20); compare it with the bootstrap")
 
     return {
         "method": "zinb",
