@@ -222,3 +222,46 @@ def summarise(queue: Sequence[dict], total: int) -> str:
         f"{count} {names.get(kind, kind)}" for kind, count in
         sorted(kinds.items(), key=lambda item: (-item[1], item[0])))
     return f"{len(queue)} of {total} track(s) are worth a look: {parts}"
+
+
+def for_flights(flights: Sequence[Tuple[str, str, Optional[Sequence[int]]]],
+                modality: str, epsg: Optional[int] = None,
+                settings: Optional[dict] = None,
+                several: bool = False) -> Tuple[List[dict], int]:
+    """The queue of a survey.
+
+    :param flights: ``(name, target folder, species ids or None)`` per
+        flight - the species filter of the survey, in the flight's own ids
+    :param several: whether the rows carry their flight's name (a survey of
+        more than one flight)
+    :return: ``(queue, number of tracks looked at)``
+    """
+    from . import match_store, track_inventory
+
+    other = "w" if modality == "t" else "t"
+    rows: List[dict] = []
+    partners: Dict[Tuple[object, int], dict] = {}
+    matched = []
+    for name, folder, species_ids in flights:
+        if species_ids is not None and not species_ids:
+            continue
+        key = name if several else None
+        of_flight = track_inventory.build_inventory(
+            folder, modality, epsg=epsg, species_ids=species_ids)
+        for row in of_flight:
+            rows.append(dict(row, flight=key))
+        try:
+            pairs = match_store.partner_tracks(folder, modality)
+        except Exception:  # noqa: BLE001 - no matching is no partner
+            pairs = {}
+        if not pairs:
+            continue
+        matched.append(key)
+        theirs = {int(row["track_id"]): row
+                  for row in track_inventory.build_inventory(
+                      folder, other, epsg=epsg,
+                      track_ids=sorted(set(pairs.values())))}
+        for track_id, partner in pairs.items():
+            if partner in theirs:
+                partners[(key, int(track_id))] = theirs[partner]
+    return build(rows, partners, matched, settings), len(rows)

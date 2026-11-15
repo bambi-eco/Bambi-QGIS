@@ -382,7 +382,7 @@ Click the **Inspector: Click Detection / Track** tool in the toolbar, then click
 
 ![Detection Selection Tool](../images/selection_tool_detections.png)
 
-The inspector (the *Feature Viewer* window) is also opened from the track inventory report: a click on a track's start or end frame there shows the animal at that frame.
+The inspector (the *Feature Viewer* window) is also opened from the track inventory report: a click on a track's start or end frame there shows the animal at that frame. The [review queue](pipeline.md#review-queue) uses it the same way: every track it lists as worth a look is shown here while you decide what it is.
 
 **Track details.** Below the image the viewer lists what the project knows about the track being shown - the same facts as its row in the [track inventory](pipeline.md#track-inventory): species, sex and age with their votes and the model that called them, box counts and occlusion, confidences, frames and times, start and end position, movement, the matched track on the other camera and any labelling-tool annotation. A clicked *detection* shows the details of the track it belongs to. The **Approved** checkmark beside the heading is the inventory's own verdict, written to the track; ticking it here or in the report is the same thing, and an open report follows.
 

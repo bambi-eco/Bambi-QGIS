@@ -217,6 +217,14 @@ class AnalyticsTabMixin:
             "Open the inventory in a window: every individual with every "
             "column, sortable and filterable, with copy and save.")
         inventory_report_row.addWidget(self.track_inventory_report_btn)
+        self.review_queue_btn = QPushButton("→ Review Queue…")
+        self.review_queue_btn.clicked.connect(self.open_review_queue)
+        self.review_queue_btn.setToolTip(
+            "The tracks worth a human look - faint, very short, of no or "
+            "doubtful species, or seen differently by the two cameras - the "
+            "most doubtful first, to approve, rule out or correct one after "
+            "another in the inspector (dock/review_queue.py).")
+        inventory_report_row.addWidget(self.review_queue_btn)
         inventory_report_row.addStretch()
         inventory_layout.addLayout(inventory_report_row)
 
@@ -1215,6 +1223,7 @@ class AnalyticsTabMixin:
         camera_label = "Thermal" if modality == "t" else "RGB"
         self.log(f"Track {track_id} ({camera_label}) deleted from the project "
                  "in the inspector")
+        self._review_queue_forget(target_folder, modality, track_id)
         dialog, flight = self._inventory_dialog_for(target_folder, modality)
         if dialog is not None:
             dialog.remove_track(track_id, flight)
@@ -1248,6 +1257,8 @@ class AnalyticsTabMixin:
         camera_label = "Thermal" if modality == "t" else "RGB"
         self.log(f"Track {track_id} ({camera_label}) "
                  f"{'approved' if approved else 'no longer approved'}")
+        if approved:
+            self._review_queue_forget(target_folder, modality, track_id)
         dialog, flight = self._inventory_dialog_for(target_folder, modality)
         if dialog is not None:
             dialog.set_track_approved(track_id, approved, flight)

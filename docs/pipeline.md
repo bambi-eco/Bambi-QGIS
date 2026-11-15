@@ -468,7 +468,7 @@ The run log reports how many pairs were confirmed out of how many raw tracks. If
 
 **→ Add Matched Pairs to QGIS** draws a line between each pair's positions, attributed with the shared frame count and median distance - the quickest way to see whether the gate is set sensibly.
 
-**→ Sync Labels Across the Match** copies species, sex and age from one camera's animals onto their matched partners on the other (direction selectable: *Thermal → RGB* or *RGB → Thermal*), and the per-frame occlusion onto the paired detections. Only matched pairs are touched; an animal that already carries an answer keeps it, and hand annotations from the labelling tool are never overwritten. It is what lets a classifier that only works on one camera label the animals of both.
+**→ Sync Labels Across the Match** copies species, sex and age from one camera's animals onto their matched partners on the other (direction selectable: *Thermal → RGB* or *RGB → Thermal*), and the per-frame occlusion onto the paired detections. Only matched pairs are touched; an animal that already carries an answer keeps it, hand annotations from the labelling tool are never overwritten, and what a person decided in the [review queue](#review-queue) stays - also where they decided that the species, sex or age cannot be told. (Up to 9.0 the per-box part - occlusion, and the species on the boxes - looked the pairs up the wrong way round: it was right only where both cameras happened to number their boxes alike, and otherwise copied nothing or took the values of an unrelated box. Run the sync again on flights where it was used.) It is what lets a classifier that only works on one camera label the animals of both.
 
 The step sits in the *Detection and Tracking* section (it needs both cameras tracked, nothing else); the classification stage builds on it whenever its **Input** is *Matched*.
 
@@ -503,7 +503,7 @@ Voting is what makes a noisy per-frame call safe. An antler only resolves from s
 
 An animal the classifier cannot call is **left unknown, never discarded**: it keeps its place in the census with the attribute blank.
 
-**The animals follow the latest run.** Running a classifier again - with another model, or re-voting at another quorum - replaces what the earlier run wrote, on the track and on its boxes (which is where the exports and the analytics read the species), and takes a call back from an animal the new run no longer calls. Only what a classifier wrote is replaced or taken back: a species from the detector's class mapping, a value synced across from the other camera after the call, and hand labels stay.
+**The animals follow the latest run.** Running a classifier again - with another model, or re-voting at another quorum - replaces what the earlier run wrote, on the track and on its boxes (which is where the exports and the analytics read the species), and takes a call back from an animal the new run no longer calls. Only what a classifier wrote is replaced or taken back: a species from the detector's class mapping, a value synced across from the other camera after the call, hand labels, and a species, sex or age that a person set in the [review queue](#review-queue) stay.
 
 **Frames used** decides what may vote. *Visible frames only* is decided frame by frame, by the best that is known about that frame: the occlusion classifier's call where it has one, otherwise the occlusion value stored on the box (what the labelling tool writes), and otherwise the frame votes - nobody called it occluded. The run log says which of these the tracks went by, and how many frames voted without a label. (Up to 9.0 a frame without a label counted as occluded as soon as any box of the flight had one: a single hand-labelled track left every other track without a frame to vote with, and so without a species.)
 
@@ -935,9 +935,37 @@ analytics_t/    # or analytics_w/, in the survey folder
 
 ### Track inventory
 
-One row per tracked individual of the chosen camera, with everything the project knows about it side by side: species (as every survey tool counts it), sex and age with their votes, the [group](#groups) it was in (named after the lowest track number among its members) and that group's size, box and occlusion counts, confidences, first and last frame with their capture times, start and end position (project CRS and WGS84), path length, the matched track on the other camera, labelling-tool annotations and the distance to the flight line. **→ List Tracked Individuals** writes it as `analytics_t/track_inventory.csv` and `.json`; **→ Add to QGIS** loads it as a point layer at each animal's last position.
+One row per tracked individual of the chosen camera, with everything the project knows about it side by side: species (as every survey tool counts it), sex and age with their votes, the [group](#groups) it was in (named after the lowest track number among its members) and that group's size, box and occlusion counts, confidences, first and last frame with their capture times, start and end position (project CRS and WGS84), path length, the matched track on the other camera, labelling-tool annotations and the distance to the flight line. Two columns say where an answer came from: **Detector species** (`detector_species`) is what the detector's own classes called the animal, whatever a classifier or a person made of it since, and **Set by hand** (`by_hand`) lists what a person decided on the track - `species`, `sex`, `age` - in the [review queue](#review-queue). **→ List Tracked Individuals** writes it as `analytics_t/track_inventory.csv` and `.json`; **→ Add to QGIS** loads it as a point layer at each animal's last position.
 
 **→ Show Report** opens the inventory as a sortable, filterable table built from the store as it stands now. Its first column, **Approved**, is your own verdict - a checkmark written to the track, so it survives, exports and appears in every later inventory. A click on a track's start or end frame opens the animal in the inspector at that frame, where the same facts are shown under the image and a wrong detection or track can be [deleted from the project](tools.md#detection--track-selection); the report follows what is done there. **Columns…** chooses which columns the table shows (saved with the QGIS project); the written CSV and JSON keep every column regardless.
+
+### Review queue
+
+Nobody looks at every track of a survey. Most are plain - a confident detector, a long track, a classifier in no doubt, both cameras agreeing - and a few are not. **→ Review Queue…** (next to *Show Report*) lists the few for the flights and the camera chosen above, the most doubtful first, each with why it is in doubt:
+
+| Why | A track is listed when |
+|-----|------------------------|
+| boxes of low confidence | the mean confidence of its boxes is below **confidence below** (default 0.40) |
+| only *n* boxes | it has fewer boxes than **fewer boxes than** (default 4) - a few boxes are what a false alarm looks like |
+| no species | nobody knows what it is: no species, `animal` or `unknown` |
+| species / sex by *n* % of the votes | a classifier called it by less than **votes below** (default 70 %) |
+| the detector calls it … | the detector's own classes say another species than the track carries |
+| the other camera says … | the track it was [matched](#a3-match-rgb--thermal-tracks) with carries another species or sex |
+| not seen by the other camera | the cameras of this flight were matched and this track found no partner |
+| hidden on *n* of *m* frames | it was occluded on more than half of its frames |
+
+A track somebody **approved**, a track that was **labelled by hand** and one already ruled out as `not-an-animal` are never listed. Doubts that change a count (a faint or very short track, one camera only) come before doubts that change a label (a narrow vote), and a track with several doubts before a track with one. The three limits can be changed at the top of the window; **Refresh** builds the queue again from the project as it is now.
+
+Selecting a row opens the track in the [inspector](tools.md#detection--track-selection) at its first frame (untick *Show in the inspector* to stop that). Then say what it is:
+
+- **✓ Approve** (key **A**) - the track is right as it stands. It is ticked as approved, as in the inventory report, and leaves the queue.
+- **✗ Not an animal** (key **X**) - rules it out: the track and its boxes become `not-an-animal`, which no survey tool counts. Nothing is deleted, so the verdict can be taken back by choosing another species.
+- **Species**, **Sex**, **Age** - correct what the track carries; sex and age can also be set to *(not known)*. The track stays in the list so that you can approve it once it is right.
+- **Skip** (key **N**) - leaves the track as it is and goes on; it is listed again next time.
+
+Each of these is written to the project at once and logged. A track approved or deleted in the inspector leaves the queue as well.
+
+**What a person decided stands.** A species, sex or age set here is marked on the track as set by hand (the inventory's *Set by hand* column), and from then on a classifier run, a re-vote at another quorum and *Sync Labels Across the Match* leave that answer alone - on the track and on its boxes - while still filling in the ones nobody decided. (Before 9.1 only tracks drawn in the labelling tool were protected: a classifier run replaced whatever stood on a track the tracker had made.) The written inventory, census, density and population results are marked stale after a correction, since their counts may no longer hold; run them again when the review is done.
 
 ### Habitat context
 

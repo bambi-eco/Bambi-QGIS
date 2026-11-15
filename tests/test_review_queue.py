@@ -306,3 +306,102 @@ class TestInventory:
         assert "by_hand" in track_inventory.COLUMNS
         rows = track_inventory.build_inventory(flight, "t")
         assert track_inventory.cell_text(rows[0]["by_hand"]) == ""
+
+
+# ---------------------------------------------------------------------------
+# The queue of a survey
+# ---------------------------------------------------------------------------
+
+class TestSurvey:
+    TRACKS = [
+        {"id": 1, "species": "roe deer", "at": (0, 0), "frames": (1, 5)},
+        {"id": 2, "species": "roe deer", "at": (60, 0), "frames": (2, 6)},
+        {"id": 3, "species": "red deer", "at": (90, 0), "frames": (3, 7)},
+    ]
+    LOOSE = {"min_boxes": 1}        # the tracks of the helper have two boxes
+
+    @pytest.fixture
+    def flight(self, tmp_path):
+        """Both cameras: the RGB one calls track 1 a red deer, saw track 2
+        as the thermal one did, and has no track for the third."""
+        from bambi_wildlife_detection.core import match_store
+        from .survey_flights import make_flight
+
+        folder = make_flight(str(tmp_path / "Meadow"), self.TRACKS)
+        make_flight(folder, [
+            {"id": 1, "species": "roe deer", "at": (60, 0), "frames": (2, 6)},
+            {"id": 2, "species": "red deer", "at": (0, 0),
+             "frames": (1, 5)}], modality="w")
+        match_store.record_matches(folder, [
+            {"track_id_t": 1, "track_id_w": 2, "shared": 2,
+             "median_dist": 1.0},
+            {"track_id_t": 2, "track_id_w": 1, "shared": 2,
+             "median_dist": 1.0}])
+        return folder
+
+    def test_the_other_camera_is_asked(self, flight):
+        queue, total = rq.for_flights([("Meadow", flight, None)], "t",
+                                      settings=self.LOOSE)
+
+        assert total == 3
+        assert [(entry["track_id"], entry["reason_kinds"])
+                for entry in queue] == [
+            (1, ["cameras_species"]), (3, ["no_partner"])]
+        assert queue[0]["reasons"] == ["the RGB camera says red deer"]
+        assert queue[0]["flight"] is None
+
+    def test_from_the_other_side(self, flight):
+        queue, total = rq.for_flights([("Meadow", flight, None)], "w",
+                                      settings=self.LOOSE)
+
+        assert total == 2
+        assert [(entry["track_id"], entry["reason_kinds"])
+                for entry in queue] == [(2, ["cameras_species"])]
+        assert queue[0]["reasons"] == [
+            "the thermal camera says roe deer"]
+
+    def test_cameras_that_were_never_matched_are_not_held_against_a_track(
+            self, tmp_path):
+        from .survey_flights import make_flight
+
+        folder = make_flight(str(tmp_path / "Forest"), self.TRACKS)
+
+        queue, total = rq.for_flights([("Forest", folder, None)], "t",
+                                      settings=self.LOOSE)
+
+        assert (queue, total) == ([], 3)
+
+    def test_a_survey_of_several_flights_names_the_flight(self, flight,
+                                                          tmp_path):
+        from .survey_flights import make_flight
+
+        forest = make_flight(str(tmp_path / "Forest"), self.TRACKS[:1])
+
+        queue, total = rq.for_flights(
+            [("Meadow", flight, None), ("Forest", forest, None)], "t",
+            several=True)
+
+        assert total == 4
+        assert sorted((entry["flight"], entry["track_id"])
+                      for entry in queue) == [
+            ("Forest", 1), ("Meadow", 1), ("Meadow", 2), ("Meadow", 3)]
+        # the same track number in two flights: each asked its own camera
+        by_key = {(entry["flight"], entry["track_id"]):
+                  entry["reason_kinds"] for entry in queue}
+        assert by_key[("Meadow", 1)] == ["short", "cameras_species"]
+        assert by_key[("Forest", 1)] == ["short"]
+        assert by_key[("Meadow", 3)] == ["short", "no_partner"]
+
+    def test_the_species_of_the_survey(self, flight, tmp_path):
+        from .survey_flights import make_flight, species_id
+
+        forest = make_flight(str(tmp_path / "Forest"), self.TRACKS)
+
+        queue, total = rq.for_flights(
+            [("Meadow", flight, [species_id(flight, "red deer")]),
+             ("Forest", forest, [])],            # none of them flew there
+            "t", several=True)
+
+        assert total == 1
+        assert [(entry["flight"], entry["track_id"]) for entry in queue] == [
+            ("Meadow", 3)]
