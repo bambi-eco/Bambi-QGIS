@@ -118,26 +118,35 @@ class TestProjectColours:
         conn.close()
 
 
-class TestIndicators:
-    @pytest.mark.parametrize("sex,age,expected", [
-        ("female", "adult", "♀ ad"),
-        ("male", "juvenile", "♂ juv"),
-        ("Female", "", "♀"),
-        ("unknown", "juvenile", "juv"),
-        ("unknown", "unknown", ""),
-        (None, None, ""),
-        ("", "yearling", "yrl"),
-        ("hermaphrodite", "senior", "H seni"),   # a project's own labels
-    ])
-    def test_indicator(self, sex, age, expected):
-        assert map_symbols.indicator(sex, age) == expected
+class TestMarks:
+    @pytest.mark.parametrize("sex,expected", [
+        ("female", "♀"), ("Male", "♂"), ("unknown", ""), ("", ""),
+        (None, ""), ("hermaphrodite", "H")])       # a project's own label
+    def test_sex_mark(self, sex, expected):
+        assert map_symbols.sex_mark(sex) == expected
+
+    @pytest.mark.parametrize("age,expected", [
+        ("adult", "a"), ("Juvenile", "j"), ("subadult", "s"),
+        ("unknown", ""), (None, ""), ("yearling", "y")])
+    def test_age_mark(self, age, expected):
+        assert map_symbols.age_mark(age) == expected
+
+    def test_an_individual_keeps_its_colour(self):
+        first = map_symbols.individual_colour(7)
+        assert first in map_symbols.INDIVIDUAL_PALETTE
+        assert map_symbols.individual_colour(7) == first
+        assert map_symbols.individual_colour(8) != first
+        assert map_symbols.individual_colour(None) == \
+            map_symbols.UNTRACKED_COLOUR
 
     def test_attributes_keep_what_is_known(self):
-        assert map_symbols.attributes("roe deer", "female", "unknown") == {
+        assert map_symbols.attributes("roe deer", "female", "unknown", 3) == {
             "species": "roe deer", "sex": "female", "age": "",
-            "indicator": "♀"}
+            "sex_mark": "♀", "age_mark": "",
+            "box_colour": map_symbols.individual_colour(3)}
         assert map_symbols.attributes() == {
-            "species": "", "sex": "", "age": "", "indicator": ""}
+            "species": "", "sex": "", "age": "", "sex_mark": "",
+            "age_mark": "", "box_colour": map_symbols.UNTRACKED_COLOUR}
         assert tuple(map_symbols.attributes()) == map_symbols.FIELDS
 
     def test_species_present(self):
@@ -179,7 +188,8 @@ class TestFromTheStores:
         assert set(tracks) == {1, 2}
         assert tracks[1]["species"] == "red deer"
         assert tracks[2] == {"species": "hare", "sex": "", "age": "",
-                             "indicator": ""}
+                             "sex_mark": "", "age_mark": "",
+                             "box_colour": map_symbols.individual_colour(2)}
         assert set(map_symbols.track_attributes(root, "t", [2])) == {2}
 
     def test_a_tracked_detection_is_what_its_track_is(self, flight):
@@ -188,9 +198,13 @@ class TestFromTheStores:
         assert set(detections) == set(ids)
         assert detections[ids[0]]["species"] == "red deer"
         assert detections[ids[2]]["species"] == "hare"
-        # in no track: the species its class maps to, nothing else
-        assert detections[ids[3]] == {"species": "roe deer", "sex": "",
-                                      "age": "", "indicator": ""}
+        # ... and has its track's box colour
+        assert detections[ids[0]]["box_colour"] == \
+            map_symbols.individual_colour(1)
+        # in no track: the species its class maps to, the neutral box
+        assert detections[ids[3]] == {
+            "species": "roe deer", "sex": "", "age": "", "sex_mark": "",
+            "age_mark": "", "box_colour": map_symbols.UNTRACKED_COLOUR}
 
     def test_nothing_stored_is_nothing_to_draw(self, tmp_path):
         assert map_symbols.track_attributes(str(tmp_path), "t") == {}

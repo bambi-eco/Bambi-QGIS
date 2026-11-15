@@ -2,18 +2,24 @@
 """What the animals look like on the map: a colour per species, a short
 indicator for sex and age, and the attributes a layer needs to show both.
 
-**Colour means species.** Detections and tracks are drawn in the colour of
-their species, so a glance at the map says *what* is where - a colour per
-track said only that two boxes were different animals. Every species has a
-default colour: the seeded ones a fixed one, any other a colour derived from
-its name, so "roe deer" looks the same in every flight without anyone having
-set it. A project can override any of them in the Project Schema dialog;
-the overrides are kept in the flight's ``project.gpkg`` (``bambi_meta``),
-keyed by species id so that renaming a species keeps its colour.
+Two scales, two questions. **Zoomed in**, the question is *which animal is
+this* - so a track's box and path keep a colour of their own per individual,
+and two roe deer side by side can be told apart. **Zoomed out**, where the
+boxes have become pins, it is *what is where* - so a pin is drawn in the
+colour of its species.
 
-**Sex and age are a short text beside the pin** - "♀", "♂ juv" - because
-a third and fourth colour dimension would be unreadable. Unknown is not
-shown at all: no indicator means nobody knows, not "neither".
+Every species has a default colour: the seeded ones a fixed one, any other
+a colour derived from its name, so "roe deer" looks the same in every flight
+without anyone having set it. A project can override any of them in the
+Project Schema dialog; the overrides are kept in the flight's
+``project.gpkg`` (``bambi_meta``), keyed by species id so that renaming a
+species keeps its colour.
+
+**Sex and age are part of the pin**, not text beside it - with several pins
+close together a label next to one reads as belonging to its neighbour. The
+sex is a mark inside the pin's head ("♀", "♂"), the age a small badge
+attached to it ("j", "a"). Unknown is not shown at all: no mark means nobody
+knows, not "neither".
 
 No Qt in here; :mod:`bambi_map_symbols` turns this into QGIS symbology.
 """
@@ -59,17 +65,23 @@ PALETTE = (
 #: Colour of anything without a species.
 FALLBACK_COLOUR = SEEDED_COLOURS["animal"]
 
-#: Attributes a styled layer carries, in field order.
-FIELDS = ("species", "sex", "age", "indicator")
+#: Colours of the individuals: a track's box and path, by its track id.
+INDIVIDUAL_PALETTE = (
+    "#ff0000", "#009600", "#0064ff", "#ffa500", "#800080", "#00c8c8",
+    "#ff69b4", "#8b4513", "#00008b", "#228b22",
+)
+
+#: Box colour of a detection that belongs to no track.
+UNTRACKED_COLOUR = "#ffd92f"
+
+#: Attributes a styled layer carries, in field order: what the animal is,
+#: the two marks its pin shows, and the colour of its box.
+FIELDS = ("species", "sex", "age", "sex_mark", "age_mark", "box_colour")
 
 _HEX = re.compile(r"^#?([0-9a-fA-F]{6})$")
 
 #: Sex labels that have a symbol of their own.
 _SEX_SYMBOLS = {"female": "♀", "male": "♂"}
-#: Age labels that have a customary abbreviation.
-_AGE_SHORT = {"adult": "ad", "juvenile": "juv", "subadult": "sub",
-              "sub-adult": "sub", "yearling": "yrl", "fawn": "fawn",
-              "calf": "calf"}
 #: Labels that mean "nobody knows", shown as nothing.
 _UNKNOWN = {"", "unknown", "none", "n/a", "na", "?"}
 
@@ -174,34 +186,41 @@ def _known(label) -> str:
     return "" if text.lower() in _UNKNOWN else text
 
 
-def sex_indicator(label) -> str:
-    """"♀" / "♂" for female / male; the first letter of any other label a
-    project defined; nothing for unknown."""
+def sex_mark(label) -> str:
+    """The mark inside a pin's head: "♀" / "♂" for female / male, the
+    first letter of any other label a project defined, nothing for
+    unknown."""
     text = _known(label)
     if not text:
         return ""
     return _SEX_SYMBOLS.get(text.lower()) or text[:1].upper()
 
 
-def age_indicator(label) -> str:
-    """A short form of an age class ("juv", "ad"); nothing for unknown."""
+def age_mark(label) -> str:
+    """The letter in a pin's age badge: the first letter of the age class
+    ("j", "a"), nothing for unknown."""
     text = _known(label)
-    if not text:
-        return ""
-    return _AGE_SHORT.get(text.lower()) or text[:4].lower()
+    return text[:1].lower() if text else ""
 
 
-def indicator(sex=None, age=None) -> str:
-    """Sex and age as one short text, e.g. ``"♀ juv"``; empty when neither
-    is known."""
-    return " ".join(part for part in (sex_indicator(sex), age_indicator(age))
-                    if part)
+def individual_colour(track_id) -> str:
+    """The colour of one individual's box and path.
+
+    From the track id, so a track has the same colour on every layer it
+    appears on - its own, and the detection layers - and keeps it when the
+    layers are added again.
+    """
+    if track_id is None:
+        return UNTRACKED_COLOUR
+    return INDIVIDUAL_PALETTE[int(track_id) % len(INDIVIDUAL_PALETTE)]
 
 
-def attributes(species=None, sex=None, age=None) -> Dict[str, str]:
+def attributes(species=None, sex=None, age=None,
+               track_id=None) -> Dict[str, str]:
     """The :data:`FIELDS` of one animal, as a layer stores them."""
     return {"species": species or "", "sex": _known(sex), "age": _known(age),
-            "indicator": indicator(sex, age)}
+            "sex_mark": sex_mark(sex), "age_mark": age_mark(age),
+            "box_colour": individual_colour(track_id)}
 
 
 # --------------------------------------------------------------------------- #
@@ -225,7 +244,8 @@ def track_attributes(target_folder: str, modality: str,
     except Exception:  # noqa: BLE001 - an unreadable store is "no tracks"
         return {}
     return {int(row["track_id"]): attributes(
-        row.get("species"), row.get("sex"), row.get("age"))
+        row.get("species"), row.get("sex"), row.get("age"),
+        track_id=row["track_id"])
         for row in inventory}
 
 
@@ -234,8 +254,9 @@ def detection_attributes(target_folder: str, modality: str
     """``detection_id -> attributes`` for the detections of a flight.
 
     A detection that belongs to a track is what its track is - the animal
-    was identified as a whole, not box by box. One that belongs to none has
-    the species the detector's class maps to, and no sex or age.
+    was identified as a whole, not box by box - and has its track's box
+    colour. One that belongs to none has the species the detector's class
+    maps to, no sex or age, and the neutral box colour.
     """
     from .exporters import common
 

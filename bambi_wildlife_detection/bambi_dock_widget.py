@@ -1164,10 +1164,11 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         symbols_group = QGroupBox("Map Symbols")
         symbols_layout = QFormLayout(symbols_group)
         symbols_info = QLabel(
-            "Detections and tracks are drawn in the colour of their species "
-            "(set per species in the Project Schema). Zoomed out, where a "
-            "bounding box is too small to see, a pin with the animal's sex "
-            "and age takes its place.")
+            "Zoomed in, every tracked animal's bounding box has a colour of "
+            "its own. Zoomed out, where a box is too small to see, a pin "
+            "takes its place - in the colour of the species (set in the "
+            "Project Schema), with the sex inside it and the age as a "
+            "badge.")
         symbols_info.setWordWrap(True)
         symbols_info.setStyleSheet("color: gray; font-size: 10px;")
         symbols_layout.addRow(symbols_info)
@@ -11352,9 +11353,9 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             # Create main group for all tracks at top of layer tree
             main_group = self._create_layer_group(f"BAMBI Wildlife Tracks ({camera_label})")
 
-            # Colour means species (core.map_symbols): each track is drawn
-            # in the colour of what it is, with its sex and age beside the
-            # pin it turns into when zoomed out.
+            # Each track keeps a colour of its own for its box and path;
+            # the pin it turns into when zoomed out is in the colour of its
+            # species and carries its sex and age (core.map_symbols).
             from .core import map_symbols
             animals = map_symbols.track_attributes(
                 config["target_folder"], trk_suffix)
@@ -11364,7 +11365,10 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             for idx, ((file_basename, track_id), detections) in enumerate(all_tracks.items()):
                 # Sort detections by frame
                 detections_sorted = sorted(detections, key=lambda d: d['frame'])
-                animal = animal_values(animals.get(int(track_id)))
+                known = animals.get(int(track_id))
+                animal = animal_values(
+                    known if known else
+                    map_symbols.attributes(track_id=track_id))
 
                 # Create subgroup for this track
                 track_name = f"Track {track_id}"
@@ -11466,7 +11470,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
                         path_layer, f"Track{track_id}_Path_{trk_suffix}", "tracks_layers",
                         display_name="Path"
                     )
-                    self._style_animal_path(path_layer, config)
+                    self._style_animal_path(path_layer)
                     # Tag layer so the inspector tool can identify and handle it
                     path_layer.setCustomProperty("bambi_layer_type", "track_path")
                     path_layer.setCustomProperty("bambi_target_folder", config["target_folder"])
@@ -11522,11 +11526,10 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         except Exception as exc:  # nosec B110 - an unstyled layer still shows
             self.log(f"Note: could not style {layer.name()}: {exc}")
 
-    def _style_animal_path(self, layer, config: Optional[dict] = None):
-        """Style a track's path in the colour of the track's species."""
+    def _style_animal_path(self, layer):
+        """Style a track's path in the colour of its individual."""
         try:
-            colours, _scale, _pins = self._animal_style_settings(config)
-            style_path(layer, colours)
+            style_path(layer)
         except Exception as exc:  # nosec B110
             self.log(f"Note: could not style {layer.name()}: {exc}")
 

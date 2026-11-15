@@ -4,18 +4,18 @@
 One rule-based style for every box layer, visible and editable in the
 ordinary Symbology dialog:
 
-* **Zoomed in**, the geo-referenced bounding box, outlined in the colour of
-  its species.
+* **Zoomed in**, the geo-referenced bounding box, in the colour of the
+  individual - a track's own colour, so neighbours can be told apart.
 * **Zoomed out**, where a one-metre box is a speck, a pin of fixed screen
-  size at the box's centre, in the same colour, with a short sex / age
-  indicator beside it ("♀ juv").
+  size at the box's centre, in the colour of the species. The sex is a mark
+  inside the pin's head and the age a small badge attached to it, so both
+  stay with their pin however close the next one is.
 
-The two are top-level rules with a scale range each, so the switch-over
-scale is changed in two places in the dialog, however many species there
-are; below each sits one rule per species present in the layer, which is
-also what the legend lists.
+The two are top-level rules with a scale range each. "Boxes" is one symbol
+that reads its colour from the feature; below "Pins" sits one rule per
+species present in the layer, which is also what the legend lists.
 
-What the colours and indicators *are* is decided in :mod:`core.map_symbols`;
+What the colours and marks *are* is decided in :mod:`core.map_symbols`;
 this module only draws them.
 """
 
@@ -38,10 +38,11 @@ STYLE_PROPERTY = "bambi_animal_style"
 BOX = "box"
 PATH = "path"
 
-PIN_HEAD_MM = 4.4
+PIN_HEAD_MM = 6.0
 PIN_OUTLINE = QColor(255, 255, 255)
 BADGE_COLOR = QColor(20, 20, 20)
-BADGE_SIZE_MM = 3.2
+#: Diameter of the age badge on the pin's shoulder.
+AGE_BADGE_MM = 3.3
 
 
 def animal_fields() -> List[QgsField]:
@@ -75,22 +76,60 @@ def _shape(name: str):
         return getattr(QgsSimpleMarkerSymbolLayer, name)
 
 
-def box_symbol(colour: str) -> QgsFillSymbol:
-    """The bounding box: a firm outline, a faint fill."""
+def _filled(field: str) -> QgsProperty:
+    """True for a feature whose *field* is not empty."""
+    return QgsProperty.fromExpression(f"coalesce(\"{field}\", '') <> ''")
+
+
+def _empty(field: str) -> QgsProperty:
+    return QgsProperty.fromExpression(f"coalesce(\"{field}\", '') = ''")
+
+
+def _letter(field: str, size: float, colour: QColor,
+            offset: QPointF) -> QgsFontMarkerSymbolLayer:
+    """One character read from *field*, drawn only where there is one."""
+    letter = QgsFontMarkerSymbolLayer()
+    # The class default is a dingbat font, which has no letters.
+    letter.setFontFamily(QFont().family())
+    letter.setFontStyle("Bold")
+    letter.setCharacter("")
+    letter.setSize(size)
+    letter.setColor(colour)
+    letter.setOffset(offset)
+    letter.setDataDefinedProperty(
+        _property("PropertyCharacter"), QgsProperty.fromField(field))
+    letter.setDataDefinedProperty(
+        _property("PropertyLayerEnabled"), _filled(field))
+    return letter
+
+
+def box_symbol(colour: str = map_symbols.UNTRACKED_COLOUR) -> QgsFillSymbol:
+    """The bounding box: a firm outline and a faint fill, in the colour
+    the feature names in ``box_colour`` (*colour* where it names none)."""
     line = QColor(colour)
     fill = QColor(colour)
     fill.setAlpha(60)
     layer = QgsSimpleFillSymbolLayer(fill)
     layer.setStrokeColor(line)
     layer.setStrokeWidth(0.8)
+    own = f"coalesce(nullif(\"box_colour\", ''), '{line.name()}')"
+    layer.setDataDefinedProperty(
+        _property("PropertyStrokeColor"), QgsProperty.fromExpression(own))
+    layer.setDataDefinedProperty(
+        _property("PropertyFillColor"),
+        QgsProperty.fromExpression(f"set_color_part({own}, 'alpha', 60)"))
     symbol = QgsFillSymbol()
     symbol.changeSymbolLayer(0, layer)
     return symbol
 
 
 def pin_marker(colour: str) -> QgsMarkerSymbol:
-    """A map pin whose tip is the animal's position, with the sex / age
-    indicator to its upper right."""
+    """A map pin whose tip is the animal's position.
+
+    The head carries the sex as a mark (a plain dot when it is unknown) and,
+    on its shoulder, a badge with the first letter of the age class - both
+    part of the pin, so they cannot be read as a neighbour's.
+    """
     fill = QColor(colour)
     head_centre = -(PIN_HEAD_MM * 0.95)
 
@@ -111,47 +150,40 @@ def pin_marker(colour: str) -> QgsMarkerSymbol:
     head.setStrokeWidth(0.45)
     head.setOffset(QPointF(0, head_centre))
 
+    # Sex unknown: the plain dot of an ordinary pin.
     eye = QgsSimpleMarkerSymbolLayer(_shape("Circle"))
-    eye.setSize(PIN_HEAD_MM * 0.36)
+    eye.setSize(PIN_HEAD_MM * 0.3)
     eye.setColor(PIN_OUTLINE)
     eye.setStrokeStyle(Qt.PenStyle.NoPen)
     eye.setOffset(QPointF(0, head_centre))
+    eye.setDataDefinedProperty(
+        _property("PropertyLayerEnabled"), _empty("sex_mark"))
 
-    # Sex and age, read from the feature, to the right of the head.
-    # Drawn twice: a white, outlined copy as a halo and the dark text
-    # on top - an outline on the text itself is painted over the letters.
-    badges = []
-    for text_colour, outline in ((PIN_OUTLINE, 0.7), (BADGE_COLOR, 0.0)):
-        badge = QgsFontMarkerSymbolLayer()
-        # The class default is a dingbat font, which has no letters.
-        badge.setFontFamily(QFont().family())
-        badge.setFontStyle("Bold")
-        badge.setCharacter("")
-        badge.setSize(BADGE_SIZE_MM)
-        badge.setColor(text_colour)
-        badge.setStrokeColor(PIN_OUTLINE)
-        badge.setStrokeWidth(outline)
-        badge.setOffset(QPointF(PIN_HEAD_MM, head_centre - 0.9))
-        # The text is centred on its offset, so a longer one has to start
-        # further out or it would run across the pin's head.
-        badge.setDataDefinedProperty(
-            _property("PropertyOffset"),
-            QgsProperty.fromExpression(
-                f"to_string({PIN_HEAD_MM * 0.68:.2f} + "
-                f"length(\"indicator\") * {BADGE_SIZE_MM * 0.3:.2f})"
-                f" || ',{head_centre - 0.9:.2f}'"))
-        badge.setDataDefinedProperty(
-            _property("PropertyCharacter"),
-            QgsProperty.fromField("indicator"))
-        badge.setDataDefinedProperty(
-            _property("PropertyLayerEnabled"),
-            QgsProperty.fromExpression(
-                "coalesce(\"indicator\", '') <> ''"))
-        badges.append(badge)
+    # Sex known: its mark in the head, dark under white so it reads on
+    # every species colour.
+    # The sex glyphs hang below their baseline; lifted a little they sit
+    # in the middle of the head.
+    centre = QPointF(0, head_centre - PIN_HEAD_MM * 0.07)
+    sex_shadow = _letter("sex_mark", PIN_HEAD_MM * 0.74, BADGE_COLOR, centre)
+    sex_shadow.setStrokeColor(BADGE_COLOR)
+    sex_shadow.setStrokeWidth(0.5)
+    sex = _letter("sex_mark", PIN_HEAD_MM * 0.74, PIN_OUTLINE, centre)
+
+    # Age: a badge on the head's upper right, overlapping it.
+    shoulder = QPointF(PIN_HEAD_MM * 0.42, head_centre - PIN_HEAD_MM * 0.42)
+    badge = QgsSimpleMarkerSymbolLayer(_shape("Circle"))
+    badge.setSize(AGE_BADGE_MM)
+    badge.setColor(PIN_OUTLINE)
+    badge.setStrokeColor(BADGE_COLOR)
+    badge.setStrokeWidth(0.3)
+    badge.setOffset(shoulder)
+    badge.setDataDefinedProperty(
+        _property("PropertyLayerEnabled"), _filled("age_mark"))
+    age = _letter("age_mark", AGE_BADGE_MM * 0.72, BADGE_COLOR, shoulder)
 
     marker = QgsMarkerSymbol()
     marker.changeSymbolLayer(0, tip)
-    for layer in (head, eye, *badges):
+    for layer in (head, eye, sex_shadow, sex, badge, age):
         marker.appendSymbolLayer(layer)
     return marker
 
@@ -197,27 +229,26 @@ def box_renderer(names: Iterable[str], colours: Dict[str, str],
                  pins: bool = True) -> QgsRuleBasedRenderer:
     """The renderer of a box layer.
 
-    :param names: species to give a rule of their own
+    :param names: species to give a pin rule of their own
     :param colours: ``species name -> #rrggbb``
     :param switch_scale: map scale (1:n) beyond which pins replace boxes
     :param pins: off draws the boxes at every scale
     """
-    names = list(names)
     root = QgsRuleBasedRenderer.Rule(None)
     if not pins or switch_scale <= 0:
-        _species_rules(root, names, colours, box_symbol)
+        root.appendChild(QgsRuleBasedRenderer.Rule(
+            box_symbol(), 0, 0, "", "Boxes"))
         return QgsRuleBasedRenderer(root)
 
     scale = float(switch_scale)
     boxes = QgsRuleBasedRenderer.Rule(
-        None, 0, 0, "", f"Boxes (closer than 1:{scale:,.0f})")
+        box_symbol(), 0, 0, "", f"Boxes (closer than 1:{scale:,.0f})")
     # "Minimum scale" is the most zoomed-out scale a rule is drawn at.
     boxes.setMinimumScale(scale)
-    _species_rules(boxes, names, colours, box_symbol)
     far = QgsRuleBasedRenderer.Rule(
         None, 0, 0, "", f"Pins (beyond 1:{scale:,.0f})")
     far.setMaximumScale(scale)
-    _species_rules(far, names, colours, pin_symbol)
+    _species_rules(far, list(names), colours, pin_symbol)
     root.appendChild(boxes)
     root.appendChild(far)
     return QgsRuleBasedRenderer(root)
@@ -226,22 +257,29 @@ def box_renderer(names: Iterable[str], colours: Dict[str, str],
 def style_boxes(layer, colours: Dict[str, str],
                 switch_scale: float = map_symbols.DEFAULT_SWITCH_SCALE,
                 pins: bool = True) -> None:
-    """Style a polygon layer of animal boxes by species, with pins beyond
-    *switch_scale*."""
+    """Style a polygon layer of animal boxes: each box in its individual's
+    colour, and pins in the species' colour beyond *switch_scale*."""
     layer.setRenderer(box_renderer(
         layer_species(layer), colours, switch_scale, pins))
     layer.setCustomProperty(STYLE_PROPERTY, BOX)
     layer.triggerRepaint()
 
 
-def style_path(layer, colours: Dict[str, str]) -> None:
-    """Style a track's path line in the colour of the track's species."""
-    names = layer_species(layer)
-    colour = QColor(map_symbols.colour_of(
-        colours, names[0] if names else ""))
+def layer_box_colour(layer) -> str:
+    """The individual colour a single-animal layer names (the neutral one
+    when it names none)."""
+    index = layer.fields().indexFromName("box_colour")
+    values = [v for v in layer.uniqueValues(index)
+              if v not in (None, "")] if index >= 0 else []
+    return str(values[0]) if values else map_symbols.UNTRACKED_COLOUR
+
+
+def style_path(layer) -> None:
+    """Style a track's path line in the colour of its individual, like the
+    track's box."""
     symbol = QgsLineSymbol.createSimple({
         "width": "1.2", "capstyle": "round", "joinstyle": "round"})
-    symbol.setColor(colour)
+    symbol.setColor(QColor(layer_box_colour(layer)))
     layer.setRenderer(QgsSingleSymbolRenderer(symbol))
     layer.setCustomProperty(STYLE_PROPERTY, PATH)
     layer.triggerRepaint()
@@ -258,7 +296,7 @@ def restyle(layers: Iterable, colours: Dict[str, str],
         if kind == BOX:
             style_boxes(layer, colours, switch_scale, pins)
         elif kind == PATH:
-            style_path(layer, colours)
+            style_path(layer)
         else:
             continue
         count += 1
