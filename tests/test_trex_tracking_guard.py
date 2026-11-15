@@ -7,6 +7,8 @@ set of tracks for the same animals - and since manual and tracker runs are now
 pooled (EXCHANGE_FORMAT_PLAN.md §8.2), a stray extra run is exactly the kind of
 thing that quietly doubles a population estimate.
 """
+import os
+
 import pytest
 
 from bambi_wildlife_detection.bambi_processing import BambiProcessor
@@ -137,19 +139,44 @@ def test_membership_comes_from_the_tracklet_id(processor, tmp_path):
 
 
 def test_a_count_mismatch_is_reported_not_guessed(processor, tmp_path):
+    """It stops the import: tracklets without their tracks are not a result
+    (it was a line in the log, and the import went on)."""
     root = str(tmp_path)
     _import_detections(root, _rows()[:2])
 
-    messages = []
-    processor._record_trex_tracks(root, "t", _rows(), log_fn=messages.append)
-    assert any("could not record TRex tracks" in m for m in messages)
+    with pytest.raises(RuntimeError, match="tracks cannot be recorded"):
+        processor._record_trex_tracks(root, "t", _rows())
+    assert track_store.active_run(root, "t") is None
+
+
+def test_only_the_tracklets_own_detections_are_paired(processor, tmp_path):
+    """The detector's boxes share the table. They were counted in, so the
+    numbers never matched and no track was recorded."""
+    root = str(tmp_path)
+    detection_store.record_detections(root, "t", [
+        {"frame": 1, "x1": 50.0, "y1": 50.0, "x2": 60.0, "y2": 60.0,
+         "confidence": 0.4, "source_class": "0"} for _ in range(4)])
+    rows = _rows()
+    _import_detections(root, rows)
+
+    ids = processor._record_trex_tracks(root, "t", rows)
+
+    assert ids == detection_store.detection_ids(
+        root, "t", detection_store.TREX)
+    boxes = {row["detection_id"]: row
+             for row in track_store.load_detections(root, "t")}
+    assert [boxes[i]["x1"] for i in ids] == [row["x1"] for row in rows]
+    pixel = track_store.load_pixel_tracks(root, "t")
+    assert sorted(row["x1"] for row in pixel) == [1.0, 1.5, 9.0]
 
 
 def test_no_store_means_no_track_run(processor, tmp_path):
     """An un-migrated project must not gain a store as a side effect."""
     root = str(tmp_path / "legacy")
-    processor._record_trex_tracks(root, "t", _rows())
-    assert not store.project_path(root) or True
+    with pytest.raises(RuntimeError):
+        processor._record_trex_tracks(root, "t", _rows())
+    assert not os.path.exists(store.project_path(root))
+    assert not os.path.exists(store.stage_path(root, store.TRACKS, "t"))
 
 
 def test_empty_import_records_nothing(processor, tmp_path):

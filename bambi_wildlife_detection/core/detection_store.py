@@ -138,6 +138,33 @@ def record_detections(target_folder: str, modality: str,
     return {"written": len(rows), "replaced": replaced, "generation": generation}
 
 
+def detection_ids(target_folder: str, modality: str, kind: str) -> List[int]:
+    """The ids of *kind*'s detections of one camera, in the order they were
+    handed out - which is the order :func:`record_detections` was given the
+    rows in. An import that knows more about its rows than the store keeps
+    (the tracklet each belongs to) finds them again this way."""
+    project_path = store.project_path(target_folder)
+    path = store.stage_path(target_folder, store.DETECTIONS, modality)
+    if not (os.path.isfile(project_path) and os.path.isfile(path)):
+        return []
+    project = store.open_store(project_path, store.PROJECT)
+    try:
+        sources = [int(row["source_id"]) for row in project.execute(
+            "SELECT source_id FROM detection_sources WHERE kind = ?", (kind,))]
+    finally:
+        project.close()
+    if not sources:
+        return []
+    conn = store.open_store(path, store.DETECTIONS, modality)
+    try:
+        marks = ", ".join("?" for _ in sources)
+        return [int(row["detection_id"]) for row in conn.execute(
+            "SELECT detection_id FROM detections "  # nosec B608 - "?" marks
+            f"WHERE source_id IN ({marks}) ORDER BY detection_id", sources)]
+    finally:
+        conn.close()
+
+
 def detection_counts(target_folder: str, modality: str) -> Dict[str, int]:
     """Detections per producer kind, for logging and the stage status."""
     path = store.stage_path(target_folder, store.DETECTIONS, modality)

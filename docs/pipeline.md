@@ -128,6 +128,10 @@ If you have already tracked animals externally with [TRex](https://trex.run), th
 - **Frame numbers:** TRex counts frames as the video does, and that number is used as the frame index. Extract the thermal frames with **Keep duplicated thermal frames** ticked (the default), from one video, without skip or sampling - otherwise every box after the first frozen frame is placed with a later pose. The import warns when the frames were extracted with duplicates dropped, and leaves out boxes on frozen frames.
 - When an NPZ folder is set, step **4. Track Animals Or Import** imports and geo-references the TRex tracklets instead of running the configured tracking backend
 
+What the import records is what the plugin's own steps record: every tracklet is a **track**, each of its frames a **box** - under a source of their own, so detecting again leaves them alone. The boxes are stored in the pixels of the **extracted frames**: boxes made on the raw video are undistorted with the camera's calibration first, the way the extraction undistorts the frames. Their **positions** are then computed by *Geo-Reference Detections* itself, as part of the import and for every box of the camera, so a box that cannot be placed (no pose for its frame, off the DEM) is recorded with the reason rather than dropped. The text files (`detections.txt`, `tracks_pixel.csv`, `tracks.csv`, …) are written only while **Also write legacy text outputs** is on.
+
+> Before 9.1 the import wrote the positions to the text files only, which nothing reads since 6.0 - imported tracklets could not be added to the map or analysed. Import them again to get their positions.
+
 ## Processing steps
 
 The steps live on two tabs, split by what they depend on:

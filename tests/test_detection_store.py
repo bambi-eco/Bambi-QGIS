@@ -358,3 +358,30 @@ def test_adopted_rows_keep_their_raw_class(tmp_path):
     _legacy_file(root, "1 10.0 20.0 30.0 40.0 0.9 7\n")
     detection_store.adopt_legacy_detections(root, "t")
     assert _stored(root)[0]["source_class"] == "7"
+
+
+# ---------------------------------------------------------------------------
+# A producer finding its own rows again
+# ---------------------------------------------------------------------------
+
+def test_detection_ids_are_one_producers_in_the_order_given(tmp_path):
+    root = str(tmp_path)
+    detection_store.record_detections(root, "t", _rows(3))
+    detection_store.record_detections(
+        root, "t", _rows(2, frame=200), kind=detection_store.TREX)
+
+    ids = detection_store.detection_ids(root, "t", detection_store.TREX)
+
+    assert len(ids) == 2 and ids == sorted(ids)
+    assert not set(ids) & set(detection_store.detection_ids(
+        root, "t", detection_store.DETECTOR))
+    frames = {row["detection_id"]: row["frame"] for row in _stored(root)}
+    assert [frames[i] for i in ids] == [200, 201]
+
+
+def test_detection_ids_of_nothing_are_empty(tmp_path):
+    root = str(tmp_path)
+    assert detection_store.detection_ids(root, "t", detection_store.TREX) == []
+    detection_store.record_detections(root, "t", _rows(1))
+    assert detection_store.detection_ids(root, "t", detection_store.TREX) == []
+    assert detection_store.detection_ids(root, "w", detection_store.DETECTOR) == []
