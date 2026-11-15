@@ -315,11 +315,11 @@ def test_distance_sampling_clips_observations_and_effort(tmp_path):
     _area(survey_folder, plots=[(box(0, -50, 100, 50), "")])
 
     survey = _survey(survey_folder, folder)
-    distances, length = BambiProcessor()._load_distance_sampling_project(
+    loaded = BambiProcessor()._load_distance_sampling_project(
         survey.flights[0], survey, "detections",
         area=survey_area.load(survey_folder, EPSG))
-    assert sorted(distances.tolist()) == [2.0, 5.0, 9.0]
-    assert length == pytest.approx(100.0)
+    assert sorted(loaded["distances"].tolist()) == [2.0, 5.0, 9.0]
+    assert loaded["length"] == pytest.approx(100.0)
 
 
 def test_distance_sampling_reports_abundance_in_the_survey_area(tmp_path):

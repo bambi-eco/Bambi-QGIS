@@ -1069,20 +1069,36 @@ class SurveyAnalyticsMixin:
             progress_fn(5)
 
         # ---- Pool the perpendicular distances and effort L ---------------- #
+        # Every flight brings its surveyed lines - its transect legs, or its
+        # recorded route - and the animals seen from them (core.
+        # distance_effort). The lines of all flights are one sample.
+        from .core import distance_effort
+
         distance_arrays = []
-        transect_length = 0.0
+        line_arrays = []
+        lines = []
+        effort_kinds = []
+        n_off_effort = 0
         projects_summary = []
         area = self._survey_area(survey, log_fn)
         for i, flight in enumerate(project_folders):
-            d, length = self._load_distance_sampling_project(
+            loaded = self._load_distance_sampling_project(
                 flight, survey, source, names, log_fn, area=area)
-            distance_arrays.append(d)
-            transect_length += length
+            distance_arrays.append(loaded["distances"])
+            line_arrays.append(loaded["line"] + len(lines))
+            lines.extend(dict(line, flight=flight.name)
+                         for line in loaded["lines"])
+            if loaded["effort"] not in effort_kinds:
+                effort_kinds.append(loaded["effort"])
+            n_off_effort += loaded["off_effort"]
             summary = {
                 "name": flight.name,
                 "target_folder": flight.target_folder,
-                "n": int(d.size),
-                "transect_length_m": length,
+                "n": int(loaded["distances"].size),
+                "transect_length_m": loaded["length"],
+                "effort": loaded["effort"],
+                "n_lines": len(loaded["lines"]),
+                "n_off_effort": loaded["off_effort"],
             }
             if area is not None:
                 summary["survey_area"] = area.describe()
@@ -1094,11 +1110,14 @@ class SurveyAnalyticsMixin:
 
         distances = (np.concatenate(distance_arrays) if distance_arrays
                      else np.asarray([], dtype=np.float64))
+        line_index = (np.concatenate(line_arrays) if line_arrays
+                      else np.asarray([], dtype=np.int64))
+        transect_length = float(sum(line["length_m"] for line in lines))
         if distances.size < 2:
             raise RuntimeError(
                 "Not enough perpendicular distances for distance sampling.")
         if transect_length <= 0:
-            raise RuntimeError("The pooled flight routes have zero length.")
+            raise RuntimeError("The pooled survey lines have zero length.")
 
         if progress_fn:
             progress_fn(20)
@@ -1109,10 +1128,15 @@ class SurveyAnalyticsMixin:
             w = float(w_cfg)
         else:
             w = float(np.percentile(distances, 95))
-        x = distances[distances <= w]
+        kept = distances <= w
+        x = distances[kept]
         n = int(x.size)
         if n < 2:
             raise RuntimeError("Truncation distance leaves too few observations.")
+        line_counts = np.bincount(
+            line_index[kept], minlength=len(lines)).tolist()
+        for line, count in zip(lines, line_counts):
+            line["n"] = int(count)
 
         if log_fn:
             log_fn(f"n={n} observations, transect length L={transect_length:.1f} m, "
@@ -1143,8 +1167,13 @@ class SurveyAnalyticsMixin:
         covered_area_m2 = 2.0 * w * transect_length
         abundance_covered = density_m2 * covered_area_m2  # == n / p
 
-        # Combine encounter-rate (Poisson) and detection-function CVs.
-        cv_n = 1.0 / math.sqrt(n)
+        # Combine the encounter-rate and detection-function CVs. The
+        # encounter rate varies between lines by more than chance alone, so
+        # its variance is measured between them wherever there are two.
+        cv_n, variance_method = distance_effort.encounter_rate_cv(
+            line_counts, [line["length_m"] for line in lines])
+        if cv_n is None:
+            cv_n, variance_method = 1.0 / math.sqrt(n), distance_effort.POISSON
         cv_esw = best["cv_esw"]
         cv_density = math.sqrt(cv_n * cv_n + cv_esw * cv_esw)
         ci_d = self._lognormal_ci(density_km2, cv_density)
@@ -1161,21 +1190,37 @@ class SurveyAnalyticsMixin:
         # Abundance for the survey plot: density x adjusted area.
         survey_area_m2 = None if area is None else area.adjusted_m2
 
-        notes = (
-            "Encounter-rate variance uses a Poisson approximation (CV = 1/sqrt(n)); "
-            "abundance is reported for the covered strip area 2*w*L. Multiply density "
-            "by your study-area size for a study-area abundance estimate."
-        )
+        n_lines = sum(1 for line in lines if line["length_m"] > 0)
+        notes = ("The effort L is " + " / ".join(
+            distance_effort.EFFORT_TEXT[kind] for kind in effort_kinds) + ". ")
+        if n_off_effort:
+            notes += (f"{n_off_effort} observation(s) seen outside the "
+                      "transect legs - in transit - are not counted. ")
+        if variance_method == distance_effort.BETWEEN_LINES:
+            notes += (
+                f"The encounter-rate variance is measured between the "
+                f"{n_lines} lines (Buckland et al. 2001, eq. 3.4), so it "
+                "includes how unevenly the animals are spread. ")
+        else:
+            notes += (
+                "With a single line the encounter-rate variance is a Poisson "
+                "approximation (CV = 1/sqrt(n)), which is too small when "
+                "animals are clumped - define transects, or pool several "
+                "flights, to measure it. ")
+        notes += (
+            "Abundance is reported for the covered strip area 2*w*L. Multiply "
+            "density by your study-area size for a study-area abundance "
+            "estimate.")
         if area is not None:
             notes += (
                 " A survey area was applied: observations outside the plot or "
-                "inside an exclusion zone were dropped, and the effort L is the "
-                "length of flight route inside the area.")
+                "inside an exclusion zone were dropped, and a line is as long "
+                "as the part of it inside the area.")
         if len(project_folders) > 1:
             notes += (
                 " Several flights were pooled: their perpendicular distances "
-                "were combined and their flight-route lengths summed into the "
-                "total effort L, assuming a shared detection function."
+                "were combined and their lines taken as one sample, assuming "
+                "a shared detection function."
             )
 
         result = {
@@ -1187,6 +1232,14 @@ class SurveyAnalyticsMixin:
             "flights": [f.name for f in project_folders],
             "projects": projects_summary,
             "transect_length_m": transect_length,
+            "effort": effort_kinds,
+            "n_lines": n_lines,
+            "lines": [{"flight": line["flight"], "name": line["name"],
+                       "length_m": line["length_m"], "n": line["n"]}
+                      for line in lines],
+            "n_off_effort": n_off_effort,
+            "encounter_rate_cv": cv_n,
+            "encounter_rate_variance": variance_method,
             "truncation_m": w,
             "best_model": best["name"],
             "effective_strip_width_m": esw,
@@ -1255,29 +1308,33 @@ class SurveyAnalyticsMixin:
 
     def _load_distance_sampling_project(self, flight, survey, source,
                                         names=None, log_fn=None, area=None):
-        """Perpendicular distances and flight-route length L for one flight.
+        """One flight's surveyed lines and the perpendicular distances of the
+        animals seen from them.
 
-        Returns ``(distances, transect_length_m)`` - a numpy array of the
-        finite, non-negative perpendicular distances and the flight-route
-        length in metres. Errors name the flight so a pooled run can say
-        which one is at fault.
+        Returns ``{"distances", "line", "lines", "length", "effort",
+        "off_effort"}``: the finite, non-negative distances and, aligned
+        with them, the index of the line each was seen from; the lines
+        (``core.distance_effort.flight_lines``) with their summed length; how
+        the lines were found; and how many observations lay on no line.
+        Errors name the flight so a pooled run can say which one is at fault.
 
         With a survey *area*, observations whose position lies outside it are
-        dropped and L is only the route length inside it - effort and
+        dropped and a line is as long as the part of it inside - effort and
         observations must describe the same region.
         """
         import numpy as np
+        from .core import distance_effort
         from .core.survey import route_suffix
 
         target_folder = flight.target_folder
         m = survey.modality
         if source == "tracks":
             perp_name = f"perpendicular_tracks_{m}.json"
-            list_key, dist_key = "tracks", "distance_m"
+            list_key, dist_key, frame_key = "tracks", "distance_m", "last_frame"
             prereq = "Calculate Track Perpendicular"
         else:
             perp_name = f"perpendicular_{m}.json"
-            list_key, dist_key = "perpendiculas", "distance_m"
+            list_key, dist_key, frame_key = "perpendiculas", "distance_m", "frame"
             prereq = "Calculate Perpendicular"
         fr_suffix = route_suffix(target_folder, m, perp_name) or m
         perp_file = os.path.join(
@@ -1307,18 +1364,98 @@ class SurveyAnalyticsMixin:
             before = len(entries)
             entries = [e for e in entries if _inside(e)]
             self._last_ds_outside_area = before - len(entries)
-        distances = np.asarray(
-            [float(e[dist_key]) for e in entries], dtype=np.float64)
-        distances = distances[np.isfinite(distances) & (distances >= 0)]
 
+        # ---- The surveyed lines ------------------------------------------- #
+        lines, effort = self._distance_sampling_lines(
+            flight, survey, area, fr_suffix, log_fn)
+        if sum(line["length_m"] for line in lines) <= 0:
+            where = " inside the survey area" if area is not None else ""
+            raise RuntimeError(
+                f"The survey lines of {flight.name} have zero length{where}.")
+
+        # ---- The animals seen from them ----------------------------------- #
+        distances, line_index, off_effort = [], [], 0
+        for entry in entries:
+            distance = float(entry[dist_key])
+            if not (np.isfinite(distance) and distance >= 0):
+                continue
+            if effort == distance_effort.TRANSECTS:
+                index = distance_effort.line_of_frame(
+                    lines, entry.get(frame_key))
+                if index is None:
+                    off_effort += 1         # seen in transit
+                    continue
+            else:
+                index = 0
+            distances.append(distance)
+            line_index.append(index)
+
+        length = float(sum(line["length_m"] for line in lines))
+        if log_fn:
+            if area is not None:
+                log_fn(f"  Survey area: {self._last_ds_outside_area} "
+                       "observation(s) outside dropped")
+            note = (f", {off_effort} seen outside the transect legs not "
+                    "counted" if off_effort else "")
+            log_fn(f"  {flight.name}: {len(distances)} distance(s) on "
+                   f"{len(lines)} line(s), L={length:.1f} m "
+                   f"({distance_effort.EFFORT_TEXT[effort]}){note}")
+        return {
+            "distances": np.asarray(distances, dtype=np.float64),
+            "line": np.asarray(line_index, dtype=np.int64),
+            "lines": lines,
+            "length": length,
+            "effort": effort,
+            "off_effort": off_effort,
+        }
+
+    def _distance_sampling_lines(self, flight, survey, area, fr_suffix,
+                                 log_fn=None):
+        """The surveyed lines of *flight* and how they were found
+        (``core.distance_effort``): its transect legs, else its recorded
+        route - and, only when the frames' positions are not to be had, the
+        whole flight route as before."""
+        import numpy as np
+        from .core import distance_effort
+        from .core.survey import route_suffix
+        from .core.transects import TransectStore
+
+        target_folder = flight.target_folder
+        m = survey.modality
+
+        images = []
+        poses_path = os.path.join(target_folder, f"poses_{m}.json")
+        if os.path.exists(poses_path):
+            with open(poses_path, 'r', encoding='utf-8') as f:
+                images = json.load(f).get("images", [])
+
+        if images:
+            transects = []
+            store = TransectStore(target_folder, m)
+            if store.load():
+                transects = store.ordered()
+                for transect in transects:
+                    transect.clamp(len(images))
+            # The positions are mesh-local; the survey area is in the world
+            # CRS, so they are shifted by the flight's DEM origin to clip.
+            offset = (0.0, 0.0)
+            if area is not None:
+                x_offset, y_offset, _source = self._resolve_population_origin(
+                    flight, log_fn)
+                offset = (x_offset, y_offset)
+            return distance_effort.flight_lines(
+                images, transects, area=area, offset=offset)
+
+        # No frame positions: the flight log is all there is to measure.
         route_folder = route_suffix(target_folder, m) or fr_suffix
         route_file = os.path.join(
             target_folder, f"flight_route_{route_folder}",
             "flight_route.geojson")
         if not os.path.exists(route_file):
             raise FileNotFoundError(
-                f"{flight.name}: flight_route.geojson not found. "
-                "Please run 'Generate Flight Route' first.")
+                f"{flight.name}: neither poses_{m}.json nor "
+                "flight_route.geojson found. Please extract the frames (or "
+                "run 'Generate Flight Route') first.")
         with open(route_file, 'r', encoding='utf-8') as f:
             route_geojson = json.load(f)
         route_coords = None
@@ -1331,27 +1468,18 @@ class SurveyAnalyticsMixin:
                 f"The flight route of {flight.name} does not contain a valid "
                 "LineString.")
         rc = np.asarray(route_coords, dtype=np.float64)
-        seg = np.diff(rc[:, :2], axis=0)
-        transect_length = float(np.hypot(seg[:, 0], seg[:, 1]).sum())
-        if transect_length <= 0:
-            raise RuntimeError(
-                f"The flight route of {flight.name} has zero length.")
         if area is not None:
-            full_length = transect_length
-            transect_length = area.clipped_length(rc[:, :2].tolist())
-            if transect_length <= 0:
-                raise RuntimeError(
-                    f"The flight route of {flight.name} never enters the "
-                    "survey area.")
-            if log_fn:
-                log_fn(f"  Survey area: {self._last_ds_outside_area} "
-                       f"observation(s) outside dropped; route inside "
-                       f"{transect_length:.1f} of {full_length:.1f} m")
-
+            length = area.clipped_length(rc[:, :2].tolist())
+        else:
+            seg = np.diff(rc[:, :2], axis=0)
+            length = float(np.hypot(seg[:, 0], seg[:, 1]).sum())
         if log_fn:
-            log_fn(f"  {flight.name}: {int(distances.size)} distance(s), "
-                   f"L={transect_length:.1f} m")
-        return distances, transect_length
+            log_fn(f"  Warning: {flight.name} has no poses_{m}.json - the "
+                   "whole flight route counts as effort, take-off and "
+                   "transit included")
+        return ([{"name": "flight route", "first_frame": 0,
+                  "last_frame": 0, "length_m": float(length)}],
+                distance_effort.FLIGHT_ROUTE)
 
     def _fit_detection_function(self, name, x, w, log_fn=None):
         """Fit a detection function by MLE; returns a dict of results or None.

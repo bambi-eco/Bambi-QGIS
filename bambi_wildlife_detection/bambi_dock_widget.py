@@ -9962,6 +9962,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             proj_rows = "".join(
                 f"<tr><td>{p.get('name') or os.path.basename(os.path.normpath(p['target_folder']))}</td>"
                 f"<td align='right'>{p.get('n', 0)}</td>"
+                f"<td align='right'>{p.get('n_lines', 1)}</td>"
                 f"<td align='right'>{p.get('transect_length_m', 0):.0f}</td></tr>"
                 for p in projects
             )
@@ -9969,18 +9970,39 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         <h4>Flights pooled ({len(projects)})</h4>
         <table cellpadding='4'>
           <tr><th align='left'>Flight</th><th align='right'>Observations</th>
-              <th align='right'>Route length (m)</th></tr>
+              <th align='right'>Lines</th>
+              <th align='right'>Surveyed line (m)</th></tr>
           {proj_rows}
         </table>
         """
+
+        # What counted as line, and how its encounter rate was judged
+        # (core.distance_effort). Absent from results written before 9.1.
+        lines_text = ""
+        if r.get("n_lines"):
+            lines_text = f" in {r['n_lines']} line(s)"
+        transit_row = (
+            f"<tr><td><b>Seen in transit</b></td><td align='right' "
+            f"style='color:#c80'>{r['n_off_effort']} (not counted)</td></tr>"
+            if r.get("n_off_effort") else "")
+        encounter_row = ""
+        if r.get("encounter_rate_cv") is not None:
+            how = ("measured between the lines"
+                   if r.get("encounter_rate_variance") == "between lines"
+                   else "Poisson - a single line")
+            encounter_row = (
+                f"<tr><td><b>Encounter-rate CV</b></td><td align='right'>"
+                f"{r['encounter_rate_cv'] * 100:.0f} % ({how})</td></tr>")
 
         html = f"""
         <h3>Distance-Sampling Estimate ({r.get('source', '')})</h3>
         <table cellpadding='4'>
           <tr><td><b>Observations (n)</b></td><td align='right'>{r.get('n', 0)}
               (of {r.get('n_before_truncation', 0)})</td></tr>
-          <tr><td><b>Transect length (L)</b></td>
-              <td align='right'>{r.get('transect_length_m', 0):.0f} m</td></tr>
+          <tr><td><b>Surveyed line (L)</b></td>
+              <td align='right'>{r.get('transect_length_m', 0):.0f} m{lines_text}</td></tr>
+          {transit_row}
+          {encounter_row}
           <tr><td><b>Truncation (w)</b></td>
               <td align='right'>{r.get('truncation_m', 0):.2f} m</td></tr>
           <tr><td><b>Best model</b></td><td align='right'>{r.get('best_model', '')}</td></tr>

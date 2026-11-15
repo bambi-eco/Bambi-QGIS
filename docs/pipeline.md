@@ -635,14 +635,24 @@ Use **→ Add Density Heatmap to QGIS** to load the raster with a blue→red col
 
 Estimates **density and abundance with 95% confidence intervals** using conventional line-transect distance sampling. It reuses the perpendicular distances already produced by **Calculate Perpendicular** (detections) or **Calculate Track Perpendicular** (tracks), so run one of those first.
 
-The tool fits both a **half-normal** and a **hazard-rate** detection function by maximum likelihood, selects the better fit by **AIC**, and computes the effective strip width (ESW), average detection probability, density (per km²) and abundance for the covered strip. Uncertainty combines a Poisson encounter-rate term with the detection-function variance via the delta method, reported as a lognormal confidence interval.
+The tool fits both a **half-normal** and a **hazard-rate** detection function by maximum likelihood, selects the better fit by **AIC**, and computes the effective strip width (ESW), average detection probability, density (per km²) and abundance for the covered strip. Uncertainty combines the encounter-rate variance with the detection-function variance via the delta method, reported as a lognormal confidence interval.
+
+**What counts as surveyed line.** Only line that was searched, and only the animals seen from it:
+
+- where a flight has **transects** ([Transect Splitting Tool](tools.md#transect-splitting-tool)), its lines are the transect legs, and an animal counts when its frame lies on one of them - animals seen in transit are reported and left out;
+- otherwise the line is the camera's path **from the first to the last recorded frame**;
+- with a **survey area**, a line is as long as the part of it inside the area.
+
+Up to 9.0 the whole flight log counted - take-off, the transit to the first transect, the way home - which made the line too long and the density too low.
+
+**How sure the encounter rate is.** Animals are clumped and lines cross different ground, so the number seen per metre varies from line to line by more than chance alone. With two or more lines - transect legs, or several flights - that variation is measured between them (Buckland et al. 2001); a Poisson figure, which assumes evenly spread animals and is too small otherwise, is used only when there is a single line. The report says which was used, and lists every line with its length and count.
 
 | Setting | Description |
 |---------|-------------|
 | **Source** | Detections or Tracks (tracks - one observation per animal - are usually preferred) |
 | **Truncation (m)** | Discard observations beyond this perpendicular distance. `0` = automatic (95th percentile) |
 
-On completion a results dialog summarises n, transect length, truncation, the selected model, ESW, detection probability, density and abundance with CIs, plus the model-comparison (AIC) table.
+On completion a results dialog summarises n, the length of surveyed line, truncation, the selected model, ESW, detection probability, density and abundance with CIs, plus the model-comparison (AIC) table.
 
 **Outputs:**
 ```
@@ -723,7 +733,7 @@ of View*, *Calculate Track Perpendicular* and the flight's DEM.
 | **Bootstrap** | transects resampled with replacement (*Bootstrap iterations*, reproducible with *Seed*); mean, SE and percentile 95 % CI of the naive density |
 | **ZINB** | zero-inflated negative binomial regression `count ~ ha`, for surveys where most transects are empty; SE by the delta method, log-normal 95 % CI |
 
-**How sure the ZINB density is.** The density is the sum of the transects' fitted counts over their summed area. Those fitted counts all come from the same four model parameters, so they rise and fall together, and the uncertainty of their sum is far larger than what one gets by adding up each transect's own uncertainty - which is what the reference R analysis does, and what this estimate reproduced up to 9.0. An interval built that way held the true density about one time in four in simulations with 40 transects; the standard error now reported is that of the sum itself and held it about nine times in ten. The density has not changed and still agrees with `glmmTMB`; its standard error and interval are wider than those in reports made with earlier versions (on the paper's St. Stefan data: 32.7 ± 9.2 per 100 ha, interval 19 to 56, where ± 2.5 and 28 to 38 used to be shown). The interval is log-normal, so it does not reach below zero.
+**How sure the ZINB density is.** The density is the sum of the transects' fitted counts over their summed area. Those fitted counts all come from the same four model parameters, so they rise and fall together, and the uncertainty of their sum is far larger than what one gets by adding up each transect's own uncertainty - which is what the reference R analysis does, and what this estimate reproduced up to 9.0. An interval built that way held the true density about one time in four in simulations with 40 transects; the standard error now reported is that of the sum itself and held it about nine times in ten. The density has not changed and still agrees with `glmmTMB`; its standard error and interval are wider than those in reports made with earlier versions (on the paper's St. Stefan data: 32.7 ± 9.2 per 100 ha, interval 19 to 56, where ± 2.5 and 28 to 38 used to be shown). The interval is log-normal, so it does not reach below zero. It needs transects to be right: with fewer than 30 the estimate says that its interval is likely too narrow still (it held the true density about 6 times in 10 with 12 transects and 8 in 10 with 20) and points to the bootstrap.
 
 **A flight without animals counts.** A flight on which nothing was detected, or none of the selected species, or nothing inside the survey area, contributes its transects with zero animals - leaving it out would overstate the density. Tick it like any other flight; it only needs its transects and its field of view.
 
