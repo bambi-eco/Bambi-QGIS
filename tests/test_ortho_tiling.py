@@ -116,11 +116,17 @@ class TestFilterShotsForTile:
         low = _Shot(9999.0, 9999.0, 0.5)         # altitude < 1 m
         assert low in filter_shots_for_tile([low], self.TILE)
 
-    def test_empty_result_falls_back_to_all(self):
+    def test_a_tile_no_shot_reaches_gets_no_shot(self):
+        """It used to get all of them - "so tiles on the boundary still
+        receive at least one shot" - and every tile away from the flight
+        had the whole flight rendered into it, to come out empty."""
         far1 = _Shot(9000.0, 9000.0, 50.0)
         far2 = _Shot(-9000.0, -9000.0, 50.0)
-        # none overlap → fall back to the full list
-        assert filter_shots_for_tile([far1, far2], self.TILE) == [far1, far2]
+        logs = []
+        assert filter_shots_for_tile(
+            [far1, far2], self.TILE, log_fn=logs.append) == []
+        assert logs == []
+        assert filter_shots_for_tile([], self.TILE) == []
 
     def test_logs_when_filtering(self):
         logs = []

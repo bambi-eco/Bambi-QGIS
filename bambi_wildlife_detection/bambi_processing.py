@@ -6978,6 +6978,7 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
             read_gltf, process_render_data
         )
         from .core.camera_pose import shot_pose
+        from .core.ortho_tiling import ShotReach
         from .core.render_resources import release_renderer
         from .core import render_size
 
@@ -7134,6 +7135,7 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
                     tw = min(max_tile_size, width_pixels - tx)
                     tiles.append((row, col, tx, ty, tw, th))
 
+            reach = ShotReach(shots, ground_z=float(mesh_aabb.p_min.z))
             for tile_i, (row, col, tx, ty, tw, th) in enumerate(tiles):
                 tile_geo_bounds = (
                     min_x + tx * pixel_size_x,
@@ -7142,13 +7144,17 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
                     max_y - ty * pixel_size_y,
                 )
 
+                # A tile none of the sample's frames can see stays empty:
+                # it is not rendered.
+                tile_shots = reach.for_tile(tile_geo_bounds, log_fn)
+                if not tile_shots:
+                    continue
+
                 tile_camera = self._create_tile_camera(
                     global_camera, global_bounds, global_resolution,
                     tx, ty, tw, th, Vector3, Camera
                 )
                 tile_res = Resolution(tw, th)
-
-                tile_shots = self._filter_shots_for_tile(shots, tile_geo_bounds, log_fn)
 
                 renderer = Renderer(tile_res, ctx, tile_camera, mesh_data, texture_data)
 
@@ -7207,12 +7213,6 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
             if progress_fn:
                 progress_fn(10 + int(((sample_i + 1) / total) * 85))
 
-    def _filter_shots_for_tile(self, shots, tile_geo_bounds, log_fn=None, fov_default=50.0):
-        """Cull shots to those overlapping a tile (core.ortho_tiling)."""
-        from .core.ortho_tiling import filter_shots_for_tile
-        return filter_shots_for_tile(
-            shots, tile_geo_bounds, log_fn=log_fn, fov_default=fov_default)
-
     def _run_alfs_alfspy(
             self, config, images, poses, dem_path, mask_path,
             output_file, ground_resolution,
@@ -7235,6 +7235,7 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
             release_all
         )
         from .core.camera_pose import shot_pose
+        from .core.ortho_tiling import ShotReach
         from .core.render_context import make_render_context
         from .core.render_resources import release_renderer
 
@@ -7423,6 +7424,13 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
                 old.tex_data = None
                 old._tex_gen_input = None
 
+        # Which frames can see which tile, worked out once. The mosaic
+        # spans the whole DEM: away from the flight no frame sees a tile, and
+        # such a tile is not rendered. It used to get every frame of the
+        # flight - read, uploaded, rendered - to come out empty.
+        reach = ShotReach(shots, ground_z=float(mesh_aabb.p_min.z))
+        unseen = 0
+
         try:
             for i, (row, col, tx, ty, tw, th) in enumerate(tiles):
                 if cancel_check and cancel_check():
@@ -7436,17 +7444,22 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
                     max_y - ty * pixel_size_y,
                 )
 
+                # Only upload GPU textures for shots whose footprint overlaps
+                # this tile - reduces peak VRAM from ~2.7 GB (all shots) to the
+                # few shots that actually cover the tile (~2-6 typically).
+                tile_shots = reach.for_tile(tile_geo_bounds, log_fn)
+                if not tile_shots:
+                    unseen += 1
+                    if progress_fn:
+                        progress_fn(20 + int(((i + 1) / len(tiles)) * 70))
+                    continue
+
                 tile_camera = self._create_tile_camera(
                     global_camera, global_bounds, global_resolution,
                     tx, ty, tw, th, Vector3, Camera
                 )
 
                 tile_res = Resolution(tw, th)
-
-                # Only upload GPU textures for shots whose footprint overlaps
-                # this tile - reduces peak VRAM from ~2.7 GB (all shots) to the
-                # few shots that actually cover the tile (~2-6 typically).
-                tile_shots = self._filter_shots_for_tile(shots, tile_geo_bounds, log_fn)
 
                 renderer = Renderer(tile_res, ctx, tile_camera, mesh_data, texture_data)
 
@@ -7483,6 +7496,8 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
                         log_fn(f"Skipping empty tile ({row}, {col})")
                     del tile_img
                     _reclaim_cpu(tile_shots)
+                    if progress_fn:
+                        progress_fn(20 + int(((i + 1) / len(tiles)) * 70))
                     continue
 
                 tile_path = os.path.join(output_dir, f"tile_{row:02d}_{col:02d}.tif")
@@ -7500,6 +7515,10 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
                 # released before the next Renderer (FBO + mesh re-upload) is
                 # allocated, and trim the bounded CPU cache so RAM stays capped.
                 _reclaim_cpu(tile_shots)
+
+            if unseen and log_fn:
+                log_fn(f"{unseen} of {len(tiles)} tile(s) lie where no frame "
+                       "sees the ground: not rendered")
         finally:
             release_all(ctx, shots)
 

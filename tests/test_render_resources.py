@@ -15,14 +15,14 @@ The first half of this file needs nothing but the module. The second runs
 the real thing on a software OpenGL context and counts what is alive on it;
 it is skipped where no such context can be made.
 """
-import ctypes
-import json
 import os
 
 import numpy as np
 import pytest
 
 from bambi_wildlife_detection.core import render_resources as rr
+
+from .software_gl import N_FRAMES, Alive, ended, small_flight, software_gl
 
 
 # ---------------------------------------------------------------------------
@@ -185,47 +185,9 @@ class TestRendererPool:
 # On a real OpenGL context
 # ---------------------------------------------------------------------------
 
-def _software_gl():
-    """A ModernGL context that needs no display, and the library to ask it
-    what is alive - or a skip."""
-    pytest.importorskip("moderngl")
-    pytest.importorskip("alfspy")
-    from alfspy.core.backends import make_context
-
-    try:
-        ctx = make_context("moderngl", backend="egl")
-        gl = ctypes.CDLL("libGL.so.1")
-    except Exception as exc:      # noqa: BLE001 - no GL here: nothing to test
-        pytest.skip(f"no OpenGL context without a display here: {exc}")
-    return ctx, gl
-
-
-class Alive:
-    """Counts the OpenGL objects alive on the current context."""
-
-    KINDS = {"textures": "glIsTexture", "renderbuffers": "glIsRenderbuffer",
-             "framebuffers": "glIsFramebuffer", "buffers": "glIsBuffer",
-             "vertex arrays": "glIsVertexArray"}
-
-    def __init__(self, gl):
-        self._is = {}
-        for kind, name in self.KINDS.items():
-            function = getattr(gl, name)
-            function.argtypes = [ctypes.c_uint]
-            function.restype = ctypes.c_ubyte
-            self._is[kind] = function
-
-    def __call__(self):
-        return {kind: sum(1 for name in range(1, 800) if function(name))
-                for kind, function in self._is.items()}
-
-    def none(self):
-        return dict.fromkeys(self.KINDS, 0)
-
-
 @pytest.fixture
 def gl():
-    ctx, library = _software_gl()
+    ctx, library = software_gl()
     yield ctx, Alive(library)
     rr.release_context(ctx)
 
@@ -289,76 +251,9 @@ class TestOnOpenGL:
 # The processing steps, on a small flight over flat ground
 # ---------------------------------------------------------------------------
 
-N_FRAMES = 6
-
-
 @pytest.fixture
 def flight(tmp_path, monkeypatch):
-    """Six thermal frames from 60 m above flat ground, a metre apart - and
-    every render context the step makes, on software OpenGL."""
-    cv2 = pytest.importorskip("cv2")
-    pytest.importorskip("trimesh")
-    pytest.importorskip("bambi")
-    pytest.importorskip("gltflib")
-    pytest.importorskip("rasterio")
-    _ctx, library = _software_gl()
-    rr.release_context(_ctx)
-    from alfspy.core.backends import make_context
-    from alfspy.core.backends.moderngl_.renderer import Renderer
-
-    from bambi_wildlife_detection.bambi_processing import BambiProcessor
-    from bambi_wildlife_detection.core import render_context
-
-    root = str(tmp_path / "flight")
-    frames = os.path.join(root, "frames_t")
-    os.makedirs(frames)
-    picture = np.random.default_rng(0).integers(
-        40, 255, (128, 160, 3), dtype=np.uint8)
-    for index in range(N_FRAMES):
-        cv2.imwrite(os.path.join(frames, f"frame_{index:06d}.png"), picture)
-    glb = os.path.join(root, "dem.glb")
-    BambiProcessor.generate_flat_surface_mesh(
-        47.0, 14.0, 500.0, 500.0, glb, os.path.join(root, "dem.json"),
-        epsg=32633)
-    with open(os.path.join(root, "poses_t.json"), "w") as handle:
-        json.dump({"images": [
-            {"imagefile": f"frame_{index:06d}.png",
-             "location": [float(index), 0.0, 60.0],
-             "rotation": [0.0, 0.0, 0.0], "fovy": [50.0]}
-            for index in range(N_FRAMES)]}, handle)
-
-    contexts = []
-
-    def software_context(device=None, engine=None):
-        contexts.append(make_context("moderngl", backend="egl"))
-        return contexts[-1]
-
-    monkeypatch.setattr(render_context, "make_render_context", software_context)
-    monkeypatch.setattr(render_context, "require_render_stack", lambda: None)
-
-    # how many textures are alive each time a renderer is made
-    alive, seen = Alive(library), []
-    make = Renderer.__init__
-
-    def counting(self, *args, **kwargs):
-        seen.append(alive()["textures"])
-        make(self, *args, **kwargs)
-
-    monkeypatch.setattr(Renderer, "__init__", counting)
-    return {
-        "root": root, "contexts": contexts, "textures": seen,
-        "processor": BambiProcessor(),
-        "config": {"target_folder": root, "dem_path": glb,
-                   "target_epsg": 32633, "alfs_camera": "T",
-                   "geotiff_camera": "T", "alfs_ground_resolution": 0.5,
-                   "alfs_create_overviews": False},
-    }
-
-
-def _ended(ctx) -> bool:
-    import moderngl
-
-    return isinstance(ctx.mglo, moderngl.InvalidObject)
+    return small_flight(tmp_path, monkeypatch)
 
 
 class TestTheStepsGiveBackWhatTheyTake:
@@ -371,7 +266,7 @@ class TestTheStepsGiveBackWhatTheyTake:
         seen = flight["textures"]
         assert len(seen) == N_FRAMES
         assert seen == [0] * N_FRAMES, "textures pile up from sample to sample"
-        assert [_ended(ctx) for ctx in flight["contexts"]] == [True]
+        assert [ended(ctx) for ctx in flight["contexts"]] == [True]
         written = os.listdir(os.path.join(flight["root"], "alfs_t"))
         assert len([name for name in written if name.endswith(".tif")]) \
             == N_FRAMES
@@ -384,7 +279,7 @@ class TestTheStepsGiveBackWhatTheyTake:
         seen = flight["textures"]
         assert len(seen) > 4
         assert seen == [0] * len(seen), "textures pile up from tile to tile"
-        assert [_ended(ctx) for ctx in flight["contexts"]] == [True]
+        assert [ended(ctx) for ctx in flight["contexts"]] == [True]
 
     def test_a_geotiff_per_frame(self, flight):
         """One renderer per frame, next to the frame's own image."""
@@ -393,7 +288,7 @@ class TestTheStepsGiveBackWhatTheyTake:
         seen = flight["textures"]
         assert len(seen) == N_FRAMES
         assert seen == [1] * N_FRAMES, "textures pile up from frame to frame"
-        assert [_ended(ctx) for ctx in flight["contexts"]] == [True]
+        assert [ended(ctx) for ctx in flight["contexts"]] == [True]
         written = os.listdir(os.path.join(flight["root"], "geotiffs_t"))
         assert len([name for name in written if name.endswith(".tiff")]) \
             == N_FRAMES
@@ -417,7 +312,7 @@ class TestTheStepsGiveBackWhatTheyTake:
                 flight["config"], alfs_sampling_mode=True,
                 alfs_sampling_rate=1, alfs_sampling_range=1))
 
-        assert [_ended(ctx) for ctx in flight["contexts"]] == [True]
+        assert [ended(ctx) for ctx in flight["contexts"]] == [True]
 
     def test_a_cancelled_light_field_gives_its_context_back(self, flight):
         calls = {"n": 0}
@@ -430,4 +325,4 @@ class TestTheStepsGiveBackWhatTheyTake:
             flight["config"], alfs_sampling_mode=True, alfs_sampling_rate=1,
             alfs_sampling_range=1), cancel_check=cancel_after_two)
 
-        assert [_ended(ctx) for ctx in flight["contexts"]] == [True]
+        assert [ended(ctx) for ctx in flight["contexts"]] == [True]

@@ -51,43 +51,130 @@ def create_tile_camera(global_camera, global_bounds, global_res,
     )
 
 
-def filter_shots_for_tile(shots, tile_geo_bounds, log_fn=None, fov_default=50.0):
-    """Return the subset of shots whose ground footprint overlaps a tile.
+#: For a camera whose matrices are not known, its reach is estimated from
+#: its height and vertical field of view, as if it looked straight down;
+#: this factor covers the frame's corners and some tilt.
+_NADIR_MARGIN = 2.5
+#: A corner ray this close to the horizon (cosine of its angle from straight
+#: down) reaches "everywhere".
+_HORIZON = 0.02
 
-    Uses circle-AABB intersection: the camera footprint is approximated as a
-    circle centred on the ground projection of the shot, with radius derived
-    from altitude and vertical FoV.  A generous 2.5× multiplier accounts for
-    oblique cameras and imprecise altitude values.
 
-    Falls back to the full shot list when no shot passes the filter (so tiles
-    on the boundary of the flight area still receive at least one shot).
+def _corner_rays(shot):
+    """The directions of a shot's four frame corners in the world, from the
+    matrices the renderer projects it with - ``None`` when it has none.
+
+    The renderer maps a world point *p* into a shot's image with
+    ``proj * correction * view * p``; taking that back for the corners of
+    the image gives the edges of what the shot can light. No assumption
+    about angles or their order is made here: whatever the renderer draws
+    is inside these rays.
     """
-    min_x, min_y, max_x, max_y = tile_geo_bounds
-    relevant = []
-    for shot in shots:
-        pos = shot.camera.transform.position
-        sx, sy, sz = float(pos.x), float(pos.y), float(pos.z)
-        altitude = abs(sz)
-        if altitude < 1.0:
-            # No meaningful altitude - include unconditionally
-            relevant.append(shot)
-            continue
+    try:
+        view = np.asarray(shot.get_view(), dtype=np.float64).reshape(4, 4)
+        correction = np.asarray(shot.get_correction(),
+                                dtype=np.float64).reshape(4, 4)
+        proj = np.asarray(shot.get_proj(), dtype=np.float64).reshape(4, 4)
+        # pyrr matrices act on row vectors: clip = p @ view @ correction @ proj
+        inverse = np.linalg.inv(view @ correction @ proj)
+    except Exception:  # noqa: BLE001 - a stand-in, or a degenerate camera
+        return None
+    rays = []
+    for x, y in ((-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)):
+        near = np.array([x, y, -1.0, 1.0]) @ inverse
+        far = np.array([x, y, 1.0, 1.0]) @ inverse
+        if abs(near[3]) < 1e-12 or abs(far[3]) < 1e-12:
+            return None
+        direction = far[:3] / far[3] - near[:3] / near[3]
+        length = float(np.linalg.norm(direction))
+        if not np.isfinite(length) or length <= 0.0:
+            return None
+        rays.append(direction / length)
+    return np.array(rays)
+
+
+def shot_reach(shot, ground_z=0.0, fov_default=50.0):
+    """``(x, y, radius)``: the circle on the map outside of which a shot
+    sees no ground.
+
+    Its centre is the point below the camera. Its radius is the camera's
+    height above the lowest ground times the tangent of the angle, from
+    straight down, of the frame corner that looks out furthest - which is
+    as far as that corner's ray gets before it meets ground at any height.
+    ``inf`` when that cannot be bounded: a corner at or above the horizon,
+    or a camera not above the lowest ground.
+
+    :param ground_z: height of the lowest ground, in the shots' coordinates
+        (0 for a DEM mesh, whose heights count from its lowest point)
+    """
+    position = shot.camera.transform.position
+    x, y, z = float(position.x), float(position.y), float(position.z)
+    height = z - float(ground_z)
+    if height < 1.0:
+        return x, y, math.inf
+
+    rays = _corner_rays(shot)
+    if rays is None:
         try:
             fov_y = shot.camera.fovy or fov_default
-        except Exception:
+        except Exception:  # noqa: BLE001
             fov_y = fov_default
-        radius = altitude * math.tan(math.radians(fov_y / 2)) * 2.5
-        # Nearest point on the AABB to the shot position
-        near_x = max(min_x, min(sx, max_x))
-        near_y = max(min_y, min(sy, max_y))
-        dist_sq = (sx - near_x) ** 2 + (sy - near_y) ** 2
-        if dist_sq <= radius * radius:
-            relevant.append(shot)
-    if not relevant:
-        return shots
-    if log_fn and len(relevant) < len(shots):
-        log_fn(f"  Shot filter: {len(relevant)}/{len(shots)} shots relevant for this tile")
-    return relevant
+        half_height = height * math.tan(math.radians(fov_y / 2))
+        return x, y, half_height * _NADIR_MARGIN
+    downward = float(np.min(-rays[:, 2]))     # cosine of the widest angle
+    if downward <= _HORIZON:
+        return x, y, math.inf
+    # 2 % on top: the frame's edge is a pixel, not a line
+    return x, y, height * math.sqrt(1.0 - downward ** 2) / downward * 1.02
+
+
+class ShotReach:
+    """Which shots can see a tile - worked out once for a set of shots.
+
+    A tile used to get *all* shots when none of them reached it, "so tiles
+    on the boundary still receive at least one shot". The mosaic spans the
+    whole DEM, so that was the case for every tile away from the flight:
+    each had every frame of the flight read, uploaded and rendered into it,
+    to be found empty and thrown away. A tile no shot reaches gets no shot
+    now, and is not rendered.
+
+    That is only safe when a shot's reach is never underestimated, which
+    the estimate it replaces did for a camera that does not look straight
+    down (its frames were then missing from tiles they covered). See
+    :func:`shot_reach`.
+    """
+
+    def __init__(self, shots, ground_z=0.0, fov_default=50.0):
+        self.shots = list(shots)
+        reach = [shot_reach(shot, ground_z, fov_default)
+                 for shot in self.shots]
+        self._reach = np.array(reach, dtype=np.float64).reshape(-1, 3)
+
+    def for_tile(self, tile_geo_bounds, log_fn=None):
+        """The shots that can see ``(min_x, min_y, max_x, max_y)``; ``[]``
+        when none does."""
+        if not self.shots:
+            return []
+        min_x, min_y, max_x, max_y = tile_geo_bounds
+        x, y, radius = self._reach[:, 0], self._reach[:, 1], self._reach[:, 2]
+        # the tile's point nearest to the one below the camera
+        distance = np.hypot(x - np.clip(x, min_x, max_x),
+                            y - np.clip(y, min_y, max_y))
+        relevant = [shot for shot, sees in zip(self.shots, distance <= radius)
+                    if sees]
+        if log_fn and relevant and len(relevant) < len(self.shots):
+            log_fn(f"  Shot filter: {len(relevant)}/{len(self.shots)} shots "
+                   "relevant for this tile")
+        return relevant
+
+
+def filter_shots_for_tile(shots, tile_geo_bounds, log_fn=None,
+                          fov_default=50.0, ground_z=0.0):
+    """The shots that can see a tile; ``[]`` when none does, and the tile
+    need not be rendered. See :class:`ShotReach`, which does the same for
+    many tiles without working out each shot's reach again."""
+    return ShotReach(shots, ground_z, fov_default).for_tile(
+        tile_geo_bounds, log_fn)
 
 
 def crop_to_content(image, bounds):

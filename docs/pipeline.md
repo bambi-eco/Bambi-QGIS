@@ -386,6 +386,8 @@ fov_t/    # or fov_w/ depending on camera selection
 
 Creates a georeferenced Airborne Light Field Sampling (ALFS) by projecting all (or a subset of) frames onto the DEM surface and blending them together. Output is a Cloud-Optimized GeoTIFF.
 
+The mosaic spans the whole DEM and is rendered in tiles of at most the *tile size*. A tile gets the frames that can see it - worked out from each frame's position, direction and field of view - and a tile no frame sees is not rendered at all; the log says how many those were. (Up to 9.0 such a tile had **every** frame of the flight rendered into it before it was found empty, which made the step slower the larger the DEM was compared to the flight; and a camera tilted away from straight down could be left out of tiles its frames reached.)
+
 **Outputs:**
 ```
 alfs_t/    # or alfs_w/ depending on camera selection
