@@ -41,10 +41,12 @@ COLUMN_HINTS = {
     "species": "Species on the track (classifier, annotation or label sync)",
     "species_vote_fraction": "Share of the voting frames that agreed",
     "species_votes": "Votes for the winning species / voting frames",
-    "species_model": "Classifier file the species came from",
+    "species_model": "Classifier file the species came from (or: by hand)",
+    "detector_species": "What the detector's classes call most of its boxes",
     "sex": "Sex on the track", "sex_vote_fraction": "Share of frames agreeing",
     "sex_model": "Classifier file the sex came from",
     "age": "Life stage on the track", "age_source": "Model or size estimate",
+    "by_hand": "What a person set on the track: species, sex, age",
     "group": "The group the animal was in: the lowest track number among "
              "the animals that were together",
     "group_size": "Animals in that group (1 = alone)",

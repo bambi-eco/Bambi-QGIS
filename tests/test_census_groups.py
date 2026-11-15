@@ -296,8 +296,9 @@ class TestInventory:
                 for row in rows] == [
             (1, 1, 3), (2, 1, 3), (3, 1, 3), (4, 4, 2), (5, 4, 2),
             (6, 6, 2), (7, 6, 2), (8, 8, 1)]
-        assert track_inventory.COLUMNS.index("group") == \
-            track_inventory.COLUMNS.index("age_source") + 1
+        columns = track_inventory.COLUMNS
+        assert columns.index("group") == columns.index("by_hand") + 1
+        assert columns.index("group_size") == columns.index("group") + 1
 
     def test_one_track_asked_for_is_still_in_its_whole_group(self, herd):
         """The inspector asks for the track it shows."""

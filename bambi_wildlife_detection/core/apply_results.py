@@ -28,6 +28,8 @@ Four rules keep the write safe:
   filled in before; a species from a detector class mapping someone
   configured is never silently overwritten - unless they ask for that.
 * **Manual tracks are never touched.** A hand annotation outranks a model.
+  So does a reviewer's word on a tracker's track: a field marked as set by
+  hand (:mod:`core.track_review`) is left as it is.
 * **The projection is idempotent and re-runnable.** ``track_predictions``
   remains the source of truth, so if something else rewrites the detection
   species later - re-applying a detector class mapping does exactly that -
@@ -45,7 +47,7 @@ import json
 import os
 from typing import Dict, Iterable, List, Optional, Sequence
 
-from . import store
+from . import store, track_review
 
 #: Task name → the field it lands in, and at which scope.
 TRACK_FIELDS = {"sex": "sex", "life_stage": "age"}
@@ -288,10 +290,13 @@ def apply_track_species(target_folder: str, modality: str,
     try:
         with store.transaction(conn):
             for row in conn.execute(
-                    "SELECT track_id, run_id, species_id FROM tracks"):
+                    "SELECT track_id, run_id, species_id, attributes "
+                    "FROM tracks"):
                 track_id = int(row["track_id"])
                 if manual_run is not None and row["run_id"] == manual_run:
                     continue      # a hand annotation outranks a model
+                if "species" in track_review.by_hand(row["attributes"]):
+                    continue      # ... and so does a reviewer's word
                 if track_id in wanted:
                     target = wanted[track_id]
                     applied[track_id] = target
@@ -441,6 +446,8 @@ def apply_track_attribute(target_folder: str, modality: str, field: str,
                 if manual_run is not None and row["run_id"] == manual_run:
                     continue
                 attributes = _load_json(row["attributes"])
+                if field in track_review.by_hand(attributes):
+                    continue      # a reviewer's word stands
                 if track_id in wanted:
                     applied[track_id] = wanted[track_id]
                     if attributes.get(field) == wanted[track_id]:

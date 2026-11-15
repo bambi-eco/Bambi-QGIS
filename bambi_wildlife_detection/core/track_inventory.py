@@ -27,8 +27,12 @@ COLUMNS = [
     "approved",
     "track_id", "camera",
     "species", "species_vote_fraction", "species_votes", "species_model",
+    # what the detector's own classes say, whoever named the animal since
+    "detector_species",
     "sex", "sex_vote_fraction", "sex_model",
     "age", "age_source",
+    # the fields a person set on the track (core.track_review)
+    "by_hand",
     # the animals it was with (core.groups): the group is named after its
     # member with the lowest track id
     "group", "group_size",
@@ -206,7 +210,7 @@ def build_inventory(target_folder: str, modality: str,
     wanted_species = None if species_ids is None else {int(s) for s in species_ids}
     wanted_tracks = None if track_ids is None else {int(t) for t in track_ids}
     from . import (classification_store, label_store, match_store,
-                   track_store)
+                   track_review, track_store)
     from .exporters import common
 
     if modality not in store.MODALITIES:
@@ -239,6 +243,7 @@ def build_inventory(target_folder: str, modality: str,
         partners = match_store.partner_tracks(target_folder, modality)
     except Exception:  # nosec B110 - no match store is no partner
         partners = {}
+    detected_as = _detector_classes(target_folder)
     # The whole flight is divided, whichever tracks are listed: a group is
     # the same thing in every tool.
     from . import analytics_source, groups
@@ -332,7 +337,19 @@ def build_inventory(target_folder: str, modality: str,
             return "; ".join(found)
 
         extra = {k: v for k, v in attributes.items()
-                 if k not in ("sex", "age", "approved")}
+                 if k not in ("sex", "age", "approved", track_review.BY_HAND)}
+        # A field a person set is theirs: the vote a classifier made for it
+        # is not what the row shows, so it is not shown beside it.
+        hand = track_review.by_hand(known.get("attributes"))
+        if track_review.SPECIES in hand:
+            species_vote = None
+        if track_review.SEX in hand:
+            sex_vote = None
+        if track_review.AGE in hand:
+            age_vote = None
+        detector_species = track_store.majority_species(
+            (detected_as.get(str(r.get("source_class"))), r.get("confidence"))
+            for r in members if r.get("label_track_id") is None)
 
         inventory.append({
             "approved": bool(attributes.get("approved", False)),
@@ -342,13 +359,21 @@ def build_inventory(target_folder: str, modality: str,
             "species_vote_fraction": (species_vote or {}).get("fraction"),
             "species_votes": (f"{species_vote['votes']}/{species_vote['n']}"
                               if species_vote else ""),
-            "species_model": (species_vote or {}).get("model", ""),
+            "species_model": (BY_HAND_TEXT if track_review.SPECIES in hand
+                              else (species_vote or {}).get("model", "")),
+            "detector_species": (
+                "" if detector_species == store.FALLBACK_SPECIES_ID
+                else species_names.get(detector_species, "")),
             "sex": attributes.get("sex", ""),
             "sex_vote_fraction": (sex_vote or {}).get("fraction"),
-            "sex_model": (sex_vote or {}).get("model", ""),
+            "sex_model": (BY_HAND_TEXT if track_review.SEX in hand
+                          else (sex_vote or {}).get("model", "")),
             "age": attributes.get("age", ""),
-            "age_source": ((age_vote or {}).get("evidence") or {}).get(
-                "source", (age_vote or {}).get("model", "")),
+            "age_source": (
+                BY_HAND_TEXT if track_review.AGE in hand
+                else ((age_vote or {}).get("evidence") or {}).get(
+                    "source", (age_vote or {}).get("model", ""))),
+            "by_hand": "; ".join(hand),
             "group": None if together is None else together.of(track_id),
             "group_size": None if together is None or together.of(
                 track_id) is None else together.size_of(
@@ -399,6 +424,27 @@ def build_inventory(target_folder: str, modality: str,
             "attributes": json.dumps(extra, sort_keys=True) if extra else "",
         })
     return inventory
+
+
+#: What the model columns say for a field a person set.
+BY_HAND_TEXT = "by hand"
+
+
+def _detector_classes(target_folder: str) -> Dict[str, int]:
+    """``class the detector reports -> species id``, from the class mapping
+    of the project. Classes nobody mapped are not in it."""
+    path = store.project_path(target_folder)
+    if not os.path.isfile(path):
+        return {}
+    conn = store.open_store(path, store.PROJECT)
+    try:
+        return {str(row["source_class"]): int(row["species_id"])
+                for row in conn.execute(
+                    "SELECT m.source_class, m.species_id FROM class_mapping m "
+                    "JOIN detection_sources s ON s.source_id = m.source_id "
+                    "WHERE s.kind <> 'manual' ORDER BY m.source_id DESC")}
+    finally:
+        conn.close()
 
 
 def _fmt(value, digits: int = 2) -> str:
