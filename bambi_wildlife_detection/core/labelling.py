@@ -519,6 +519,71 @@ class LabelTrack:
         return track
 
 
+def visible_spans(track: "LabelTrack") -> List[Tuple[int, int]]:
+    """The stretches of frames on which *track* has a box, as inclusive
+    ``(first, last)`` pairs: from a key frame to the next, unless the first
+    of the two is a stop frame."""
+    frames = track.frames()
+    spans: List[Tuple[int, int]] = []
+    start = None
+    for index, frame in enumerate(frames):
+        if start is None:
+            start = frame
+        last = index + 1 == len(frames)
+        if last or track.keyframes[frame].get("stop"):
+            spans.append((start, frame))
+            start = None
+    return spans
+
+
+def merge_overlap(tracks: List["LabelTrack"]) -> dict:
+    """What several label tracks have in common in time - which is what a
+    merge of them cannot keep.
+
+    A merged track has one box per frame. Where two of the tracks both have
+    a box, the merge takes its key frames from both in turn: fine when both
+    are the same animal labelled twice, and wrong when they are two animals
+    - the merged track then jumps between them, and on every such frame one
+    animal's box is gone. The merge used to do that without a word.
+
+    :return: ``{"frames": frames on which more than one track has a box,
+        "boxes": boxes that the merged track cannot hold (one per extra
+        track and frame), "first", "last": the range those frames lie in
+        (``None`` without any), "pairs": [(id, id, shared frames), ...]}``
+    """
+    spans = {track.track_id: visible_spans(track) for track in tracks}
+
+    events: Dict[int, int] = {}
+    for track_spans in spans.values():
+        for first, last in track_spans:
+            events[first] = events.get(first, 0) + 1
+            events[last + 1] = events.get(last + 1, 0) - 1
+    frames = boxes = 0
+    first_shared = last_shared = None
+    showing, previous = 0, None
+    for frame in sorted(events):
+        if previous is not None and showing > 1:
+            frames += frame - previous
+            boxes += (frame - previous) * (showing - 1)
+            first_shared = previous if first_shared is None else first_shared
+            last_shared = frame - 1
+        showing += events[frame]
+        previous = frame
+
+    pairs = []
+    ids = sorted(spans)
+    for index, one in enumerate(ids):
+        for other in ids[index + 1:]:
+            shared = sum(
+                max(0, min(a_last, b_last) - max(a_first, b_first) + 1)
+                for a_first, a_last in spans[one]
+                for b_first, b_last in spans[other])
+            if shared:
+                pairs.append((one, other, shared))
+    return {"frames": frames, "boxes": boxes, "first": first_shared,
+            "last": last_shared, "pairs": pairs}
+
+
 def merge_tracks(tracks: List["LabelTrack"],
                  mark_gaps: bool = True) -> Tuple["LabelTrack", int]:
     """Combine several label tracks of one animal into a single track.

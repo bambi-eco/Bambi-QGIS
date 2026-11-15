@@ -473,3 +473,68 @@ def test_a_click_opens_the_box_that_was_clicked(iface, look_alikes,
     assert shown["track_id"] == review.track_of_detection(root, "t", second)
     assert len(shown["green"]) == 1 and len(shown["blue"]) == 1
     assert shown["green"][0][0] == 60.0          # the second box
+
+
+# ---------------------------------------------------------------------------
+# Merging label tracks that overlap in time
+# ---------------------------------------------------------------------------
+
+class _Tracks:
+    def __init__(self, *tracks):
+        self.tracks = {track.track_id: track for track in tracks}
+
+
+def _label_track(track_id, frames):
+    from bambi_wildlife_detection.core.labelling import LabelTrack
+
+    track = LabelTrack(track_id)
+    for frame in frames:
+        track.set_keyframe(frame, (frame, frame, frame + 10, frame + 10))
+    return track
+
+
+def _merge_tool(*tracks):
+    from bambi_wildlife_detection import bambi_labelling_tool
+
+    cls = next(value for name, value in vars(bambi_labelling_tool).items()
+               if isinstance(value, type)
+               and hasattr(value, "_confirm_overlapping_merge"))
+    tool = cls.__new__(cls)
+    tool._store = _Tracks(*tracks)
+    return tool
+
+
+def test_merging_two_animals_side_by_side_asks_first(monkeypatch):
+    """The merge took its key frames from both tracks in turn and said
+    nothing: one track jumping between two animals."""
+    from qgis.PyQt.QtWidgets import QMessageBox
+
+    asked = []
+
+    def warning(_parent, title, text, *_buttons):
+        asked.append((title, text))
+        return QMessageBox.StandardButton.Cancel
+
+    monkeypatch.setattr(QMessageBox, "warning", warning)
+    tool = _merge_tool(_label_track(1, [0, 10, 20]),
+                       _label_track(2, [5, 15, 25]))
+
+    assert tool._confirm_overlapping_merge([1, 2]) is False
+    (title, text), = asked
+    assert "overlap" in title
+    assert "16 frame(s)" in text and "between frame 5 and 20" in text
+    assert "L1 and L2" in text and "different animals" in text
+
+    monkeypatch.setattr(QMessageBox, "warning",
+                        lambda *a: QMessageBox.StandardButton.Yes)
+    assert tool._confirm_overlapping_merge([1, 2]) is True
+
+
+def test_merging_tracks_that_follow_each_other_asks_nothing(monkeypatch):
+    from qgis.PyQt.QtWidgets import QMessageBox
+
+    monkeypatch.setattr(
+        QMessageBox, "warning",
+        lambda *a: pytest.fail("there is nothing to warn about"))
+    tool = _merge_tool(_label_track(1, [0, 10]), _label_track(2, [30, 40]))
+    assert tool._confirm_overlapping_merge([1, 2]) is True

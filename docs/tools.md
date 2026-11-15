@@ -152,6 +152,8 @@ Instead of manually re-drawing a box on a far-away frame, **Propagate box (geo)*
 
 Several tracks can be propagated in one step: select them in the track list (Ctrl / Shift click, the same selection used for merging and deleting) and the button changes to **Propagate boxes (geo) - _n_ tracks**, projecting each selected track's box on the current frame. Tracks are handled independently - one whose box has no DEM intersection, or that has no box on the current frame at all, is skipped without aborting the others, and a summary afterwards lists per track what was created and what was skipped.
 
+**Merging label tracks.** Select two or more tracks and merge them into one: the lowest track id survives, the key frames are combined, and the last key frame before a gap between the tracks becomes a stop frame (unless you tick *Interpolate across the gaps*). A merged track has **one box per frame** - so where the tracks show a box on the same frames, its key frames are taken from the tracks in turn. That is right for one animal labelled twice and wrong for two animals, whose merged track would jump between them with one animal's box gone on every shared frame. The tool therefore asks first, naming the tracks, the frames they share and how many boxes cannot be kept (up to 9.0 it merged without a word); the same question comes up for merges accepted from the proposals of the ground-distance search.
+
 ### Cross-modality copy
 
 Wildlife is often easier to spot in one modality than the other (e.g. warm animals in thermal, or distinctive shapes in RGB). Once a modality is labelled, **Copy labels from _&lt;other modality&gt;_** (in the *Overlays* section, its caption follows the current modality) brings those tracks over instead of re-labelling from scratch.

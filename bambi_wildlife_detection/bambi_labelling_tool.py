@@ -134,6 +134,7 @@ from .core.labelling import (  # noqa: F401 - re-exported API
     group_track_ids,
     keyframe_window,
     load_valid_mask,
+    merge_overlap,
     merge_tracks,
     propagation_frames,
     read_custom_fields,
@@ -2176,6 +2177,9 @@ class LabellingToolDialog(QDialog):
                 "Shift while clicking in the track list.")
             return
 
+        if not self._confirm_overlapping_merge(ids):
+            return
+
         listed = "\n".join(
             f"• L{tid}  [{self._track_range_text(tid)}]" for tid in ids)
         box = QMessageBox(self)
@@ -2206,6 +2210,39 @@ class LabellingToolDialog(QDialog):
         self._mark_dirty()
         self._refresh_track_list()
         self._render_frame()
+
+    def _confirm_overlapping_merge(self, ids: List[int]) -> bool:
+        """Ask before merging tracks that show a box on the same frames.
+
+        A merged track has one box per frame, so where two of the tracks
+        both have one the merge takes its key frames from both in turn.
+        That used to happen without a word: two animals merged by mistake
+        became one track jumping between them, with one animal's box gone
+        on every frame they shared.
+        """
+        tracks = [self._store.tracks[tid] for tid in ids
+                  if tid in self._store.tracks]
+        overlap = merge_overlap(tracks)
+        if not overlap["frames"]:
+            return True
+        pairs = "\n".join(
+            f"• L{one} and L{other}: {shared} frame(s)"
+            for one, other, shared in overlap["pairs"])
+        reply = QMessageBox.warning(
+            self, "Merge Tracks - the tracks overlap",
+            f"These tracks show a box on the same {overlap['frames']} "
+            f"frame(s), between frame {overlap['first']} and "
+            f"{overlap['last']}:\n\n{pairs}\n\n"
+            "A merged track has one box per frame. On those frames its key "
+            "frames are taken from the tracks in turn, and "
+            f"{overlap['boxes']} box(es) cannot be kept.\n\n"
+            "That is what you want when the tracks are the same animal "
+            "labelled twice. If they are different animals, the merged "
+            "track would jump between them - do not merge those.\n\n"
+            "Merge them anyway?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel)
+        return reply == QMessageBox.StandardButton.Yes
 
     def _track_range_text(self, track_id: int) -> str:
         track = self._store.tracks.get(track_id) if self._store else None
@@ -2300,6 +2337,10 @@ class LabellingToolDialog(QDialog):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         groups = group_track_ids(dialog.accepted_pairs())
+        # Close on the ground is what was proposed; tracks that also show a
+        # box on the same frames may be two animals standing together.
+        groups = [group for group in groups
+                  if self._confirm_overlapping_merge(list(group))]
         if not groups:
             return
 

@@ -10,6 +10,7 @@ import sys
 
 import pytest
 
+from bambi_wildlife_detection.core import labelling
 from bambi_wildlife_detection.core.labelling import (
     CustomField,
     LabelStore,
@@ -973,6 +974,58 @@ def _track(track_id, frames, **kwargs):
     for f in frames:
         track.set_keyframe(f, (f, f, f + 10, f + 10))
     return track
+
+
+class TestMergeOverlap:
+    """A merged track has one box per frame: what tracks share in time is
+    what a merge cannot keep - and it used to drop it without a word."""
+
+    def test_tracks_one_after_the_other_share_nothing(self):
+        found = labelling.merge_overlap(
+            [_track(1, [0, 10]), _track(2, [11, 20])])
+        assert found == {"frames": 0, "boxes": 0, "first": None,
+                         "last": None, "pairs": []}
+
+    def test_two_animals_side_by_side(self):
+        """Key frames on different frames - nothing "conflicts", and yet
+        both have a box on every frame from 5 to 20."""
+        a, b = _track(1, [0, 10, 20]), _track(2, [5, 15, 25])
+        merged, conflicts = merge_tracks([a, b])
+        assert conflicts == 0                       # ... the old measure
+        assert merged.frames() == [0, 5, 10, 15, 20, 25]   # in turn
+
+        found = labelling.merge_overlap([a, b])
+        assert found["frames"] == 16 and found["boxes"] == 16
+        assert (found["first"], found["last"]) == (5, 20)
+        assert found["pairs"] == [(1, 2, 16)]
+
+    def test_a_stop_frame_ends_what_a_track_shows(self):
+        a = _track(1, [0, 10, 50, 60])
+        a.keyframes[10]["stop"] = True               # gone from 11 to 49
+        assert labelling.visible_spans(a) == [(0, 10), (50, 60)]
+        found = labelling.merge_overlap([a, _track(2, [20, 40])])
+        assert found["frames"] == 0
+
+        found = labelling.merge_overlap([a, _track(2, [5, 55])])
+        assert found["frames"] == 6 + 6              # 5-10 and 50-55
+        assert (found["first"], found["last"]) == (5, 55)
+
+    def test_three_tracks_lose_two_boxes_where_all_three_show(self):
+        found = labelling.merge_overlap([
+            _track(1, [0, 10]), _track(2, [5, 15]), _track(3, [8, 9])])
+        # 5-7: two tracks, 8-9: three, 10: two
+        assert found["frames"] == 6
+        assert found["boxes"] == 3 + 2 * 2 + 1
+        assert found["pairs"] == [(1, 2, 6), (1, 3, 2), (2, 3, 2)]
+
+    def test_a_single_key_frame_is_a_frame_shown(self):
+        found = labelling.merge_overlap([_track(1, [7]), _track(2, [0, 10])])
+        assert found["frames"] == 1 and found["pairs"] == [(1, 2, 1)]
+
+    def test_a_track_without_key_frames_shows_nothing(self):
+        assert labelling.visible_spans(LabelTrack(9)) == []
+        assert labelling.merge_overlap(
+            [LabelTrack(9), _track(2, [0, 10])])["frames"] == 0
 
 
 class TestMergeTracks:
