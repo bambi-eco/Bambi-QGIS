@@ -3110,9 +3110,12 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
             log_fn(f"{len(called_by_model)} animal(s) were called by a "
                    "life-stage classifier and are left as they are")
 
-        # Only the species set to Size-based take a verdict from the
-        # measurement; the rest still count towards the cohort statistics,
-        # because removing them would shift everyone else's score.
+        # What each animal is: the species classifier's call, the track's
+        # own species, and failing both what the detector called most of its
+        # boxes (track_store.animal_species) - it decides both whether the
+        # animal is measured (only the species set to Size-based are) and
+        # which animals it is compared with.
+        from .core import label_store, store as _store
         species_names = self._species_names_of_labels(config, target_folder)
         species_of_track = {
             int(row["track_id"]): species_names(row["label"]) for row in
@@ -3121,6 +3124,25 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
         for track_id, name in self._named_track_species(
                 target_folder, suffix).items():
             species_of_track.setdefault(track_id, name)
+        vocabulary = label_store.vocabulary(target_folder) or {}
+        named = {int(row["species_id"]): row["name"]
+                 for row in vocabulary.get("species", [])
+                 if int(row["species_id"]) > 0}
+        animal_species = track_store.animal_species(target_folder, suffix)
+        for track_id, species_id in animal_species.items():
+            if species_id in named:
+                species_of_track.setdefault(track_id, named[species_id])
+        # "animal", "unknown" and "not-an-animal" are no species: a track
+        # that carries one is among the unidentified - and must not count
+        # as "a species is known for this flight", after which only the
+        # identified animals would be measured.
+        species_of_track = {
+            track_id: name for track_id, name in species_of_track.items()
+            if name in named.values()}
+        # A track that is no animal has no size worth comparing.
+        no_animal = {track_id for track_id, species_id
+                     in animal_species.items()
+                     if species_id == _store.NOT_AN_ANIMAL_SPECIES_ID}
         if species_of_track:
             to_measure = {track_id for track_id, name
                           in species_of_track.items() if name in measured}
@@ -3154,6 +3176,8 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
                 source = life_stage.AREA_GEO
         if not areas:
             areas = life_stage.track_areas(rows, geo=False)
+        areas = {track_id: entry for track_id, entry in areas.items()
+                 if track_id not in no_animal}
 
         if log_fn:
             log_fn(f"Measuring {len(areas)} individual(s) on the {source} "
@@ -3176,26 +3200,40 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
                      target_folder, suffix, "sex")
                  if row["label"].lower() == "male"]
 
-        # The cohort keeps every animal - a robust median over the whole herd
-        # is the point - but only the ones set to be measured, and not already
-        # called by a classifier, take a verdict from it.
+        # A cohort keeps every animal of its species - a robust median over
+        # the whole herd is the point - but only the ones set to be measured,
+        # and not already called by a classifier, take a verdict from it.
         def _takes_a_verdict(track_id):
             if track_id in called_by_model:
                 return False
             return to_measure is None or track_id in to_measure
 
-        found = [item for item in life_stage.assess(areas, settings,
-                                                    adults=males)
-                 if _takes_a_verdict(item.track_id)]
-        if log_fn:
-            log_fn(life_stage.explain(found, settings, source))
+        # Each animal among its own kind: a roe deer is half a red deer at
+        # any age, and measured against a herd of them an adult roe deer is
+        # exactly the low outlier the rule looks for. The animals nobody
+        # identified are compared with each other.
+        groups = life_stage.cohorts(areas, species_of_track)
+        found, ratios, cohort_of = [], {}, {}
+        for name in sorted(groups, key=str):
+            members = groups[name]
+            assessed = life_stage.assess(members, settings, adults=males)
+            taken = [item for item in assessed
+                     if _takes_a_verdict(item.track_id)]
+            wanted = any(_takes_a_verdict(track_id) for track_id in members)
+            if log_fn and wanted:
+                label = name or ("no known species" if len(groups) > 1
+                                 else "")
+                log_fn(life_stage.explain(taken, settings, source,
+                                          cohort=label, size=len(members)))
+            found.extend(taken)
+            ratios.update(life_stage.cohort_ratio(assessed))
+            for item in taken:
+                cohort_of[item.track_id] = (name, len(members))
 
         if not found and not from_model:
             if progress_fn:
                 progress_fn(100)
             return
-
-        ratios = life_stage.cohort_ratio(found)
         classification_store.record_track_predictions(
             target_folder, suffix, classification_store.LIFE_STAGE,
             from_model + [{
@@ -3207,7 +3245,10 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
                 "model": classification_store.SIZE_MODEL,
                 "evidence": {
                     "area": item.area, "z": item.z, "gap": item.gap,
+                    "separation": item.separation,
                     "cohort_ratio": ratios.get(item.track_id),
+                    "cohort": cohort_of[item.track_id][0],
+                    "cohort_size": cohort_of[item.track_id][1],
                     "frames": item.frames, "source": source,
                     "low_outlier": item.low_outlier,
                 },

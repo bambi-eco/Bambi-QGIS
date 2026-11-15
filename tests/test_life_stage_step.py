@@ -386,21 +386,26 @@ def test_no_species_set_to_size_measures_nothing(flight):
     assert any("nothing to measure" in line for line in logs)
 
 
+def _species(root, calls, modality="t"):
+    """Record the species classifier's call for ``{track_id: species}``."""
+    classification_store.record_track_predictions(root, modality, "species", [
+        {"track_id": track_id, "label": label, "votes": 3, "n": 3,
+         "fraction": 1.0} for track_id, label in calls.items()])
+
+
 def test_only_the_species_set_to_size_are_measured(flight):
     """The choice is per species, in the same place the models are chosen."""
-    classification_store.record_track_predictions(flight, "t", "species", [
-        {"track_id": 1, "label": "red deer", "votes": 3, "n": 3,
-         "fraction": 1.0},
-        {"track_id": 2, "label": "wild boar", "votes": 3, "n": 3,
-         "fraction": 1.0}])
-    _run(flight, classification_models={
+    _species(flight, {1: "red deer", 2: "red deer", 3: "red deer",
+                      4: "red deer", 5: "wild boar", 6: "wild boar",
+                      7: "wild boar"})
+    _run(flight, life_stage_min_individuals=3, classification_models={
         "life_stage": {"modality": "thermal",
                        "species": {"red deer": {"model": "size"},
                                    "wild boar": {"model": "off"}}}})
 
     called = _labels(flight)
-    assert 1 in called            # red deer is measured
-    assert 2 not in called        # wild boar is left uncalled
+    assert {1, 2, 3, 4} <= set(called)            # red deer are measured
+    assert not {5, 6, 7} & set(called)            # wild boar left uncalled
 
 
 def test_the_stage_is_recorded(flight):
@@ -413,17 +418,139 @@ def test_the_stage_is_recorded(flight):
 def test_a_never_configured_selection_measures_by_default(flight):
     """What the Species… dialog shows before it is ever saved - size for
     every species - is what runs, instead of "nothing to measure"."""
-    classification_store.record_track_predictions(flight, "t", "species", [
-        {"track_id": 1, "label": "red deer", "votes": 3, "n": 3,
-         "fraction": 1.0},
-        {"track_id": 2, "label": "wild boar", "votes": 3, "n": 3,
-         "fraction": 1.0}])
-    logs = _run(flight, classification_models={
+    _species(flight, {1: "red deer", 2: "red deer", 3: "red deer",
+                      4: "red deer", 5: "wild boar", 6: "wild boar",
+                      7: "wild boar"})
+    logs = _run(flight, life_stage_min_individuals=3, classification_models={
         "life_stage": {"modality": "thermal"}})
 
     assert not any("nothing to measure" in line for line in logs)
     called = _labels(flight)
-    assert 1 in called and 2 in called
+    assert 1 in called and 5 in called
+
+
+# ---------------------------------------------------------------------------
+# Among its own kind
+# ---------------------------------------------------------------------------
+
+# Six red deer and four roe deer, all adults: a roe deer is half the size.
+MIXED = [1000, 1010, 1020, 1030, 1040, 1050, 480, 490, 500, 510]
+MIXED_SPECIES = {track: "red deer" if track <= 6 else "roe deer"
+                 for track in range(1, 11)}
+
+
+@pytest.fixture
+def mixed(tmp_path):
+    root = str(tmp_path)
+    store.open_store(store.project_path(root), store.PROJECT).close()
+    _populate(root, "t", MIXED)
+    return root
+
+
+def test_an_adult_of_a_smaller_species_is_no_juvenile(mixed):
+    """All animals of the flight were one cohort: among red deer every roe
+    deer sits far below the median, and the largest of them - the one next
+    to the gap - was called a juvenile."""
+    _species(mixed, MIXED_SPECIES)
+    logs = _run(mixed)
+
+    labels = _labels(mixed)
+    assert len(labels) == 10
+    assert set(labels.values()) == {life_stage.ADULT}
+    assert any("Life stage (red deer)" in line for line in logs)
+    assert any("Life stage (roe deer)" in line for line in logs)
+
+
+def test_without_species_the_flight_is_one_cohort_as_before(mixed):
+    """Nothing says what the animals are, so they are compared with each
+    other - which is all there is to go by."""
+    _run(mixed)
+    assert life_stage.JUVENILE in _labels(mixed).values()
+
+
+def test_a_juvenile_is_found_among_its_own_species(tmp_path):
+    root = str(tmp_path)
+    store.open_store(store.project_path(root), store.PROJECT).close()
+    # red deer 1-6, roe deer 7-11 - of which 7 is a fawn
+    _populate(root, "t", MIXED[:6] + [240, 480, 490, 500, 510])
+    _species(root, {t: "red deer" if t <= 6 else "roe deer"
+                    for t in range(1, 12)})
+    _run(root)
+
+    labels = _labels(root)
+    assert [t for t, label in labels.items()
+            if label == life_stage.JUVENILE] == [7]
+
+
+def test_a_species_with_too_few_animals_is_not_judged(mixed):
+    """Three animals are no herd to stand out from - and the other species'
+    are no measure for them."""
+    species = dict(MIXED_SPECIES)
+    species[10] = "chamois"
+    _species(mixed, species)
+    logs = _run(mixed)
+
+    labels = _labels(mixed)
+    assert not {7, 8, 9, 10} & set(labels)       # 3 roe deer, 1 chamois
+    assert set(labels) == {1, 2, 3, 4, 5, 6}
+    assert any("Life stage (roe deer): too few individuals" in line
+               for line in logs)
+
+
+def test_the_species_the_detector_named_counts(mixed):
+    """No classifier ran; the detector's class mapping called the boxes."""
+    from bambi_wildlife_detection.core import label_store
+
+    label_store.vocabulary(mixed, create=True)
+    names = label_store.vocabulary(mixed)["species_by_name"]
+    conn = store.open_store(
+        store.stage_path(mixed, store.DETECTIONS, "t"), store.DETECTIONS, "t")
+    with store.transaction(conn):
+        # frames 0-5 hold the red deer, 6-9 the roe deer (_populate)
+        conn.execute("UPDATE detections SET species_id = ? WHERE frame < 6",
+                     (names["red deer"],))
+        conn.execute("UPDATE detections SET species_id = ? WHERE frame >= 6",
+                     (names["roe deer"],))
+    conn.close()
+    _run(mixed)
+
+    assert set(_labels(mixed).values()) == {life_stage.ADULT}
+
+
+def test_a_track_that_is_no_animal_is_not_part_of_the_herd(flight):
+    """Its box is a rock's: it is neither judged nor a measure for others.
+    (It also used to count as "a species is known for this flight" - after
+    which no animal without a species was measured at all.)"""
+    conn = store.open_store(
+        store.stage_path(flight, store.TRACKS, "t"), store.TRACKS, "t")
+    conn.execute("UPDATE tracks SET species_id = ? WHERE track_id = 7",
+                 (store.NOT_AN_ANIMAL_SPECIES_ID,))
+    conn.commit()
+    conn.close()
+    _run(flight)
+
+    labels = _labels(flight)
+    assert 7 not in labels and len(labels) == 6
+    assert labels[1] == life_stage.JUVENILE
+
+
+def test_twins_are_both_juveniles(tmp_path):
+    """Of two fawns of a size, the smaller one is a hair below its sibling,
+    not below the herd - and was called an adult."""
+    root = str(tmp_path)
+    store.open_store(store.project_path(root), store.PROJECT).close()
+    _populate(root, "t", [400, 410, 1000, 1010, 1020, 1030, 1040, 1050])
+    _run(root)
+
+    labels = _labels(root)
+    assert labels[1] == labels[2] == life_stage.JUVENILE
+    assert set(list(labels.values())[2:]) == {life_stage.ADULT}
+    evidence = {track: row["evidence"]
+                for track, row in _rows(root, "t").items()}
+    assert evidence[1]["separation"] == evidence[2]["separation"] == \
+        pytest.approx(590.0)
+    assert evidence[1]["gap"] == pytest.approx(10.0)
+    assert evidence[1]["cohort_size"] == 8
 
 
 # ---------------------------------------------------------------------------

@@ -107,6 +107,31 @@ class TestConditions:
         areas = _areas([400, 1000, 1010, 1020, 1030, 1040, 1050])
         assert _labels(life_stage.assess(areas))[1] == life_stage.JUVENILE
 
+    def test_twins_are_both_juveniles(self):
+        """Two fawns of a size: the smaller one's gap to the next animal -
+        its sibling - is tiny. The gap that matters is the one over both."""
+        areas = _areas([400, 410, 1000, 1010, 1020, 1030, 1040, 1050])
+        found = {item.track_id: item for item in life_stage.assess(areas)}
+        assert found[1].label == found[2].label == life_stage.JUVENILE
+        assert found[1].gap == 10 and found[1].separation == 590
+        assert found[2].gap == found[2].separation == 590
+        assert all(found[track].label == life_stage.ADULT
+                   and found[track].separation == 0.0
+                   for track in range(3, 9))
+
+    def test_three_calves_of_a_nursery_herd(self):
+        areas = _areas([390, 400, 420, 1000, 1010, 1020, 1030, 1040, 1050,
+                        1060])
+        labels = _labels(life_stage.assess(areas))
+        assert [labels[t] for t in (1, 2, 3)] == [life_stage.JUVENILE] * 3
+        assert set(list(labels.values())[3:]) == {life_stage.ADULT}
+
+    def test_a_known_adult_among_the_small_ones_stays_an_adult(self):
+        areas = _areas([400, 410, 1000, 1010, 1020, 1030, 1040, 1050])
+        labels = _labels(life_stage.assess(areas, adults=[1]))
+        assert labels[1] == life_stage.ADULT
+        assert labels[2] == life_stage.JUVENILE
+
     def test_the_z_threshold_is_configurable(self):
         areas = _areas([700, 1000, 1010, 1020, 1030])
         strict = life_stage.assess(areas, Config(z_threshold=-50.0))
@@ -207,6 +232,40 @@ class TestTrackAreas:
 # ---------------------------------------------------------------------------
 # Reporting
 # ---------------------------------------------------------------------------
+
+class TestCohorts:
+    """Each animal is compared with its own kind."""
+
+    def test_animals_are_grouped_by_what_they_are(self):
+        areas = _areas([1000, 1010, 500, 510, 700])
+        groups = life_stage.cohorts(
+            areas, {1: "red deer", 2: "red deer", 3: "roe deer",
+                    4: "roe deer"})
+        assert {name: sorted(members) for name, members in groups.items()} \
+            == {"red deer": [1, 2], "roe deer": [3, 4], "": [5]}
+
+    def test_an_adult_roe_deer_is_no_juvenile_red_deer(self):
+        """Together, the roe deer are what the rule looks for."""
+        sizes = [1000, 1010, 1020, 1030, 1040, 1050, 480, 490, 500, 510]
+        areas = _areas(sizes)
+        together = _labels(life_stage.assess(areas))
+        assert life_stage.JUVENILE in together.values()
+
+        species = {t: "red deer" if t <= 6 else "roe deer"
+                   for t in range(1, 11)}
+        apart = {}
+        for members in life_stage.cohorts(areas, species).values():
+            apart.update(_labels(life_stage.assess(members)))
+        assert set(apart.values()) == {life_stage.ADULT}
+
+    def test_the_log_names_the_species(self):
+        areas = _areas([400, 1000, 1010, 1020, 1030, 1040, 1050])
+        line = life_stage.explain(life_stage.assess(areas), cohort="roe deer")
+        assert line.startswith("Life stage (roe deer): 1 juvenile(s)")
+        few = life_stage.explain([], cohort="chamois", size=2)
+        assert few.startswith(
+            "Life stage (chamois): too few individuals of this species (2)")
+
 
 class TestExplain:
 
