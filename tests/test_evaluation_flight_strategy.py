@@ -21,7 +21,10 @@ from pyproj import CRS, Transformer  # noqa: E402
 
 from bambi_wildlife_detection.evaluation_flight_strategy import (  # noqa: E402
     EvaluationFlightStrategy,
+    RandomLoopStrategy,
     RandomStrategy,
+    clear_previous_plan,
+    clear_routes,
 )
 
 # 1 km x 1 km flight area in UTM 33N metres
@@ -282,3 +285,107 @@ class TestRandomStrategyEndToEnd:
                 area_path, start_points_path, str(target))
 
         assert run("a") == run("b")
+
+
+def _a_flight_folder(folder):
+    """A target folder that already holds somebody's data: a flight, notes,
+    and a ``routes`` folder with files that are not the planner's."""
+    (folder / "frames_t").mkdir(parents=True)
+    (folder / "frames_t" / "00000001.jpg").write_bytes(b"jpeg")
+    (folder / "project.gpkg").write_bytes(b"sqlite")
+    (folder / "notes.txt").write_text("field notes")
+    (folder / "routes" / "valid").mkdir(parents=True)
+    (folder / "routes" / "valid" / "my_route.gpx").write_text("<gpx/>")
+    (folder / "routes" / "archive").mkdir()
+    (folder / "routes" / "archive" / "route_1.geojson").write_text("{}")
+    return {path: path.read_bytes() for path in folder.rglob("*")
+            if path.is_file()}
+
+
+def _plan(strategy_cls, area_path, start_points_path, target, seed=1234,
+          **overrides):
+    parameters = dict(
+        grid_size=250.0, max_start_and_stop_distance=10000.0, min_transects=2,
+        max_distance=2000.0, number_of_retries=50, target_crs_epsg=32633,
+        min_transects_per_route=1, seed=seed)
+    parameters.update(overrides)
+    return strategy_cls(**parameters).create_routes(
+        area_path, start_points_path, str(target))
+
+
+class TestTheTargetFolderIsNotThePlanners:
+    """A plan used to start by deleting its target folder - with a flight's
+    folder chosen as the target, the flight. It may only replace what an
+    earlier plan wrote."""
+
+    @pytest.mark.parametrize("strategy_cls, extra", [
+        (RandomStrategy, {"max_number_of_flights": 4}),
+        (RandomLoopStrategy, {}),
+    ])
+    def test_planning_keeps_everything_else_in_the_folder(
+            self, strategy_cls, extra, area_path, start_points_path, tmp_path):
+        target = tmp_path / "flight"
+        before = _a_flight_folder(target)
+
+        _plan(strategy_cls, area_path, start_points_path, target, **extra)
+
+        for path, content in before.items():
+            assert path.is_file(), f"{path.name} was deleted"
+            assert path.read_bytes() == content
+        assert (target / "startpoints.geojson").is_file()
+        assert (target / "log.txt").is_file()
+
+    def test_a_new_plan_replaces_the_routes_of_the_old_one(
+            self, area_path, start_points_path, tmp_path):
+        target = tmp_path / "plan"
+        target.mkdir()
+        _plan(RandomStrategy, area_path, start_points_path, target,
+              max_number_of_flights=4)
+        valid = target / "routes" / "valid"
+        # routes the next plan will not write again
+        for folder in ("valid", "all", "valid_kml", "valid_lines", "7"):
+            (target / "routes" / folder).mkdir(exist_ok=True)
+        (valid / "route_99.geojson").write_text("{}")
+        (target / "routes" / "all" / "route_99.geojson").write_text("{}")
+        (target / "routes" / "valid_kml" / "route_99.kml").write_text("")
+        (target / "routes" / "valid_lines" / "route_99.geojson").write_text("{}")
+        (target / "routes" / "valid_lines" / "route_99_transects.geojson"
+         ).write_text("{}")
+        (target / "routes" / "7" / "route_99.geojson").write_text("{}")
+
+        _plan(RandomStrategy, area_path, start_points_path, target,
+              max_number_of_flights=4, seed=5)
+
+        left = sorted(str(path.relative_to(target))
+                      for path in target.rglob("route_99*"))
+        assert left == []
+        assert not (target / "routes" / "7").exists()
+        assert list(valid.glob("route_*.geojson"))
+
+    def test_clearing_a_folder_without_a_plan_does_nothing(self, tmp_path):
+        before = _a_flight_folder(tmp_path)
+        clear_previous_plan(str(tmp_path))
+        clear_routes(str(tmp_path / "missing"))
+        assert {path: path.read_bytes() for path in tmp_path.rglob("*")
+                if path.is_file()} == before
+
+    def test_only_the_planners_own_files_go(self, tmp_path):
+        before = _a_flight_folder(tmp_path)
+        for name in ("startpoints.geojson", "grid.geojson",
+                     "grid_filtered.geojson", "transects.geojson",
+                     "transects_valids.geojson", "log.txt"):
+            (tmp_path / name).write_text("{}")
+        (tmp_path / "routes" / "valid" / "route_3.geojson").write_text("{}")
+        (tmp_path / "routes" / "0").mkdir()
+        (tmp_path / "routes" / "0" / "route_3.geojson").write_text("{}")
+        # the planner's naming, but not where the planner writes
+        (tmp_path / "route_3.geojson").write_text("{}")
+        before[tmp_path / "route_3.geojson"] = b"{}"
+
+        clear_previous_plan(str(tmp_path))
+
+        assert {path: path.read_bytes() for path in tmp_path.rglob("*")
+                if path.is_file()} == before
+        assert not (tmp_path / "routes" / "0").exists()
+        assert (tmp_path / "routes" / "valid").is_dir()     # still holds a file
+

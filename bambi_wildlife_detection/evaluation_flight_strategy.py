@@ -2,7 +2,7 @@ import abc
 import copy
 import math
 import os.path
-import shutil
+import re
 import sys
 from typing import List, Optional
 # pyproj must be imported before geopandas: geopandas checks pyproj
@@ -20,6 +20,66 @@ import simplekml
 
 GridPosition = namedtuple("GridPosition", ["latitude", "longitude", "x", "y"])
 TransectStatus = namedtuple("TransectStatus", ["is_valid", "already_visited"])
+
+#: What a plan leaves in its target folder. The folder is the user's - it may
+#: be a flight's folder, or hold anything else - so a new plan removes these
+#: files of the previous plan and nothing more.
+PLAN_FILES = (
+    "startpoints.geojson", "grid.geojson", "grid_filtered.geojson",
+    "transects.geojson", "transects_valids.geojson", "log.txt",
+)
+ROUTES_FOLDER = "routes"
+#: Sub-folders of ``routes``: the route sets, the line layers the planner
+#: dialog derives from them, and one folder per start point (its index).
+ROUTE_FOLDERS = ("all", "valid", "invalid", "valid_kml", "valid_lines")
+_ROUTE_FILE = re.compile(r"^route_\d+(_transects)?\.(geojson|kml)$")
+
+
+def _remove_quietly(path: str) -> None:
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+def _remove_if_empty(folder: str) -> None:
+    try:
+        os.rmdir(folder)
+    except OSError:
+        pass
+
+
+def clear_routes(target_path: str) -> None:
+    """Remove the route files of an earlier plan, or of an earlier try of this
+    one, from ``<target>/routes``.
+
+    Route files only: whatever else is in there stays, and so does every
+    folder that still holds something.
+    """
+    routes = os.path.join(target_path, ROUTES_FOLDER)
+    if not os.path.isdir(routes):
+        return
+    for folder in os.listdir(routes):
+        path = os.path.join(routes, folder)
+        if not (folder in ROUTE_FOLDERS or folder.isdigit()) or not os.path.isdir(path):
+            continue
+        for name in os.listdir(path):
+            if _ROUTE_FILE.match(name):
+                _remove_quietly(os.path.join(path, name))
+        _remove_if_empty(path)
+    _remove_if_empty(routes)
+
+
+def clear_previous_plan(target_path: str) -> None:
+    """Remove what an earlier plan wrote into *target_path* - and only that.
+
+    The target folder used to be deleted as a whole before a plan was
+    written, which took everything else in it along: with a flight's folder
+    as the target, the flight.
+    """
+    for name in PLAN_FILES:
+        _remove_quietly(os.path.join(target_path, name))
+    clear_routes(target_path)
 
 
 class EvaluationFlightStrategy(abc.ABC):
@@ -372,8 +432,8 @@ class EvaluationFlightStrategy(abc.ABC):
             start_geojson["features"].append(feature)
 
         if target_path is not None:
-            shutil.rmtree(target_path, ignore_errors=True)
             os.makedirs(target_path, exist_ok=True)
+            clear_previous_plan(target_path)
             with open(os.path.join(target_path, "startpoints.geojson"), "w") as f:
                 json.dump(start_geojson, f)
         # endregion
@@ -1112,7 +1172,7 @@ class RandomLoopStrategy(EvaluationFlightStrategy):
                 transects_copy = copy.deepcopy(transects)
                 res = []
                 res_transects = []
-                shutil.rmtree(os.path.join(target_path, "routes"), ignore_errors=True)
+                clear_routes(target_path)
                 transect_count = 0
                 # prepare dead_end_counter
                 dead_end_counter = 0

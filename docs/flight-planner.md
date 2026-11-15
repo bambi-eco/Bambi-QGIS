@@ -60,6 +60,8 @@ After planning completes, results are saved to the target folder and automatical
         └── ...
 ```
 
+Planning again into the same folder replaces these files - the plan files listed above, `log.txt` and the `route_*` files under `routes/`. Nothing else in the folder is touched, so a plan can be written next to other data; still, a folder of its own keeps a plan easy to find.
+
 ![Flight Strategy Planner: QGIS Results](../images/flight_planner_results.png)
 
 Each route is imported as a sub-group containing:
