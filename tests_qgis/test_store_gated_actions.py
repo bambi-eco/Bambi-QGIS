@@ -136,3 +136,152 @@ def test_the_track_distances_ask_for_tracks_in_the_store(dock, stores_only,
     assert started == []
     text = str(quiet[0])
     assert "Flight route" in text and "Tracked animals" not in text
+
+
+# ---------------------------------------------------------------------------
+# "Add ... to QGIS" twice shows the product once
+# ---------------------------------------------------------------------------
+
+def _tree(node=None, depth=0):
+    """The layer tree as indented names, "G" for a group and "L" for a
+    layer."""
+    from qgis.core import QgsLayerTree
+
+    node = node or QgsProject.instance().layerTreeRoot()
+    lines = []
+    for child in node.children():
+        is_group = QgsLayerTree.isGroup(child)
+        lines.append("  " * depth + ("G " if is_group else "L ") + child.name())
+        if is_group:
+            lines.extend(_tree(child, depth + 1))
+    return lines
+
+
+def _raster(path):
+    """A small GeoTIFF QGIS can open."""
+    from osgeo import gdal, osr
+
+    dataset = gdal.GetDriverByName("GTiff").Create(path, 4, 4, 1,
+                                                   gdal.GDT_Byte)
+    dataset.SetGeoTransform((500000.0, 1.0, 0.0, 5300004.0, 0.0, -1.0))
+    srs = osr.SpatialReference()
+    srs.ImportFromEPSG(32633)
+    dataset.SetProjection(srs.ExportToWkt())
+    dataset.GetRasterBand(1).Fill(7)
+    dataset.FlushCache()
+    dataset = None
+    return path
+
+
+def test_adding_the_tracks_twice_shows_them_once(dock, stores_only, quiet,
+                                                 monkeypatch):
+    """A second group of the same name appeared - and the first one stood
+    empty beside it, its layers gone with the files that were rewritten."""
+    monkeypatch.setattr(bambi_dock_widget, "FrameRangeDialog", _WholeRange)
+    dock.add_tracks_to_qgis()
+    once = _tree()
+    dock.add_tracks_to_qgis()
+
+    assert _tree() == once
+    assert once.count("    G BAMBI Wildlife Tracks (Thermal)") == 1
+    assert "        L Path" in once
+
+
+def test_adding_the_frame_detections_twice_shows_them_once(
+        dock, stores_only, quiet, monkeypatch):
+    monkeypatch.setattr(bambi_dock_widget, "FrameRangeDialog", _WholeRange)
+    dock.add_frame_detections_to_qgis()
+    once = _tree()
+    dock.add_frame_detections_to_qgis()
+
+    assert _tree() == once
+    assert sum("BAMBI Frame Detections" in line for line in once) == 1
+    assert sum(line.strip().startswith("L Detections_Frame")
+               for line in once) == 3
+
+
+def test_another_range_replaces_the_one_shown(dock, stores_only, quiet,
+                                              monkeypatch):
+    """The group shows what was asked for last."""
+    class FirstFrameOnly(_WholeRange):
+        def selected_range(self):
+            return (self._range[0], self._range[0])
+
+    monkeypatch.setattr(bambi_dock_widget, "FrameRangeDialog", _WholeRange)
+    dock.add_frame_detections_to_qgis()
+    monkeypatch.setattr(bambi_dock_widget, "FrameRangeDialog", FirstFrameOnly)
+    dock.add_frame_detections_to_qgis()
+
+    shown = [line.strip() for line in _tree()
+             if line.strip().startswith("L Detections_Frame")]
+    assert shown == ["L Detections_Frame_000000"]
+
+
+def test_a_layer_added_again_replaces_itself(dock, stores_only, tmp_path):
+    from qgis.core import QgsRasterLayer
+
+    path = _raster(str(tmp_path / "ortho.tif"))
+    first = QgsRasterLayer(path, "BAMBI Orthomosaic (Thermal)")
+    assert first.isValid()
+    dock._add_layer_to_flight(first)
+    once = _tree()
+    dock._add_layer_to_flight(
+        QgsRasterLayer(path, "BAMBI Orthomosaic (Thermal)"))
+
+    assert _tree() == once
+    assert once.count("    L BAMBI Orthomosaic (Thermal)") == 1
+    assert len(QgsProject.instance().mapLayers()) == 1
+
+
+def test_the_same_layer_object_is_not_removed_from_under_itself(
+        dock, stores_only, tmp_path):
+    from qgis.core import QgsRasterLayer
+
+    layer = QgsRasterLayer(_raster(str(tmp_path / "ortho.tif")),
+                           "BAMBI Orthomosaic (Thermal)")
+    dock._add_layer_to_flight(layer)
+    assert len(QgsProject.instance().mapLayers()) == 1
+    assert layer.isValid()
+
+
+def test_the_other_cameras_layer_of_the_same_kind_stays(
+        dock, stores_only, tmp_path):
+    from qgis.core import QgsRasterLayer
+
+    path = _raster(str(tmp_path / "ortho.tif"))
+    dock._add_layer_to_flight(
+        QgsRasterLayer(path, "BAMBI Orthomosaic (Thermal)"))
+    dock._add_layer_to_flight(QgsRasterLayer(path, "BAMBI Orthomosaic (RGB)"))
+    dock._add_layer_to_flight(
+        QgsRasterLayer(path, "BAMBI Orthomosaic (Thermal)"))
+
+    names = sorted(layer.name()
+                   for layer in QgsProject.instance().mapLayers().values())
+    assert names == ["BAMBI Orthomosaic (RGB)", "BAMBI Orthomosaic (Thermal)"]
+
+
+def test_a_survey_layer_added_again_replaces_itself(dock, stores_only,
+                                                    tmp_path):
+    from qgis.core import QgsRasterLayer
+
+    path = _raster(str(tmp_path / "density.tif"))
+    for _ in range(2):
+        dock._add_layer_to_survey(
+            QgsRasterLayer(path, "BAMBI Density Tracks (Thermal)"))
+
+    assert sum("BAMBI Density Tracks (Thermal)" in line
+               for line in _tree()) == 1
+    assert len(QgsProject.instance().mapLayers()) == 1
+
+
+def test_a_users_own_layer_of_another_name_is_left_alone(
+        dock, stores_only, quiet, monkeypatch, tmp_path):
+    from qgis.core import QgsRasterLayer
+
+    mine = QgsRasterLayer(_raster(str(tmp_path / "mine.tif")), "my notes")
+    QgsProject.instance().addMapLayer(mine)
+    monkeypatch.setattr(bambi_dock_widget, "FrameRangeDialog", _WholeRange)
+    dock.add_tracks_to_qgis()
+    dock.add_tracks_to_qgis()
+
+    assert "L my notes" in [line.strip() for line in _tree()]

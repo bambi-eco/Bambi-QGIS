@@ -14035,11 +14035,51 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             return flight_group
         return self._insert_group(flight_group, label)
 
+    @staticmethod
+    def _take_out(parent, name: str, keep=None) -> int:
+        """Take what is called *name* out of *parent* - a layer, or a group
+        with everything in it - and out of the project.
+
+        "Add ... to QGIS" shows a product as it is now. Pressed a second
+        time it used to add the product again beside the first: a second
+        group of the same name (the first one emptied, where its layers'
+        files were rewritten), a second copy of a raster layer.
+
+        *keep* is a layer that must stay (the one about to be added).
+        Returns how many nodes were removed.
+        """
+        removed = 0
+        for child in list(parent.children()):
+            if child.name() != name:
+                continue
+            if QgsLayerTree.isGroup(child):
+                group = sip.cast(child, QgsLayerTreeGroup)
+                layer_ids = [node.layerId() for node in group.findLayers()
+                             if node.layerId()]
+                if layer_ids:
+                    QgsProject.instance().removeMapLayers(layer_ids)
+                parent.removeChildNode(child)
+                removed += 1
+            elif QgsLayerTree.isLayer(child):
+                layer_id = sip.cast(child, QgsLayerTreeLayer).layerId()
+                if keep is not None and layer_id == keep.id():
+                    continue
+                if layer_id and QgsProject.instance().mapLayer(layer_id):
+                    # takes its node out of the tree with it
+                    QgsProject.instance().removeMapLayer(layer_id)
+                else:
+                    parent.removeChildNode(child)
+                removed += 1
+        return removed
+
     def _add_layer_to_survey(self, layer, at_top: bool = True):
         """Add a survey-wide layer (density, coverage, inventory, survey
-        area) to the survey group - it belongs to no single flight."""
+        area) to the survey group - it belongs to no single flight. A layer
+        of the same name that is already there is replaced."""
+        group = self._survey_group()
+        self._take_out(group, layer.name(), keep=layer)
         QgsProject.instance().addMapLayer(layer, False)
-        self._insert_node(self._survey_group(), QgsLayerTreeLayer(layer),
+        self._insert_node(group, QgsLayerTreeLayer(layer),
                           layer.name(), at_top)
         return layer
 
@@ -14051,11 +14091,15 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         without a tree node first and then placed by hand. Use this for the
         products that are one layer and get no subgroup of their own
         (orthomosaic, ALFS, merged FoV). A layer named for a camera goes
-        into that camera's subgroup, at its place in the fixed order.
+        into that camera's subgroup, at its place in the fixed order. A
+        layer - or group - of the same name that is already there is
+        replaced.
         """
+        group = self._camera_group(layer.name())
+        self._take_out(group, layer.name(), keep=layer)
         QgsProject.instance().addMapLayer(layer, False)
-        self._insert_node(self._camera_group(layer.name()),
-                          QgsLayerTreeLayer(layer), layer.name(), at_top)
+        self._insert_node(group, QgsLayerTreeLayer(layer), layer.name(),
+                          at_top)
         return layer
 
     def _remove_layer_group(self, group_name: str) -> bool:
@@ -14087,12 +14131,19 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         """Create a layer group in the active flight's group - in the
         camera subgroup its name belongs to, at its place in the fixed order.
 
+        A group of that name which is already there - from pressing the
+        same "Add ... to QGIS" before - is replaced, with its layers.
+
         :param group_name: Name for the new group
         :param at_top: for names the plugin does not order: top or bottom
         :return: The created QgsLayerTreeGroup
         """
-        return self._insert_group(self._camera_group(group_name), group_name,
-                                  at_top)
+        # anywhere in this flight's group: one from before the camera
+        # subgroups existed sits a level higher
+        self._remove_layer_group(group_name)
+        parent = self._camera_group(group_name)
+        self._take_out(parent, group_name)
+        return self._insert_group(parent, group_name, at_top)
 
     def _persist_memory_layer(self, mem_layer: QgsVectorLayer, file_name: str,
                               subfolder: str = "qgis_layers",

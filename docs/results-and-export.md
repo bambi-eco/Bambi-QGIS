@@ -154,6 +154,15 @@ BAMBI Survey                 survey-wide layers (all flights)
 └── BAMBI Environment        satellite, land-cover and terrain rasters
 ```
 
+**Adding a product again replaces it.** Every "→ Add … to QGIS" button shows
+its product as it is now: the group or layer of that name that is already in
+the flight's (or the survey's) group is taken out first, with its layers. A
+group added for a range of frames therefore shows the range asked for last -
+choose a wider range to see more at once. Layers of your own, and the
+plugin's layers under another name or camera, are left alone. (Before 9.1 a
+second press added a second group of the same name, and left the first one
+standing empty where its layers' files had been rewritten.)
+
 Within a group the plugin's layers keep one fixed order, top to bottom,
 whatever the order they were created in - overlays on top, rasters below:
 
