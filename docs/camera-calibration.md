@@ -68,6 +68,8 @@ After input is configured, the annotation page shows the RGB and thermal frames 
 - Enable the **Magnifier** (checkbox or press `M`) to show a circular loupe under the cursor for sub-pixel precision
 - Use **Save Points…** / **Load Points…** to persist and reload annotation work between sessions
 
+**With calibrations loaded.** If a calibration is loaded for a camera, its frames are shown *undistorted* with it, which makes features easier to pick. The thermal calibration that is saved is nevertheless the calibration of the thermal camera's **raw** frames - the loaded one refined, with the camera's whole distortion. (Up to 9.0 only the distortion left over after the loaded calibration was saved, as if it were all there is; such a file undistorts raw thermal frames by a fraction of what they need. If you ran a stereo calibration on top of a loaded thermal calibration with 9.0 or earlier, run it again.)
+
 ![Camera Calibration Wizard: Stereo Annotation](../images/camera_calib_stereo_annotation.png)
 
 **Output:** Two separate JSON files (one per camera):

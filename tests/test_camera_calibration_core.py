@@ -298,3 +298,102 @@ class TestRunStereoCalibration:
             "initial_calibration": _initial_calib(),
         }, cancel_check=lambda: True)
         assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# Stereo calibration on top of a loaded thermal calibration
+# ---------------------------------------------------------------------------
+
+class TestStereoWithALoadedThermalCalibration:
+    """With a thermal calibration loaded the points are placed on images
+    undistorted with it. The fit then started from "no distortion" and
+    saved only what was left over - as if that were the camera's whole
+    distortion. What is saved is used on the camera's raw frames."""
+
+    #: The thermal camera as it really is: clearly barrel-distorted.
+    D_TRUE = np.array([-0.25, 0.08, 0.0, 0.0, 0.0])
+    #: ... and the calibration that was loaded for it: close, not exact.
+    K_LOADED = K_T_TRUE * [[1.03, 1, 1.02], [1, 1.03, 0.98], [1, 1, 1]]
+    D_LOADED = np.array([-0.22, 0.05, 0.0, 0.0, 0.0])
+
+    @classmethod
+    def _points(cls):
+        """A grid seen by both cameras: the RGB pixels (ideal), the thermal
+        ones as the raw image has them, and as placed on the image
+        undistorted with the loaded calibration."""
+        import cv2
+
+        wide = np.array([[x, y] for x in np.linspace(60, 580, 7)
+                         for y in np.linspace(50, 460, 6)])
+        rays = np.column_stack([(wide[:, 0] - K_W[0, 2]) / K_W[0, 0],
+                                (wide[:, 1] - K_W[1, 2]) / K_W[1, 1],
+                                np.ones(len(wide))])
+        raw, _j = cv2.projectPoints(rays.reshape(-1, 1, 3), np.zeros(3),
+                                    np.zeros(3), K_T_TRUE,
+                                    cls.D_TRUE.reshape(1, -1))
+        placed = cv2.undistortPoints(
+            raw.reshape(-1, 1, 2), cls.K_LOADED, cls.D_LOADED.reshape(1, -1),
+            P=cls.K_LOADED)
+        return wide, raw.reshape(-1, 2), placed.reshape(-1, 2)
+
+    @staticmethod
+    def _misfit(result, wide, raw):
+        """How far the raw thermal points, undistorted with the saved
+        calibration, are from the RGB points - in RGB pixels, RMS."""
+        import cv2
+
+        thermal = result["Thermal"]
+        back = cv2.undistortPoints(
+            raw.reshape(-1, 1, 2).astype(np.float64),
+            np.array(thermal["mtx"], dtype=np.float64),
+            np.array(thermal["dist"], dtype=np.float64).reshape(1, -1),
+            P=K_W).reshape(-1, 2)
+        return float(np.sqrt(((back - wide) ** 2).sum(axis=1).mean()))
+
+    def _run(self, placed, wide):
+        return cc.run_stereo_calibration({
+            "T_points": placed.tolist(), "W_points": wide.tolist(),
+            "initial_calibration": {
+                "Wide": {"ret": 0.5, "mtx": K_W.tolist(), "dist": [0.0] * 5},
+                "Thermal": {"ret": 1.0, "mtx": self.K_LOADED.tolist(),
+                            "dist": self.D_LOADED.tolist()}},
+            "rgb_pre_undistorted": True, "th_pre_undistorted": True})
+
+    def test_the_saved_calibration_fits_the_raw_frames(self):
+        wide, raw, placed = self._points()
+        result = self._run(placed, wide)
+
+        assert self._misfit(result, wide, raw) < 1.5
+        # the camera's whole distortion, not the little that was left over
+        assert result["Thermal"]["dist"][0] == pytest.approx(
+            self.D_TRUE[0], abs=0.08)
+
+    def test_only_the_leftover_would_not_fit_them(self):
+        """What used to be saved, for comparison: a distortion near zero,
+        which on the raw frames is off by many pixels."""
+        import cv2
+
+        wide, raw, placed = self._points()
+        leftover = {"Thermal": {"mtx": self.K_LOADED.tolist(),
+                                "dist": [0.0] * 5}}
+        assert self._misfit(leftover, wide, raw) > 5.0
+        # sanity: the points really were placed where the loaded
+        # calibration puts them
+        back = cc._raw_points(placed, self.K_LOADED, self.D_LOADED)
+        assert np.allclose(back.reshape(-1, 2), raw, atol=1e-3)
+        assert cv2 is not None
+
+    def test_without_a_loaded_calibration_nothing_changes(self):
+        """Points placed on the raw images, no distortion to start from."""
+        result = cc.run_stereo_calibration({
+            "T_points": _thermal_points(), "W_points": W_POINTS,
+            "initial_calibration": _initial_calib()})
+        assert result["optimized_mse"] < 1.0
+
+    def test_a_loaded_calibration_without_distortion_is_left_as_it_is(self):
+        """Nothing to take the points back through."""
+        result = cc.run_stereo_calibration({
+            "T_points": _thermal_points(), "W_points": W_POINTS,
+            "initial_calibration": _initial_calib(),
+            "th_pre_undistorted": True})
+        assert result["optimized_mse"] < 1.0

@@ -294,6 +294,32 @@ def run_single_calibration(params: dict, log_fn=None, progress_fn=None,
 # Stereo calibration: homography + Nelder-Mead
 # ---------------------------------------------------------------------------
 
+def _raw_points(points, camera_matrix, distortion):
+    """Where points of an image undistorted with a calibration lie in the
+    camera's raw image - the calibration's distortion applied to them.
+
+    ``cv2.undistort(image, K, d)`` gives an image of a camera with matrix
+    ``K`` and no distortion; going back is projecting the points' viewing
+    rays through ``K`` *with* ``d``.
+
+    :param points: ``(N, 1, 2)`` or ``(N, 2)`` pixel coordinates
+    :return: ``(N, 1, 2)`` float64
+    """
+    import cv2
+    import numpy as np
+
+    pixels = np.asarray(points, dtype=np.float64).reshape(-1, 2)
+    camera_matrix = np.asarray(camera_matrix, dtype=np.float64)
+    rays = np.column_stack([
+        (pixels[:, 0] - camera_matrix[0, 2]) / camera_matrix[0, 0],
+        (pixels[:, 1] - camera_matrix[1, 2]) / camera_matrix[1, 1],
+        np.ones(len(pixels))])
+    raw, _jacobian = cv2.projectPoints(
+        rays.reshape(-1, 1, 3), np.zeros(3), np.zeros(3), camera_matrix,
+        np.asarray(distortion, dtype=np.float64).reshape(1, -1))
+    return raw.reshape(-1, 1, 2)
+
+
 def run_stereo_calibration(params: dict, log_fn=None, progress_fn=None,
                            cancel_check=None) -> dict:
     log = log_fn or _noop
@@ -378,7 +404,17 @@ def run_stereo_calibration(params: dict, log_fn=None, progress_fn=None,
     rgb_pre_undist = params.get("rgb_pre_undistorted", False)
     th_pre_undist = params.get("th_pre_undistorted", False)
     rgb_dist_warp = np.zeros(5) if rgb_pre_undist else rgb_dist5
-    th_dist_x0 = np.zeros(5) if th_pre_undist else th_dist5
+
+    # The thermal side is what is fitted, and what is saved is used on the
+    # camera's *raw* frames. With a thermal calibration loaded the points
+    # were placed on images undistorted with it, and the fit then started
+    # from "no distortion": it found - and saved - only what was left over
+    # after the loaded calibration, as if that were the camera's whole
+    # distortion. So the points are taken back to where they lie in the raw
+    # image, and the fit starts from the loaded calibration in full.
+    if th_pre_undist and np.any(th_dist5):
+        T_pts = _raw_points(T_pts, th_mtx, th_dist5)
+    th_dist_x0 = th_dist5
 
     def _warp(pts, cm, dc):
         p = np.array(pts, dtype=np.float32).reshape(-1, 1, 2)
