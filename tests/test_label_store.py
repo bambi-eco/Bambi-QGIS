@@ -617,3 +617,166 @@ def test_no_box_is_materialised_on_a_duplicated_frame(tmp_path):
     result = label_store.materialise(root, "t", [_track()])
     assert result["added"] == 2
     assert [row["frame"] for row in _detections(root)] == [1, 3]
+
+
+# ---------------------------------------------------------------------------
+# A label track keeps its track (and what was decided about it)
+# ---------------------------------------------------------------------------
+
+def _tracker_track(root):
+    """One detector box, tracked: the track a label is then imported from."""
+    detection_store.record_detections(root, "t", [
+        {"frame": 1, "x1": 10.0, "y1": 20.0, "x2": 30.0, "y2": 40.0,
+         "confidence": 0.5, "source_class": "0"}])
+    detection_id = track_store.load_detections(root, "t")[0]["detection_id"]
+    track_store.record_tracks(
+        root, "t", [{"track_id": 1, "detection_id": detection_id}],
+        kind="builtin")
+    conn = store.open_store(
+        store.stage_path(root, store.TRACKS, "t"), store.TRACKS, "t")
+    try:
+        return int(conn.execute(
+            "SELECT t.track_id FROM tracks t JOIN track_runs r USING (run_id) "
+            "WHERE r.kind = 'builtin'").fetchone()["track_id"])
+    finally:
+        conn.close()
+
+
+def _manual_ids(root):
+    return {row["label_track_id"]: row["track_id"]
+            for row in label_store.load_tracks(root, "t")}
+
+
+def _track_attributes(root, track_id):
+    conn = store.open_store(
+        store.stage_path(root, store.TRACKS, "t"), store.TRACKS, "t")
+    try:
+        row = conn.execute("SELECT attributes FROM tracks WHERE track_id = ?",
+                           (track_id,)).fetchone()
+        return None if row is None else json.loads(row["attributes"] or "{}")
+    finally:
+        conn.close()
+
+
+def test_a_save_does_not_bring_the_replaced_track_back(tmp_path):
+    """A label imported from a tracker track replaces it once exported. The
+    link that says so was dropped by every later save in the labelling tool,
+    and the animal counted twice until the next export."""
+    root = str(tmp_path)
+    ls = _label_store(root)
+    original = _tracker_track(root)
+    ls.tracks[1].origin_track_id = original
+    ls.save()
+    ls.export_to_detections()
+    assert track_store.superseded_track_ids(root, "t") == {original}
+
+    ls.tracks[1].sex = "male"           # any edit, then Save or autosave
+    ls.save()
+
+    assert track_store.superseded_track_ids(root, "t") == {original}
+    assert _manual_ids(root)[1] is not None
+
+
+def test_a_label_that_was_never_exported_replaces_nothing(tmp_path):
+    root = str(tmp_path)
+    ls = _label_store(root)
+    ls.tracks[1].origin_track_id = _tracker_track(root)
+    ls.save()
+    ls.save()
+    assert track_store.superseded_track_ids(root, "t") == set()
+
+
+def test_removing_the_labels_from_the_project_ends_the_replacement(tmp_path):
+    """With the manual track gone, a link left behind would hide the
+    tracker's track as well - the animal would not count at all."""
+    root = str(tmp_path)
+    ls = _label_store(root)
+    original = _tracker_track(root)
+    ls.tracks[1].origin_track_id = original
+    ls.save()
+    ls.export_to_detections()
+
+    label_store.clear_materialised(root, "t")
+
+    assert track_store.superseded_track_ids(root, "t") == set()
+    assert _manual_ids(root)[1] is None
+
+
+def test_exporting_again_keeps_the_track_ids(tmp_path):
+    """Every export wrote the hand-labelled tracks anew under new ids, which
+    orphaned whatever refers to a track by its id: the thermal/RGB pairing,
+    an open inventory."""
+    from bambi_wildlife_detection.core.labelling import LabelTrack
+
+    root = str(tmp_path)
+    ls = _label_store(root)
+    second = LabelTrack(2, species="red deer")
+    second.set_keyframe(5, (1.0, 1.0, 9.0, 9.0))
+    ls.tracks[2] = second
+    ls.save()
+    ls.export_to_detections()
+    first = _manual_ids(root)
+    assert len(set(first.values())) == 2 and None not in first.values()
+
+    ls.tracks[1].set_keyframe(3, (31.0, 41.0, 51.0, 61.0))    # move a box
+    ls.save()
+    ls.export_to_detections()
+
+    assert _manual_ids(root) == first
+
+
+def test_exporting_again_keeps_the_approved_tick(tmp_path):
+    root = str(tmp_path)
+    ls = _label_store(root)
+    ls.save()
+    ls.export_to_detections()
+    track_id = _manual_ids(root)[1]
+    assert track_store.set_track_attribute(root, "t", track_id,
+                                           "approved", True)
+
+    ls.tracks[1].age = "juvenile"
+    ls.save()
+    ls.export_to_detections()
+
+    attributes = _track_attributes(root, track_id)
+    assert attributes["approved"] is True
+    assert attributes["age"] == 2           # ... and the label's new value
+
+
+def test_a_new_label_track_gets_a_new_id_and_the_others_keep_theirs(tmp_path):
+    from bambi_wildlife_detection.core.labelling import LabelTrack
+
+    root = str(tmp_path)
+    ls = _label_store(root)
+    ls.save()
+    ls.export_to_detections()
+    first = _manual_ids(root)[1]
+
+    added = LabelTrack(2, species="fox")
+    added.set_keyframe(7, (1.0, 1.0, 5.0, 5.0))
+    ls.tracks[2] = added
+    ls.save()
+    ls.export_to_detections()
+
+    ids = _manual_ids(root)
+    assert ids[1] == first
+    assert ids[2] not in (None, first)
+
+    del ls.tracks[1]                        # ... and one is deleted
+    ls.save()
+    ls.export_to_detections()
+    assert _manual_ids(root) == {2: ids[2]}
+    assert _track_attributes(root, first) is None
+
+
+def test_the_labels_own_value_wins_over_a_verdict_of_that_name(tmp_path):
+    """A custom field may be called "approved" too; then the label decides."""
+    root = str(tmp_path)
+    label_store.save_tracks(root, "t", [_track(1, attributes={"approved": False})])
+    label_store.materialise(root, "t")
+    track_id = _manual_ids(root)[1]
+    track_store.set_track_attribute(root, "t", track_id, "approved", True)
+
+    label_store.materialise(root, "t")
+
+    assert _track_attributes(root, track_id)["approved"] is False

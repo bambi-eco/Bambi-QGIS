@@ -113,14 +113,21 @@ def save_tracks(target_folder: str, modality: str, tracks: Iterable[dict],
     Each track is ``{"label_track_id", "species_id", "attributes",
     "origin_track_id"?, "keyframes": [{"frame", "x1".."y2", "stop"?,
     "attributes"?, "origin_detection_id"?}]}``.
+
+    A label track keeps the link to the manual track it produced
+    (``track_id``) unless the caller names one. The link is what marks the
+    tracker track it was imported from as replaced; a save that dropped it -
+    as every save did - made the animal count twice until the next export.
     """
     tracks = list(tracks)
     conn = _labels_conn(target_folder, modality)
     try:
         with store.transaction(conn):
             keep = [t["label_track_id"] for t in tracks]
-            existing = [row["label_track_id"] for row in conn.execute(
-                "SELECT label_track_id FROM label_tracks")]
+            linked = {row["label_track_id"]: row["track_id"]
+                      for row in conn.execute(
+                          "SELECT label_track_id, track_id FROM label_tracks")}
+            existing = list(linked)
             for label_track_id in existing:
                 if label_track_id not in keep:
                     conn.execute(
@@ -138,7 +145,8 @@ def save_tracks(target_folder: str, modality: str, tracks: Iterable[dict],
                     (track["label_track_id"],
                      track.get("species_id", store.FALLBACK_SPECIES_ID),
                      track.get("origin_track_id"),
-                     track.get("track_id"),
+                     track.get("track_id",
+                               linked.get(track["label_track_id"])),
                      json.dumps(track.get("attributes") or {})))
                 conn.execute(
                     "DELETE FROM label_keyframes WHERE label_track_id = ?",
@@ -429,6 +437,45 @@ def _invalidate_geo(target_folder: str, modality: str,
         conn.close()
 
 
+#: What a user decides about a track after it exists - the inventory's
+#: "approved" tick - as opposed to what the label track itself says. It lives
+#: on the track only, so it has to be carried over when the track is rewritten.
+USER_VERDICTS = ("approved",)
+
+
+def _previous_manual_tracks(conn, det_path: str) -> Dict[int, dict]:
+    """``{label_track_id: {"track_id", "verdicts"}}`` of the manual tracks
+    about to be replaced, found through the detections they still share with
+    their label track."""
+    from . import gpkg
+
+    previous: Dict[int, dict] = {}
+    if not os.path.isfile(det_path):
+        return previous
+    gpkg.attach(conn, det_path, "det")
+    try:
+        rows = conn.execute(
+            "SELECT d.label_track_id AS label_track_id, "
+            "MIN(t.track_id) AS track_id FROM tracks t "
+            "JOIN track_runs r ON r.run_id = t.run_id "
+            "JOIN track_members m ON m.track_id = t.track_id "
+            "JOIN det.detections d ON d.detection_id = m.detection_id "
+            "WHERE r.kind = ? AND d.label_track_id IS NOT NULL "
+            "GROUP BY d.label_track_id", (MANUAL_KIND,)).fetchall()
+        for row in rows:
+            attributes = _load_json(conn.execute(
+                "SELECT attributes FROM tracks WHERE track_id = ?",
+                (row["track_id"],)).fetchone()["attributes"])
+            previous[int(row["label_track_id"])] = {
+                "track_id": int(row["track_id"]),
+                "verdicts": {key: attributes[key] for key in USER_VERDICTS
+                             if key in attributes},
+            }
+    finally:
+        gpkg.detach(conn, "det")
+    return previous
+
+
 def _write_manual_tracks(target_folder: str, modality: str,
                          tracks: List[dict],
                          detection_of: Dict[Tuple[int, int], int],
@@ -438,34 +485,40 @@ def _write_manual_tracks(target_folder: str, modality: str,
     A label track *is* a track - its membership is given by the annotator
     rather than computed - so downstream consumers stop special-casing manual
     data (§6.5). No association logic happens here (§6.6).
+
+    The run is rewritten as a whole, but a label track keeps **its track**:
+    the same track id, and what the user decided about that track since
+    (:data:`USER_VERDICTS`). New ids with every export took the "approved"
+    tick and the thermal/RGB pairing of every hand-labelled animal with them.
     """
     conn = store.open_store(
         store.stage_path(target_folder, store.TRACKS, modality),
         store.TRACKS, modality)
+    written = 0
     try:
+        previous = _previous_manual_tracks(conn, store.stage_path(
+            target_folder, store.DETECTIONS, modality))
         with store.transaction(conn):
-            previous = [int(row["run_id"]) for row in conn.execute(
+            runs = [int(row["run_id"]) for row in conn.execute(
                 "SELECT run_id FROM track_runs WHERE kind = ?", (MANUAL_KIND,))]
-            for run_id in previous:
+            for run_id in runs:
                 conn.execute(
                     "DELETE FROM track_members WHERE track_id IN "
                     "(SELECT track_id FROM tracks WHERE run_id = ?)", (run_id,))
                 conn.execute("DELETE FROM tracks WHERE run_id = ?", (run_id,))
                 conn.execute("DELETE FROM track_runs WHERE run_id = ?", (run_id,))
 
-            if not tracks:
-                return 0
+            if tracks:
+                generation = conn.execute(
+                    "SELECT IFNULL(MAX(generation), 0) + 1 AS g FROM track_runs "
+                    "WHERE kind = ?", (MANUAL_KIND,)).fetchone()["g"]
+                cur = conn.execute(
+                    "INSERT INTO track_runs (kind, tracker, generation, "
+                    "created_at, is_active) "
+                    "VALUES (?, 'labelling tool', ?, '', 0)",
+                    (MANUAL_KIND, generation))
+                run_id = int(cur.lastrowid)
 
-            generation = conn.execute(
-                "SELECT IFNULL(MAX(generation), 0) + 1 AS g FROM track_runs "
-                "WHERE kind = ?", (MANUAL_KIND,)).fetchone()["g"]
-            cur = conn.execute(
-                "INSERT INTO track_runs (kind, tracker, generation, "
-                "created_at, is_active) VALUES (?, 'labelling tool', ?, '', 0)",
-                (MANUAL_KIND, generation))
-            run_id = int(cur.lastrowid)
-
-            written = 0
             for track in tracks:
                 members = [detection_id
                            for (label_track_id, _frame), detection_id
@@ -473,11 +526,16 @@ def _write_manual_tracks(target_folder: str, modality: str,
                            if label_track_id == track["label_track_id"]]
                 if not members:
                     continue
+                before = previous.get(track["label_track_id"], {})
+                # the label's own values win over a verdict of the same name
+                attributes = dict(before.get("verdicts") or {})
+                attributes.update(track.get("attributes") or {})
                 new = conn.execute(
-                    "INSERT INTO tracks (run_id, species_id, attributes) "
-                    "VALUES (?, ?, ?)",
-                    (run_id, track.get("species_id", store.FALLBACK_SPECIES_ID),
-                     json.dumps(track.get("attributes") or {})))
+                    "INSERT INTO tracks (track_id, run_id, species_id, "
+                    "attributes) VALUES (?, ?, ?, ?)",
+                    (before.get("track_id"), run_id,
+                     track.get("species_id", store.FALLBACK_SPECIES_ID),
+                     json.dumps(attributes)))
                 track_id = int(new.lastrowid)
                 conn.executemany(
                     "INSERT OR IGNORE INTO track_members "
@@ -487,6 +545,8 @@ def _write_manual_tracks(target_folder: str, modality: str,
     finally:
         conn.close()
 
+    # Also when no track is left: links to manual tracks that were just
+    # removed must not go on marking tracker tracks as replaced.
     _record_manual_track_ids(target_folder, modality)
     if log_fn and written:
         log_fn(f"Store: recorded {written} manual track(s)")
@@ -500,11 +560,16 @@ def _record_manual_track_ids(target_folder: str, modality: str) -> None:
     labels_path = store.stage_path(target_folder, store.LABELS, modality)
     tracks_path = store.stage_path(target_folder, store.TRACKS, modality)
     det_path = store.stage_path(target_folder, store.DETECTIONS, modality)
-    if not all(os.path.isfile(p) for p in (labels_path, tracks_path, det_path)):
+    if not os.path.isfile(labels_path):
         return
 
     conn = _labels_conn(target_folder, modality)
     try:
+        if not (os.path.isfile(tracks_path) and os.path.isfile(det_path)):
+            # nothing is materialised, so nothing is linked
+            with store.transaction(conn):
+                conn.execute("UPDATE label_tracks SET track_id = NULL")
+            return
         gpkg.attach(conn, tracks_path, "trk")
         gpkg.attach(conn, det_path, "det")
         pairs = conn.execute(
@@ -516,6 +581,9 @@ def _record_manual_track_ids(target_folder: str, modality: str) -> None:
             "WHERE r.kind = ? AND d.label_track_id IS NOT NULL",
             (MANUAL_KIND,)).fetchall()
         with store.transaction(conn):
+            # The manual run was just rewritten: every link is set afresh,
+            # so a label track that produced no track is linked to none.
+            conn.execute("UPDATE label_tracks SET track_id = NULL")
             for row in pairs:
                 conn.execute(
                     "UPDATE label_tracks SET track_id = ? "
