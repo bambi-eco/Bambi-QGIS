@@ -983,3 +983,71 @@ def test_once_the_step_has_finished_flights_can_be_switched(
 
     assert dock._active_flight()["target_folder"] == a
 
+
+
+# ---------------------------------------------------------------------------
+# What a new flight starts from
+# ---------------------------------------------------------------------------
+
+def _first_flight(dock, folder):
+    dock.target_folder_edit.setText(folder)
+    dock.target_crs_edit.setText("EPSG:32633")
+    dock._on_target_folder_changed()
+
+
+def test_a_default_flight_starts_as_a_new_form_does(dock, quiet, monkeypatch,
+                                                    two_flights):
+    """ "Default configuration" took the values a project saved before a
+    setting existed is loaded with - photo mode, crop padding 0.10 (the
+    classifiers were trained with 0.25), the first-frame orthomosaic, no
+    measured flight-log margin - instead of what a new form shows."""
+    a, b = two_flights
+    pristine = dict(dock._pristine_config)
+    _first_flight(dock, a)
+    # the first flight is configured differently
+    dock.video_mode_check.setChecked(False)
+    dock.classification_padding_spin.setValue(0.5)
+    dock.ortho_method_combo.setCurrentIndex(1)
+    dock.airdata_padding_auto_check.setChecked(False)
+
+    _add(dock, monkeypatch, b, "Forest", copy_configuration=False)
+
+    now = dock._current_config_values()
+    different = {key: (pristine[key], now[key]) for key in pristine
+                 if pristine[key] != now[key] and key != "Input/TargetFolder"}
+    assert different == {}
+    assert dock.video_mode_check.isChecked()
+    assert dock.classification_padding_spin.value() == 0.25
+    assert dock.ortho_method_combo.currentIndex() == 4
+    assert dock.airdata_padding_auto_check.isChecked()
+
+
+def test_a_copied_flight_keeps_the_settings_and_a_new_forms_inputs(
+        dock, quiet, monkeypatch, two_flights):
+    """The recordings are cleared whichever way - to what a new form shows,
+    which is video mode (it switched to photo mode)."""
+    a, b = two_flights
+    _first_flight(dock, a)
+    dock.classification_padding_spin.setValue(0.5)
+    dock.ortho_method_combo.setCurrentIndex(1)
+
+    _add(dock, monkeypatch, b, "Forest", copy_configuration=True)
+
+    assert dock.classification_padding_spin.value() == 0.5
+    assert dock.ortho_method_combo.currentIndex() == 1
+    assert dock.video_mode_check.isChecked() == \
+        dock._pristine_config["Input/VideoMode"]
+
+
+def test_the_stored_defaults_the_classifiers_depend_on_are_the_forms(dock):
+    """A flight whose store has no value is loaded with the schema's."""
+    from bambi_wildlife_detection.core import config_schema
+    from bambi_wildlife_detection.core.classification import CropConfig
+
+    defaults = {entry.key: entry.default
+                for entry in config_schema.CONFIG_ENTRIES}
+    assert defaults["Classification/CropPadding"] == CropConfig().padding
+    assert dock._pristine_config["Classification/CropPadding"] == \
+        CropConfig().padding
+    assert defaults["Classification/CropSize"] == CropConfig().size == \
+        dock._pristine_config["Classification/CropSize"]

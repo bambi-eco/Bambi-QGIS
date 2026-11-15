@@ -87,6 +87,12 @@ Input tab shows the active one; **Rename…** renames it and 🗑 removes it.
 - **Adding a new flight:** type its name into the **Name** field and press
   `+` (or Enter). The flight is added and becomes active; then set its
   **Target folder** further down the Input tab. `+` does not ask for a folder.
+  You are asked whether the new flight copies the current flight's settings
+  or starts from the defaults. Its recordings are empty either way, and
+  *default* means what a new project shows (since 9.1; before, a default
+  flight started in photo mode, with crop padding 0.10 instead of the 0.25
+  the classifiers were trained with, the first-frame orthomosaic and no
+  measured flight-log margin).
 - **Adding an existing flight:** **Browse and Add…** picks a target folder
   that has been processed before (see below). The name is taken from the
   Name field, or asked for.

@@ -207,7 +207,11 @@ CONFIG_ENTRIES: List[ConfigEntry] = [
     ConfigEntry("Classification/BatchSize", "int_double", 16),
     ConfigEntry("Classification/Fp16", "bool", True),
     ConfigEntry("Classification/Projection", "int_double", 0),
-    ConfigEntry("Classification/CropPadding", "double", 0.10),
+    # 0.25 is what the form shows and what the published classifiers were
+    # trained with (core.classification.CropConfig). It was 0.10 here, so a
+    # flight whose store had no value - every flight added with "default
+    # configuration" - was embedded with crops the classifiers do not know.
+    ConfigEntry("Classification/CropPadding", "double", 0.25),
     ConfigEntry("Classification/CropSize", "int_double", 224),
     ConfigEntry("Classification/Letterbox", "bool", True),
     ConfigEntry("Classification/FrameSelection", "int_double", 0),

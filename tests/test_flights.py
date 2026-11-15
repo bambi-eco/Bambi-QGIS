@@ -325,6 +325,43 @@ def test_defaults_reset_the_processing_settings():
     assert values["Detection/Confidence"] == entry.default
 
 
+def test_default_means_what_a_new_form_shows():
+    """Not the schema's default, which is what a project saved before the
+    setting existed is loaded with - and for many settings an empty value."""
+    form = {"Classification/CropPadding": 0.25, "Input/VideoMode": True,
+            "Ortho/Method": 4, "Detection/Confidence": 0.4}
+    values = flights.new_flight_values(_current(), False, defaults=form)
+    for key, value in form.items():
+        assert values[key] == value, key
+
+
+def test_a_copied_flight_takes_its_inputs_from_a_new_form():
+    """Copying keeps the settings; the recordings are cleared to what a new
+    form shows - video mode, not the empty value that meant photo mode."""
+    form = {"Input/VideoMode": True, "Detection/Confidence": 0.4}
+    values = flights.new_flight_values(_current(), True, defaults=form)
+    assert values["Input/VideoMode"] is True
+    assert values["Detection/Confidence"] == 0.77        # copied
+    for key in RECORDINGS:
+        assert values[key] == "", key
+
+
+def test_a_setting_the_form_does_not_name_falls_back_on_the_schema():
+    values = flights.new_flight_values({}, False, defaults={})
+    entry = [e for e in config_schema.CONFIG_ENTRIES
+             if e.key == "Detection/Confidence"][0]
+    assert values["Detection/Confidence"] == entry.default
+    assert set(values) == {e.key for e in config_schema.CONFIG_ENTRIES}
+
+
+def test_the_crop_padding_is_the_one_the_classifiers_were_trained_with():
+    from bambi_wildlife_detection.core.classification import CropConfig
+
+    entry = [e for e in config_schema.CONFIG_ENTRIES
+             if e.key == "Classification/CropPadding"][0]
+    assert entry.default == CropConfig().padding == 0.25
+
+
 def test_the_crs_is_a_setting_not_a_recording():
     """Blanking it on every new flight would only have to be retyped."""
     assert not flights.is_recording_input("Input/TargetCrs")

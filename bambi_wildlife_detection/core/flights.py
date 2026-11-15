@@ -383,7 +383,8 @@ def is_recording_input(key: str) -> bool:
     return key.startswith(INPUT_SCOPE) and key not in NOT_RECORDING_INPUTS
 
 
-def new_flight_values(current: Dict[str, object], copy_configuration: bool
+def new_flight_values(current: Dict[str, object], copy_configuration: bool,
+                      defaults: Optional[Dict[str, object]] = None
                       ) -> Dict[str, object]:
     """Form values for a newly added flight.
 
@@ -391,12 +392,23 @@ def new_flight_values(current: Dict[str, object], copy_configuration: bool
     the previous flight's paths would quietly process it twice. The rest is the
     caller's choice: *copy_configuration* keeps the current detection, tracking
     and output settings, otherwise everything returns to its default.
+
+    :param defaults: what a new form shows, by schema key - the dock's own
+        state right after it was built. "Default" used to mean the schema's
+        ``entry.default``, which is something else: the value a project
+        *saved before the setting existed* is loaded with, and where there
+        is none, an empty one. A new flight therefore started in photo mode
+        with crop padding 0.10, the first-frame orthomosaic and no automatic
+        flight-log margin, where a new project starts in video mode with
+        0.25, the average and the margin measured. A key missing from
+        *defaults* falls back on the schema.
     """
     from .config_schema import CONFIG_ENTRIES
 
+    defaults = defaults or {}
     values: Dict[str, object] = {}
     for entry in CONFIG_ENTRIES:
-        default = _entry_default(entry)
+        default = defaults.get(entry.key, _entry_default(entry))
         if is_recording_input(entry.key):
             values[entry.key] = default
         elif copy_configuration:

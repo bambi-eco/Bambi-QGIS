@@ -396,6 +396,9 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
 
         # Snapshot pristine widget state so a new project can reset to defaults
         self._snapshot_default_config()
+        # ... and the same by settings key: what a flight added with
+        # "default configuration" starts from (core.flights.new_flight_values).
+        self._pristine_config = self._current_config_values()
 
         # Connect to project signals for config persistence
         self._connect_project_signals()
@@ -4679,7 +4682,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
                 getattr(self, '_classification_models', None) or {}),
             "classification_crop_padding": (
                 self.classification_padding_spin.value()
-                if hasattr(self, 'classification_padding_spin') else 0.10),
+                if hasattr(self, 'classification_padding_spin') else 0.25),
             "classification_crop_size": (
                 self.classification_crop_size_spin.value()
                 if hasattr(self, 'classification_crop_size_spin') else 224),
@@ -7014,7 +7017,9 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         self._switching_flight = True
         try:
             self._apply_flight_values(
-                flights_core.new_flight_values(current, copy_configuration))
+                flights_core.new_flight_values(
+                    current, copy_configuration,
+                    defaults=self._pristine_config))
             self.target_folder_edit.setText("")
         finally:
             self._switching_flight = False
@@ -7092,7 +7097,9 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         self._switching_flight = True
         try:
             self._apply_flight_values(
-                flights_core.new_flight_values(current, copy_configuration))
+                flights_core.new_flight_values(
+                    current, copy_configuration,
+                    defaults=self._pristine_config))
             self.target_folder_edit.setText(folder)
         finally:
             self._switching_flight = False
@@ -13408,6 +13415,13 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
                 self.log("Warning: ignoring an unreadable thermal curve")
         self._thermal_vis_curve = curve
         self._update_thermal_vis_curve_label()
+
+    def _current_config_values(self) -> Dict[str, Any]:
+        """Every setting of the form, by its key in ``core.config_schema``."""
+        from .core.config_schema import WIDGET_BINDINGS
+
+        return {key: self._config_widget_value(attr, role)
+                for key, (attr, role) in WIDGET_BINDINGS.items()}
 
     def _config_widget_value(self, attr: str, role: str):
         """Read a config value from the bound widget (core.config_schema role)."""
