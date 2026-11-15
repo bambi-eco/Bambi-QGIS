@@ -165,6 +165,9 @@ class AnalyticsTabMixin:
 
         analytics_tab_layout.addWidget(census_group)
 
+        # ----- Grid Density (dock/grid_density.py) -----
+        analytics_tab_layout.addWidget(self._build_grid_group())
+
         # ----- Track Inventory -----
         inventory_group = QGroupBox("Track Inventory")
         inventory_layout = QVBoxLayout(inventory_group)

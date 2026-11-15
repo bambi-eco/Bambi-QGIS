@@ -36,6 +36,7 @@ from .dock.step_status import StepStatusMixin
 from .dock.analytics_tab import AnalyticsTabMixin
 from .dock.transect_layers import TransectLayersMixin
 from .dock.group_layers import GroupLayersMixin
+from .dock.grid_density import GridDensityMixin
 from .dock.result_layers import ResultLayersMixin
 from .dock.flight_route_layers import FlightRouteLayersMixin
 from .dock.layer_groups import LayerGroupsMixin
@@ -68,6 +69,7 @@ class BambiDockWidget(
         AnalyticsTabMixin,
         TransectLayersMixin,
         GroupLayersMixin,
+        GridDensityMixin,
         ResultLayersMixin,
         FlightRouteLayersMixin,
         LayerGroupsMixin,

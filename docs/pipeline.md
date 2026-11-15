@@ -709,6 +709,48 @@ analytics_t/    # or analytics_w/, in the survey folder
 └── groups_tracks.json
 ```
 
+### Grid density
+
+Transects describe a survey along the way it was flown. A grid describes it by the ground: the survey's ground is cut into **equal cells**, and what was found is looked at cell by cell - how dense, how clumped, and where the hot spots are. The grid covers the **survey area**; without one it covers the ground the ticked flights saw.
+
+| Setting | Description |
+|---------|-------------|
+| **Cells** | The shape of a cell: **hexagons** (the default), **squares**, **triangles** or **rectangles**. Every neighbour of a hexagon shares a whole edge with it and is equally far away, which is what the hot-spot statistics assume; rectangles have a width and a height of their own. |
+| **Size by** | Give a cell's size by its **area** (default 1 ha) or by the **length of its edge** - two ways to say the same: switching keeps the cells as they are. |
+| **Seen at least** | The share of a cell the cameras have to have seen for it to count (default 50 %). |
+| **Repeated flights** | How a cell that several flights saw is read: **Average over the flights** - all sightings over all the ground looked at, the mean density over the visits - or **Highest flight** - the flight with the highest density, among those that saw enough of the cell on their own: what was there at least. |
+
+The settings are saved with the QGIS project.
+
+**Density is animals over ground that was seen.** A cell the drone crossed at one corner holds few animals because little of it was looked at, not because few are there. A cell's density is therefore its animals divided by the ground the cameras saw *in the cell* - the field-of-view footprints inside the survey area - not by the size of the cell. Run **Calculate Field of View** for the survey's camera on every flight first; a flight without footprints counts as having seen the whole survey area, and cannot be analysed without one.
+
+**A cell that was hardly seen says nothing.** Cells of which less than the set share was seen stay on the map as *too little seen*, with what was found there, and are left out of every statistic. The share is of the whole cell, so a cell the edge of the survey area cuts down to a corner is treated the same way. Cells no flight saw are *not seen*.
+
+**The same ground is the same cell, in every survey.** The grid is laid from the origin of the map's coordinate system, not from a corner of what is analysed today: a square cell of 100 m always runs from a multiple of 100 to the next. Two surveys of an area - or one survey analysed again after a flight was added - have the same cells with the same names (`c5000r53000`: column and row counted from the origin), so they can be compared cell by cell.
+
+**Per cell** (`grid_density_{source}_cells.csv`, and the attributes of the layer): its status, the animals and their density per km², the same per species, the counts by sex and age, the [groups](#groups) among its animals and their mean size, how much of it was seen and by how many flights, the [environment](environment.md) it lies in - the mean of each layer over the cell and the most common land-cover class with its share - and whether it is a hot or cold spot, overall and per species. A second table has one row per cell **and flight**.
+
+**Over the cells that count** - for all animals and for each species; **→ Show Grid Statistics** opens them as a table:
+
+- the **mean density** with a 95 % interval from *resampling the cells* - they are drawn again and again with replacement, and the middle 95 % of the densities that gives is the interval. It asks nothing of how the counts are distributed, but takes the cells as independent: with clumped animals it is somewhat too narrow;
+- the **total for the survey area** - the mean density times the area minus its exclusion zones (not given without a survey area);
+- the **variance-to-mean ratio** - 1 for animals scattered at random, above 1 for clumped, below 1 for evenly spread ones - with its chi-square test. Cells that were seen to different extents are compared with what their ground would hold at the overall density;
+- **Moran's I** - whether neighbouring cells are more alike than cells in general, with a permutation test;
+- the **share of cells with animals**, with its interval. A minimum: an animal that was there and not found makes a cell look empty;
+- the number of **hot-spot and cold-spot cells**: cells that hold more (or less), together with their neighbours, than cells picked at random would (Getis-Ord Gi\*, at 90, 95 and 99 %; not corrected for the number of cells tested).
+
+Resampling and permutations use a fixed seed: the same survey gives the same numbers every time.
+
+**→ Add Grid to QGIS** loads the cells as a layer in the BAMBI Survey group, coloured by density, with the number of animals written in. Cells that were too little seen are hatched, cells nobody saw left empty. The layer comes with a second style, **Hot spots**, in its style menu (right-click → Styles).
+
+**Outputs:**
+```
+analytics_t/    # or analytics_w/, in the survey folder
+├── grid_density_tracks.json            # or grid_density_detections...: everything, with the cells' corners
+├── grid_density_tracks_cells.csv       # one row per cell
+└── grid_density_tracks_by_flight.csv   # one row per cell and flight
+```
+
 ### Density heatmap
 
 Generates a **kernel-density estimate raster** of animal locations. Points are binned to a grid and smoothed with a Gaussian kernel; each output pixel is the estimated density in **animals per hectare**.

@@ -402,6 +402,10 @@ class SettingsMixin:
             # the result files are named by.
             "census_source": self._survey_source(),
 
+            # Survey analytics: grid density (the grid_* settings follow
+            # below, from the grid panel)
+            "grid_source": self._survey_source(),
+
             # Survey analytics: density heatmap
             "density_source": self._survey_source(),
             "density_cell_size": (
@@ -447,6 +451,10 @@ class SettingsMixin:
 
             # Environmental context and habitat summary
             **self._environment_config(),
+
+            # Grid density: how the grid is cut and read
+            **(self.grid_panel.values() if hasattr(self, 'grid_panel')
+               else {}),
 
             # Map symbols of detections and tracks
             "map_pins_enabled": (
@@ -579,6 +587,8 @@ class SettingsMixin:
         self._inventory_columns = []
         if hasattr(self, 'survey_panel'):
             self.survey_panel.reset()
+        if hasattr(self, 'grid_panel'):
+            self.grid_panel.reset()
 
         self.log("Configuration reset to defaults")
 
@@ -734,6 +744,8 @@ class SettingsMixin:
                            json.dumps(self._flights()))
         if hasattr(self, 'survey_panel'):
             self.survey_panel.save(project)
+        if hasattr(self, 'grid_panel'):
+            self.grid_panel.save(project)
         project.writeEntry(PLUGIN_SCOPE, "Flights/Active",
                            str(getattr(self, "_active_flight_index", 0)))
 
@@ -762,6 +774,8 @@ class SettingsMixin:
             # flight list, not part of any one flight's configuration.
             if hasattr(self, 'survey_panel'):
                 self.survey_panel.load(project)
+            if hasattr(self, 'grid_panel'):
+                self.grid_panel.load(project)
 
         # Prefer the active flight's own store; fall back to the QGIS project,
         # which is where projects written before 6.0 keep everything.

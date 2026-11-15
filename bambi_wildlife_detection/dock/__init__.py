@@ -15,6 +15,8 @@ The tabs
     ``classification_settings``  Configuration > Classification
     ``step_tabs``                the Pre-Processing and Processing tabs
     ``analytics_tab``            the Survey Analytics tab
+    ``grid_density``             Survey Analytics > Grid Density, and the
+                                 grid on the map
 
 What they share
     ``run_panel``                starting a step, its progress, the log

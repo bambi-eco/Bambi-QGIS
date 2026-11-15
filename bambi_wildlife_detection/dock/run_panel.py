@@ -135,7 +135,8 @@ class RunPanelMixin:
 
     #: Survey Analytics steps: they run on config["survey"] (core.survey).
     _SURVEY_STEPS = frozenset({
-        "census_summary", "track_inventory", "density_heatmap",
+        "census_summary", "grid_density", "track_inventory",
+        "density_heatmap",
         "coverage_map", "survey_orthomosaic", "distance_sampling",
         "population_estimation", "habitat_summary"})
 
@@ -213,6 +214,9 @@ class RunPanelMixin:
 
             if step == "census_summary":
                 self.show_census_table()
+
+            if step == "grid_density":
+                self.show_grid_statistics()
 
             if step == "habitat_summary":
                 self.show_habitat_charts()
