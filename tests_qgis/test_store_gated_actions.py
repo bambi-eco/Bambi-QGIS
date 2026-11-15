@@ -285,3 +285,58 @@ def test_a_users_own_layer_of_another_name_is_left_alone(
     dock.add_tracks_to_qgis()
 
     assert "L my notes" in [line.strip() for line in _tree()]
+
+
+# ---------------------------------------------------------------------------
+# The coverage map: a gap is a value, and has a colour of its own
+# ---------------------------------------------------------------------------
+
+def _coverage_raster(path, rows, nodata=65535):
+    from osgeo import gdal, osr
+    import numpy as np
+
+    data = np.asarray(rows, dtype=np.uint16)
+    dataset = gdal.GetDriverByName("GTiff").Create(
+        path, data.shape[1], data.shape[0], 1, gdal.GDT_UInt16)
+    dataset.SetGeoTransform((500000.0, 1.0, 0.0, 5300000.0 + data.shape[0],
+                             0.0, -1.0))
+    srs = osr.SpatialReference()
+    srs.ImportFromEPSG(32633)
+    dataset.SetProjection(srs.ExportToWkt())
+    band = dataset.GetRasterBand(1)
+    band.SetNoDataValue(nodata)
+    band.WriteArray(data)
+    dataset.FlushCache()
+    dataset = None
+    return path
+
+
+def test_the_coverage_layer_shows_a_gap_as_not_seen(dock, stores_only,
+                                                    tmp_path):
+    from qgis.core import QgsColorRampShader, QgsRasterLayer
+
+    path = _coverage_raster(str(tmp_path / "coverage_map.tif"),
+                            [[0, 1, 2], [65535, 1, 3]])
+    layer = QgsRasterLayer(path, "BAMBI Coverage Map (Thermal)")
+    assert layer.isValid()
+
+    dock._apply_coverage_style(layer)
+
+    shader = layer.renderer().shader().rasterShaderFunction()
+    assert shader.colorRampType() == QgsColorRampShader.Type.Discrete
+    items = [(item.value, item.label) for item in shader.colorRampItemList()]
+    assert items == [(0.0, "not seen"), (1.0, "1"), (2.0, "2"), (3.0, "3")]
+
+
+def test_a_coverage_layer_without_gaps_has_no_such_class(dock, stores_only,
+                                                         tmp_path):
+    from qgis.core import QgsRasterLayer
+
+    path = _coverage_raster(str(tmp_path / "coverage_map.tif"),
+                            [[65535, 1, 2], [65535, 1, 2]])
+    layer = QgsRasterLayer(path, "BAMBI Coverage Map (Thermal)")
+    dock._apply_coverage_style(layer)
+
+    labels = [item.label for item in layer.renderer().shader()
+              .rasterShaderFunction().colorRampItemList()]
+    assert labels == ["1", "2"]

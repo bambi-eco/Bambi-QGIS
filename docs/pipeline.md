@@ -662,7 +662,17 @@ analytics_t/    # or analytics_w/
 └── density_tracks.json   # stats: peak/mean density, point count, parameters
 ```
 
-Use **→ Add Density Heatmap to QGIS** to load the raster with a blue→red colour ramp scaled to the data. Empty (no-signal) cells are stored as nodata so the surround renders transparent.
+Use **→ Add Density Heatmap to QGIS** to load the raster with a blue→red colour ramp scaled to the data.
+
+**A zero is a result, and no data is something else.** The raster tells three things apart:
+
+- ground that is known to have been surveyed carries its density - **`0` where no animal was**. "Known" is the survey area where one is switched on, else the cameras' footprints (run **Calculate Field of View** for the survey's camera); with both, the footprints inside the area. The raster reaches as far as that ground does.
+- everything outside it is **no data** (transparent).
+- where neither a survey area nor footprints say what was looked at, only the cells the kernel reaches carry a value and the rest is blank - "no animal" cannot be told from "not looked at" then, and the log says so.
+
+`mean_density` in the JSON is the mean of what the raster holds, and `mean_density_over` says which: `surveyed_ground` (all of it, its empty parts included - the figure to quote, with `surveyed_area_ha`) or `cells_with_animals` (how dense the animals stood where they were, which says nothing about the survey as a whole).
+
+Before 9.1 every cell without animals was no data. Surveyed ground that was empty looked like ground that was never surveyed, and a mean taken from the raster - by the plugin, or by QGIS' zonal statistics - was the mean over the places where animals were. The raster's cells are now exactly the cells the animals were counted into; they used to be written a little narrower, sliding by up to one cell towards the top left.
 
 ### Distance sampling
 
@@ -696,7 +706,9 @@ The JSON also stores the fitted detection-function curve and the distance histog
 
 ### Coverage map
 
-Combines the exported per-frame GeoTIFFs on the same grid as the **Orthomosaic**, but instead of merging image content it counts, per output pixel, how many frames contain valid (non-nodata) data at that position. The result is a single-band raster where `1` means the ground was imaged once, `N` means it was seen in `N` overlapping frames, and nodata (`0`) means it was never covered - a map of survey effort/overlap. Run **Export Frames as GeoTIFF** for the chosen camera first.
+Combines the exported per-frame GeoTIFFs on the same grid as the **Orthomosaic**, but instead of merging image content it counts, per output pixel, how many frames contain valid (non-nodata) data at that position. The result is a single-band raster where `1` means the ground was imaged once and `N` that it was seen in `N` overlapping frames - a map of survey effort/overlap. Run **Export Frames as GeoTIFF** for the chosen camera first.
+
+**Inside a survey area, `0` is a value: ground no frame saw - a gap in the survey.** The map reaches as far as the survey plot does, also where no frame went, and everything outside the plot (and inside an exclusion zone) is no data. Without a survey plot, ground no frame saw is no data: nothing says it was to be surveyed. (Before 9.1 `0` was the no-data value, so a gap inside the survey area was transparent like the world outside it, was left out of every statistic taken from the raster, and was not on the map at all where the plot reached beyond the frames.)
 
 | Setting | Description |
 |---------|-------------|
@@ -705,11 +717,11 @@ Combines the exported per-frame GeoTIFFs on the same grid as the **Orthomosaic**
 **Outputs:**
 ```
 analytics_t/    # or analytics_w/
-├── coverage_map.tif    # uint16 GeoTIFF - overlapping frame count per pixel
-└── coverage_map.json   # stats: frame count, max/mean overlap, covered & multi-covered area (ha)
+├── coverage_map.tif    # uint16 GeoTIFF - overlapping frame count per pixel (no data: 65535)
+└── coverage_map.json   # stats: frame count, max/mean overlap, covered & multi-covered area (ha), gap area and covered share of the survey area
 ```
 
-Use **→ Add Coverage Map to QGIS** to load the raster with a graduated colour ramp scaled to the data. Uncovered cells are stored as nodata so the surround renders transparent.
+Use **→ Add Coverage Map to QGIS** to load the raster in classes from light (seen once) to dark (seen most often) - one class per count up to eight frames, doubling from there. A gap in the survey area has a colour of its own, grey, and is listed as **not seen**. `mean_overlap` in the JSON is the mean over the covered ground; `gap_area_ha` and `survey_area_coverage_fraction` say how much of the survey area was not, and was, seen.
 
 ### Survey Orthomosaic
 

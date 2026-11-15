@@ -9632,6 +9632,32 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         except Exception as e:  # nosec B110
             self.log(f"Warning: could not style density layer: {e}")
 
+    def _apply_coverage_style(self, layer):
+        """Colour the coverage map: classes over the frames that saw the
+        ground, and a colour of its own for 0 - ground of the survey area
+        that no frame saw (core.raster_styles)."""
+        from .core import raster_styles
+        try:
+            from qgis.core import (
+                QgsSingleBandPseudoColorRenderer, QgsColorRampShader,
+                QgsRasterShader,
+            )
+            stats = layer.dataProvider().bandStatistics(1)
+            entries = raster_styles.coverage_classes(
+                stats.minimumValue, stats.maximumValue)
+            ramp = QgsColorRampShader(entries[0][0], entries[-1][0])
+            ramp.setColorRampType(QgsColorRampShader.Type.Discrete)
+            ramp.setColorRampItemList([
+                QgsColorRampShader.ColorRampItem(upper, QColor(*colour), label)
+                for upper, colour, label in entries])
+            shader = QgsRasterShader()
+            shader.setRasterShaderFunction(ramp)
+            layer.setRenderer(QgsSingleBandPseudoColorRenderer(
+                layer.dataProvider(), 1, shader))
+            layer.triggerRepaint()
+        except Exception as e:  # noqa: BLE001 - the layer is still added
+            self.log(f"Warning: could not style coverage layer: {e}")
+
     def run_coverage_map(self):
         """Run the coverage-map generation step over the survey."""
         survey = self._checked_survey(check_species=False)
@@ -9713,7 +9739,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             layer = QgsRasterLayer(raster_file, layer_name)
             if not layer.isValid():
                 raise RuntimeError(f"Failed to load raster: {raster_file}")
-            self._apply_density_style(layer)
+            self._apply_coverage_style(layer)
             self._add_layer_to_survey(layer)
             self.update_status("add_coverage", "🟢 Added")
             self.iface.mapCanvas().refresh()

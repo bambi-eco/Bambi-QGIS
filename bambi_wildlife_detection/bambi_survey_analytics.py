@@ -64,6 +64,19 @@ class SurveyAnalyticsMixin:
         return area
 
     @staticmethod
+    def _surveyed_ground(survey, area=None):
+        """The ground the survey is known to have looked at, as one
+        geometry: each flight's camera footprints inside the survey plot,
+        or the plot itself for a flight without footprints. ``None`` when
+        that is unknown for a flight (no footprints and no plot)."""
+        from .core import habitat, survey_rasters
+
+        return survey_rasters.looked_at_geometry(
+            habitat.monitored_geometry(flight.target_folder,
+                                       survey.modality, area)
+            for flight in survey.flights)
+
+    @staticmethod
     def _survey_area_mask(area, shape, transform):
         """Boolean raster, True on cells whose centre lies in *area*."""
         import numpy as np
@@ -258,8 +271,12 @@ class SurveyAnalyticsMixin:
         Points come from either geo-referenced detections or tracks (one point
         per track) of every flight of the survey. A Gaussian kernel is applied
         and the result written as a single-band float32 GeoTIFF where each
-        pixel is the estimated point density in animals per hectare. Cells
-        with no signal are set to nodata.
+        pixel is the estimated point density in animals per hectare.
+
+        Ground that is known to have been surveyed - the survey area, the
+        cameras' footprints - carries its density, **zero where no animal
+        was**; everything else is nodata. Where neither is known, only the
+        cells the kernel reaches carry a value (core.survey_rasters).
 
         :param config: Configuration dictionary. Relevant keys:
             ``density_source`` ("detections"|"tracks"), ``density_cell_size`` (m),
@@ -295,12 +312,28 @@ class SurveyAnalyticsMixin:
         if progress_fn:
             progress_fn(20)
 
-        # Grid bounds padded by 3 bandwidths so the kernel tails are captured.
+        from .core import survey_rasters
+
+        # The ground known to have been looked at; its empty parts are a
+        # result (density 0), not a blank.
+        surveyed = self._surveyed_ground(survey, area)
+        if surveyed is None and log_fn:
+            log_fn("Neither a survey area nor the cameras' footprints "
+                   "(Calculate Field of View) say which ground was surveyed: "
+                   "the map shows where animals were and leaves the rest "
+                   "blank, without telling 'no animal' from 'not looked at'.")
+
+        # Grid bounds padded by 3 bandwidths so the kernel tails are captured
+        # - and wide enough for all of the surveyed ground.
         pad = 3.0 * bandwidth
         min_x = pts[:, 0].min() - pad
         max_x = pts[:, 0].max() + pad
         min_y = pts[:, 1].min() - pad
         max_y = pts[:, 1].max() + pad
+        if surveyed is not None:
+            s_min_x, s_min_y, s_max_x, s_max_y = surveyed.bounds
+            min_x, min_y = min(min_x, s_min_x), min(min_y, s_min_y)
+            max_x, max_y = max(max_x, s_max_x), max(max_y, s_max_y)
 
         width = int(math.ceil((max_x - min_x) / cell_size))
         height = int(math.ceil((max_y - min_y) / cell_size))
@@ -314,6 +347,9 @@ class SurveyAnalyticsMixin:
                 log_fn(f"Grid too large, increased cell size to {cell_size:.2f} m")
         width = max(1, width)
         height = max(1, height)
+        # the grid's own extent - whole cells from its top left corner
+        min_x, min_y, max_x, max_y = survey_rasters.snap_bounds(
+            min_x, max_y, width, height, cell_size)
 
         if log_fn:
             log_fn(f"Density grid: {width} x {height} cells")
@@ -349,19 +385,23 @@ class SurveyAnalyticsMixin:
         cell_area_m2 = cell_size * cell_size
         density = smoothed / cell_area_m2 * 10000.0
 
-        # Everything below this threshold is treated as "no signal" (nodata) so
-        # the empty surround renders transparent.
-        nodata = -9999.0
+        # Everything below this threshold is "no signal": the kernel does
+        # not reach there.
+        nodata = survey_rasters.DENSITY_NODATA
         eps = (1.0 / cell_area_m2 * 10000.0) * 1e-4  # ~0 relative to one point
         signal = density > eps
-        if area is not None:
-            # Outside the plot or inside an exclusion zone is not surveyed
-            # ground, so it shows no density at all rather than kernel tails.
-            from rasterio.transform import from_bounds as _from_bounds
-            signal &= self._survey_area_mask(
-                area, density.shape,
-                _from_bounds(min_x, min_y, max_x, max_y, width, height))
-        out = np.where(signal, density, nodata).astype(np.float32)
+        from rasterio.features import geometry_mask as _geometry_mask
+        from rasterio.transform import from_bounds as _from_bounds
+        transform = _from_bounds(min_x, min_y, max_x, max_y, width, height)
+        looked_at = None
+        if surveyed is not None:
+            looked_at = _geometry_mask([surveyed], out_shape=density.shape,
+                                       transform=transform, invert=True)
+        elif area is not None:
+            # Exclusion zones without a plot: not surveyed ground, so no
+            # density there at all rather than kernel tails.
+            signal &= self._survey_area_mask(area, density.shape, transform)
+        out = survey_rasters.density_raster(density, signal, looked_at)
 
         analytics_folder = survey.ensure_analytics_folder()
         stem = f"density_{source}"
@@ -372,7 +412,11 @@ class SurveyAnalyticsMixin:
         bounds = (min_x, min_y, max_x, max_y)
         self._save_single_band_raster(out, out_file, bounds, target_epsg, nodata, log_fn)
 
-        valid = density[signal]
+        # The mean is taken over what the raster holds: all of the surveyed
+        # ground where that is known - its empty parts included -, else the
+        # cells with animals, which says where they were dense and nothing
+        # about the survey as a whole.
+        valid = density[looked_at if looked_at is not None else signal]
         stats = {
             "source": source,
             "camera_suffix": suffix,
@@ -383,10 +427,15 @@ class SurveyAnalyticsMixin:
             "unit": "points_per_hectare",
             "max_density": float(valid.max()) if valid.size else 0.0,
             "mean_density": float(valid.mean()) if valid.size else 0.0,
+            "mean_density_over": ("surveyed_ground" if looked_at is not None
+                                  else "cells_with_animals"),
             "raster": out_file,
             "species": label or None,
             "flights": [f.name for f in survey.flights],
         }
+        if looked_at is not None:
+            stats["surveyed_area_ha"] = float(
+                int(looked_at.sum()) * cell_area_m2 / 10000.0)
         if area is not None:
             stats["survey_area"] = area.describe()
             if area.adjusted_m2:
@@ -781,8 +830,12 @@ class SurveyAnalyticsMixin:
         but instead of merging image content it counts, per output pixel, how
         many frames contain valid (non-nodata) data at that position. The
         result is a single-band raster where 1 means the ground was imaged
-        once, N means it was seen in N overlapping frames, and nodata (0)
-        means it was never covered.
+        once and N that it was seen in N overlapping frames.
+
+        Inside a survey plot **0 is a value: ground no frame saw, a gap in
+        the survey**, and the raster reaches as far as the plot does;
+        outside the plot is nodata. Without a plot, ground no frame saw is
+        nodata - nothing says it was to be surveyed (core.survey_rasters).
 
         :param config: Configuration dictionary. Relevant keys:
             ``coverage_camera`` ("T"|"W"), ``coverage_cell_size`` (m, 0 =
@@ -888,11 +941,23 @@ class SurveyAnalyticsMixin:
 
         # Ground outside the survey plot (or inside an exclusion zone) is not
         # part of the survey, so it does not count as covered either.
-        area = self._survey_area(survey, log_fn=log_fn)
-        if area is not None:
-            count[~self._survey_area_mask(area, count.shape, out_transform)] = 0
+        from .core import survey_rasters
 
-        out = count.astype(np.uint16)
+        area = self._survey_area(survey, log_fn=log_fn)
+        inside = excluded = None
+        if area is not None and area.geometry is not None \
+                and not area.geometry.is_empty:
+            # all of the plot is on the map, also where no frame reached
+            count, out_transform = survey_rasters.grow_to_bounds(
+                count, out_transform, area.geometry.bounds)
+            out_height, out_width = count.shape
+            inside = self._survey_area_mask(area, count.shape, out_transform)
+        elif area is not None:
+            excluded = ~self._survey_area_mask(area, count.shape,
+                                               out_transform)
+
+        out = survey_rasters.coverage_raster(count, inside, excluded)
+        nodata_out = survey_rasters.COVERAGE_NODATA
 
         analytics_folder = survey.ensure_analytics_folder()
         output_file = os.path.join(analytics_folder, "coverage_map.tif")
@@ -921,7 +986,7 @@ class SurveyAnalyticsMixin:
             "compress": "LZW",
             "tiled": True,
             "BIGTIFF": "IF_SAFER",
-            "nodata": 0,
+            "nodata": nodata_out,
         }
         with rasterio.open(output_file, "w", **out_meta) as dst:
             dst.write(out, 1)
@@ -940,7 +1005,7 @@ class SurveyAnalyticsMixin:
 
         # Summary statistics over the covered area.
         px_area_m2 = abs(out_transform.a * out_transform.e)
-        covered = out[out > 0]
+        covered = out[(out > 0) & (out != nodata_out)]
         stats = {
             "camera_suffix": camera_suffix,
             "crs": f"EPSG:{target_epsg}",
@@ -955,6 +1020,10 @@ class SurveyAnalyticsMixin:
                 int((covered >= 2).sum()) * px_area_m2 / 10000.0),
             "raster": output_file,
         }
+        if inside is not None:
+            # ground of the plot no frame saw: 0 on the map
+            stats["gap_area_ha"] = float(
+                int((out == 0).sum()) * px_area_m2 / 10000.0)
         if area is not None:
             stats["survey_area"] = area.describe()
             if area.adjusted_m2:
