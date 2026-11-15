@@ -388,24 +388,63 @@ class TestZinbAgainstGlmmTMB:
         1.996594, 2.132053, 2.241751, 2.628096, 2.875178, 1.778265, 1.988550,
         2.199333, 2.257071, 2.149337, 2.208404, 1.845604]
 
+    @staticmethod
+    def _se_as_the_r_script_adds_it_up(counts, areas, result):
+        """``sqrt(sum(se_fit²)) / sum(ha) * 100`` - the transects' variances
+        added up as if their fitted values were independent. It is not what
+        is reported any more, but it is what glmmTMB's ``se_zinb`` is, so it
+        still tells whether the fit and its covariance are glmmTMB's."""
+        from bambi_wildlife_detection.core import population
+
+        y = np.asarray(counts, dtype=float)
+        x = np.asarray(areas, dtype=float)
+        p = result["params"]
+        p_zero = p["zero_inflation_prob"]
+        params = np.array([p["intercept"], p["ha"], math.log(p["theta"]),
+                           math.log(p_zero / (1.0 - p_zero))])
+        hessian = population._numeric_hessian(
+            lambda q: population._zinb_nll(q, y, x), params)
+        covariance = np.linalg.inv(hessian)
+        fitted = (1.0 - p_zero) * np.exp(params[0] + params[1] * x)
+        gradients = np.column_stack(
+            [fitted, fitted * x, np.zeros_like(fitted), -fitted * p_zero])
+        each = np.einsum("ij,jk,ik->i", gradients, covariance, gradients)
+        return math.sqrt(each.sum()) / x.sum() * HA_PER_KM2
+
     def test_multimodal_cell_reaches_the_global_optimum(self):
         r = estimate_zinb(self.LEMBACH_COUNTS, self.LEMBACH_AREAS)
         # glmmTMB: dens_zinb = 57.313, se_zinb = 29.847
         assert r["density_per_100ha"] == pytest.approx(57.313, rel=1e-3)
-        assert r["se"] == pytest.approx(29.847, rel=1e-2)
+        assert self._se_as_the_r_script_adds_it_up(
+            self.LEMBACH_COUNTS, self.LEMBACH_AREAS, r) == pytest.approx(
+                29.847, rel=1e-2)
         # The degenerate local optimum a single start finds sits at 56.41 -
         # guard the multistart that gets us off it.
         assert r["density_per_100ha"] > 57.0
         assert r["error"] is None
 
-    def test_identified_cell_matches_density_and_se(self):
+    def test_identified_cell_matches_density_and_covariance(self):
         r = estimate_zinb(self.STSTEFAN_COUNTS, self.STSTEFAN_AREAS)
         # glmmTMB: dens_zinb = 32.672, se_zinb = 2.495
         assert r["density_per_100ha"] == pytest.approx(32.672, rel=1e-3)
-        assert r["se"] == pytest.approx(2.495, rel=1e-2)
-        assert r["ci95"][0] == pytest.approx(27.78, abs=0.05)
-        assert r["ci95"][1] == pytest.approx(37.56, abs=0.05)
+        assert self._se_as_the_r_script_adds_it_up(
+            self.STSTEFAN_COUNTS, self.STSTEFAN_AREAS, r) == pytest.approx(
+                2.495, rel=1e-2)
         assert r["error"] is None
+
+    def test_the_reported_uncertainty_is_that_of_the_sum(self):
+        """The fitted values of the transects all come from the same four
+        parameters, so they move together: the variance of their sum is far
+        larger than the sum of their variances. glmmTMB's 2.495 (interval
+        27.8 to 37.6) became 9.19 (19.0 to 56.1) on the same fit."""
+        r = estimate_zinb(self.STSTEFAN_COUNTS, self.STSTEFAN_AREAS)
+        assert r["se"] == pytest.approx(9.187, rel=1e-2)
+        assert r["ci95"][0] == pytest.approx(19.03, abs=0.2)
+        assert r["ci95"][1] == pytest.approx(56.10, abs=0.5)
+
+        lembach = estimate_zinb(self.LEMBACH_COUNTS, self.LEMBACH_AREAS)
+        assert lembach["se"] == pytest.approx(35.823, rel=1e-2)
+        assert lembach["ci95"][0] > 0          # log-normal: never below zero
 
     def test_naive_matches_r_exactly(self):
         # R: sum(count)/sum(ha)*100 = 39.481 (lembach x Daim2)
@@ -456,3 +495,63 @@ class TestEstimatePopulation:
         assert r["estimates"]["naive"]["density_per_100ha"] is not None
         assert r["estimates"]["zinb"]["density_per_100ha"] is None
         assert r["estimates"]["zinb"]["error"]
+
+
+class TestDensityInterval:
+    """The 95 % interval of a density: log-normal, so never below zero."""
+
+    def test_it_holds_the_estimate_and_stays_above_zero(self):
+        from bambi_wildlife_detection.core.population import density_interval
+
+        low, high = density_interval(10.0, 8.0)
+        assert 0.0 < low < 10.0 < high
+        # the symmetric interval would reach to -5.7
+        assert 10.0 - 1.96 * 8.0 < 0.0
+
+    def test_it_is_symmetric_in_the_ratio(self):
+        from bambi_wildlife_detection.core.population import density_interval
+
+        low, high = density_interval(32.0, 9.0)
+        assert 32.0 / low == pytest.approx(high / 32.0)
+
+    def test_a_small_uncertainty_gives_nearly_the_usual_interval(self):
+        from bambi_wildlife_detection.core.population import density_interval
+
+        low, high = density_interval(100.0, 2.0)
+        assert low == pytest.approx(100.0 - 1.96 * 2.0, abs=0.1)
+        assert high == pytest.approx(100.0 + 1.96 * 2.0, abs=0.1)
+
+    def test_nothing_to_spread(self):
+        from bambi_wildlife_detection.core.population import density_interval
+
+        assert density_interval(0.0, 1.0) == [0.0, 0.0]
+        assert density_interval(5.0, 0.0) == [5.0, 5.0]
+
+
+class TestTheUncertaintyOfTheSum:
+    """What the interval is for: holding the true density. A simulation of
+    the full fit takes minutes, so this checks the arithmetic it rests on -
+    the variance of a sum of fitted values that share their parameters."""
+
+    def test_shared_parameters_make_the_sum_far_more_uncertain(self):
+        from bambi_wildlife_detection.core import population
+
+        # 30 transects whose fitted values depend on one parameter only:
+        # fitted_i = exp(b0), Var(b0) = v. Then Var(sum) = n² f² v, while
+        # adding the transects' variances gives n f² v - too small by n.
+        n, fitted, variance = 30, 2.0, 0.04
+        grad = np.full((n, 1), fitted)
+
+        def nll(params):                # a parabola with that curvature
+            return 0.5 * (params[0] - 0.7) ** 2 / variance
+
+        se, interval, error = population._delta_method_se(
+            nll, np.array([0.7]), grad, total_ha=60.0, density=100.0)
+
+        assert error is None
+        assert se == pytest.approx(
+            math.sqrt(n * n * fitted * fitted * variance) / 60.0 * HA_PER_KM2,
+            rel=1e-4)
+        as_it_was = math.sqrt(n * fitted * fitted * variance) / 60.0 * HA_PER_KM2
+        assert se == pytest.approx(as_it_was * math.sqrt(n), rel=1e-4)
+        assert interval[0] < 100.0 < interval[1]

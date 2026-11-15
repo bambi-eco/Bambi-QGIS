@@ -18,8 +18,20 @@ and three estimators turn that table into a density:
     the ``glmmTMB(count ~ ha, ziformula = ~1, family = nbinom2)`` model of the
     R script, fitted here by maximum likelihood with scipy.  The density is
     ``sum(fitted) / sum(ha) * 100`` with the fitted values on the response
-    scale (``(1 - p_zero) * mu``, like ``predict(type = "response")``) and the
-    SE from the delta method, combined as ``sqrt(sum(se²)) / sum(ha) * 100``.
+    scale (``(1 - p_zero) * mu``, like ``predict(type = "response")``). Its
+    SE is the delta method's for that sum - see "Uncertainty" below.
+
+**Uncertainty of the ZINB density.** The R script adds up the squared
+standard errors of the transects' fitted values, ``sqrt(sum(se²))``, as if
+the fitted values were independent. They are not: every one of them is a
+function of the same four parameters, so they rise and fall together, and
+the variance of their sum is far larger than the sum of their variances -
+by about the number of transects. Up to 9.0 this module reproduced the R
+figure; an interval built on it held the true density about one time in
+four in simulations (40 transects), where it should hold it 95 times in
+100. The standard error is now the delta method's for the sum itself, and
+the interval is log-normal (:func:`density_interval`). The density is
+unchanged, and still reproduces glmmTMB's.
 
 The two inputs the plugin has to build first are:
 
@@ -440,9 +452,10 @@ def estimate_zinb(counts: Sequence[float],
     Mirrors ``glmmTMB(count ~ ha, ziformula = ~1, family = nbinom2)`` followed
     by ``augment(type.predict = "response")``: the fitted value of a transect
     is ``(1 - p_zero) * exp(b0 + b1 * ha)`` and the reported density is
-    ``sum(fitted) / sum(ha) * 100``.  Standard errors come from the delta
-    method on the MLE covariance (the inverse observed information) and are
-    combined across transects as ``sqrt(sum(se²))``, exactly as in the R code.
+    ``sum(fitted) / sum(ha) * 100``.  Its standard error comes from the
+    delta method on the MLE covariance (the inverse observed information),
+    applied to the sum of the fitted values - not, as in the R code, to each
+    fitted value on its own and then added up (see the module docstring).
     """
     import numpy as np
 
@@ -589,8 +602,9 @@ def _delta_method_se(nll, params, grad, total_ha: float, density: float,
     parameter is only safe when the fitted values do not depend on it - i.e.
     its column in *grad* is zero - which is asserted here rather than assumed.
 
-    R combines the per-transect SEs as ``sqrt(sum(se_fit²)) / sum(ha) * 100``,
-    which is reproduced here.
+    The standard error is that of the summed fitted values,
+    ``sqrt(g' V g) / sum(ha) * 100`` with ``g`` the sum of the transects'
+    gradients and ``V`` the covariance of the parameters.
     """
     import numpy as np
 
@@ -624,13 +638,34 @@ def _delta_method_se(nll, params, grad, total_ha: float, density: float,
     if not np.all(np.isfinite(cov)):
         return None, None, singular_msg
 
-    sub_grad = grad[:, free]
-    var_fitted = np.einsum("ij,jk,ik->i", sub_grad, cov, sub_grad)
-    if not np.all(np.isfinite(var_fitted)) or np.any(var_fitted < 0):
+    # The density is the *sum* of the fitted values over the summed area, so
+    # its variance is that of the sum: the transects' gradients are added up
+    # before they meet the covariance. Adding the transects' variances
+    # instead - what the R script does, and this did until 9.1 - treats the
+    # fitted values as independent, while they all come from the same four
+    # parameters and move together.
+    total_grad = grad[:, free].sum(axis=0)
+    variance = float(total_grad @ cov @ total_grad)
+    if not math.isfinite(variance) or variance < 0:
         return None, None, "standard errors are not finite (singular information)"
 
-    se = float(math.sqrt(float(np.sum(var_fitted))) / total_ha * HA_PER_KM2)
-    return se, [density - 1.96 * se, density + 1.96 * se], None
+    se = math.sqrt(variance) / total_ha * HA_PER_KM2
+    return se, density_interval(density, se), None
+
+
+def density_interval(density: float, se: float) -> List[float]:
+    """The 95 % interval of a density from its standard error.
+
+    Log-normal, as is usual for densities and abundances (Burnham et al.
+    1987): the interval is ``[density / c, density * c]`` with
+    ``c = exp(1.96 * sqrt(log(1 + cv^2)))``. It cannot reach below zero,
+    which the symmetric ``density -/+ 1.96 se`` does as soon as the
+    uncertainty is large - exactly when the interval matters most.
+    """
+    if density <= 0 or se <= 0:
+        return [density, density]
+    spread = math.exp(1.96 * math.sqrt(math.log1p((se / density) ** 2)))
+    return [density / spread, density * spread]
 
 
 def estimate_population(transects: List[dict], methods: Sequence[str] = (

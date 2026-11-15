@@ -721,7 +721,11 @@ of View*, *Calculate Track Perpendicular* and the flight's DEM.
 |---|---|
 | **Naive** | `sum(count) / sum(ha) × 100` - animals per 100 ha (= per km²) |
 | **Bootstrap** | transects resampled with replacement (*Bootstrap iterations*, reproducible with *Seed*); mean, SE and percentile 95 % CI of the naive density |
-| **ZINB** | zero-inflated negative binomial regression `count ~ ha`, for surveys where most transects are empty |
+| **ZINB** | zero-inflated negative binomial regression `count ~ ha`, for surveys where most transects are empty; SE by the delta method, log-normal 95 % CI |
+
+**How sure the ZINB density is.** The density is the sum of the transects' fitted counts over their summed area. Those fitted counts all come from the same four model parameters, so they rise and fall together, and the uncertainty of their sum is far larger than what one gets by adding up each transect's own uncertainty - which is what the reference R analysis does, and what this estimate reproduced up to 9.0. An interval built that way held the true density about one time in four in simulations with 40 transects; the standard error now reported is that of the sum itself and held it about nine times in ten. The density has not changed and still agrees with `glmmTMB`; its standard error and interval are wider than those in reports made with earlier versions (on the paper's St. Stefan data: 32.7 ± 9.2 per 100 ha, interval 19 to 56, where ± 2.5 and 28 to 38 used to be shown). The interval is log-normal, so it does not reach below zero.
+
+**A flight without animals counts.** A flight on which nothing was detected, or none of the selected species, or nothing inside the survey area, contributes its transects with zero animals - leaving it out would overstate the density. Tick it like any other flight; it only needs its transects and its field of view.
 
 **Study area (ha)** turns the density into an abundance: enter it, or take
 it from the flights' field-of-view area (**Use flight FoV area**) or from the

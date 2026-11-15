@@ -4230,7 +4230,11 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         self.pop_zinb_check.setToolTip(
             "Zero-inflated negative binomial regression (count ~ ha, constant\n"
             "zero-inflation), for transect counts with many zeros and\n"
-            "overdispersion. Needs at least 4 transects of differing area.")
+            "overdispersion. Needs at least 4 transects of differing area.\n"
+            "Its standard error is that of the summed fitted counts, with a\n"
+            "log-normal 95% interval - wider than the reference R analysis\n"
+            "reports, which adds the transects' uncertainties up as if they\n"
+            "were independent.")
         pop_methods_row.addWidget(self.pop_naive_check)
         pop_methods_row.addWidget(self.pop_bootstrap_check)
         pop_methods_row.addWidget(self.pop_zinb_check)
