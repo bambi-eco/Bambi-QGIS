@@ -30,6 +30,7 @@ from ..core import flight_viewer as fv
 from ..core import flight_viewer_geometry as geo
 from ..core.render_resources import RendererPool, release_context
 from .qt import QtCore, QtWidgets, Signal
+from ..core import quiet
 
 MODE_VIEW = "view"
 MODE_ORTHO = "ortho"
@@ -101,8 +102,8 @@ class AlfsWorker(QtCore.QThread):
         for shot in self._shots.values():
             try:
                 shot.release()
-            except Exception:  # nosec B110
-                pass
+            except Exception:
+                quiet.detail("A frame's image could not be released")
         self._shots.clear()
         self._renderers.clear()
         release_context(self.ctx)
@@ -178,8 +179,8 @@ class AlfsWorker(QtCore.QThread):
         for key in [k for k in self._shots if k not in wanted]:
             try:
                 self._shots.pop(key).release()
-            except Exception:  # nosec B110
-                pass
+            except Exception:
+                quiet.detail("A frame's image could not be released")
         shots = [s for s in (self._shot(e, version, max_edge)
                              for e in req["frames"]) if s is not None]
         if not shots:

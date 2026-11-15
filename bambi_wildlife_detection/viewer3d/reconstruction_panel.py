@@ -20,6 +20,7 @@ from ..core import flight_reconstruction as fr
 from ..core import flight_viewer as fv
 from ..core import flight_viewer_geometry as geo
 from .qt import QtCore, QtWidgets, Signal
+from ..core import quiet
 
 COLOR_RGB = "rgb"
 COLOR_THERMAL = "thermal"
@@ -290,8 +291,8 @@ class ReconWorker(QtCore.QThread):
                            "generator": "BAMBI 3D Flight Viewer reconstruction"},
                           fh, indent=2, default=float)
             files += [path, os.path.join(out, "surface.json")]
-        except Exception:  # nosec B110 - the mesh is an extra
-            pass
+        except Exception:  # the mesh is an extra
+            quiet.problem("The surface mesh (surface.glb) could not be written; the other results are there")
         return files
 
 
@@ -524,8 +525,8 @@ class ReconstructionPanel(QtWidgets.QWidget):
                 result["sparse"] = (pts, cols, None)
                 result["files"].append(ply)
                 parts.append(f"{len(pts):,} sparse points")
-            except Exception:  # nosec B110 - an unreadable file is skipped
-                pass
+            except Exception:  # an unreadable file is skipped
+                quiet.problem(f"The earlier reconstruction's points ({ply}) could not be read and are left out")
         npz = os.path.join(out, fr.SURFACE_FILE)
         if os.path.isfile(npz):
             try:
@@ -553,8 +554,8 @@ class ReconstructionPanel(QtWidgets.QWidget):
                         if os.path.isfile(os.path.join(out, name))}
                     result["files"].append(npz)
                     parts.append(f"surface {grid.width}×{grid.height} cells")
-            except Exception:  # nosec B110 - an unreadable file is skipped
-                pass
+            except Exception:  # an unreadable file is skipped
+                quiet.problem(f"The earlier reconstruction's surface ({npz}) could not be read and is left out")
         if not parts:
             return
         self.result = result

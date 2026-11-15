@@ -11,6 +11,7 @@ import json
 import sys
 
 from qgis.PyQt.QtCore import QObject, pyqtSignal
+from . import quiet
 
 _SETTINGS_PREFIX = "bambi/flight_planner/"
 
@@ -127,8 +128,8 @@ class _FlightPlanWorker(QObject):
                 supported_drivers["kml"] = "rw"
                 supported_drivers["KML"] = "rw"
                 supported_drivers["LIBKML"] = "rw"
-            except Exception:  # nosec B110
-                pass
+            except Exception:
+                quiet.detail("KML support could not be switched on in fiona")
 
             strategy = self._strategy_cls(**self._strategy_kwargs)
             routes = strategy.create_routes(

@@ -49,6 +49,7 @@ from .core import ortho_segmentation as ortho
 from .core import segmentation as seg
 from .gui_utils import (
     ClosesOnce, fit_to_screen, read_hf_token, write_hf_token)
+from .core import quiet
 
 _SETTINGS_PREFIX = "bambi/segmentation_tool/"
 _SIDE_PANEL_WIDTH = 360
@@ -910,12 +911,12 @@ class SegmentationToolDialog(ClosesOnce, QDialog):
             try:
                 dock.set_hf_token(token)
                 return
-            except Exception:  # nosec B110 - fall through to the settings
-                pass
+            except Exception:  # fall through to the settings
+                quiet.detail("The main panel did not take the Hugging Face token; it goes to the QGIS settings")
         try:
             write_hf_token(token)
-        except Exception:  # nosec B110 - no QGIS settings (tests)
-            pass
+        except Exception:  # no QGIS settings (tests)
+            quiet.detail("The Hugging Face token could not be stored in the QGIS settings")
 
     def _hf_token(self) -> str:
         """The token a run should use: the field, else environment / CLI."""
@@ -1894,8 +1895,8 @@ class SegmentationToolDialog(ClosesOnce, QDialog):
         if self._dock_widget is not None and hasattr(self._dock_widget, "log"):
             try:
                 self._dock_widget.log(f"[Segmentation] {message}")
-            except Exception:  # nosec B110
-                pass
+            except Exception:
+                quiet.detail("The main panel's log could not be written to")
 
     def showEvent(self, event):
         self._sync_token_from_dock()

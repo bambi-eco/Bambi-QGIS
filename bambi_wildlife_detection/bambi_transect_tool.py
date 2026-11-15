@@ -50,6 +50,7 @@ from .core.transects import (
     frame_after_distance,
     path_length,
 )
+from .core import quiet
 
 #: Width of the controls next to the canvas (the scroll area adds the bar).
 _SIDE_PANEL_WIDTH = 300
@@ -680,8 +681,8 @@ class TransectToolDialog(ClosesOnce, QDialog):
             try:
                 with open(poses_path, "r", encoding="utf-8") as fh:
                     self._images = json.load(fh).get("images", [])
-            except Exception:  # nosec B110
-                pass
+            except Exception:
+                quiet.problem(f"The poses file {poses_path} could not be read: no frames are shown")
         if not self._images:
             QMessageBox.warning(
                 self, "BAMBI Transect Tool",

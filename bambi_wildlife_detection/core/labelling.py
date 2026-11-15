@@ -28,6 +28,7 @@ import os
 import json
 import shutil
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+from . import quiet
 
 # ---------------------------------------------------------------------------
 # Class taxonomies
@@ -1791,8 +1792,8 @@ class _GeoPropagator:
         tri_mesh = Trimesh(vertices=mesh_data.vertices, faces=mesh_data.indices)
         try:
             _ = tri_mesh.triangles_tree  # pre-build BVH
-        except Exception:  # nosec B110
-            pass
+        except Exception:
+            quiet.detail("The DEM mesh's search tree could not be built ahead; it is built at the first use")
         self._tri_mesh = tri_mesh
         self._correction = read_correction(self.target_folder, self.correction_path)
 

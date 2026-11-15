@@ -11,6 +11,7 @@ import sys
 import subprocess  # nosec B404
 import zipfile
 import importlib.metadata
+from . import quiet
 
 
 _DJI_SDK_URL = (
@@ -252,8 +253,8 @@ def _get_version_status(dist_name, plugins_dir=None):
         ver = Version(Version(ver_str).public)
         if (min_ver and ver < Version(min_ver)) or (max_ver and ver > Version(max_ver)):
             return ver_str, 'untested'
-    except Exception:  # nosec B110
-        pass  # if packaging is unavailable or version is unparseable, assume ok
+    except Exception:
+        quiet.detail(f"The version {ver_str!r} could not be compared with the tested range; it is taken as tested")
     return ver_str, 'ok'
 
 

@@ -21,6 +21,7 @@ from .core.heading import (
 from .core.log_margin import resolve_margin_ms
 from .bambi_survey_analytics import SurveyAnalyticsMixin
 from .bambi_environment import ENVIRONMENT_STEPS, EnvironmentMixin
+from .core import quiet
 
 # Progress callback receives a single int: percentage 0-100
 ProgressCallback = Callable[[int], None]
@@ -1511,8 +1512,10 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
                 origin = dem_metadata.get("origin", [0, 0, 0])
                 coord_offset_x = float(origin[0])
                 coord_offset_y = float(origin[1])
-            except Exception:  # nosec B110
-                pass
+            except Exception:
+                quiet.problem(
+                    f"The DEM metadata {dem_metadata_path} could not be read: the flight route is placed "
+                    f"without the DEM's origin")
         elif dem_path:
             auto_metadata_path = dem_path.replace(".gltf", ".json").replace(".glb", ".json")
             if os.path.exists(auto_metadata_path):
@@ -1522,8 +1525,10 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
                     origin = dem_metadata.get("origin", [0, 0, 0])
                     coord_offset_x = float(origin[0])
                     coord_offset_y = float(origin[1])
-                except Exception:  # nosec B110
-                    pass
+                except Exception:
+                    quiet.problem(
+                        f"The DEM metadata {auto_metadata_path} could not be read: the flight route is "
+                        f"placed without the DEM's origin")
 
         if coord_offset_x != 0 or coord_offset_y != 0:
             if abs(coord_offset_x) <= 180 and abs(coord_offset_y) <= 90:
@@ -1976,8 +1981,10 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
                         dem_meta = json.load(f)
                     origin = dem_meta.get("origin", [0, 0, 0])
                     x_offset, y_offset = float(origin[0]), float(origin[1])
-                except Exception:  # nosec B110
-                    pass
+                except Exception:
+                    quiet.problem(
+                        f"The DEM metadata {dem_meta_path} could not be read: distances are computed "
+                        f"without the DEM's origin")
 
         # The frames of the camera the detections are from: their image
         # names, and the camera position and footprint of each.
@@ -3920,8 +3927,10 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
                         dem_meta = json.load(f)
                     origin = dem_meta.get("origin", [0, 0, 0])
                     x_offset, y_offset = float(origin[0]), float(origin[1])
-                except Exception:  # nosec B110
-                    pass
+                except Exception:
+                    quiet.problem(
+                        f"The DEM metadata {dem_meta_path} could not be read: distances are computed "
+                        f"without the DEM's origin")
 
         # The frames of the camera the tracks are from.
         poses_images, frame_to_image = _camera_frames(
@@ -7277,8 +7286,8 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
             for shot in shots:
                 try:
                     shot.release()
-                except Exception:  # nosec B110
-                    pass
+                except Exception:
+                    quiet.detail("A frame's image could not be released")
 
             if progress_fn:
                 progress_fn(10 + int(((sample_i + 1) / total) * 85))
@@ -8584,8 +8593,8 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
                 try:
                     from rasterio.crs import CRS as RasterioCRS
                     profile['crs'] = RasterioCRS.from_epsg(crs_epsg)
-                except Exception:  # nosec B110
-                    pass  # Will save without CRS
+                except Exception:
+                    quiet.problem(f"EPSG:{crs_epsg} could not be set as the GeoTIFF's CRS: it is written without one")
 
             with rasterio.open(output_path, 'w', **profile) as dst:
                 dst.write(data)

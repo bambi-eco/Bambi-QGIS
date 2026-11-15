@@ -19,6 +19,7 @@ Consolidated from ``bambi_box_projector.py``, ``bambi_processing.py`` and
 import os
 import json
 from typing import Any, Dict, Tuple
+from . import quiet
 
 
 def read_correction(target_folder: str, correction_path: str) -> dict:
@@ -35,8 +36,8 @@ def read_correction(target_folder: str, correction_path: str) -> dict:
         try:
             with open(path, "r", encoding="utf-8") as fh:
                 return json.load(fh)
-        except Exception:  # nosec B110
-            pass
+        except Exception:
+            quiet.problem(f"The correction file {path} could not be read; no correction is applied")
     return {}
 
 

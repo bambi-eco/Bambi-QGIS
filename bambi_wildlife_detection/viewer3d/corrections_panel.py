@@ -20,6 +20,7 @@ from ..core import flight_corrections as fc
 from ..core import flight_viewer as fv
 from ..core import flight_viewer_geometry as geo
 from .qt import QtCore, QtWidgets, Signal
+from ..core import quiet
 
 
 class RefineWorker(QtCore.QThread):
@@ -531,8 +532,8 @@ class CorrectionsPanel(QtWidgets.QWidget):
         if dock is not None and hasattr(dock, "load_correction_values"):
             try:
                 dock.load_correction_values(path)
-            except Exception:  # nosec B110
-                pass
+            except Exception:
+                quiet.problem("The main panel could not take over the saved correction values")
         msg = f"Saved {path}"
         if backup:
             msg += f" (backup: {backup})"

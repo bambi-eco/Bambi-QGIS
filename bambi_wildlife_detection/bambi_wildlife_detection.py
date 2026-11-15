@@ -12,7 +12,8 @@ from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction
 
 from .bambi_dock_widget import BambiDockWidget
-from .gui_utils import forget_when_finished
+from .gui_utils import (
+    forget_when_finished, hide_notes_from_qgis, show_notes_in_qgis)
 
 
 class BambiWildlifeDetection:
@@ -135,9 +136,18 @@ class BambiWildlifeDetection:
         self.actions.append(action)
         return action
 
+    def _note_in_the_panel(self, text: str) -> None:
+        """A problem the plugin survived, in the main panel's log too."""
+        if self.dock_widget is not None:
+            self.dock_widget.log(f"Note: {text}")
+
     def initGui(self):
         """Create the menu entries and toolbar icons inside the QGIS GUI."""
         icon_path = os.path.join(self.plugin_dir, 'icons', 'icon.png')
+
+        # Errors the plugin carries on from are written to the Log Messages
+        # panel (tab "BAMBI") instead of going nowhere (core.quiet).
+        show_notes_in_qgis(also=self._note_in_the_panel)
 
         # Add main action to show/hide the dock widget
         self.dock_widget_action = self.add_action(
@@ -308,6 +318,7 @@ class BambiWildlifeDetection:
 
     def unload(self):
         """Removes the plugin menu item and icon from QGIS GUI."""
+        hide_notes_from_qgis()
         for action in self.actions:
             self.iface.removePluginMenu(self.tr('&Bambi - QGIS Integration'), action)
             self.iface.removeToolBarIcon(action)

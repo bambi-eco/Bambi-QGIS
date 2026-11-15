@@ -12,6 +12,7 @@ import os
 from typing import Any, Dict, List, Optional, Tuple
 
 from .core.survey import chosen_source
+from .core import quiet
 
 
 def _cancelled(message):
@@ -514,8 +515,8 @@ class SurveyAnalyticsMixin:
                 try:
                     from rasterio.crs import CRS as RasterioCRS
                     profile['crs'] = RasterioCRS.from_epsg(crs_epsg)
-                except Exception:  # nosec B110
-                    pass
+                except Exception:
+                    quiet.problem(f"EPSG:{crs_epsg} could not be set as the raster's CRS: it is written without one")
             if width > 256 and height > 256:
                 profile.update({'tiled': True, 'blockxsize': 256, 'blockysize': 256})
 

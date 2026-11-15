@@ -10,6 +10,7 @@ persistent QGIS layers.
 import os
 import sys
 import tempfile
+from .core import quiet
 
 
 def _fix_package_priority():
@@ -791,6 +792,6 @@ class FlightPlannerDialog(ClosesOnce, QDialog):
             try:
                 if os.path.exists(tmp):
                     os.remove(tmp)
-            except Exception:  # nosec B110
-                pass
+            except Exception:
+                quiet.detail(f"The temporary file {tmp} could not be removed")
         self._temp_files.clear()

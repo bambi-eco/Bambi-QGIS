@@ -22,6 +22,7 @@ import requests
 from typing import Dict, Any, Optional, Tuple, Type
 from enum import Enum
 from dataclasses import dataclass
+from .core import quiet
 
 
 class TrackerBackend(Enum):
@@ -334,9 +335,9 @@ class TrackerManager:
                 tracker_class=GeoHybridDeepOcSort
             )
 
-        except Exception:  # nosec B110
+        except Exception:
             # georef_tracker import can fail
-            pass
+            quiet.detail("The geo-referenced trackers are not available")
 
         return trackers
 
@@ -384,8 +385,8 @@ class TrackerManager:
 
                 params[name] = (param_type, default, f"Parameter: {name}")
 
-        except Exception:  # nosec B110
-            pass
+        except Exception:
+            quiet.problem(f"The parameters of the tracker {tracker_id!r} could not be read from its constructor")
 
         return params
 

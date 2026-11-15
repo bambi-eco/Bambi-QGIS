@@ -22,6 +22,7 @@ from qgis.core import (
     QgsProject, QgsVectorLayer,
 )
 from qgis.PyQt import sip
+from .core import quiet
 
 TRACK_TYPES = ("track_final", "track_path")
 DETECTION_TYPE = "detection"
@@ -111,8 +112,8 @@ def _refresh_canvas() -> None:
         from qgis.utils import iface
         if iface is not None:
             iface.mapCanvas().refresh()
-    except Exception:  # nosec B110 - no canvas outside QGIS
-        pass
+    except Exception:  # no canvas outside QGIS
+        quiet.detail("The map canvas could not be refreshed")
 
 
 def _track_layers(target_folder: str, modality: str,

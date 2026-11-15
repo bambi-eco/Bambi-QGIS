@@ -47,6 +47,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from . import hf_access, sam3_local
+from . import quiet
 
 # ---------------------------------------------------------------------------
 # Vocabulary
@@ -476,8 +477,8 @@ class RoboflowBackend(SegmentationBackend):
         if self._session is not None:
             try:
                 self._session.close()
-            except Exception:  # nosec B110
-                pass
+            except Exception:
+                quiet.detail("The connection to the segmentation service could not be closed")
             self._session = None
 
     def segment_image(self, image_path, texts, points, names, confidence):
@@ -643,8 +644,8 @@ class TransformersBackend(SegmentationBackend):
             import torch
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-        except Exception:  # nosec B110
-            pass
+        except Exception:
+            quiet.detail("The graphics card's cache could not be emptied")
 
     def _text_image_model(self):
         if self._text_image is None:
@@ -1053,8 +1054,8 @@ class MetaSam3Backend(SegmentationBackend):
             if shutdown is not None:
                 try:
                     shutdown()
-                except Exception:  # nosec B110
-                    pass
+                except Exception:
+                    quiet.detail("The segmentation model could not be shut down")
 
     # -- both calls are one clip ------------------------------------------
 
@@ -1124,8 +1125,8 @@ class MetaSam3Backend(SegmentationBackend):
             try:
                 self._predictor.handle_request(request={
                     "type": "close_session", "session_id": session_id})
-            except Exception:  # nosec B110
-                pass
+            except Exception:
+                quiet.detail("The segmentation session could not be closed")
         return results
 
     def _propagate(self, session_id, total, confidence, pace: SequencePace,

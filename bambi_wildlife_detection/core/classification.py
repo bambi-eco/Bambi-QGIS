@@ -18,6 +18,7 @@ import time
 from typing import Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple
 
 from . import hf_access
+from . import quiet
 
 #: Fill value for the parts of a crop window that fall outside the frame.
 #: Mid-grey rather than black: an animal at the frame edge otherwise gets a
@@ -241,8 +242,8 @@ def reduced_precision_dtype():
         probe = getattr(torch.cuda, "is_bf16_supported", None)
         if probe is not None and probe():
             return getattr(torch, "bfloat16", None)
-    except Exception:  # nosec B110
-        pass
+    except Exception:
+        quiet.detail("bfloat16 support could not be asked for; half precision is used")
     return None
 
 
@@ -369,8 +370,8 @@ class Backbone:
             self.device = "cpu"
             try:
                 torch.cuda.empty_cache()
-            except Exception:  # nosec B110
-                pass
+            except Exception:
+                quiet.detail("The graphics card's cache could not be emptied")
             where = "cpu (the fp32 weights do not fit on the GPU)"
         if self._log:
             self._log(f"{reason}; continuing in fp32 on {where}")

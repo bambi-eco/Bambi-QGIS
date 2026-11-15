@@ -30,6 +30,7 @@ import os
 import struct
 import time
 from typing import Callable, List, Optional
+from . import quiet
 
 #: TIFF tags that say where the image data is, and how much of it.
 _OFFSET_TAGS = {273: 279, 324: 325}     # Strip-/TileOffsets: their ByteCounts
@@ -340,8 +341,8 @@ def fetch(session, url: str, destination: str,
             if callable(close):
                 try:
                     close()
-                except Exception:  # nosec B110 - closing what already broke
-                    pass
+                except Exception:  # closing what already broke
+                    quiet.detail("The connection could not be closed")
 
     raise DownloadError(
         f"{url} could not be downloaded: {problems[-1] if problems else '?'}. "

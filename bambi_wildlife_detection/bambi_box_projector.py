@@ -40,6 +40,7 @@ from .core.corrections import (  # noqa: F401 - re-exported API
     correction_for_frame as _correction_for_frame,
     read_correction as _read_correction,
 )
+from .core import quiet
 
 
 def _load_georef(target_folder: str, src_modality: str) -> List[dict]:
@@ -217,8 +218,8 @@ class BoxProjectionWorker(QThread):
                 o = d.get("origin")
                 if o and len(o) >= 3:
                     return (float(o[0]), float(o[1]), float(o[2]))
-            except Exception:  # nosec B110
-                pass
+            except Exception:
+                quiet.problem(f"The DEM metadata {json_path} could not be read")
             return None
 
         # Primary: derive JSON path from the stored DEM path

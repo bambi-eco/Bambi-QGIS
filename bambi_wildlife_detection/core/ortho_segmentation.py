@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from . import sam3_local
+from . import quiet
 
 ORTHO_FILE = "orthomosaic.tif"
 
@@ -191,8 +192,8 @@ class OrthoReader:
     def close(self) -> None:
         try:
             self._dataset.close()
-        except Exception:  # nosec B110
-            pass
+        except Exception:
+            quiet.detail("The orthomosaic could not be closed")
 
     def __enter__(self):
         return self

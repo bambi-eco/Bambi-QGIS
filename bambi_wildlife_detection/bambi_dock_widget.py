@@ -57,6 +57,7 @@ from .core import store as _store_kinds
 # importing the dock.
 from .gui_utils import FitTabWidget, PLUGIN_SCOPE, read_alfs_selection  # noqa: E402
 from . import gui_utils as gui_utils_hf
+from .core import quiet
 
 
 def _camera_suffix(camera_label: str) -> str:
@@ -4913,8 +4914,8 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         if not getattr(self, "_loading_config", False):
             try:
                 self.survey_panel.save(QgsProject.instance())
-            except Exception:  # nosec B110 - saved again with the project
-                pass
+            except Exception:  # saved again with the project
+                quiet.problem("The survey could not be saved to the project now; it is saved again with the project")
 
     def current_survey(self):
         """The :class:`core.survey.Survey` the tab describes right now."""
@@ -5874,10 +5875,10 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
                             epsg = src.crs.to_epsg()
                             if epsg:
                                 file_crs_label = f"EPSG:{epsg}"
-                        except Exception:  # nosec B110
-                            pass
-        except Exception:  # nosec B110
-            pass
+                        except Exception:
+                            quiet.detail("The GeoTIFF's CRS gave no EPSG code")
+        except Exception:
+            quiet.detail("The GeoTIFF's CRS could not be read for the confirmation dialog")
         if file_crs_label == "Unknown":
             # rasterio reports crs=None for e.g. compound CRS files; GDAL's OSR
             # can often still identify the horizontal EPSG code.
@@ -6096,8 +6097,8 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
                     if self._is_valid_utm_crs(crs_value):
                         detected_crs = crs_value.upper()
                         source = "DEM metadata"
-            except Exception:  # nosec B110
-                pass
+            except Exception:
+                quiet.problem(f"The DEM metadata {dem_metadata_path} could not be read to find the CRS")
 
         # Try 2: AirData CSV GPS coordinates
         if detected_crs is None:
@@ -11042,8 +11043,8 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
                 return
             try:
                 config["survey"] = self._survey_config()
-            except Exception:  # nosec B110 - no survey, no area
-                pass
+            except Exception:  # no survey, no area
+                quiet.detail("No survey is set up: the step runs without a survey area")
 
         self.worker_thread = QThread()
         self.worker = ProcessingWorker(self.processor, step, config)
@@ -11144,8 +11145,8 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
                                 "This is often caused by an incorrect Timezone setting.\n"
                                 "Please check the Timezone in the Photo Settings and try again."
                             )
-                    except Exception:  # nosec B110
-                        pass
+                    except Exception:
+                        quiet.detail(f"{poses_path} could not be checked for matched photos")
 
                     # If the airdata field was empty, fill it with the
                     # EXIF-reconstructed CSV so the user can see it and reuse it.
@@ -13520,8 +13521,8 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             project.writeProject.disconnect(self._on_project_write)
             project.readProject.disconnect(self._on_project_read)
             project.cleared.disconnect(self._on_project_cleared)
-        except Exception:  # nosec B110
-            pass  # Ignore errors if signals weren't connected
+        except Exception:
+            quiet.detail("The project's signals were not connected")
 
     def _on_project_write(self, doc):
         """Called when project is about to be saved."""

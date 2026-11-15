@@ -1,5 +1,9 @@
 # Troubleshooting
 
+## Where to look first
+
+When a result is missing or not what you expected, open QGIS' **Log Messages** panel (*View > Panels > Log Messages*) and its **BAMBI** tab. The plugin carries on after many small failures - metadata it could not read, a raster whose CRS could not be set, a correction file that did not parse - and says there what happened and why, with the original error. What matters for the result is written as a warning and repeated in the plugin's own log panel, starting with `Note:`; fallbacks and clean-up that did not work are written as information. (Up to 9.0 these 62 places said nothing at all: an unreadable `correction.json`, for instance, simply meant an uncorrected flight.)
+
 ## `No module named 'bambi'` / `No module named 'alfspy'`
 
 You have not installed the `bambi_detection` / `alfs_py` dependency, or you have not restarted QGIS after installing it. Install both required packages via the [Dependency Manager](installation.md#dependency-manager) and restart QGIS; the Python environment is only loaded at startup.

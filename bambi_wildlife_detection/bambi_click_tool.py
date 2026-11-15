@@ -46,6 +46,7 @@ from qgis.PyQt.QtWidgets import QMessageBox
 from .bambi_feature_viewer import FeatureViewerDialog
 from .core import inspection
 from .gui_utils import mouse_xy
+from .core import quiet
 
 TRACK_TYPES = {"track_final", "track_path"}
 DETECTION_TYPE = "detection"
@@ -414,8 +415,8 @@ class BambiClickTool(QgsMapToolIdentify):
                             layer_xy, found["frame_idx_w"], image_path_w,
                             target_folder, dem_path, correction_path, "w",
                         )
-                except Exception:  # nosec B110
-                    pass
+                except Exception:
+                    quiet.problem("The clicked place could not be marked in the frame")
 
             frames.append(frame_dict)
 
@@ -590,8 +591,8 @@ class BambiClickTool(QgsMapToolIdentify):
                 if ok and value is not None:
                     return float(value) - origin[2]  # convert to local z
 
-        except Exception:  # nosec B110
-            pass
+        except Exception:
+            quiet.problem("The ground height could not be read from the DEM raster; 0 m is used")
         return 0.0
 
     # ------------------------------------------------------------------

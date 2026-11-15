@@ -142,6 +142,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from . import quiet
 
 #: Version of the interface described above.
 API_VERSION = 1
@@ -661,8 +662,8 @@ class Implementation:
         if callable(getattr(self.instance, "teardown", None)):
             try:
                 self.instance.teardown()
-            except Exception:  # noqa: BLE001  # nosec B110 - best effort
-                pass
+            except Exception:  # best effort
+                quiet.problem("The custom model's teardown() failed")
 
     def class_name_of(self, index: int) -> str:
         if 0 <= index < len(self.class_names):

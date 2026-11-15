@@ -29,6 +29,7 @@ from typing import Optional, Tuple, List, Callable
 import numpy as np
 
 from qgis.PyQt.QtCore import QObject, pyqtSignal
+from .core import quiet
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -780,8 +781,10 @@ class GLTFMeshGenerator:
                     try:
                         src_epsg = int(source_crs_override.upper().replace("EPSG:", "").strip())
                         self._log(f"Using source CRS override: EPSG:{src_epsg}")
-                    except Exception:  # nosec B110
-                        pass
+                    except Exception:
+                        quiet.problem(
+                            f"The source CRS override {source_crs_override!r} is not an EPSG code and is "
+                            f"ignored")
 
                 # Method 1: Extract EPSG from rasterio CRS without DB lookup
                 # to_epsg() may fail when QGIS's outdated proj.db shadows pyproj's own.
@@ -789,31 +792,31 @@ class GLTFMeshGenerator:
                 if src_epsg is None and src.crs is not None:
                     try:
                         src_epsg = src.crs.to_epsg()
-                    except Exception:  # nosec B110
-                        pass
+                    except Exception:
+                        quiet.detail("The DEM's CRS gave no EPSG code directly; reading it from its description")
                 if src_epsg is None and src.crs is not None:
                     try:
                         import re
                         matches = re.findall(r'ID\["EPSG",(\d+)\]', str(src.crs))
                         if matches:
                             src_epsg = int(matches[-1])
-                    except Exception:  # nosec B110
-                        pass
+                    except Exception:
+                        quiet.detail("No EPSG code could be read from the description of the DEM's CRS")
 
                 # Method 2: Parse EPSG from the CRS string if it is in "EPSG:XXXXX" form
                 # (str(src.crs) can return WKT in newer rasterio - only accept EPSG strings)
                 if src_epsg is None and crs and crs.upper().startswith("EPSG:"):
                     try:
                         src_epsg = int(crs.upper().replace("EPSG:", "").strip())
-                    except Exception:  # nosec B110
-                        pass
+                    except Exception:
+                        quiet.detail(f"The DEM's CRS {crs!r} is not written as an EPSG code")
 
                 # Method 3: Parse EPSG from the caller-provided source_crs parameter
                 if src_epsg is None and source_crs:
                     try:
                         src_epsg = int(source_crs.upper().replace("EPSG:", "").strip())
-                    except Exception:  # nosec B110
-                        pass
+                    except Exception:
+                        quiet.detail(f"The CRS given for the DEM, {source_crs!r}, is not written as an EPSG code")
 
                 # Method 4: Default to UTM 33N if all else fails (common for Austria)
                 if src_epsg is None:
@@ -843,8 +846,10 @@ class GLTFMeshGenerator:
                     _target_epsg_reproject = None
                     try:
                         _target_epsg_reproject = int(source_crs.upper().replace("EPSG:", "").strip())
-                    except Exception:  # nosec B110
-                        pass
+                    except Exception:
+                        quiet.detail(
+                            f"The CRS to reproject the DEM to, {source_crs!r}, is not written as an EPSG "
+                            f"code")
                     if _target_epsg_reproject and _target_epsg_reproject != 4326:
                         try:
                             from rasterio.warp import reproject as _rasterio_reproject

@@ -144,6 +144,7 @@ from .core.labelling import (  # noqa: F401 - re-exported API
     validate_custom_fields,
     write_custom_fields,
 )
+from .core import quiet
 
 #: Where the last configured field schema is remembered, so a newly labelled
 #: flight (or the other modality) starts out with the same extra fields.
@@ -1707,8 +1708,8 @@ class LabellingToolDialog(ClosesOnce, QDialog):
                         "bambi_correction_path", "")
                 if self._dem_path and self._correction_path:
                     break
-        except Exception:  # nosec B110
-            pass
+        except Exception:
+            quiet.detail("DEM and correction paths could not be taken from the project's layers")
         # Common fallbacks inside the folder
         if not self._correction_path:
             candidate = os.path.join(self._target_folder, "correction.json")
@@ -1733,8 +1734,8 @@ class LabellingToolDialog(ClosesOnce, QDialog):
             try:
                 with open(poses_path, "r", encoding="utf-8") as fh:
                     self._images = json.load(fh).get("images", [])
-            except Exception:  # nosec B110
-                pass
+            except Exception:
+                quiet.problem(f"The poses file {poses_path} could not be read: no frames are shown")
         if not self._images:
             QMessageBox.warning(
                 self, "BAMBI Labelling Tool",

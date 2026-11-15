@@ -45,6 +45,7 @@ from .core.video_export import (  # noqa: F401 - re-exported API
     track_color_bgr as _track_color_bgr,
 )
 from .core import video_export
+from .core import quiet
 
 # Fixed colour for the drone marker / look-point trail (BGR).
 _DRONE_COLOR = (0, 215, 255)
@@ -103,8 +104,8 @@ class _MapTileProvider:
                 if cache_path and img is not None:
                     cv2.imwrite(cache_path, img)
                 return img
-        except Exception:  # noqa: BLE001  # nosec B110
-            pass
+        except Exception:
+            quiet.detail(f"Map tile {zoom}/{x}/{y} could not be fetched")
         return None
 
     def render(self, extent, width, height, margin):

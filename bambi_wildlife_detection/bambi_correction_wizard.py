@@ -63,6 +63,7 @@ from .core.correction_solver import (  # noqa: F401 - re-exported API
     wrap_deg as _wrap_deg,
     wrap_rad as _wrap_rad,
 )
+from .core import quiet
 
 
 # ---------------------------------------------------------------------------
@@ -1156,8 +1157,8 @@ class _LightFieldRenderWorker(QThread):
                     fovy, shot_aspect, None, lazy=False,
                 )
                 shots.append(shot)
-            except Exception:  # nosec B110
-                pass
+            except Exception:
+                quiet.problem(f"The frame {img_path} could not be loaded for the preview and is left out")
 
         if not shots:
             raise RuntimeError(
@@ -1334,8 +1335,8 @@ class BambiCorrectionWizard(ClosesOnce, QDialog):
                 try:
                     with open(path, 'r', encoding='utf-8') as fh:
                         self._poses[suffix] = json.load(fh)
-                except Exception:  # nosec B110
-                    pass
+                except Exception:
+                    quiet.problem(f"The poses file {path} could not be read")
 
     # ------------------------------------------------------------------
     # UI construction
@@ -2516,8 +2517,8 @@ class BambiCorrectionWizard(ClosesOnce, QDialog):
             try:
                 with open(path, 'r', encoding='utf-8') as fh:
                     return json.load(fh)
-            except Exception:  # nosec B110
-                pass
+            except Exception:
+                quiet.problem(f"The correction file {path} could not be read; the wizard starts without it")
         return {}
 
     def _write_correction_json(self, data: dict) -> None:

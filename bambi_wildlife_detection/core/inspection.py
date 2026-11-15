@@ -18,6 +18,7 @@ QGIS-specific pieces are injected by the caller:
 import os
 import json
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
+from . import quiet
 
 
 def _map_north(meta: dict) -> str:
@@ -468,8 +469,8 @@ def ray_cast_dem_z(
             )
             try:
                 _ = tri_mesh.triangles_tree   # pre-build BVH
-            except Exception:  # nosec B110
-                pass
+            except Exception:
+                quiet.detail("The DEM mesh's search tree could not be built ahead; it is built at the first use")
             mesh_cache[mesh_path] = tri_mesh
 
         tri_mesh = mesh_cache[mesh_path]
@@ -481,8 +482,8 @@ def ray_cast_dem_z(
         )
         if len(locations) > 0:
             return float(np.max(locations[:, 2]))
-    except Exception:  # nosec B110
-        pass
+    except Exception:
+        quiet.problem("The ground height could not be found by ray casting onto the DEM mesh")
     return None
 
 
@@ -548,8 +549,8 @@ def project_map_point(
                 o = d.get("origin")
                 if o and len(o) >= 3:
                     return (float(o[0]), float(o[1]), float(o[2]))
-            except Exception:  # nosec B110
-                pass
+            except Exception:
+                quiet.problem(f"The DEM metadata {json_path} could not be read")
             return None
 
         dem_json_found = None
@@ -649,8 +650,8 @@ def project_map_point(
                     f"{best['detection_id']} "
                     f"at x={(best['gx1'] + best['gx2']) / 2:.3f} "
                     f"y={(best['gy1'] + best['gy2']) / 2:.3f}")
-        except Exception:  # nosec B110
-            pass
+        except Exception:
+            quiet.detail("The nearest geo-referenced detection could not be looked up")
 
         log(
             f"[FoV click | {modality}]  frame={frame_idx}\n"

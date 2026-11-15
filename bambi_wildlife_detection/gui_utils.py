@@ -2,7 +2,7 @@
 """Small Qt helpers shared by the plugin's dialogs."""
 
 from qgis.PyQt.QtGui import QCursor
-from qgis.PyQt.QtCore import QEvent, QObject, QSize, Qt
+from qgis.PyQt.QtCore import QEvent, QObject, QSize, Qt, pyqtSignal
 from qgis.PyQt.QtWidgets import QApplication, QStackedWidget, QTabWidget
 
 
@@ -178,6 +178,79 @@ class FitTabWidget(QTabWidget):
         if event.type() == QEvent.Type.LayoutRequest:
             self.updateGeometry()
         return handled
+
+
+# ---------------------------------------------------------------------------
+# What went wrong quietly, where it can be read
+# ---------------------------------------------------------------------------
+
+#: The tab of QGIS' Log Messages panel the plugin writes to.
+LOG_TAB = "BAMBI"
+
+
+class _Notes(QObject):
+    """Carries a note from whichever thread it was made in to the GUI's."""
+
+    said = pyqtSignal(str, bool)            # text, is a problem
+
+
+_notes = None
+_notes_handler = None
+
+
+def show_notes_in_qgis(also=None) -> None:
+    """Show what ``core.quiet`` notes - errors the plugin survives - in
+    QGIS' *Log Messages* panel, tab :data:`LOG_TAB`: problems as warnings,
+    the rest as information.
+
+    :param also: ``also(text)`` is called for every problem as well - the
+        main panel's own log
+    """
+    import logging
+
+    from .core import quiet
+
+    global _notes, _notes_handler
+    hide_notes_from_qgis()
+    _notes = _Notes()
+
+    def to_the_log(text: str, is_problem: bool) -> None:
+        from qgis.core import Qgis, QgsMessageLog
+
+        level = Qgis.MessageLevel.Warning if is_problem \
+            else Qgis.MessageLevel.Info
+        QgsMessageLog.logMessage(text, LOG_TAB, level)
+        if is_problem and also is not None:
+            also(text)
+
+    _notes.said.connect(to_the_log)
+
+    class Handler(logging.Handler):
+        def emit(self, record):
+            try:
+                _notes.said.emit(record.getMessage(),
+                                 record.levelno >= logging.WARNING)
+            except (RuntimeError, AttributeError):  # nosec B110
+                pass        # QGIS is closing: nowhere left to say it
+
+    _notes_handler = Handler(level=logging.DEBUG)
+    logger = logging.getLogger(quiet.LOGGER_NAME)
+    logger.addHandler(_notes_handler)
+    if logger.level == logging.NOTSET or logger.level > logging.DEBUG:
+        logger.setLevel(logging.DEBUG)
+
+
+def hide_notes_from_qgis() -> None:
+    """Undo :func:`show_notes_in_qgis` (the plugin is unloaded)."""
+    import logging
+
+    from .core import quiet
+
+    global _notes, _notes_handler
+    if _notes_handler is not None:
+        logging.getLogger(quiet.LOGGER_NAME).removeHandler(_notes_handler)
+    _notes_handler = None
+    _notes = None
 
 
 # ---------------------------------------------------------------------------

@@ -38,6 +38,7 @@ from qgis.PyQt.QtWidgets import (
 from .core.thermal_curve import (
     DEFAULT_POINTS, MIN_POINT_SEPARATION, ThermalCurve, scan_temperatures,
 )
+from .core import quiet
 
 _POINT_HIT_RADIUS_PX = 9.0
 _HIST_BARS = 128
@@ -565,8 +566,8 @@ class CurveEditorPanel(QWidget):
         finally:
             try:
                 close_fn()
-            except Exception:  # nosec B110
-                pass
+            except Exception:
+                quiet.detail("The thermal file of the detection could not be closed")
             progress.close()
 
         if scan.n_images == 0:
@@ -615,8 +616,8 @@ class CurveEditorPanel(QWidget):
         if self._preview_close_fn is not None:
             try:
                 self._preview_close_fn()
-            except Exception:  # nosec B110
-                pass
+            except Exception:
+                quiet.detail("The thermal file of the preview could not be closed")
         self._preview_parse_fn = None
         self._preview_close_fn = None
 
