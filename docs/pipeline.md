@@ -245,6 +245,8 @@ re-running the detector leaves manual labels untouched and vice versa. Editing
 a label re-uses the detections it already produced, so only the boxes that
 actually moved need geo-referencing again.
 
+**Detecting again replaces the detector's boxes of that camera** - also when another model is selected. The class mapping is kept per model, but only the boxes of the latest run exist; they do not pile up next to those of the model that ran before.
+
 #### → Geo-Reference Detections
 
 Projects pixel-space bounding boxes to real-world UTM coordinates by ray-casting against the DEM mesh. Each detection's four corners are projected and the result is stored as a world-space bounding box.

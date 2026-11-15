@@ -70,8 +70,13 @@ def record_detections(target_folder: str, modality: str,
     Each row needs ``frame``, ``x1``, ``y1``, ``x2``, ``y2`` and may carry
     ``confidence``, ``source_class`` and ``attributes`` (a JSON string).
 
-    Only this producer's rows are removed - a re-run of the detector never
-    disturbs manually labelled or TRex-imported detections sharing the table.
+    Only this *kind* of producer's rows are removed - a re-run of the
+    detector never disturbs manually labelled or TRex-imported detections
+    sharing the table. But every row of the kind goes, whichever *model*
+    wrote it: a source is kept per model, and removing only the rows of the
+    model that runs now left those of the previous one in place. Detecting
+    again with another weights file (or after the rows were adopted from
+    ``detections.txt``, or migrated) then doubled every animal.
 
     Returns ``{"written": n, "replaced": m, "generation": g}``.
     """
@@ -82,6 +87,8 @@ def record_detections(target_folder: str, modality: str,
     try:
         with store.transaction(project):
             source_id = ensure_source(project, kind, model, version, config_hash)
+        of_kind = [int(row["source_id"]) for row in project.execute(
+            "SELECT source_id FROM detection_sources WHERE kind = ?", (kind,))]
         species = {
             str(row["source_class"]): store.resolve_species(
                 project, source_id, str(row["source_class"]))
@@ -95,7 +102,8 @@ def record_detections(target_folder: str, modality: str,
         try:
             with store.transaction(conn):
                 cur = conn.execute(
-                    "DELETE FROM detections WHERE source_id = ?", (source_id,))
+                    "DELETE FROM detections WHERE source_id IN "
+                    f"({', '.join('?' * len(of_kind))})", of_kind)
                 replaced = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
                 conn.executemany(
                     "INSERT INTO detections (frame, x1, y1, x2, y2, confidence, "

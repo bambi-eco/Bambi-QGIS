@@ -123,10 +123,71 @@ def test_generation_advances_per_source(tmp_path):
     assert other["generation"] == 1   # its own counter, untouched by the detector
 
 
+def _sources(target_folder):
+    project = store.open_store(
+        store.project_path(target_folder), store.PROJECT)
+    try:
+        return {row["source_id"]: (row["kind"], row["model"] or "")
+                for row in project.execute(
+                    "SELECT source_id, kind, model FROM detection_sources")}
+    finally:
+        project.close()
+
+
 def test_different_models_are_different_sources(tmp_path):
+    """Each model keeps a source of its own - its class mapping hangs on it."""
     detection_store.record_detections(str(tmp_path), "t", _rows(2), model="a.pt")
     detection_store.record_detections(str(tmp_path), "t", _rows(3), model="b.pt")
-    assert len(_stored(str(tmp_path))) == 5
+    assert sorted(_sources(str(tmp_path)).values()) == [
+        ("detector", "a.pt"), ("detector", "b.pt")]
+
+
+def test_detecting_with_another_model_replaces_the_previous_boxes(tmp_path):
+    """The boxes of the model that ran before used to stay, since only the
+    rows of the model running now were removed: every animal was then there
+    twice, and so in every track, count and export."""
+    root = str(tmp_path)
+    detection_store.record_detections(root, "t", _rows(2), model="a.pt")
+    result = detection_store.record_detections(
+        root, "t", _rows(3, frame=50), model="b.pt")
+
+    stored = _stored(root)
+    assert [row["frame"] for row in stored] == [50, 51, 52]
+    assert result["replaced"] == 2
+    b = [sid for sid, value in _sources(root).items()
+         if value == ("detector", "b.pt")]
+    assert {row["source_id"] for row in stored} == set(b)
+
+    # ... and going back to the first model replaces again
+    detection_store.record_detections(root, "t", _rows(1), model="a.pt")
+    assert [row["frame"] for row in _stored(root)] == [1]
+
+
+def test_detecting_after_adoption_replaces_the_adopted_boxes(tmp_path):
+    """Rows adopted from detections.txt (and migrated ones) belong to the
+    detector under another model name."""
+    root = str(tmp_path)
+    detection_store.record_detections(
+        root, "t", _rows(4), model="adopted from detections.txt")
+    detection_store.record_detections(root, "t", _rows(2), model="")
+    detection_store.record_detections(root, "t", _rows(1), model="new.pt")
+    assert len(_stored(root)) == 1
+
+
+def test_another_model_leaves_the_other_producers_alone(tmp_path):
+    root = str(tmp_path)
+    detection_store.record_detections(root, "t", _rows(2), model="a.pt")
+    detection_store.record_detections(
+        root, "t", _rows(3, frame=100), kind=detection_store.MANUAL)
+    detection_store.record_detections(
+        root, "t", _rows(2, frame=200), kind=detection_store.TREX)
+    detection_store.record_detections(root, "w", _rows(5), model="a.pt")
+
+    detection_store.record_detections(root, "t", _rows(1, frame=9), model="b.pt")
+
+    assert sorted(r["frame"] for r in _stored(root)) == [
+        9, 100, 101, 102, 200, 201]
+    assert len(_stored(root, "w")) == 5      # the other camera's detector
 
 
 def test_detection_counts_by_kind(tmp_path):
