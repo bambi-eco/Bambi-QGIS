@@ -218,9 +218,24 @@ def clear(target_folder: str, source: str) -> List[str]:
         path = os.path.join(folder(target_folder), name)
         for candidate in (path, path + ".aux.xml"):
             if os.path.isfile(candidate):
-                os.remove(candidate)
+                try:
+                    os.remove(candidate)
+                except OSError as exc:
+                    raise EnvironmentFailure(_in_use(candidate, exc)) from exc
                 removed.append(candidate)
     return removed
+
+
+def _in_use(path: str, exc: OSError) -> str:
+    """Why a file could not be replaced, in the user's terms.
+
+    On Windows a file another program has open cannot be deleted or
+    replaced; for these rasters that program is nearly always QGIS showing
+    the layer.
+    """
+    return (f"{os.path.basename(path)} could not be replaced ({exc}). If "
+            "it is loaded as a layer, remove the layer from the map and run "
+            "the step again.")
 
 
 def available_layers(target_folder: str) -> List[Layer]:
@@ -553,7 +568,14 @@ def write_raster(path: str, array, grid: Grid, description: str = "",
             dst.set_band_description(1, description)
         if colormap:
             dst.write_colormap(1, colormap)
-    os.replace(temporary, path)
+    try:
+        os.replace(temporary, path)
+    except OSError as exc:
+        try:
+            os.remove(temporary)
+        except OSError:  # nosec B110 - the stray temporary file is harmless
+            pass
+        raise EnvironmentFailure(_in_use(path, exc)) from exc
     return path
 
 

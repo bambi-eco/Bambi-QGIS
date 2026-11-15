@@ -150,6 +150,37 @@ class TestMetadata:
         assert env.is_complete(root, env.TERRAIN)
         assert [layer.key for layer in env.available_layers(root)] == ["twi"]
 
+    def test_a_file_that_is_in_use_fails_with_what_to_do(self, tmp_path,
+                                                         monkeypatch):
+        """Windows refuses to delete or replace a file QGIS has open as a
+        layer: that has to read as "remove the layer", not as a traceback."""
+        root = str(tmp_path)
+        grid = env.make_grid((0.0, 0.0, 30.0, 20.0), 32633, 0.0)
+        values = np.zeros(grid.shape, dtype=np.float32)
+        env.write_raster(env.layer_path(root, "ndvi"), values, grid)
+        env.write_metadata(root, env.SENTINEL2, {"files": ["ndvi.tif"]})
+
+        def locked(path, *args):
+            raise PermissionError(32, "The process cannot access the file")
+
+        monkeypatch.setattr(os, "remove", locked)
+        with pytest.raises(env.EnvironmentFailure) as error:
+            env.clear(root, env.SENTINEL2)
+        assert "ndvi.tif" in str(error.value)
+        assert "remove the layer" in str(error.value)
+        monkeypatch.undo()
+        assert env.is_complete(root, env.SENTINEL2)      # nothing was lost
+
+        monkeypatch.setattr(os, "replace", locked)
+        with pytest.raises(env.EnvironmentFailure, match="remove the layer"):
+            env.write_raster(env.layer_path(root, "ndvi"), values + 1, grid)
+        monkeypatch.undo()
+        # the old raster is intact and no temporary file is left behind
+        read, _grid = env.read_raster(env.layer_path(root, "ndvi"))
+        assert float(read.max()) == 0.0
+        assert sorted(os.listdir(env.folder(root))) == [
+            "ndvi.tif", "sentinel2.json"]
+
     def test_a_broken_metadata_file_is_not_done(self, tmp_path):
         root = str(tmp_path)
         env.ensure_folder(root)

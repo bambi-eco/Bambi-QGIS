@@ -325,3 +325,109 @@ def test_run_all_runs_the_sources_on_real_worker_threads(dock, flight,
 
     assert ran == ["env_sentinel2", "env_landcover", "env_weather"]
     assert dock.worker is None and dock._environment_queue == []
+
+
+def _sources_on_the_map():
+    return sorted(os.path.basename(layer.source())
+                  for layer in QgsProject.instance().mapLayers().values())
+
+
+def test_a_rerun_takes_its_layers_off_the_map_and_puts_them_back(
+        dock, flight, monkeypatch):
+    """A loaded raster keeps its file open, and Windows will not let an open
+    file be replaced: the source's layers leave the map before it runs and
+    return - all of them - when it has ended."""
+    dock.add_environment_to_qgis()
+    assert _sources_on_the_map() == ["landcover.tif", "ndvi.tif", "twi.tif"]
+
+    seen = {}
+
+    def start_worker(self, step):
+        seen[step] = _sources_on_the_map()
+
+    monkeypatch.setattr(type(dock), "start_worker", start_worker)
+    dock.run_environment_step("env_sentinel2")
+    # only the source that is rewritten lets go of its files
+    assert seen["env_sentinel2"] == ["landcover.tif", "twi.tif"]
+
+    dock._on_environment_step_finished("env_sentinel2")
+    assert _sources_on_the_map() == ["landcover.tif", "ndvi.tif", "twi.tif"]
+    group = dock._flight_group().findGroup(ENVIRONMENT_GROUP)
+    assert len(group.findLayers()) == 3
+    assert not dock._environment_readd
+
+
+def test_layers_return_only_when_the_whole_queue_has_ended(dock, flight,
+                                                           monkeypatch):
+    dock.add_environment_to_qgis()
+    monkeypatch.setattr(type(dock), "start_worker", lambda self, step: None)
+    monkeypatch.setattr(type(dock), "_run_next_when_thread_stopped",
+                        lambda self: None)
+    dock.run_environment_step("env_sentinel2")
+    dock._environment_queue = ["env_landcover"]
+    dock._on_environment_step_finished("env_sentinel2")
+    assert "ndvi.tif" not in _sources_on_the_map()       # still queued
+    dock._environment_queue = []
+    dock._on_environment_step_finished("env_landcover")
+    assert "ndvi.tif" in _sources_on_the_map()
+
+
+def test_the_queue_stops_when_the_active_flight_changes(dock, flight,
+                                                        monkeypatch,
+                                                        tmp_path):
+    started = []
+    monkeypatch.setattr(type(dock), "run_environment_step",
+                        lambda self, step: started.append(step) or True)
+    dock._environment_queue = ["env_landcover", "env_weather"]
+    dock._environment_queue_folder = flight
+    other = str(tmp_path / "forest")
+    os.makedirs(other)
+    dock._set_target_folder_text(other)
+    dock._run_next_environment_step()
+    assert started == [] and dock._environment_queue == []
+
+    # the same flight carries on
+    dock._set_target_folder_text(flight)
+    dock._environment_queue = ["env_weather"]
+    dock._run_next_environment_step()
+    assert started == ["env_weather"]
+
+
+def test_adding_layers_never_removes_another_flights_group(
+        dock, flight, monkeypatch, tmp_path):
+    """A flight without a layer group of its own used to fall back on the
+    tree root when looking for the group to replace - and found the other
+    flight's."""
+    from qgis.PyQt.QtWidgets import QFileDialog, QInputDialog
+
+    dock.add_environment_to_qgis()                # the meadow flight's
+    meadow_group = dock._flight_group(create=False)
+    assert meadow_group.findGroup(ENVIRONMENT_GROUP) is not None
+
+    forest = str(tmp_path / "forest")
+    os.makedirs(forest)
+    grid = env.make_grid((447000.0, 5350500.0, 447200.0, 5350600.0),
+                         32633, 0.0)
+    env.write_raster(env.layer_path(forest, "twi"),
+                     np.ones(grid.shape, dtype=np.float32), grid)
+    env.write_metadata(forest, env.TERRAIN, {"files": ["twi.tif"]})
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory",
+                        lambda *a, **k: forest)
+    monkeypatch.setattr(QInputDialog, "getText",
+                        lambda *a, **k: ("Forest", True))
+    monkeypatch.setattr(type(dock), "_ask_new_flight_configuration",
+                        lambda self: True)
+    dock.browse_and_add_flight()
+    assert dock._active_target_folder() == forest
+    assert dock._flight_group(create=False, or_root=False) is None
+
+    dock.add_environment_to_qgis()                # the forest flight's
+    root = QgsProject.instance().layerTreeRoot()
+    assert meadow_group.findGroup(ENVIRONMENT_GROUP) is not None
+    assert len(meadow_group.findGroup(ENVIRONMENT_GROUP).findLayers()) == 3
+    forest_group = dock._flight_group(create=False, or_root=False)
+    assert forest_group is not None
+    assert len(forest_group.findGroup(ENVIRONMENT_GROUP).findLayers()) == 1
+    assert len([g for g in root.findGroups(True)
+                if g.name() == ENVIRONMENT_GROUP]) == 2
+

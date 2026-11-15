@@ -195,6 +195,8 @@ class EnvironmentDockMixin:
         layout.addLayout(add_row)
 
         self._environment_queue: List[str] = []
+        self._environment_queue_folder = ""
+        self._environment_readd = False
         return group
 
     def _environment_config(self) -> dict:
@@ -262,8 +264,47 @@ class EnvironmentDockMixin:
                 self, "Missing Prerequisites",
                 f"{_STEP_TEXT[step][0]} cannot run:\n\n{reasons}")
             return False
+        if self.worker is None:
+            self._release_environment_layers(step)
         self.start_worker(step)
         return self.worker is not None
+
+    def _active_target_folder(self) -> str:
+        """The active flight's target folder, straight from the form -
+        ``get_config()`` would re-read the flight log for the time zone."""
+        return self.target_folder_edit.text().strip()
+
+    def _release_environment_layers(self, step: str) -> int:
+        """Take the rasters *step* is about to rewrite off the map.
+
+        A raster layer keeps its file open, and Windows refuses to delete or
+        replace an open file - re-running a source whose layers are loaded
+        would fail on the first file. They are put back when the step (or
+        the whole "Run All Four" queue) has ended.
+        """
+        from qgis.core import QgsProject
+
+        target_folder = self._active_target_folder()
+        if not target_folder:
+            return 0
+
+        def key(path: str) -> str:
+            return os.path.normcase(os.path.abspath(path))
+
+        files = {key(environment.layer_path(target_folder, layer.key))
+                 for layer in environment.layers_of(ENVIRONMENT_STEPS[step])}
+        project = QgsProject.instance()
+        rasters = {layer_id: layer
+                   for layer_id, layer in project.mapLayers().items()
+                   if isinstance(layer, QgsRasterLayer)}
+        held = [layer_id for layer_id, layer in rasters.items()
+                if key(layer.source()) in files]
+        if held:
+            project.removeMapLayers(held)
+            self._environment_readd = True
+            self.log(f"Took {len(held)} environment layer(s) off the map "
+                     "while their files are rewritten.")
+        return len(held)
 
     def run_environment_all(self) -> None:
         """Run the four sources one after the other."""
@@ -287,11 +328,27 @@ class EnvironmentDockMixin:
             self.log(f"Skipping {_STEP_TEXT[step][0]}: " + " ".join(problems))
             self.update_status(step, "⚪ Skipped")
         self._environment_queue = [step for step, _p in runnable]
+        # The queue belongs to this flight: it must not carry on with
+        # another one when the user switches flights while it runs.
+        self._environment_queue_folder = self._active_target_folder()
         self._run_next_environment_step()
+
+    @staticmethod
+    def _same_folder(first: str, second: str) -> bool:
+        def key(path: str) -> str:
+            return os.path.normcase(os.path.abspath(path)) if path else ""
+        return key(first) == key(second)
 
     def _run_next_environment_step(self) -> None:
         if self.worker is not None:
             return      # something else was started in the meantime
+        started_for = getattr(self, "_environment_queue_folder", "")
+        if self._environment_queue and started_for and not self._same_folder(
+                started_for, self._active_target_folder()):
+            self.log("Stopped the remaining environment steps: the active "
+                     "flight changed while they were running.")
+            self._environment_queue = []
+            return
         while self._environment_queue:
             step = self._environment_queue.pop(0)
             if self.run_environment_step(step):
@@ -300,12 +357,18 @@ class EnvironmentDockMixin:
     def _on_environment_step_finished(self, step: str) -> None:
         """After a source ended - however it ended - show what is on disk
         and carry on with the next queued one."""
-        target_folder = self.get_config().get("target_folder", "")
+        target_folder = self._active_target_folder()
         done = environment.status(target_folder)
         if done.get(ENVIRONMENT_STEPS[step]):
             self._set_environment_status(step, target_folder)
         if self._environment_queue:
             self._run_next_when_thread_stopped()
+        elif self._environment_readd:
+            # The layers taken off the map for the re-run go back on it,
+            # showing the new rasters.
+            self._environment_readd = False
+            if environment.available_layers(target_folder):
+                self.add_environment_to_qgis()
 
     def _run_next_when_thread_stopped(self) -> None:
         """Start the next queued source once the finished worker's thread
@@ -426,7 +489,7 @@ class EnvironmentDockMixin:
         layers - and shows one raster at a time: stacked opaque rasters
         would only hide each other.
         """
-        target_folder = self.get_config().get("target_folder", "")
+        target_folder = self._active_target_folder()
         layers = environment.available_layers(target_folder) \
             if target_folder else []
         if not layers:

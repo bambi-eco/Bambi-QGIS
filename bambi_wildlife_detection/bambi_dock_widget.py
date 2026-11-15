@@ -11359,6 +11359,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             from .core import map_symbols
             animals = map_symbols.track_attributes(
                 config["target_folder"], trk_suffix)
+            style_settings = self._animal_style_settings(config)
 
             total_tracks = 0
 
@@ -11452,7 +11453,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
                     bbox_layer, f"Track{track_id}_FinalPosition_{trk_suffix}", "tracks_layers",
                     display_name="Final Position"
                 )
-                self._style_animal_boxes(bbox_layer, config)
+                self._style_animal_boxes(bbox_layer, style_settings)
                 # Tag layer so the inspector tool can identify and handle it
                 bbox_layer.setCustomProperty("bambi_layer_type", "track_final")
                 bbox_layer.setCustomProperty("bambi_target_folder", config["target_folder"])
@@ -11516,12 +11517,19 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
                                  map_symbols.DEFAULT_SWITCH_SCALE)),
                 bool(config.get("map_pins_enabled", True)))
 
-    def _style_animal_boxes(self, layer, config: Optional[dict] = None):
+    def _style_animal_boxes(self, layer, settings=None):
         """Style a layer of animal boxes (detections, a track's final
         position): species colours, and pins beyond the switch-over scale
-        (:mod:`bambi_map_symbols`)."""
+        (:mod:`bambi_map_symbols`).
+
+        *settings* is what :meth:`_animal_style_settings` returned. Pass it
+        when styling many layers: reading it afresh per layer means reading
+        the whole form and the flight's store every time.
+        """
         try:
-            colours, scale, pins = self._animal_style_settings(config)
+            colours, scale, pins = (
+                settings if settings is not None
+                else self._animal_style_settings())
             style_boxes(layer, colours, scale, pins)
         except Exception as exc:  # nosec B110 - an unstyled layer still shows
             self.log(f"Note: could not style {layer.name()}: {exc}")
@@ -11999,6 +12007,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         # Create a group for the layers at top of layer tree
         group = self._create_layer_group(f"BAMBI Frame Detections ({camera_label})")
         animals = self._detection_animals(camera_label)
+        style_settings = self._animal_style_settings()
 
         for frame_idx, detections in frame_detections.items():
             if not detections:
@@ -12047,7 +12056,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             # Persist layer to GeoPackage
             layer = self._persist_memory_layer(
                 layer, f"{layer_name}_{_camera_suffix(camera_label)}", "detection_layers")
-            self._style_animal_boxes(layer)
+            self._style_animal_boxes(layer, style_settings)
 
             # Tag layer so the inspector tool can identify and handle it
             layer.setCustomProperty("bambi_layer_type", "detection")
@@ -13508,7 +13517,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
 
         self.log("Configuration loaded from project")
 
-    def _flight_group(self, create: bool = True):
+    def _flight_group(self, create: bool = True, or_root: bool = True):
         """The layer group of the active flight, or the tree root.
 
         Layers are grouped per flight so it is obvious which outputs belong
@@ -13533,6 +13542,10 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         group = root.findGroup(name)
         if group is None and create:
             group = root.insertGroup(0, name)
+        if group is None and not or_root:
+            # A flight that has no group yet has no layers of its own; the
+            # tree root would stand in for it - and hold the other flights'.
+            return None
         return group or root
 
     @contextmanager
@@ -13643,7 +13656,12 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         Looked up anywhere below the flight group, so a group from before
         the camera subgroups existed is found as well.
         """
-        root = self._flight_group(create=False)
+        # Only inside this flight's own group. Falling back on the tree root
+        # for a flight that has no group yet found - and removed - the
+        # same-named group of another flight.
+        root = self._flight_group(create=False, or_root=False)
+        if root is None:
+            return False
         group = root.findGroup(group_name)
         if group is None:
             return False

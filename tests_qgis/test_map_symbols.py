@@ -355,6 +355,28 @@ def test_detections_share_their_tracks_colour(dock, flight, monkeypatch):
     assert all(len(_rules(layer)) == 2 for layer in layers)
 
 
+def test_the_settings_are_read_once_for_all_the_layers(dock, flight,
+                                                       monkeypatch):
+    """Reading them means reading the whole form (which re-parses the
+    flight log for the time zone) and the flight's store: once per add, not
+    once per frame layer."""
+    _accept_frame_range(monkeypatch)
+    calls = []
+    original = type(dock)._animal_style_settings
+
+    def counted(self, config=None):
+        calls.append(1)
+        return original(self, config)
+
+    monkeypatch.setattr(type(dock), "_animal_style_settings", counted)
+    dock.add_frame_detections_to_qgis()
+    assert len(_animal_layers(symbols.BOX)) == 3
+    assert len(calls) == 1
+    calls.clear()
+    dock.add_tracks_to_qgis()
+    assert len(calls) == 1
+
+
 def test_a_new_colour_in_the_schema_reaches_the_layers(dock, flight,
                                                        monkeypatch):
     from bambi_wildlife_detection.bambi_schema_dialog import BambiSchemaDialog
