@@ -174,3 +174,73 @@ def make_flight(folder: str, tracks, modality: str = "t",
     if seen is not None:
         write_footprints(folder, seen, modality)
     return folder
+
+
+def make_labelled_flight(folder, materialise=True):
+    """Two animals and a rock.
+
+    A roe deer the tracker lost half-way (two tracks), a red deer the
+    detector calls roe deer and loses after four frames, and a warm rock it
+    takes for an animal on two frames. All three were labelled: the red deer
+    by importing its track and correcting it, the rock as not-an-animal.
+    """
+    from bambi_wildlife_detection.core import classification_store
+
+    os.makedirs(folder, exist_ok=True)
+    roe, red = species_id(folder, "roe deer"), species_id(folder, "red deer")
+    project = store.open_store(store.project_path(folder), store.PROJECT)
+    source = detection_store.ensure_source(
+        project, detection_store.DETECTOR, "yolo_wildlife.pt")
+    with store.transaction(project):
+        project.execute(
+            "INSERT OR REPLACE INTO class_mapping (source_id, source_class, "
+            "species_id) VALUES (?, 'roe', ?)", (source, roe))
+    project.close()
+
+    def box(frame, at, confidence):
+        return {"frame": frame, "x1": at[0], "y1": at[1], "x2": at[0] + 10.0,
+                "y2": at[1] + 10.0, "confidence": confidence,
+                "source_class": "roe"}
+
+    rows = [box(f, (100.0, 100.0), 0.9) for f in range(6)]          # 1-6
+    rows += [box(f, (300.0, 300.0), 0.5) for f in range(4)]         # 7-10
+    rows += [box(f, (500.0, 500.0), 0.2) for f in (2, 3)]           # 11-12
+    detection_store.record_detections(folder, "t", rows,
+                                      model="yolo_wildlife.pt")
+    ids = [row["detection_id"] for row in sorted(
+        track_store.load_detections(folder, "t"),
+        key=lambda row: row["detection_id"])]
+    membership = [1, 1, 1, 2, 2, 2, 3, 3, 3, 3, 4, 4]
+    track_store.record_tracks(folder, "t", [
+        {"track_id": track, "detection_id": detection}
+        for track, detection in zip(membership, ids)], tracker="builtin")
+    track_store.set_track_attribute(folder, "t", 1, "sex", "female")
+    classification_store.record_track_predictions(folder, "t", "species", [
+        {"track_id": 1, "label": "roe deer", "votes": 3, "n": 3,
+         "fraction": 1.0, "model": "/models/species_v3.pt"},
+        {"track_id": 3, "label": "roe deer", "votes": 3, "n": 4,
+         "fraction": 0.75, "model": "/models/species_v3.pt"}])
+
+    vocabulary = label_store.vocabulary(folder)
+    female = next(value["value_id"] for value in vocabulary["enums"]["sex"]
+                  if value["label"] == "female") \
+        if "enums" in vocabulary else None
+
+    def keyframes(at, frames):
+        return [{"frame": frame, "x1": at[0], "y1": at[1],
+                 "x2": at[0] + 10.0, "y2": at[1] + 10.0}
+                for frame in frames]
+
+    label_store.save_tracks(folder, "t", [
+        {"label_track_id": 1, "species_id": roe,
+         "attributes": {} if female is None else {"sex": female},
+         "keyframes": keyframes((100.0, 100.0), (0, 5))},
+        {"label_track_id": 2, "species_id": red, "origin_track_id": 3,
+         "keyframes": keyframes((300.0, 300.0), (0, 5))},
+        {"label_track_id": 3,
+         "species_id": store.NOT_AN_ANIMAL_SPECIES_ID,
+         "keyframes": keyframes((500.0, 500.0), (2, 3))},
+    ])
+    if materialise:
+        label_store.materialise(folder, "t")
+    return folder

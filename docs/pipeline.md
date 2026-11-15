@@ -538,6 +538,32 @@ bambi_t/classification.gpkg
 └── track_predictions    # per animal: the call, and the vote behind it
 ```
 
+### Accuracy against hand labels
+
+A flight somebody went through in the [Labelling Tool](tools.md#labelling-tool) carries its own answer key: every animal that person drew is known, frame by frame, with its species, sex and age. **→ Compare with Hand Labels…** (Processing tab, *Accuracy*) compares the pipeline's output on the selected flight with it - which says how far the numbers of the flights nobody went through can be trusted, and where the pipeline fails. Nothing is changed by it.
+
+What is compared is the pipeline's **own** output: the detector's boxes (hand-drawn ones are left out), the tracker's tracks - also those a label has replaced since - and the species, sex and age the survey tools count each track as. The report answers three questions in turn, each needing the one before:
+
+- **Were the animals found?** Frame by frame, the detector's boxes are paired with the labelled ones - the best overlapping pairs first, a box used once. A labelled animal with a box on it is *found*, one without is *missed*, a box on nothing is a *false alarm*. From these come **precision** (the share of boxes that are on an animal) and **recall** (the share of labelled boxes that got one), overall, per labelled species and per species the detector called its boxes - and a table of what both would have been **had only boxes of at least a given confidence been kept**, with the confidence at which their balance (F1) is best.
+- **Was each animal one track?** A census counts tracks. Per labelled animal: whether a track follows it, for how much of the time, and in how many pieces; per track: whether it follows a labelled animal at all, or more than one. The number of tracks against the number of labelled animals is what a census would have got wrong (`+2`: two animals too many).
+- **Was it named right?** For the animals that say what they are, a confusion table - rows what was labelled, columns what the survey tools count the track as that follows the animal for the longest - for species, sex and age; where a classifier made the call, also the classifier's own call per model.
+
+| Setting | Description |
+|---------|-------------|
+| **Camera** | Thermal or RGB; starts on the camera the animals are tracked on. |
+| **Overlap (IoU) at least** | How much a box of the pipeline and a labelled box have to overlap to be the same animal: the area they share over the area they cover together. Labels are drawn on key frames and filled in between, and a thermal animal is a few pixels across - the default of 0.3 allows for that; benchmark data sets use 0.5. |
+| **First to last labelled frame** | Which frames were gone through. A frame without a label only says "no animal here" if somebody looked at it, so by default the frames from the first to the last label count. Untick to name the frames - the whole flight, if all of it was gone through. |
+
+A label of the species **`not-an-animal`** is the reviewer saying "this is none": a box on it is a *confirmed* false alarm, and it is not an animal that could be missed. Labels made with *Import as label track* are compared like any other; where nobody moved a box it matches itself, which flatters the figures a little, and the report says how many such labels there are. Detections and tracks deleted in the inspector are gone from the project and cannot be counted against the pipeline.
+
+**Outputs** (written on every comparison):
+```
+analytics_t/    # or analytics_w/, in the flight's folder
+├── accuracy.html        # the report
+├── accuracy.json        # all figures, per animal and per track
+└── accuracy_boxes.csv   # every labelled box and every box of the pipeline: found, missed, false alarm, ruled out
+```
+
 ### S1. Open Segmentation Tool
 
 Segmentation is interactive - a prompt, a look at the mask, another click - so it is a window of its own rather than a step: the [Segmentation Tool](tools.md#segmentation-tool), also on the toolbar. It prompts SAM3 / SAM 3.1 with **text** ("deer") or **clicked points** on the extracted frames of either camera, on single frames or **tracked across a sequence**, through the Roboflow API, `transformers`, or Meta's official `sam3` package. The window also geo-references the masks onto the DEM, adds them as QGIS layers and exports them as GeoJSON.

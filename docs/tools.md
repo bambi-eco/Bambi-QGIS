@@ -201,6 +201,8 @@ Whenever the file and the store disagree and it is not certain which is right, t
 
 Editing a label and exporting again **re-uses the detections it already produced**: a box you did not move keeps its identity, and only boxes that actually moved need geo-referencing again. Without that, one key-frame edit would invalidate the whole flight, which is why 5.x export was an all-or-nothing rewrite.
 
+How well the pipeline did against your labels - found, missed and wrongly named animals - is what the [accuracy report](pipeline.md#accuracy-against-hand-labels) on the Processing tab shows.
+
 Label tracks are also written as **real tracks**, so labelled animals reach the survey analytics and the exports without re-running tracking. A track imported with *Import as label track* replaces the pipeline track it came from, so refining a detector track does not count the animal twice. A labelled animal keeps its track across exports - the same track id, and with it its **Approved** tick and its thermal/RGB pairing.
 
 **Replace detections in project** is the destructive variant: after a confirmation dialog the detector's detections are removed and the labels remain. Re-run **Geo-Reference Detections** and **Track Animals** afterwards to rebuild the QGIS layers from the labels: with nothing but labelled boxes left, tracking has nothing to associate - the labelled tracks are tracks already - and it records that the tracker's earlier tracks are gone.

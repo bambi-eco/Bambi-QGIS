@@ -14,6 +14,8 @@ The tabs
     ``tracking_settings``        Configuration > Tracking
     ``classification_settings``  Configuration > Classification
     ``step_tabs``                the Pre-Processing and Processing tabs
+    ``accuracy``                 Processing > Accuracy: the report against
+                                 hand labels
     ``analytics_tab``            the Survey Analytics tab
     ``grid_density``             Survey Analytics > Grid Density, and the
                                  grid on the map

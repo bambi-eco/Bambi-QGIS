@@ -645,6 +645,8 @@ class StepTabsMixin:
 
         animal_layout.addWidget(proc_steps_group)
         animal_layout.addWidget(classify_steps_group)
+        # Accuracy against hand labels (dock/accuracy.py)
+        animal_layout.addWidget(self._build_accuracy_group())
         animal_layout.addWidget(extra_steps_group)
 
         # ----- Export -----
