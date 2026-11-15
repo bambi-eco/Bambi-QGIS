@@ -126,10 +126,16 @@ class TestMarks:
         assert map_symbols.sex_mark(sex) == expected
 
     @pytest.mark.parametrize("age,expected", [
-        ("adult", "a"), ("Juvenile", "j"), ("subadult", "s"),
-        ("unknown", ""), (None, ""), ("yearling", "y")])
+        ("adult", "A"), ("Juvenile", "J"), ("subadult", "S"),
+        ("unknown", ""), (None, ""), ("yearling", "Y")])
     def test_age_mark(self, age, expected):
         assert map_symbols.age_mark(age) == expected
+
+    @pytest.mark.parametrize("colour,expected", [
+        ("#a50f15", "#ffffff"), ("#54278f", "#ffffff"), ("#e6550d", "#ffffff"),
+        ("#ffd92f", "#202020"), ("#b2df8a", "#202020"), ("#ffffff", "#202020")])
+    def test_a_mark_reads_on_its_pin(self, colour, expected):
+        assert map_symbols.reads_on(colour) == expected
 
     def test_an_individual_keeps_its_colour(self):
         first = map_symbols.individual_colour(7)

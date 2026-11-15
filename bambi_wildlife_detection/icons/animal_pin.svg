@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Map pin of the animal layers (bambi_map_symbols.py). A teardrop whose
+     tip, at the bottom centre, is the animal's position. QGIS fills in the
+     colours: the species colour, and the outline. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="128" viewBox="0 0 100 128">
+  <path d="M 50 124 L 15.66 66.51 A 40 40 0 1 1 84.34 66.51 Z"
+        fill="param(fill) #2e8b57"
+        stroke="param(outline) #ffffff"
+        stroke-width="param(outline-width) 5"
+        stroke-linejoin="round"/>
+</svg>

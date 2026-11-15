@@ -161,10 +161,12 @@ Two scales, two questions.
 
 **Zoomed in** - *which animal is this?* An animal is its geo-referenced **bounding box**, and every tracked individual has a colour of its own for its box and its path, so two roe deer side by side can be told apart. The colour comes from the track id: a track looks the same on its own layers and on the detection layers, and keeps its colour when the layers are added again. Detections that belong to no track share one neutral colour.
 
-**Zoomed out** - *what is where?* Where a one-metre box is a speck, the animal becomes a **pin** of fixed size on screen whose tip is the box's centre, in the **colour of its species**. Sex and age are part of the pin itself, so with several pins close together they cannot be read as a neighbour's:
+**Zoomed out** - *what is where?* Where a one-metre box is a speck, the animal becomes a teardrop **pin** of fixed size on screen whose tip is the box's centre, in the **colour of its species**. Sex and age are part of the pin itself, so with several pins close together they cannot be read as a neighbour's:
 
-- the **sex** is a mark inside the pin's head - `♀`, `♂`, or the first letter of a sex your project defined; a plain dot when it is unknown;
-- the **age** is a small badge on the pin's shoulder with the first letter of the age class - `j` juvenile, `a` adult; no badge when it is unknown.
+- the **sex** is the mark in the middle of the pin - `♀`, `♂`, or the first letter of a sex your project defined - and `?` when it is not known;
+- the **age** is a small badge on the pin's lower right, ringed in the pin's colour, with the first letter of the age class - `J` juvenile, `A` adult, `S` for a subadult class you added; no badge when it is not known.
+
+The mark is white on a dark species colour and dark on a light one.
 
 Every species has a default colour - the seeded ones a fixed one, any species you add a colour derived from its name, the same in every flight - and each can be changed in **Configuration → Project → Edit Project Schema… → Species → Colour…** (*Default Colour* goes back). The colours are stored with the flight and follow a species when it is renamed. A detection that belongs to a track takes its track's species, sex and age - the classifier's vote and the labelling tool's annotations included - so the map agrees with the track inventory.
 

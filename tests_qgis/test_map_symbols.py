@@ -15,7 +15,7 @@ from qgis.core import (
     QgsCentroidFillSymbolLayer, QgsFeature, QgsFontMarkerSymbolLayer,
     QgsGeometry, QgsMapRendererParallelJob, QgsMapSettings, QgsProject,
     QgsRectangle, QgsRuleBasedRenderer, QgsSimpleFillSymbolLayer,
-    QgsVectorLayer,
+    QgsSvgMarkerSymbolLayer, QgsVectorLayer,
 )
 from qgis.PyQt.QtCore import QSize
 from qgis.PyQt.QtGui import QColor
@@ -50,6 +50,11 @@ def _rules(layer):
     renderer = layer.renderer()
     assert isinstance(renderer, QgsRuleBasedRenderer)
     return renderer.rootRule().children()
+
+
+def _pin_colour(rule):
+    """Fill colour of the teardrop of a pin rule."""
+    return _pin_layers(rule)[0].fillColor().name()
 
 
 def _pin_layers(rule):
@@ -105,47 +110,64 @@ def test_a_pin_is_the_colour_of_its_species():
     hare, deer = pins.children()[0], pins.children()[1]
     assert isinstance(hare.symbol().symbolLayer(0),
                       QgsCentroidFillSymbolLayer)
-    assert _pin_layers(hare)[1].color().name() == "#010203"       # head
-    assert _pin_layers(deer)[1].color().name() == \
-        map_symbols.SEEDED_COLOURS["red deer"]
+    assert _pin_colour(hare) == "#010203"
+    assert _pin_colour(deer) == map_symbols.SEEDED_COLOURS["red deer"]
 
 
 def test_sex_and_age_are_part_of_the_pin():
-    """Nothing is drawn beside the pin: the sex mark sits on the head's
-    centre and the age badge overlaps the head, so with pins close together
-    neither can be read as a neighbour's."""
+    """Nothing is drawn beside the pin: the sex mark sits in the teardrop's
+    round part and the age badge overlaps its lower right, so with pins
+    close together neither can be read as a neighbour's."""
     layer = _layer()
     symbols.style_boxes(layer, {}, 500)
     _boxes, pins = _rules(layer)
-    layers = _pin_layers(pins.children()[0])
-    head = layers[1]
-    radius = head.size() / 2.0
-    letters = [entry for entry in layers
-               if isinstance(entry, QgsFontMarkerSymbolLayer)]
-    fields = [entry.dataDefinedProperties().property(
-        symbols._property("PropertyCharacter")).field() for entry in letters]
-    assert fields == ["sex_mark", "sex_mark", "age_mark"]
-    assert all(entry.fontFamily() != "Dingbats" for entry in letters)
-    def distance(entry):
-        dx = entry.offset().x() - head.offset().x()
-        dy = entry.offset().y() - head.offset().y()
-        return (dx ** 2 + dy ** 2) ** 0.5
+    body, sex, badge, age = _pin_layers(pins.children()[0])
+    assert isinstance(body, QgsSvgMarkerSymbolLayer)
+    half_width = body.size() / 2.0
 
-    # the sex mark (and the dot that stands in for an unknown one) sits in
-    # the middle of the head
-    for entry in layers[2:5]:
-        assert distance(entry) < radius / 4.0
-    # the age badge is on the head's upper right and overlaps it
-    badge, age = layers[5], layers[6]
-    assert badge.offset().x() > 0 > badge.offset().y() - head.offset().y()
-    assert distance(badge) - badge.size() / 2.0 < radius
+    # the sex mark: centred, inside the pin, "?" where the sex is unknown
+    assert isinstance(sex, QgsFontMarkerSymbolLayer)
+    assert sex.offset().x() == 0 and sex.offset().y() < 0
+    character = sex.dataDefinedProperties().property(
+        symbols._property("PropertyCharacter")).expressionString()
+    assert "sex_mark" in character and "'?'" in character
+    assert sex.fontFamily() != "Dingbats"
+
+    # the age badge: lower right, overlapping the pin, ringed in its colour
+    assert 0 < badge.offset().x() < half_width
+    assert badge.offset().x() + badge.size() / 2.0 > half_width
+    assert badge.strokeColor().name() == body.fillColor().name()
+    assert badge.color().name() == "#ffffff"
     assert age.offset() == badge.offset()
+    assert age.dataDefinedProperties().property(
+        symbols._property("PropertyCharacter")).field() == "age_mark"
 
     marks = {f["species"]: (f["sex_mark"], f["age_mark"])
              for f in layer.getFeatures()}
-    assert marks["roe deer"] == ("♀", "j")
-    assert marks["red deer"] == ("♂", "a")
+    assert marks["roe deer"] == ("♀", "J")
+    assert marks["red deer"] == ("♂", "A")
     assert marks["hare"] == ("", "")
+
+
+def test_the_mark_is_dark_on_a_light_pin():
+    layer = _layer()
+    symbols.style_boxes(layer, {"hare": "#ffffcc", "red deer": "#400000"},
+                        500)
+    _boxes, pins = _rules(layer)
+    hare, deer = pins.children()[0], pins.children()[1]
+    assert _pin_layers(hare)[1].color().name() == "#202020"
+    assert _pin_layers(deer)[1].color().name() == "#ffffff"
+
+
+def test_the_pin_drawing_travels_with_the_style():
+    """Embedded, not a path into this plugin installation: the project
+    still shows pins on another computer."""
+    path = symbols.pin_svg_path()
+    assert path.startswith("base64:")
+    layer = _layer()
+    symbols.style_boxes(layer, {}, 500)
+    _boxes, pins = _rules(layer)
+    assert _pin_layers(pins.children()[0])[0].path().startswith("base64:")
 
 
 def test_pins_can_be_switched_off():
@@ -226,7 +248,7 @@ def test_restyle_touches_only_what_was_styled():
     assert symbols.restyle([styled, other], {"hare": "#010203"}, 2000) == 1
     boxes, pins = _rules(styled)
     assert "1:2,000" in boxes.label()
-    assert _pin_layers(pins.children()[0])[1].color().name() == "#010203"
+    assert _pin_colour(pins.children()[0]) == "#010203"
     assert not isinstance(other.renderer(), QgsRuleBasedRenderer)
 
 
@@ -312,7 +334,7 @@ def test_tracks_differ_up_close_and_agree_by_species_far_out(
     assert "1:800" in close.label()
     assert [rule.label() for rule in far.children()] == [
         "red deer", "undetermined"]
-    assert _pin_layers(far.children()[0])[1].color().name() == \
+    assert _pin_colour(far.children()[0]) == \
         map_symbols.SEEDED_COLOURS["red deer"]
     # the path of the two-box track, in the individual's colour like its box
     (path,) = _animal_layers(symbols.PATH)
@@ -362,7 +384,7 @@ def test_a_new_colour_in_the_schema_reaches_the_layers(dock, flight,
     deer = next(layer for layer in _animal_layers(symbols.BOX)
                 if next(layer.getFeatures())["species"] == "red deer")
     _close, far = _rules(deer)
-    assert _pin_layers(far.children()[0])[1].color().name() == "#010203"
+    assert _pin_colour(far.children()[0]) == "#010203"
 
 
 def test_a_cancelled_schema_dialog_keeps_the_colours(dock, flight,

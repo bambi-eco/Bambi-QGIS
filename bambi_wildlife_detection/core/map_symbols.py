@@ -17,9 +17,9 @@ species keeps its colour.
 
 **Sex and age are part of the pin**, not text beside it - with several pins
 close together a label next to one reads as belonging to its neighbour. The
-sex is a mark inside the pin's head ("♀", "♂"), the age a small badge
-attached to it ("j", "a"). Unknown is not shown at all: no mark means nobody
-knows, not "neither".
+sex is the mark in the middle of the pin ("♀", "♂", and "?" when it is not
+known), the age a small badge on its lower right ("J", "A"), left off when
+it is not known.
 
 No Qt in here; :mod:`bambi_map_symbols` turns this into QGIS symbology.
 """
@@ -187,20 +187,34 @@ def _known(label) -> str:
 
 
 def sex_mark(label) -> str:
-    """The mark inside a pin's head: "♀" / "♂" for female / male, the
-    first letter of any other label a project defined, nothing for
-    unknown."""
+    """The mark in the middle of a pin: "♀" / "♂" for female / male, the
+    first letter of any other label a project defined, nothing for unknown
+    (the pin then shows :data:`UNKNOWN_SEX_MARK`)."""
     text = _known(label)
     if not text:
         return ""
     return _SEX_SYMBOLS.get(text.lower()) or text[:1].upper()
 
 
+#: What a pin shows where the sex is not known.
+UNKNOWN_SEX_MARK = "?"
+
+
 def age_mark(label) -> str:
     """The letter in a pin's age badge: the first letter of the age class
-    ("j", "a"), nothing for unknown."""
+    ("J", "A", "S"), nothing for unknown."""
     text = _known(label)
-    return text[:1].lower() if text else ""
+    return text[:1].upper() if text else ""
+
+
+def reads_on(colour: str) -> str:
+    """The colour a mark is drawn in on top of *colour*: white on a dark
+    species colour, near-black on a light one (the yellow of an
+    undetermined animal, the pale green of a hare)."""
+    value = normalise_colour(colour)
+    red, green, blue = (int(value[i:i + 2], 16) for i in (1, 3, 5))
+    brightness = (299 * red + 587 * green + 114 * blue) / 1000.0
+    return "#ffffff" if brightness < 170 else "#202020"
 
 
 def individual_colour(track_id) -> str:

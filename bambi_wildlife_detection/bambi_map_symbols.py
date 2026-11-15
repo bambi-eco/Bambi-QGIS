@@ -6,10 +6,11 @@ ordinary Symbology dialog:
 
 * **Zoomed in**, the geo-referenced bounding box, in the colour of the
   individual - a track's own colour, so neighbours can be told apart.
-* **Zoomed out**, where a one-metre box is a speck, a pin of fixed screen
-  size at the box's centre, in the colour of the species. The sex is a mark
-  inside the pin's head and the age a small badge attached to it, so both
-  stay with their pin however close the next one is.
+* **Zoomed out**, where a one-metre box is a speck, a teardrop pin of fixed
+  screen size whose tip is the box's centre, in the colour of the species.
+  The sex is the mark in its middle ("?" when unknown) and the age a small
+  badge on its lower right, so both stay with their pin however close the
+  next one is.
 
 The two are top-level rules with a scale range each. "Boxes" is one symbol
 that reads its colour from the feature; below "Pins" sits one rule per
@@ -19,15 +20,18 @@ What the colours and marks *are* is decided in :mod:`core.map_symbols`;
 this module only draws them.
 """
 
+import base64
+import os
 from typing import Dict, Iterable, List, Optional
 
 from qgis.core import (
     QgsCentroidFillSymbolLayer, QgsField, QgsFillSymbol,
     QgsFontMarkerSymbolLayer, QgsLineSymbol, QgsMarkerSymbol, QgsProperty,
     QgsRuleBasedRenderer, QgsSimpleFillSymbolLayer,
-    QgsSimpleMarkerSymbolLayer, QgsSingleSymbolRenderer, QgsSymbolLayer,
+    QgsSimpleMarkerSymbolLayer, QgsSingleSymbolRenderer, QgsSvgMarkerSymbolLayer,
+    QgsSymbolLayer,
 )
-from qgis.PyQt.QtCore import QPointF, Qt, QVariant
+from qgis.PyQt.QtCore import QPointF, QVariant
 from qgis.PyQt.QtGui import QColor, QFont
 
 from .core import map_symbols
@@ -38,11 +42,27 @@ STYLE_PROPERTY = "bambi_animal_style"
 BOX = "box"
 PATH = "path"
 
-PIN_HEAD_MM = 6.0
+#: Width of a pin; its height follows from the drawing (100 x 128).
+PIN_WIDTH_MM = 8.5
+PIN_HEIGHT_MM = PIN_WIDTH_MM * 1.28
 PIN_OUTLINE = QColor(255, 255, 255)
-BADGE_COLOR = QColor(20, 20, 20)
-#: Diameter of the age badge on the pin's shoulder.
-AGE_BADGE_MM = 3.3
+BADGE_COLOR = QColor(32, 32, 32)
+#: Diameter of the age badge on the pin's lower right.
+AGE_BADGE_MM = 4.0
+
+#: The teardrop, bundled with the plugin.
+PIN_SVG = os.path.join(os.path.dirname(__file__), "icons", "animal_pin.svg")
+
+
+def pin_svg_path() -> str:
+    """The pin drawing as a path QGIS can store in a style.
+
+    Embedded rather than referenced: a project opened on another computer,
+    or by someone without the plugin, would otherwise look for a file in
+    this installation's folder and draw a question mark.
+    """
+    with open(PIN_SVG, "rb") as fh:
+        return "base64:" + base64.b64encode(fh.read()).decode("ascii")
 
 
 def animal_fields() -> List[QgsField]:
@@ -79,10 +99,6 @@ def _shape(name: str):
 def _filled(field: str) -> QgsProperty:
     """True for a feature whose *field* is not empty."""
     return QgsProperty.fromExpression(f"coalesce(\"{field}\", '') <> ''")
-
-
-def _empty(field: str) -> QgsProperty:
-    return QgsProperty.fromExpression(f"coalesce(\"{field}\", '') = ''")
 
 
 def _letter(field: str, size: float, colour: QColor,
@@ -124,66 +140,52 @@ def box_symbol(colour: str = map_symbols.UNTRACKED_COLOUR) -> QgsFillSymbol:
 
 
 def pin_marker(colour: str) -> QgsMarkerSymbol:
-    """A map pin whose tip is the animal's position.
+    """A teardrop pin whose tip is the animal's position.
 
-    The head carries the sex as a mark (a plain dot when it is unknown) and,
-    on its shoulder, a badge with the first letter of the age class - both
-    part of the pin, so they cannot be read as a neighbour's.
+    In its middle the sex as a mark - "?" when it is not known - and on its
+    lower right a badge with the first letter of the age class, ringed in
+    the pin's colour. Both are part of the pin, so they cannot be read as a
+    neighbour's.
     """
     fill = QColor(colour)
-    head_centre = -(PIN_HEAD_MM * 0.95)
+    mark_colour = QColor(map_symbols.reads_on(colour))
 
-    # The point of the pin: a triangle from the head down to the position.
-    tip = QgsSimpleMarkerSymbolLayer(_shape("Triangle"))
-    tip.setSize(PIN_HEAD_MM * 0.72)
-    tip.setAngle(180)
-    tip.setColor(fill)
-    tip.setStrokeColor(PIN_OUTLINE)
-    tip.setStrokeWidth(0.3)
-    # The offset turns with the marker, so "up" is positive here.
-    tip.setOffset(QPointF(0, PIN_HEAD_MM * 0.36))
+    body = QgsSvgMarkerSymbolLayer(pin_svg_path())
+    body.setSize(PIN_WIDTH_MM)
+    body.setFillColor(fill)
+    body.setStrokeColor(PIN_OUTLINE)
+    body.setStrokeWidth(0.45)
+    # The drawing's bottom edge is 4/128 below the tip.
+    body.setVerticalAnchorPoint(
+        QgsSvgMarkerSymbolLayer.VerticalAnchorPoint.Bottom)
+    body.setOffset(QPointF(0, PIN_HEIGHT_MM * 4.0 / 128.0))
 
-    head = QgsSimpleMarkerSymbolLayer(_shape("Circle"))
-    head.setSize(PIN_HEAD_MM)
-    head.setColor(fill)
-    head.setStrokeColor(PIN_OUTLINE)
-    head.setStrokeWidth(0.45)
-    head.setOffset(QPointF(0, head_centre))
+    # The round part of the teardrop is centred 78/128 above the tip.
+    # The mark sits a little above it, clear of the age badge.
+    middle = QPointF(0, -PIN_HEIGHT_MM * 78.0 / 128.0 - 0.9)
+    sex = _letter("sex_mark", PIN_WIDTH_MM * 0.5, mark_colour, middle)
+    sex.setDataDefinedProperty(
+        _property("PropertyCharacter"), QgsProperty.fromExpression(
+            "coalesce(nullif(\"sex_mark\", ''), "
+            f"'{map_symbols.UNKNOWN_SEX_MARK}')"))
+    sex.setDataDefinedProperty(
+        _property("PropertyLayerEnabled"), QgsProperty.fromValue(True))
 
-    # Sex unknown: the plain dot of an ordinary pin.
-    eye = QgsSimpleMarkerSymbolLayer(_shape("Circle"))
-    eye.setSize(PIN_HEAD_MM * 0.3)
-    eye.setColor(PIN_OUTLINE)
-    eye.setStrokeStyle(Qt.PenStyle.NoPen)
-    eye.setOffset(QPointF(0, head_centre))
-    eye.setDataDefinedProperty(
-        _property("PropertyLayerEnabled"), _empty("sex_mark"))
-
-    # Sex known: its mark in the head, dark under white so it reads on
-    # every species colour.
-    # The sex glyphs hang below their baseline; lifted a little they sit
-    # in the middle of the head.
-    centre = QPointF(0, head_centre - PIN_HEAD_MM * 0.07)
-    sex_shadow = _letter("sex_mark", PIN_HEAD_MM * 0.74, BADGE_COLOR, centre)
-    sex_shadow.setStrokeColor(BADGE_COLOR)
-    sex_shadow.setStrokeWidth(0.5)
-    sex = _letter("sex_mark", PIN_HEAD_MM * 0.74, PIN_OUTLINE, centre)
-
-    # Age: a badge on the head's upper right, overlapping it.
-    shoulder = QPointF(PIN_HEAD_MM * 0.42, head_centre - PIN_HEAD_MM * 0.42)
+    # Age: a white disc ringed in the pin's colour, on its lower right.
+    corner = QPointF(PIN_WIDTH_MM * 0.37, -PIN_HEIGHT_MM * 0.22)
     badge = QgsSimpleMarkerSymbolLayer(_shape("Circle"))
     badge.setSize(AGE_BADGE_MM)
     badge.setColor(PIN_OUTLINE)
-    badge.setStrokeColor(BADGE_COLOR)
-    badge.setStrokeWidth(0.3)
-    badge.setOffset(shoulder)
+    badge.setStrokeColor(fill)
+    badge.setStrokeWidth(0.5)
+    badge.setOffset(corner)
     badge.setDataDefinedProperty(
         _property("PropertyLayerEnabled"), _filled("age_mark"))
-    age = _letter("age_mark", AGE_BADGE_MM * 0.72, BADGE_COLOR, shoulder)
+    age = _letter("age_mark", AGE_BADGE_MM * 0.66, BADGE_COLOR, corner)
 
     marker = QgsMarkerSymbol()
-    marker.changeSymbolLayer(0, tip)
-    for layer in (head, eye, sex_shadow, sex, badge, age):
+    marker.changeSymbolLayer(0, body)
+    for layer in (sex, badge, age):
         marker.appendSymbolLayer(layer)
     return marker
 
