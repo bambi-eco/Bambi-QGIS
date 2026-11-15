@@ -227,7 +227,7 @@ The Segmentation Tool prompts Meta's **SAM3** (or **SAM 3.1**) on the extracted 
 |---|---|---|---|
 | **Local - transformers** (`facebook/sam3`) | text, points | yes (`Sam3VideoModel` / `Sam3TrackerVideoModel`) | `transformers >= 5.0`, a Hugging Face read token with access to the gated repository (the **HF token** field - one token shared with the Classification tab, entering it in either place fills both); CPU works, a GPU is much faster |
 | **Local - Meta sam3 package** | text, points | yes - **SAM 3.1** with object multiplexing (~7x faster with many objects) | `pip install git+https://github.com/facebookresearch/sam3.git` (Python >= 3.12, PyTorch >= 2.7, CUDA >= 12.6) and the same token; the SAM 3.1 checkpoint exists only as a bare checkpoint on Hugging Face, so this is the only way to run it |
-| **Remote - Roboflow API** | text | no | a Roboflow API key (kept in QSettings, never in the project) |
+| **Remote - Roboflow API** | text | no | a Roboflow API key (kept in QSettings, never in the project, and masked in the log and in error messages) |
 
 **Check access** asks Hugging Face whether the HF token may read the chosen checkpoint before anything is downloaded. Both local backends download their checkpoint (~3.4 GB) automatically on first use into the plugin's shared model cache (`<QGIS profile>/bambi_deps/models/hf_cache`, the same folder as the DINOv3 backbone), so one download serves every project; the Meta backend can also be pointed at a checkpoint file you already have.
 

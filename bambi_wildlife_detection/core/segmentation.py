@@ -152,8 +152,10 @@ class SegmentationRequest:
     confidence: float = 0.5
     model: str = ""                     # HF repo (transformers) / version (meta)
     checkpoint_path: str = ""           # meta backend: local .pt, optional
-    api_key: str = ""                   # roboflow
-    hf_token: str = ""                  # gated downloads
+    # Credentials: kept out of the object's repr, so that an error message
+    # or a log line that quotes the request cannot quote them.
+    api_key: str = field(default="", repr=False)    # roboflow
+    hf_token: str = field(default="", repr=False)   # gated downloads
     device: str = "auto"
     models_dir: str = ""
     source: str = SOURCE_FRAMES         # frames | orthomosaic
@@ -493,12 +495,49 @@ class RoboflowBackend(SegmentationBackend):
             "image": {"type": "base64", "value": image_b64},
             "prompts": [{"type": "text", "text": p} for p in texts],
         }
-        response = self._session.post(
-            self.endpoint, params={"api_key": self.api_key},
-            headers={"Content-Type": "application/json"}, json=payload,
-            timeout=(10, 120))
-        response.raise_for_status()
-        return self.normalise(response.json(), self.output_format)
+        return self.normalise(self._post(payload), self.output_format)
+
+    def _post(self, payload: dict) -> dict:
+        """The service's answer to *payload*.
+
+        The key travels as a query parameter - that is Roboflow's interface -
+        so the URL of the request holds it, and the HTTP library quotes that
+        URL in every error it raises ("401 ... for url: ...?api_key=..."),
+        which went into the log as it was. A failure is therefore reported
+        in our own words, with the key taken out of whatever is quoted, and
+        without the original exception chained on.
+        """
+        import requests
+
+        from .redaction import redact
+
+        try:
+            response = self._session.post(
+                self.endpoint, params={"api_key": self.api_key},
+                headers={"Content-Type": "application/json"}, json=payload,
+                timeout=(10, 120))
+        except requests.RequestException as exc:
+            message = redact(exc, [self.api_key])
+            raise SegmentationError(
+                f"The Roboflow service could not be reached: {message}"
+            ) from None
+
+        status = response.status_code
+        if status in (401, 403):
+            raise SegmentationError(
+                f"Roboflow did not accept the API key (HTTP {status}). "
+                "Check the key in the Segmentation Tool.")
+        if status >= 400:
+            detail = redact((response.text or "")[:300], [self.api_key])
+            raise SegmentationError(
+                f"The Roboflow service answered with an error (HTTP "
+                f"{status}){': ' + detail if detail.strip() else ''}")
+        try:
+            return response.json()
+        except ValueError:
+            raise SegmentationError(
+                "The Roboflow service sent an answer that is not JSON."
+            ) from None
 
     @staticmethod
     def normalise(response: dict, output_format: str = "polygon") -> List[dict]:

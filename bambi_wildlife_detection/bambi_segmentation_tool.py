@@ -252,7 +252,9 @@ class _SegmentationWorker(QThread):
             self.cancelled.emit()
             return
         except Exception as exc:  # noqa: BLE001 - surfaced to the user
-            self.failed.emit(str(exc))
+            from .core.redaction import redact
+            self.failed.emit(redact(
+                exc, [self.request.api_key, self.request.hf_token]))
             return
         self.finished_ok.emit(results)
 
@@ -305,7 +307,8 @@ class _GeoRefWorker(QThread):
                 self.config, progress_fn=self.progress.emit,
                 log_fn=self.log.emit, cancel_check=lambda: self._cancel)
         except Exception as exc:  # noqa: BLE001 - surfaced to the user
-            self.failed.emit(str(exc))
+            from .core.redaction import redact, secrets_of
+            self.failed.emit(redact(exc, secrets_of(self.config)))
             return
         self.finished_ok.emit()
 

@@ -277,8 +277,12 @@ class ProcessingWorker(QObject):
             self.finished.emit(self.step, False)
         except Exception as e:
             import traceback
+            from .core.redaction import redact, secrets_of
             tb = traceback.format_exc()
-            self.error.emit(self.step, f"{str(e)}\n\n{tb}")
+            # An error text can quote a URL or a request, and with it an
+            # API key or a token; neither belongs in a log.
+            self.error.emit(self.step, redact(f"{str(e)}\n\n{tb}",
+                                              secrets_of(self.config)))
             self.finished.emit(self.step, False)
 
 
