@@ -88,15 +88,15 @@ class ReconWorker(QtCore.QThread):
         result = dict(job=job, out_dir=out, files=[])
         started = time.monotonic()
 
-        views = []
-        for n, i in enumerate(keys):
-            fr._check(cancel)
-            self.progress.emit(f"Loading frame {i}", 0.05 * n / len(keys))
-            img = _load_rgb(rgb.frame_path(i), job["max_edge"])
-            if img is not None:
-                views.append(fr.View(i, rgb.camera(i), img, mask=_load_mask(
-                    job["mask_w"], img.shape[1], img.shape[0],
-                    job["mask_erosion"])))
+        # The views hold no image: each is read when a step needs it, and
+        # a limited amount of them kept. All keyframes at once, as float
+        # images, were 11 MB each - more memory than there is for any
+        # longer range.
+        views = fr.lazy_views(
+            keys, rgb.camera,
+            lambda i: _load_rgb(rgb.frame_path(i), job["max_edge"]),
+            lambda w, h: _load_mask(job["mask_w"], w, h, job["mask_erosion"]),
+            progress=self._step(0.0, 0.05), cancel=cancel)
         if len(views) < 3:
             raise RuntimeError("At least three readable keyframes are needed.")
         result["views"] = [v.index for v in views]
@@ -177,16 +177,12 @@ class ReconWorker(QtCore.QThread):
                 idx = sorted({fv.matching_frame(rgb.images, thermal.images, i)
                               for i in range(job["start"], job["end"] + 1,
                                              max(1, job["thermal_step"]))})
-                tviews = []
-                for i in idx:
-                    fr._check(cancel)
-                    img = _load_rgb(thermal.frame_path(i), job["max_edge"])
-                    if img is not None:
-                        tviews.append(fr.View(i, thermal.camera(i), img,
-                                              mask=_load_mask(job["mask_t"],
-                                                              img.shape[1],
-                                                              img.shape[0],
-                                                              job["mask_erosion"])))
+                tviews = fr.lazy_views(
+                    idx, thermal.camera,
+                    lambda i: _load_rgb(thermal.frame_path(i), job["max_edge"]),
+                    lambda w, h: _load_mask(job["mask_t"], w, h,
+                                            job["mask_erosion"]),
+                    cancel=cancel)
                 if tviews:
                     result["thermal_grid"], result["thermal"] = \
                         ortho(tviews, 0.85, 0.95)

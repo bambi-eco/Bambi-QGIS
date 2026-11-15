@@ -30,9 +30,20 @@ Texturing
 
 All coordinates are DEM-local metres; cameras are
 :class:`core.flight_viewer.FrameCamera`.
+
+Memory
+    Nothing here is held per keyframe for longer than it is used: the
+    images are read when they are needed and a limited amount of them kept
+    (:class:`FrameImages`), feature descriptors live while a frame's
+    neighbours are matched, and what a camera sees of the surface is stored
+    for the part of the grid it looks at (:class:`Visibility`). A
+    reconstruction used to hold every keyframe as a float image from start
+    to end - 11 MB each at the default size, 14 GB for the 5 km of a
+    survey flight.
 """
 
 import math
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -176,17 +187,112 @@ def dem_heights(grid: GroundGrid, caster, top: float = 1.0e4) -> np.ndarray:
 # Views and results
 # ---------------------------------------------------------------------------
 
-@dataclass
+#: How much of the frames' images is kept in memory at a time (bytes). With
+#: fewer keyframes than fit, every image is read once, as it always was.
+IMAGE_BUDGET = 1 << 30
+#: ... but never fewer than this many images: a stereo pair and its
+#: neighbours are worked on together.
+MIN_IMAGES_KEPT = 4
+
+
+class FrameImages:
+    """The images of a set of frames, read when they are asked for.
+
+    The most recently used are kept, up to *budget* bytes of them; an image
+    asked for again after it was dropped is read again.
+
+    :param read: ``read(index) -> image array``, or ``None`` when the frame
+        cannot be read
+    """
+
+    def __init__(self, read: Callable[[int], Optional[np.ndarray]],
+                 budget: int = IMAGE_BUDGET, min_kept: int = MIN_IMAGES_KEPT):
+        self._read = read
+        self._budget = int(budget)
+        self._min_kept = max(1, int(min_kept))
+        self._held: "OrderedDict[int, np.ndarray]" = OrderedDict()
+        self._bytes = 0
+        #: how many times an image was read, and the most that were held
+        self.reads = 0
+        self.peak_held = 0
+        self.peak_bytes = 0
+
+    def __len__(self) -> int:
+        return len(self._held)
+
+    def try_get(self, index: int) -> Optional[np.ndarray]:
+        """The image of frame *index*, or ``None`` when it cannot be read."""
+        image = self._held.pop(index, None)
+        if image is None:
+            image = self._read(index)
+            if image is None:
+                return None
+            self.reads += 1
+            self._bytes += image.nbytes
+        self._held[index] = image                 # most recently used
+        while len(self._held) > self._min_kept:
+            if self._bytes <= self._budget:
+                break
+            _index, dropped = self._held.popitem(last=False)
+            self._bytes -= dropped.nbytes
+        self.peak_held = max(self.peak_held, len(self._held))
+        self.peak_bytes = max(self.peak_bytes, self._bytes)
+        return image
+
+    def get(self, index: int) -> np.ndarray:
+        image = self.try_get(index)
+        if image is None:
+            raise RuntimeError(f"Frame {index} can no longer be read.")
+        return image
+
+
 class View:
-    """A frame used by the reconstruction: camera plus (scaled) image."""
-    index: int
-    camera: FrameCamera
-    image: np.ndarray               # (H, W, 3) float32 or uint8, RGB
-    mask: Optional[np.ndarray] = None   # (H, W) bool, False = no image there
+    """A frame used by the reconstruction: camera plus (scaled) image.
+
+    The image is the array given - or, with *images*, read from there each
+    time it is asked for, so that the views of a long flight do not hold
+    their images.
+
+    :param image: ``(H, W, 3)`` float32 or uint8, RGB
+    :param mask: ``(H, W)`` bool, False = no image there
+    :param images: a :class:`FrameImages` to read the image from
+    :param size: ``(width, height)`` of the image, when known without it
+    """
+
+    __slots__ = ("index", "camera", "mask", "_image", "_images", "_size")
+
+    def __init__(self, index: int, camera: FrameCamera,
+                 image: Optional[np.ndarray] = None,
+                 mask: Optional[np.ndarray] = None,
+                 images: Optional[FrameImages] = None,
+                 size: Optional[Tuple[int, int]] = None):
+        if image is None and images is None:
+            raise ValueError("a view needs an image, or somewhere to read "
+                             "it from")
+        self.index = index
+        self.camera = camera
+        self.mask = mask
+        self._image = image
+        self._images = images
+        self._size = (int(size[0]), int(size[1])) if size else None
+
+    @property
+    def image(self) -> np.ndarray:
+        if self._image is not None:
+            return self._image
+        return self._images.get(self.index)
 
     @property
     def size(self) -> Tuple[int, int]:
-        return self.image.shape[1], self.image.shape[0]
+        if self._size is None:
+            image = self.image
+            self._size = (image.shape[1], image.shape[0])
+        return self._size
+
+    def with_camera(self, camera: FrameCamera) -> "View":
+        """This view from another camera - the image is not touched."""
+        return View(self.index, camera, self._image, self.mask,
+                    self._images, self._size)
 
     def valid(self, u, v, ok) -> np.ndarray:
         """*ok* restricted to pixels the undistortion mask keeps."""
@@ -196,6 +302,38 @@ class View:
         ui = np.clip(np.rint(np.where(ok, u, 0)), 0, self.mask.shape[1] - 1).astype(int)
         vi = np.clip(np.rint(np.where(ok, v, 0)), 0, self.mask.shape[0] - 1).astype(int)
         return ok & self.mask[vi, ui]
+
+
+def lazy_views(indices: Sequence[int], camera_of: Callable[[int], FrameCamera],
+               read_image: Callable[[int], Optional[np.ndarray]],
+               mask_of: Optional[Callable[[int, int], Optional[np.ndarray]]] = None,
+               budget: int = IMAGE_BUDGET, progress: ProgressFn = None,
+               cancel: CancelFn = None) -> List[View]:
+    """Views of the frames *indices* that hold no image.
+
+    Every frame is read once here - one that cannot be read is left out, as
+    it always was - and then again whenever a step needs it and it is not
+    among the images kept (:class:`FrameImages`).
+
+    :param mask_of: ``mask_of(width, height)`` - the undistortion mask for
+        images of that size; asked once per size, the views share the array
+    """
+    images = FrameImages(read_image, budget)
+    masks: Dict[Tuple[int, int], Optional[np.ndarray]] = {}
+    views = []
+    for n, index in enumerate(indices):
+        _check(cancel)
+        if progress:
+            progress(f"Loading frame {index}", n / max(len(indices), 1))
+        image = images.try_get(index)
+        if image is None:
+            continue
+        size = (image.shape[1], image.shape[0])
+        if mask_of is not None and size not in masks:
+            masks[size] = mask_of(*size)
+        views.append(View(index, camera_of(index), mask=masks.get(size),
+                          images=images, size=size))
+    return views
 
 
 @dataclass
@@ -311,7 +449,7 @@ def heightfield_mesh(grid: GroundGrid, z: np.ndarray):
 def texture_from_frames(grid: GroundGrid, surface_z: np.ndarray,
                         views: Sequence[View], caster=None,
                         progress: ProgressFn = None, cancel: CancelFn = None,
-                        visible: Optional[List[np.ndarray]] = None):
+                        visible: Optional[Sequence[np.ndarray]] = None):
     """Colour every cell from the frames that see it.
 
     Each frame contributes with weight ``cos(angle)^2`` between the view ray
@@ -335,6 +473,8 @@ def texture_from_frames(grid: GroundGrid, surface_z: np.ndarray,
         w, h = view.size
         u, v, ok = project_points(view.camera, w, h, pts)
         ok = view.valid(u, v, ok) & finite
+        if not ok.any():
+            continue
         if visible is not None:
             ok &= np.asarray(visible[k]).reshape(-1)
         if not ok.any():
@@ -365,9 +505,67 @@ def texture_from_frames(grid: GroundGrid, surface_z: np.ndarray,
     return color.reshape(shape + (3,)).astype(np.float32), seen.reshape(shape)
 
 
+class Visibility:
+    """Which cells of a grid one camera sees: a boolean ``(H, W)`` array of
+    which only the rows and columns holding a ``True`` are stored.
+
+    A camera sees a small part of a survey's grid; kept in full, the masks
+    of a long flight's keyframes were a grid of their own each - megabytes
+    per frame. Indexed with arrays of rows and columns like the array it
+    stands for, ``np.asarray()`` gives that array.
+    """
+
+    __slots__ = ("shape", "_row0", "_col0", "_inside")
+
+    def __init__(self, seen: np.ndarray):
+        seen = np.asarray(seen, dtype=bool)
+        self.shape = seen.shape
+        rows = np.flatnonzero(seen.any(axis=1))
+        cols = np.flatnonzero(seen.any(axis=0))
+        if len(rows):
+            self._row0, self._col0 = int(rows[0]), int(cols[0])
+            self._inside = seen[rows[0]:rows[-1] + 1,
+                                cols[0]:cols[-1] + 1].copy()
+        else:
+            self._row0 = self._col0 = 0
+            self._inside = np.zeros((0, 0), bool)
+
+    @property
+    def nbytes(self) -> int:
+        return self._inside.nbytes
+
+    def __getitem__(self, key) -> np.ndarray:
+        rows, cols = key
+        rows = np.asarray(rows) - self._row0
+        cols = np.asarray(cols) - self._col0
+        height, width = self._inside.shape
+        within = (rows >= 0) & (rows < height) & (cols >= 0) & (cols < width)
+        out = np.zeros(np.broadcast(rows, cols).shape, bool)
+        out[within] = self._inside[rows[within], cols[within]]
+        return out
+
+    def __array__(self, dtype=None, copy=None):
+        full = np.zeros(self.shape, bool)
+        height, width = self._inside.shape
+        full[self._row0:self._row0 + height,
+             self._col0:self._col0 + width] = self._inside
+        return full if dtype is None else full.astype(dtype)
+
+
+class _VisibleInBlock:
+    """Per view, what it sees of a block of a finer grid - worked out when
+    it is asked for, one view at a time."""
+
+    def __init__(self, visibility, rows, cols):
+        self._visibility, self._rows, self._cols = visibility, rows, cols
+
+    def __getitem__(self, k) -> np.ndarray:
+        return self._visibility[k][self._rows, self._cols]
+
+
 def visibility_masks(grid: GroundGrid, surface_z: np.ndarray,
                      views: Sequence[View], caster,
-                     cancel: CancelFn = None) -> List[np.ndarray]:
+                     cancel: CancelFn = None) -> List[Visibility]:
     """Per view: which cells of *grid* the camera sees unoccluded by the
     surface itself (ray cast towards the camera)."""
     X, Y = grid.xy()
@@ -392,7 +590,7 @@ def visibility_masks(grid: GroundGrid, surface_z: np.ndarray,
             seen[sel[~blocked]] = True
         else:
             seen = ok
-        out.append(seen.reshape(X.shape))
+        out.append(Visibility(seen.reshape(X.shape)))
     return out
 
 
@@ -431,7 +629,9 @@ def texture_ortho(grid: GroundGrid, surface_z: np.ndarray, views: Sequence[View]
             BX, BY = block.xy()
             cu = np.clip(((BX - grid.lower[0]) / grid.gsd).astype(int), 0, grid.width - 1)
             cv = np.clip(((grid.upper[1] - BY) / grid.gsd).astype(int), 0, grid.height - 1)
-            vis = [m[cv, cu] for m in visibility]
+            # one view at a time: a list of these for every view was a
+            # block of the texture per keyframe
+            vis = _VisibleInBlock(visibility, cv, cu)
         color, _ = texture_from_frames(block, z, views, None, visible=vis)
         img[r0:r1] = color
     for c in range(3):
@@ -455,32 +655,23 @@ def sparse_points(views: Sequence[View], dem_caster=None,
     :return: ``(points (N, 3), colours (N, 3) uint8, errors (N,))``
     """
     import cv2
-    sift = cv2.SIFT_create(nfeatures=max_features)
-    feats = []
-    for k, view in enumerate(views):
-        _check(cancel)
-        if progress:
-            progress(f"Features in frame {view.index}", 0.5 * k / max(len(views), 1))
-        img = np.asarray(view.image)
-        grey = cv2.cvtColor(np.clip(img, 0, 255).astype(np.uint8),
-                            cv2.COLOR_RGB2GRAY)
-        feature_mask = None
-        if view.mask is not None:
-            # Stay clear of the mask edge: the border itself is a strong edge.
-            feature_mask = cv2.erode(view.mask.astype(np.uint8) * 255,
-                                     np.ones((9, 9), np.uint8))
-        kp, desc = sift.detectAndCompute(grey, feature_mask)
-        pts = np.array([p.pt for p in kp], np.float64).reshape(-1, 2)
-        feats.append((pts, desc))
+    views = list(views)
+    # Worked out as the pairs get to them, and dropped behind them: the
+    # features of all keyframes at once were 2 MB each.
+    feats = _Features(views, max_features, cancel)
     matcher = cv2.BFMatcher(cv2.NORM_L2)
     out_p, out_c, out_e = [], [], []
     pairs = [(i, j) for i in range(len(views))
              for j in range(i + 1, min(len(views), i + 1 + neighbours))]
+    behind = 0
     for n, (i, j) in enumerate(pairs):
         _check(cancel)
         if progress:
             progress(f"Triangulating frames {views[i].index}/{views[j].index}",
-                     0.5 + 0.5 * n / max(len(pairs), 1))
+                     n / max(len(pairs), 1))
+        while behind < i:                   # no pair goes back
+            feats.done_with(behind)
+            behind += 1
         (p1, d1), (p2, d2) = feats[i], feats[j]
         if d1 is None or d2 is None or len(p1) < 8 or len(p2) < 8:
             continue
@@ -541,24 +732,63 @@ class RefineReport:
     median_turn: float = 0.0              # degrees
 
 
-def _features(views, max_features, cancel, progress=None, share=1.0):
-    import cv2
-    sift = cv2.SIFT_create(nfeatures=max_features)
-    feats = []
-    for k, view in enumerate(views):
-        _check(cancel)
-        if progress:
-            progress(f"Features in frame {view.index}", share * k / max(len(views), 1))
-        img = np.asarray(view.image)
-        grey = cv2.cvtColor(np.clip(img, 0, 255).astype(np.uint8),
-                            cv2.COLOR_RGB2GRAY)
-        fmask = None
+class _Features:
+    """SIFT features of the views, worked out when a view's are first asked
+    for: ``features[k] -> (points, descriptors)``.
+
+    The points of every view are kept - two numbers each. The descriptors
+    are 128 numbers each, megabytes per view, and only needed while a view
+    is matched against its neighbours: :meth:`done_with` drops them.
+    """
+
+    def __init__(self, views, max_features, cancel=None, progress=None,
+                 share=1.0):
+        import cv2
+
+        self._views = list(views)
+        self._sift = cv2.SIFT_create(nfeatures=max_features)
+        self._cancel, self._progress, self._share = cancel, progress, share
+        self._points: List[Optional[np.ndarray]] = [None] * len(self._views)
+        self._descriptors: Dict[int, Optional[np.ndarray]] = {}
+        #: the most views whose descriptors were held at once
+        self.peak_held = 0
+
+    def __len__(self) -> int:
+        return len(self._views)
+
+    def __getitem__(self, k):
+        if self._points[k] is None:
+            self._compute(k)
+        return self._points[k], self._descriptors.get(k)
+
+    def _compute(self, k):
+        import cv2
+
+        view = self._views[k]
+        _check(self._cancel)
+        if self._progress:
+            self._progress(f"Features in frame {view.index}",
+                           self._share * k / max(len(self._views), 1))
+        grey = cv2.cvtColor(np.clip(np.asarray(view.image), 0, 255)
+                            .astype(np.uint8), cv2.COLOR_RGB2GRAY)
+        mask = None
         if view.mask is not None:
-            fmask = cv2.erode(view.mask.astype(np.uint8) * 255,
-                              np.ones((9, 9), np.uint8))
-        kp, desc = sift.detectAndCompute(grey, fmask)
-        feats.append((np.array([p.pt for p in kp], np.float64).reshape(-1, 2), desc))
-    return feats
+            # Stay clear of the mask edge: the border itself is a strong edge.
+            mask = cv2.erode(view.mask.astype(np.uint8) * 255,
+                             np.ones((9, 9), np.uint8))
+        keypoints, descriptors = self._sift.detectAndCompute(grey, mask)
+        self._points[k] = np.array([p.pt for p in keypoints],
+                                   np.float64).reshape(-1, 2)
+        self._descriptors[k] = descriptors
+        self.peak_held = max(self.peak_held, len(self._descriptors))
+
+    def done_with(self, k) -> None:
+        """View *k* will not be matched any more."""
+        self._descriptors.pop(k, None)
+
+
+def _features(views, max_features, cancel, progress=None, share=1.0):
+    return _Features(views, max_features, cancel, progress, share)
 
 
 def _match_tracks(feats, neighbours, ratio, cancel):
@@ -599,6 +829,8 @@ def _match_tracks(feats, neighbours, ratio, cancel):
                     a, b = find((i, m.queryIdx)), find((j, m.trainIdx))
                     if a != b:
                         parent[a] = b
+        if hasattr(feats, "done_with"):
+            feats.done_with(i)
     groups = {}
     for node in list(parent):
         groups.setdefault(find(node), []).append(node)
@@ -932,7 +1164,7 @@ def refine_poses(views: Sequence[View], refine_fov: bool = True,
         K[1, 1] *= scale
         w, h = view.size
         new_cam = camera_from_opencv(K, R, -R @ C, w, h)
-        refined.append(View(view.index, new_cam, view.image, view.mask))
+        refined.append(view.with_camera(new_cam))
         shifts.append(np.linalg.norm(cam[v, 3:]))
         turns.append(math.degrees(np.linalg.norm(cam[v, :3])))
     report.fovy_before = views[0].camera.fovy
