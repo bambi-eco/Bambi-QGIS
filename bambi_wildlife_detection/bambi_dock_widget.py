@@ -6443,6 +6443,23 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         self.start_worker("trex_import")
 
     def _check_existing_outputs(self, target_folder: str):
+        """Show what has been processed in *target_folder*.
+
+        A folder whose stores cannot be read - damaged, or written by a
+        newer version - is shown as not processed, with the reason in the
+        log. The error used to end whatever had asked for the refresh half
+        way: switching to such a flight left the selector on it and
+        everything else on the flight before.
+        """
+        try:
+            self._read_existing_outputs(target_folder)
+        except Exception as exc:  # noqa: BLE001 - said in the log
+            self._read_existing_outputs("")
+            self.log("WARNING: what has been processed in "
+                     f"{target_folder} could not be read ({exc}); the steps "
+                     "are shown as not started.")
+
+    def _read_existing_outputs(self, target_folder: str):
         """Check for existing output subfolders and update status labels.
 
         Each camera-selectable step is checked against the camera currently
@@ -6988,6 +7005,14 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         self._flight_list = updated
         self._refresh_flight_combo()
 
+        # Settings the project keeps for this flight stay this flight's.
+        project = QgsProject.instance()
+        kept = self._kept_in_project(project).get(flight.get("name") or "")
+        if kept is not None:
+            self._keep_in_project(project, flight.get("name") or "", None)
+            self._keep_in_project(
+                project, updated[self._active_flight_index]["name"], kept)
+
         # Rename the group rather than leaving a stale one behind.
         group = QgsProject.instance().layerTreeRoot().findGroup(previous)
         if group is not None:
@@ -7187,7 +7212,15 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
 
         # A folder that has already been processed describes itself, so it is
         # adopted as it stands rather than started from scratch (§10.2).
-        existing = flights_core.describe_existing(folder)
+        try:
+            existing = flights_core.describe_existing(folder)
+        except Exception as exc:  # noqa: BLE001 - a store that cannot be read
+            QMessageBox.warning(
+                self, "Flight",
+                f"{folder}\nholds results that cannot be read:\n\n{exc}\n\n"
+                "The flight was not added, and nothing in the folder was "
+                "changed.")
+            return
         if existing["is_flight"]:
             if not self._confirm_existing_flight(folder, existing):
                 return
@@ -7369,6 +7402,9 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         index = self._active_flight_index
         name = flights_core.group_name(flight)
         updated = flights_core.remove_flight(self._flights(), index)
+        # what the project kept for it goes with it; the folder's own stay
+        self._keep_in_project(
+            QgsProject.instance(), flight.get("name") or "", None)
         active = flights_core.active_after_removal(
             len(self._flights()), index, index)
 
@@ -13661,26 +13697,27 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         saved, and it replaced a processed folder's configuration with
         whatever the form showed.
         """
+        from .core import flights as flights_core
         from .core.config_schema import save_config_entries
         project = QgsProject.instance()
 
         values = self._current_config_values()
 
         target_folder = self.target_folder_edit.text().strip()
+        name = (self._active_flight() or {}).get("name") or ""
         if target_folder and os.path.isdir(target_folder) and \
                 self._flight_owns(target_folder):
-            self._store_form_config(target_folder)
+            if self._store_form_config(target_folder):
+                # they have their home now; the project need not keep them
+                self._keep_in_project(project, name, None)
         else:
             # No folder yet, so there is nowhere to put it - the QGIS project
-            # carries it until one is chosen. The same for a folder in the
-            # field that is not the active flight's: a folder's stored
-            # configuration is only ever replaced by its own flight.
-            save_config_entries(
-                values,
-                lambda k, v: project.writeEntry(PLUGIN_SCOPE, k, v),
-                lambda k, v: project.writeEntryDouble(PLUGIN_SCOPE, k, v),
-                lambda k, v: project.writeEntryBool(PLUGIN_SCOPE, k, v),
-            )
+            # keeps it for this flight until there is. The same for a folder
+            # in the field that is not the active flight's: a folder's
+            # stored configuration is only ever replaced by its own flight.
+            kept = {}
+            save_config_entries(values, *flights_core.config_writers(kept))
+            self._keep_in_project(project, name, kept)
 
         project.writeEntry(PLUGIN_SCOPE, "Flights/List",
                            json.dumps(self._flights()))
@@ -13721,17 +13758,30 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
 
         flight = self._active_flight()
         folder = (flight or {}).get("target_folder", "")
-        stored = flights_core.load_config(folder) if folder else {}
+        stored, unreadable = {}, ""
+        if folder:
+            try:
+                stored = flights_core.load_config(folder)
+            except Exception as exc:  # noqa: BLE001 - shown to the user below
+                unreadable = str(exc) or type(exc).__name__
         migrated_from_project = False
 
+        if not stored:
+            # what the QGIS project keeps for a flight without a folder to
+            # put it in - this flight's own, and only its own
+            stored = self._kept_in_project(project).get(
+                (flight or {}).get("name") or "", {})
         if stored:
             read_str, read_double, read_bool = flights_core.config_readers(stored)
+        elif not self._legacy_entries_are_for(project, flight):
+            if flight is not None:
+                # Nothing is stored for this flight. The form must not go on
+                # showing the flight that was looked at before.
+                self._show_flight_without_settings(flight, unreadable)
+            return  # No saved config anywhere
         else:
-            _test_value, has_config = project.readEntry(
-                PLUGIN_SCOPE, "Input/TargetFolder", "")
-            if not has_config:
-                return  # No saved config anywhere
-            migrated_from_project = bool(folder)
+            # never "moved" over a store that could not be read
+            migrated_from_project = bool(folder) and not unreadable
 
             def read_str(key: str, default: str = "") -> str:
                 value, ok = project.readEntry(PLUGIN_SCOPE, key, default)
@@ -13787,6 +13837,95 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         self._apply_custom_implementations()
 
         self.log("Configuration loaded from project")
+
+    #: QGIS project entry: the settings of flights that have no folder to
+    #: keep them in (yet, or just now), as ``{flight name: {key: value}}``.
+    ENTRY_KEPT_SETTINGS = "Flights/Pending"
+
+    def _kept_in_project(self, project) -> dict:
+        """``{flight name: settings}`` the QGIS project keeps for flights
+        whose folder cannot take them: a flight added by name and waiting
+        for its folder, one whose folder is not there. ``""`` is the form of
+        a project that has no flight yet.
+
+        One slot per flight. There used to be a single one - the project's
+        plain entries - written by whichever flight was saved last and read
+        for any flight whose own store had nothing: a flight whose drive was
+        not connected was shown, and then given, another flight's settings.
+        """
+        raw, _ok = project.readEntry(PLUGIN_SCOPE, self.ENTRY_KEPT_SETTINGS, "")
+        try:
+            kept = json.loads(raw) if raw else {}
+        except ValueError:
+            return {}
+        if not isinstance(kept, dict):
+            return {}
+        return {str(name): values for name, values in kept.items()
+                if isinstance(values, dict)}
+
+    def _keep_in_project(self, project, name: str, values) -> None:
+        """Set (or, with ``None``, drop) what the project keeps for the
+        flight called *name*."""
+        kept = self._kept_in_project(project)
+        if values is None:
+            if name not in kept:
+                return
+            del kept[name]
+        else:
+            kept[name] = {key: "" if value is None else str(value)
+                          for key, value in values.items()}
+        project.writeEntry(PLUGIN_SCOPE, self.ENTRY_KEPT_SETTINGS,
+                           json.dumps(kept, sort_keys=True))
+
+    def _legacy_entries_are_for(self, project, flight) -> bool:
+        """Whether the plain settings entries of the QGIS project - where
+        versions before 9.1 kept the settings of a flight without a folder,
+        and versions before 6.0 all settings - are *flight*'s.
+
+        Nothing says whose they are, so they are taken for the only flight
+        of the project (written before 6.0) or for a flight that still has
+        no folder; never for one flight among several that has a folder.
+        """
+        _value, has_config = project.readEntry(
+            PLUGIN_SCOPE, "Input/TargetFolder", "")
+        if not has_config:
+            return False
+        return len(self._flights()) <= 1 or \
+            not ((flight or {}).get("target_folder") or "").strip()
+
+    def _show_flight_without_settings(self, flight: dict, unreadable: str = ""):
+        """Show a flight nothing is stored for: the form as a new project
+        shows it, in the flight's folder - and say why.
+
+        The form used to stay as it was, so the flight appeared with the
+        folder, the recordings and every setting of the flight selected
+        before it (and a store that could not be read ended the switch with
+        an error half way).
+        """
+        folder = (flight.get("target_folder") or "").strip()
+        name = flight.get("name") or ""
+        self._apply_flight_values(self._pristine_config)
+        self._set_target_folder_text(folder)
+        self._apply_classification_models_to_table()
+        self._sync_stage_cameras()
+        self._apply_custom_implementations()
+
+        if unreadable:
+            text = (f"The settings of flight '{name}' could not be read from "
+                    f"{folder} ({unreadable}). The form shows the default "
+                    "settings; nothing in the folder was changed.")
+        elif folder and not os.path.isdir(folder):
+            text = (f"The folder of flight '{name}' is not there: {folder} - "
+                    "a drive that is not connected, or a folder that was "
+                    "moved? The form shows the default settings.")
+        else:
+            self.log(f"No settings are stored for flight '{name}' yet - the "
+                     "form shows the defaults.")
+            return
+        self.log(f"WARNING: {text}")
+        bar = getattr(self.iface, "messageBar", None)
+        if callable(bar):
+            bar().pushWarning("BAMBI", text)
 
     def _flight_group(self, create: bool = True, or_root: bool = True):
         """The layer group of the active flight, or the tree root.

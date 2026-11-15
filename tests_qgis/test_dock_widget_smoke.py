@@ -41,6 +41,21 @@ class TestConstruction:
             assert key in config
 
 
+def _save_as_an_old_version_did(dock):
+    """The form as plain entries of the QGIS project - where versions before
+    6.0 kept every setting, and versions before 9.1 those of a flight that
+    had no folder to keep them in."""
+    from qgis.core import QgsProject
+    from bambi_wildlife_detection.core.config_schema import save_config_entries
+
+    project = QgsProject.instance()
+    save_config_entries(
+        dock._current_config_values(),
+        lambda key, value: project.writeEntry(PLUGIN_SCOPE, key, value),
+        lambda key, value: project.writeEntryDouble(PLUGIN_SCOPE, key, value),
+        lambda key, value: project.writeEntryBool(PLUGIN_SCOPE, key, value))
+
+
 class TestConfigRoundTrip:
     """save_config_to_project → reset → load_config_from_project fidelity."""
 
@@ -139,7 +154,7 @@ class TestConfigRoundTrip:
         # Saved before "Auto" existed: no Extraction/AirdataPaddingAuto entry.
         from qgis.core import QgsProject
         dock.target_folder_edit.setText("/tmp/margin_legacy")
-        dock.save_config_to_project()
+        _save_as_an_old_version_did(dock)
         QgsProject.instance().removeEntry(PLUGIN_SCOPE, "Extraction/AirdataPaddingAuto")
         dock.load_config_from_project()
         assert not dock.airdata_padding_auto_check.isChecked()
@@ -149,7 +164,7 @@ class TestConfigRoundTrip:
         # Before 7.1 the heading was a checkbox (Extraction/UseGimbalHeading).
         from qgis.core import QgsProject
         dock.target_folder_edit.setText("/tmp/heading_legacy")
-        dock.save_config_to_project()
+        _save_as_an_old_version_did(dock)
         project = QgsProject.instance()
         project.removeEntry(PLUGIN_SCOPE, "Extraction/HeadingSource")
         project.writeEntry(PLUGIN_SCOPE, "Extraction/UseGimbalHeading", "1")

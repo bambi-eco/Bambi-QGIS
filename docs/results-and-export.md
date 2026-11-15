@@ -118,6 +118,15 @@ Input tab shows the active one; **Rename…** renames it and 🗑 removes it.
 - A flight's settings are **written only to its own folder**. A folder that
   is merely in the target folder field - there is no flight yet, because it
   has no name - is not written to.
+- A flight that has **no folder to keep its settings in** - added by name and
+  still waiting for one, or a project without a flight yet - has them kept in
+  the QGIS project, each flight its own, until they can move into its folder.
+- A flight whose **folder is not there** (a drive that is not connected, a
+  folder that was moved) or whose `project.gpkg` **cannot be read** is shown
+  with the default settings and its own folder, and the log says why. Nothing
+  is written to it, and its settings are back when the folder is. (Before 9.1
+  such a flight was shown with the folder, recordings and settings of the
+  flight selected before it.)
 - Only one flight at a time can be waiting for its target folder - a flight
   keeps its configuration in its folder, so set it before adding the next.
 

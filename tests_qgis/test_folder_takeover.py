@@ -464,3 +464,287 @@ def test_the_question_for_a_new_flight_is_unchanged(
     assert dialog["title"] == "Add existing flight"
     assert "Add flight" in dialog["buttons"]
     assert "stay with" not in dialog["text"]
+
+
+# ---------------------------------------------------------------------------
+# A flight is never shown with another flight's settings
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def meadow_and_forest(dock, quiet, asked, monkeypatch, folders):
+    """Two flights with settings of their own; "meadow" is the active one."""
+    from qgis.PyQt.QtWidgets import QFileDialog, QInputDialog
+
+    a, _b, c = folders
+    _enter(dock, a)
+    dock.confidence_spin.setValue(0.9)
+    dock.airdata_path_edit.setText("/data/meadow/airdata.csv")
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory",
+                        lambda *args, **kwargs: c)
+    monkeypatch.setattr(QInputDialog, "getText",
+                        lambda *args, **kwargs: ("Lake", True))
+    monkeypatch.setattr(type(dock), "_ask_new_flight_configuration",
+                        lambda self: False)
+    dock.browse_and_add_flight()
+    dock.confidence_spin.setValue(0.3)
+    dock.airdata_path_edit.setText("/data/lake/airdata.csv")
+    dock.save_config_to_project()
+    dock.flight_combo.setCurrentIndex(0)
+    assert dock.confidence_spin.value() == pytest.approx(0.9)
+    return a, c
+
+
+def _defaults(dock):
+    return (dock._pristine_config["Detection/Confidence"],
+            dock._pristine_config["Input/AirdataPath"])
+
+
+def test_a_flight_whose_store_cannot_be_read_shows_the_defaults(
+        dock, meadow_and_forest):
+    """The switch ended in an error half way: the selector said "Lake", the
+    form kept the meadow's folder, flight log and thresholds."""
+    _a, c = meadow_and_forest
+    with open(store.project_path(c), "w") as handle:
+        handle.write("not a GeoPackage")
+
+    dock._on_flight_changed(1)
+
+    assert dock._active_flight()["name"] == "Lake"
+    assert dock.target_folder_edit.text() == c
+    assert (dock.confidence_spin.value(), dock.airdata_path_edit.text()) == \
+        pytest.approx(_defaults(dock))
+    assert "could not be read" in dock.log_text.toPlainText()
+    with open(store.project_path(c)) as handle:
+        assert handle.read() == "not a GeoPackage"         # left alone
+
+
+def test_a_flight_whose_folder_is_gone_shows_the_defaults(
+        dock, meadow_and_forest):
+    import shutil
+
+    _a, c = meadow_and_forest
+    shutil.rmtree(c)
+
+    dock._on_flight_changed(1)
+
+    assert dock.target_folder_edit.text() == c
+    assert (dock.confidence_spin.value(), dock.airdata_path_edit.text()) == \
+        pytest.approx(_defaults(dock))
+    assert "is not there" in dock.log_text.toPlainText()
+
+
+def test_the_other_flight_is_untouched_by_it(dock, meadow_and_forest):
+    import shutil
+
+    a, c = meadow_and_forest
+    shutil.rmtree(c)
+    dock._on_flight_changed(1)
+    _save_the_qgis_project(dock)
+
+    dock._on_flight_changed(0)
+
+    assert dock.target_folder_edit.text() == a
+    assert dock.confidence_spin.value() == pytest.approx(0.9)
+    assert dock.airdata_path_edit.text() == "/data/meadow/airdata.csv"
+    assert flights.load_config(a)["Detection/Confidence"] == "0.9"
+
+
+def test_the_settings_are_back_when_the_folder_is(dock, meadow_and_forest,
+                                                  tmp_path):
+    import shutil
+
+    _a, c = meadow_and_forest
+    parked = str(tmp_path / "parked")
+    shutil.move(c, parked)                   # the drive is unplugged ...
+    dock._on_flight_changed(1)
+    _save_the_qgis_project(dock)
+    dock._on_flight_changed(0)
+    shutil.move(parked, c)                   # ... and connected again
+
+    dock._on_flight_changed(1)
+
+    assert dock.confidence_spin.value() == pytest.approx(0.3)
+    assert dock.airdata_path_edit.text() == "/data/lake/airdata.csv"
+
+
+def test_settings_kept_in_the_project_belong_to_the_flight_that_left_them(
+        dock, quiet, asked, monkeypatch, folders):
+    """A flight waiting for its folder keeps its settings in the QGIS
+    project. A flight whose folder was missing was shown - and then given -
+    whatever lay there."""
+    import shutil
+
+    a, _b, c = folders
+    _enter(dock, a)
+    dock.confidence_spin.setValue(0.9)
+    # a second flight with a folder, then a third still waiting for its own
+    from qgis.PyQt.QtWidgets import QFileDialog, QInputDialog
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory",
+                        lambda *args, **kwargs: c)
+    monkeypatch.setattr(QInputDialog, "getText",
+                        lambda *args, **kwargs: ("Lake", True))
+    monkeypatch.setattr(type(dock), "_ask_new_flight_configuration",
+                        lambda self: True)
+    dock.browse_and_add_flight()
+    dock.confidence_spin.setValue(0.3)
+    dock.flight_name_edit.setText("Ridge")
+    dock.add_flight()
+    dock.confidence_spin.setValue(0.77)            # Ridge's own
+    dock.flight_combo.setCurrentIndex(0)           # Ridge's go to the project
+
+    shutil.rmtree(c)                               # Lake's folder is gone
+    dock.flight_combo.setCurrentIndex(1)
+    assert dock._active_flight()["name"] == "Lake"
+    assert dock.confidence_spin.value() == pytest.approx(
+        dock._pristine_config["Detection/Confidence"])
+
+    dock.flight_combo.setCurrentIndex(2)
+    assert dock._active_flight()["name"] == "Ridge"
+    assert dock.confidence_spin.value() == pytest.approx(0.77)
+
+
+def test_renaming_the_waiting_flight_keeps_its_settings(
+        dock, quiet, asked, monkeypatch, folders):
+    a, _b, _c = folders
+    _enter(dock, a)
+    monkeypatch.setattr(type(dock), "_ask_new_flight_configuration",
+                        lambda self: True)
+    dock.flight_name_edit.setText("Ridge")
+    dock.add_flight()
+    dock.confidence_spin.setValue(0.77)
+    dock.save_config_to_project()
+    assert dock._rename_active_flight("High Ridge")
+
+    dock.flight_combo.setCurrentIndex(0)
+    dock.flight_combo.setCurrentIndex(1)
+
+    assert dock._active_flight()["name"] == "High Ridge"
+    assert dock.confidence_spin.value() == pytest.approx(0.77)
+
+
+def test_browse_and_add_says_when_a_folder_cannot_be_read(
+        dock, quiet, asked, monkeypatch, folders):
+    from qgis.PyQt.QtWidgets import QFileDialog, QInputDialog
+
+    a, _b, c = folders
+    with open(store.project_path(c), "w") as handle:
+        handle.write("not a GeoPackage")
+    _enter(dock, a)
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory",
+                        lambda *args, **kwargs: c)
+    monkeypatch.setattr(QInputDialog, "getText",
+                        lambda *args, **kwargs: ("Lake", True))
+
+    dock.browse_and_add_flight()
+
+    assert len(dock._flights()) == 1
+    assert any("cannot be read" in str(args) for args in quiet["warn"])
+
+
+# ---------------------------------------------------------------------------
+# Projects saved by earlier versions
+# ---------------------------------------------------------------------------
+
+def _plain_entries(dock, **changed):
+    """The form as plain entries of the QGIS project - where versions before
+    6.0 kept every setting, and versions before 9.1 those of a flight that
+    had no folder to keep them in."""
+    from qgis.core import QgsProject
+
+    from bambi_wildlife_detection.core.config_schema import save_config_entries
+    from bambi_wildlife_detection.gui_utils import PLUGIN_SCOPE
+
+    project = QgsProject.instance()
+    values = dict(dock._current_config_values(), **changed)
+    save_config_entries(
+        values,
+        lambda key, value: project.writeEntry(PLUGIN_SCOPE, key, value),
+        lambda key, value: project.writeEntryDouble(PLUGIN_SCOPE, key, value),
+        lambda key, value: project.writeEntryBool(PLUGIN_SCOPE, key, value))
+
+
+def _flight_list(flight_list, active=0):
+    import json
+
+    from qgis.core import QgsProject
+
+    from bambi_wildlife_detection.gui_utils import PLUGIN_SCOPE
+
+    project = QgsProject.instance()
+    project.writeEntry(PLUGIN_SCOPE, "Flights/List", json.dumps(flight_list))
+    project.writeEntry(PLUGIN_SCOPE, "Flights/Active", str(active))
+
+
+def test_a_project_from_before_6_0_brings_its_settings_into_the_folder(
+        dock, quiet, asked, folders):
+    a, _b, _c = folders
+    _plain_entries(dock, **{"Input/TargetFolder": a,
+                            "Detection/Confidence": 0.61})
+
+    dock._on_project_read(None)
+
+    assert dock._active_flight()["target_folder"] == a
+    assert dock.confidence_spin.value() == pytest.approx(0.61)
+    assert flights.load_config(a)["Detection/Confidence"] == "0.61"
+
+
+def test_a_flight_still_waiting_for_its_folder_takes_the_plain_entries(
+        dock, quiet, asked, folders):
+    """A 9.0 project: the second flight was added by name, and its settings
+    were kept in the project's plain entries."""
+    a, _b, _c = folders
+    flights.save_config(a, {"Input/TargetFolder": a,
+                            "Detection/Confidence": "0.9"})
+    _plain_entries(dock, **{"Input/TargetFolder": "",
+                            "Detection/Confidence": 0.33})
+    _flight_list([{"name": "Meadow", "target_folder": a},
+                  {"name": "Ridge", "target_folder": ""}], active=1)
+
+    dock._on_project_read(None)
+
+    assert dock._active_flight()["name"] == "Ridge"
+    assert dock.confidence_spin.value() == pytest.approx(0.33)
+
+
+def test_plain_entries_are_not_given_to_one_flight_among_several(
+        dock, quiet, asked, folders, tmp_path):
+    """They are the last flight's that had no folder - not those of a flight
+    whose folder happens to be missing. It was shown them, and they were
+    then "moved" into its folder as its own."""
+    a, _b, _c = folders
+    flights.save_config(a, {"Input/TargetFolder": a,
+                            "Detection/Confidence": "0.9"})
+    away = str(tmp_path / "not" / "connected")
+    _plain_entries(dock, **{"Input/TargetFolder": "",
+                            "Detection/Confidence": 0.33})
+    _flight_list([{"name": "Meadow", "target_folder": a},
+                  {"name": "Lake", "target_folder": away}], active=1)
+
+    dock._on_project_read(None)
+
+    assert dock._active_flight()["name"] == "Lake"
+    assert dock.target_folder_edit.text() == away
+    assert dock.confidence_spin.value() == pytest.approx(
+        dock._pristine_config["Detection/Confidence"])
+    assert not os.path.exists(away)
+
+
+def test_a_project_without_a_flight_keeps_what_was_entered(
+        dock, quiet, asked, monkeypatch, folders):
+    """No name yet, so no flight - the form is kept with the project all
+    the same, and comes back with it."""
+    monkeypatch.setattr(type(dock), "_prompt_flight_name",
+                        lambda self, folder: "")
+    a, _b, _c = folders
+    _enter(dock, a)
+    dock.confidence_spin.setValue(0.61)
+    _save_the_qgis_project(dock)
+    dock.confidence_spin.setValue(0.2)
+    dock.target_folder_edit.setText("")
+
+    dock._on_project_read(None)
+
+    assert dock._flights() == []
+    assert dock.target_folder_edit.text() == a
+    assert dock.confidence_spin.value() == pytest.approx(0.61)
+    assert not os.path.isfile(store.project_path(a))      # still not written to
