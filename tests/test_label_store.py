@@ -545,6 +545,48 @@ def test_unknown_species_falls_back_to_animal(tmp_path):
     assert tracks[2]["species_id"] == store.FALLBACK_SPECIES_ID
 
 
+def _add_species(root, name):
+    conn = store.open_store(store.project_path(root), store.PROJECT)
+    try:
+        with store.transaction(conn):
+            cur = conn.execute(
+                "INSERT INTO species (name, protected) VALUES (?, 0)", (name,))
+            return int(cur.lastrowid)
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("spelled", [
+    "Alpine ibex", "alpine ibex", "ALPINE IBEX", "  Alpine ibex "])
+def test_a_species_name_with_capitals_is_found(tmp_path, spelled):
+    """The name used to be lower-cased before it was looked up, while the
+    vocabulary keeps its spelling: every species that is not all lower-case
+    was stored as 'animal'."""
+    from bambi_wildlife_detection.core.labelling import LabelTrack
+
+    root = str(tmp_path)
+    ls = _label_store(root)
+    ibex = _add_species(root, "Alpine ibex")
+    track = LabelTrack(2, species=spelled)
+    track.set_keyframe(1, (0.0, 0.0, 1.0, 1.0))
+    ls.tracks[2] = track
+    ls.save()
+
+    tracks = {t["label_track_id"]: t for t in label_store.load_tracks(root, "t")}
+    assert tracks[2]["species_id"] == ibex != store.FALLBACK_SPECIES_ID
+    assert tracks[1]["species_id"] == 1          # 'roe deer', as before
+
+
+def test_the_spelling_as_given_wins_over_another_case(tmp_path):
+    from bambi_wildlife_detection.core import labelling
+
+    assert labelling.resolve_species_id("Fox", {"fox": 7, "Fox": 9}) == 9
+    assert labelling.resolve_species_id("FOX", {"fox": 7}) == 7
+    assert labelling.resolve_species_id("", {"fox": 7}) is None
+    assert labelling.resolve_species_id(None, {"fox": 7}) is None
+    assert labelling.resolve_species_id("wolf", {"fox": 7}) is None
+
+
 def test_label_store_without_a_project_store_is_a_no_op(tmp_path):
     """The labelling tool must keep working on an un-migrated 5.x folder."""
     from bambi_wildlife_detection.core.labelling import LabelStore, LabelTrack

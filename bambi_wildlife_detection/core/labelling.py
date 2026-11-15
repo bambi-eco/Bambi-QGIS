@@ -726,6 +726,25 @@ def group_track_ids(pairs: Iterable[Tuple[int, int]]) -> List[List[int]]:
                   key=lambda g: g[0])
 
 
+def resolve_species_id(name: str, species_by_name: Dict[str, int]
+                       ) -> Optional[int]:
+    """The id of the species called *name*, or ``None`` when the vocabulary
+    has none of that name.
+
+    As spelled first, then ignoring case: the vocabulary keeps a species'
+    spelling ("Alpine ibex"), and a label written before the project had a
+    vocabulary may spell it differently ("alpine ibex").
+    """
+    name = (name or "").strip()
+    if name in species_by_name:
+        return species_by_name[name]
+    folded = name.lower()
+    for known, species_id in species_by_name.items():
+        if known.lower() == folded:
+            return species_id
+    return None
+
+
 class LabelStore:
     """Loads / saves the label tracks of one modality."""
 
@@ -836,11 +855,14 @@ class LabelStore:
                     "attributes": kf_attributes,
                 })
 
-            species = (track.species or "unknown").strip().lower()
+            # Not lower-cased first: that missed every species whose name
+            # is not all lower-case, and the label was stored as "animal".
+            species_id = resolve_species_id(
+                track.species or "unknown", species_ids)
             rows.append({
                 "label_track_id": track.track_id,
-                "species_id": species_ids.get(
-                    species, _store.FALLBACK_SPECIES_ID),
+                "species_id": (_store.FALLBACK_SPECIES_ID
+                               if species_id is None else species_id),
                 "origin_track_id": track.origin_track_id,
                 "attributes": attributes,
                 "keyframes": keyframes,
