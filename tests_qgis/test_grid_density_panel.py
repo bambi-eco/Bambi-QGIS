@@ -518,4 +518,3 @@ class TestBreaks:
         assert spot_class({"status": "counted",
                            "spot": "hot spot (95 %)"}) == "hot spot (95 %)"
         assert spot_class({"status": "not seen", "spot": ""}) == "not seen"
-
