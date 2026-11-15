@@ -4647,6 +4647,16 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
 
         return alfs_runtime.apply_selection(config, log_fn=log_fn)
 
+    @staticmethod
+    def _say_if_the_mesh_is_shifted(dem_json, log_fn=None) -> None:
+        """One line in the log for an elevation mesh made before its
+        heights were put at the cell centres (core.dem_mesh)."""
+        from .core import dem_mesh
+
+        note = dem_mesh.stale_note(dem_json)
+        if note and log_fn:
+            log_fn(note)
+
     def run_georeference(self, config: Dict[str, Any], progress_fn=None, log_fn=None, cancel_check=None):
         """Geo-reference detections using DEM.
 
@@ -4681,6 +4691,7 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
         dem_json_path = dem_path.replace(".gltf", ".json").replace(".glb", ".json")
         with open(dem_json_path, 'r') as f:
             dem_json = json.load(f)
+        self._say_if_the_mesh_is_shifted(dem_json, log_fn)
 
         x_offset = dem_json["origin"][0]
         y_offset = dem_json["origin"][1]
@@ -5324,6 +5335,7 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
         dem_json_path = dem_path.replace(".gltf", ".json").replace(".glb", ".json")
         with open(dem_json_path, 'r') as f:
             dem_json = json.load(f)
+        self._say_if_the_mesh_is_shifted(dem_json, log_fn)
 
         x_offset = dem_json["origin"][0]
         y_offset = dem_json["origin"][1]
@@ -6527,6 +6539,7 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
         dem_json_path = dem_path.replace(".gltf", ".json").replace(".glb", ".json")
         with open(dem_json_path, 'r') as f:
             dem_json = json.load(f)
+        self._say_if_the_mesh_is_shifted(dem_json, log_fn)
 
         x_offset = dem_json["origin"][0]
         y_offset = dem_json["origin"][1]
@@ -8655,6 +8668,7 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
         dem_json_path = dem_path.replace(".gltf", ".json").replace(".glb", ".json")
         with open(dem_json_path, 'r') as f:
             dem_json = json.load(f)
+        self._say_if_the_mesh_is_shifted(dem_json, log_fn)
 
         x_offset = dem_json["origin"][0]
         y_offset = dem_json["origin"][1]

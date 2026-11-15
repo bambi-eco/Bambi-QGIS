@@ -948,6 +948,8 @@ class GLTFMeshGenerator:
             vertex_map = {}
             vertex_count = 0
 
+            from .core import dem_mesh
+
             for row in rows:
                 for col in cols:
                     if row < height and col < width:
@@ -955,8 +957,11 @@ class GLTFMeshGenerator:
                         if np.isnan(z):
                             continue
 
-                        x = col * pixel_size_x
-                        y = (height - row - 1) * pixel_size_y
+                        # A cell's height is the height at its centre. It
+                        # used to be put at the cell's south-west corner,
+                        # which moved the whole terrain half a cell.
+                        x, y = dem_mesh.cell_position(
+                            row, col, height, pixel_size_x, pixel_size_y)
                         z_local = z - origin_z
 
                         # Z-up coordinate system: x=east, y=north, z=altitude
@@ -1025,7 +1030,9 @@ class GLTFMeshGenerator:
                         "latitude": origin_lat,
                         "longitude": origin_lon,
                         "altitude": origin_z
-                    }
+                    },
+                    # what tells this mesh from one made before
+                    dem_mesh.HEIGHTS_AT: dem_mesh.CELL_CENTRES,
                 }
                 with open(metadata_path, 'w') as f:
                     json.dump(metadata, f, indent=4)
