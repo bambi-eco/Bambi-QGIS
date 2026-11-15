@@ -43,6 +43,7 @@ changelog=Version 9.1.0
     Fixed:
     - "Run All Four" (Environmental Context) no longer takes QGIS down when the second source starts.
     - The flight planner no longer deletes its target folder. A plan started by removing the whole folder, with everything else in it; it now replaces only the files of an earlier plan.
+    - Perpendicular distances of RGB detections and tracks are measured from the RGB camera's frames. Both steps took the thermal camera's positions whichever camera the boxes were from, so an RGB box was measured from an unrelated thermal frame.
     - The built-in tracker's "Tracker Mode" and "Max Center Distance" work. The tracker matched by overlap with the Hungarian assignment whatever mode was selected and never read the centre distance, so GREEDY, CENTER and HUNGARIAN_CENTER did nothing. All four modes now do what they say (HUNGARIAN, the default, tracks exactly as before), the form enables the threshold the chosen mode uses, and the centre distance defaults to 2 m (it was 0.2 m, at which the centre modes would join next to nothing).
     - "Abort" stops tracking. It was not passed on to the trackers: the run went on to the end, was written, and was then reported as cancelled. Tracking now stops between two frames, before anything is written, so the previous tracks stay.
     - Boxes the tracker fills in between two detections are no longer recorded as detections. Each track got a member with the id -1, which refers to nothing and was reported as a missing detection.

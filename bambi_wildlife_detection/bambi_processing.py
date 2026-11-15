@@ -376,6 +376,38 @@ def _only_labelled_boxes(target_folder: str, modality: str,
     return bool(labelled)
 
 
+def _camera_frames(target_folder: str, modality: str, log_fn=None):
+    """``(images, {frame: image file})`` of one camera's poses file; both
+    empty when it cannot be read.
+
+    The perpendicular steps took the first poses file they found - the
+    thermal one - whichever camera the boxes were from. A frame number of an
+    RGB box then picked the position and footprint of an unrelated thermal
+    frame, and the distance was measured from there.
+    """
+    path = os.path.join(target_folder, f"poses_{modality}.json")
+    if not os.path.exists(path):
+        if log_fn:
+            log_fn(f"Warning: poses_{modality}.json not found - the distances "
+                   "are measured to the whole route instead of to the part "
+                   "each frame saw")
+        return [], {}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            images = json.load(fh).get("images", [])
+    except (OSError, ValueError) as exc:
+        if log_fn:
+            log_fn(f"Warning: could not read poses_{modality}.json: {exc}")
+        return [], {}
+    frame_to_image = {index: info.get("imagefile", "")
+                      for index, info in enumerate(images)
+                      if info.get("imagefile", "")}
+    if log_fn and frame_to_image:
+        log_fn(f"Mapped {len(frame_to_image)} frames to image filenames "
+               f"(poses_{modality}.json)")
+    return images, frame_to_image
+
+
 def _is_detection_id(value) -> bool:
     """True for the id of a stored detection - not ``None``, and not the -1
     an interpolated box carries."""
@@ -1927,28 +1959,10 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
                 except Exception:  # nosec B110
                     pass
 
-        # Load poses for frame→image mapping AND camera FOV computation
-        poses_images = []
-        frame_to_image: Dict[int, str] = {}
-        for suffix in ("t", "w"):
-            poses_path = os.path.join(target_folder, f"poses_{suffix}.json")
-            if os.path.exists(poses_path):
-                try:
-                    with open(poses_path, 'r') as f:
-                        poses = json.load(f)
-                    for idx, img_info in enumerate(poses.get("images", [])):
-                        imagefile = img_info.get("imagefile", "")
-                        if imagefile:
-                            frame_to_image[idx] = imagefile
-                    if frame_to_image:
-                        poses_images = poses.get("images", [])
-                        if log_fn:
-                            log_fn(f"Mapped {len(frame_to_image)} frames to image filenames "
-                                   f"(poses_{suffix}.json)")
-                        break
-                except Exception as e:
-                    if log_fn:
-                        log_fn(f"Warning: could not read poses_{suffix}.json: {e}")
+        # The frames of the camera the detections are from: their image
+        # names, and the camera position and footprint of each.
+        poses_images, frame_to_image = _camera_frames(
+            target_folder, det_suffix, log_fn)
 
         if progress_fn:
             progress_fn(20)
@@ -3722,24 +3736,9 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
                 except Exception:  # nosec B110
                     pass
 
-        # Load poses for frame→image mapping AND camera FOV computation
-        poses_images = []
-        frame_to_image: Dict[int, str] = {}
-        for suffix in ("t", "w"):
-            poses_path = os.path.join(target_folder, f"poses_{suffix}.json")
-            if os.path.exists(poses_path):
-                try:
-                    with open(poses_path, 'r') as f:
-                        poses = json.load(f)
-                    for idx, img_info in enumerate(poses.get("images", [])):
-                        imagefile = img_info.get("imagefile", "")
-                        if imagefile:
-                            frame_to_image[idx] = imagefile
-                    if frame_to_image:
-                        poses_images = poses.get("images", [])
-                        break
-                except Exception:  # nosec B110
-                    pass
+        # The frames of the camera the tracks are from.
+        poses_images, frame_to_image = _camera_frames(
+            target_folder, trk_suffix, log_fn)
 
         if progress_fn:
             progress_fn(20)
