@@ -272,15 +272,28 @@ class TestDownloadHead:
     download, so a mapping can be configured before the classifier ever
     ran (2026-09-07: the dialog told the user to run it first)."""
 
+    HEAD = b"head"
+
     def _hub(self, monkeypatch, calls, fetched_name="species_matched.pt"):
+        import hashlib
+        from bambi_wildlife_detection.core import model_pins
+
+        # The published file is what the fake hub serves.
+        self.revisions = []
+        repo = "cpraschl/bambi-species-classification"
+        monkeypatch.setattr(model_pins, "_FILES", {repo: {
+            "non_geo/species_matched.pt": (
+                len(self.HEAD), hashlib.sha256(self.HEAD).hexdigest())}})
         hub = types.ModuleType("huggingface_hub")
 
-        def hf_hub_download(repo_id, filename, token=None, local_dir=None):
+        def hf_hub_download(repo_id, filename, token=None, local_dir=None,
+                            revision=None):
             calls.append((repo_id, filename, token, local_dir))
+            self.revisions.append(revision)
             path = os.path.join(local_dir, *filename.split("/"))
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "wb") as fh:
-                fh.write(b"head")
+                fh.write(self.HEAD)
             return path
 
         hub.hf_hub_download = hf_hub_download
@@ -299,6 +312,29 @@ class TestDownloadHead:
                           "non_geo/species_matched.pt", "hf_x",
                           os.path.dirname(os.path.dirname(destination)))]
         assert logs and "Downloading" in logs[0]
+        # ... at the commit this release was tested with
+        from bambi_wildlife_detection.core import model_pins
+        assert self.revisions == [model_pins.REVISIONS[
+            "cpraschl/bambi-species-classification"]]
+
+    def test_a_head_that_is_not_the_published_file_is_refused(
+            self, monkeypatch, tmp_path):
+        self._hub(monkeypatch, [])
+        self.HEAD = b"another version"
+        destination = hf_access.head_local_path(
+            str(tmp_path), "species", "non_geo", "matched")
+        with pytest.raises(RuntimeError, match="not the published file"):
+            hf_access.download_head(
+                "cpraschl/bambi-species-classification", "species",
+                "non_geo", "matched", destination, "")
+        assert not os.path.isfile(destination)
+
+    def test_a_repository_that_is_not_pinned_gets_no_revision(
+            self, monkeypatch, tmp_path):
+        self._hub(monkeypatch, [])
+        hf_access.download_head("r/s", "sex", "non_geo", "rgb",
+                                str(tmp_path / "sex" / "non_geo" / "x.pt"), "")
+        assert self.revisions == [None]
 
     def test_an_empty_token_is_sent_as_none(self, monkeypatch, tmp_path):
         calls = []

@@ -488,8 +488,9 @@ class SegmentationToolDialog(QDialog):
         self.model_edit.setPlaceholderText(seg.sam3_local.DEFAULT_SAM3_REPO)
         self.model_edit.setToolTip(
             "Hugging Face repository of the SAM3 checkpoint. Leave empty for "
-            f"{seg.sam3_local.DEFAULT_SAM3_REPO}; pin a revision with "
-            "'repo@commit'.")
+            f"{seg.sam3_local.DEFAULT_SAM3_REPO}, at the commit this plugin "
+            "release was tested with. Pin a repository of your own with "
+            "'repo@commit'; 'repo@main' follows the latest state.")
         self.model_row_label = QLabel("Model:")
         form.addRow(self.model_row_label, self.model_edit)
 

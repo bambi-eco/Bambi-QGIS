@@ -607,9 +607,9 @@ class TransformersBackend(SegmentationBackend):
                  token: str = "",  # nosec B107
                  device: str = "auto", log_fn=None):
         super().__init__(log_fn)
-        from .classification import split_revision
+        from .classification import resolve_revision
 
-        self.model_id, self.revision = split_revision(
+        self.model_id, self.revision = resolve_revision(
             model_id or sam3_local.DEFAULT_SAM3_REPO)
         self.models_dir = models_dir
         self.token = token

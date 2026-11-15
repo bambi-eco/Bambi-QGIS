@@ -223,27 +223,121 @@ class TestDownloadFile:
             min_size=1000, log_fn=logs.append)
         assert ok is True
         assert len(attempts) == 2
-        assert any("Trying standard download" in m for m in logs)
+        assert any("trying once more" in m for m in logs)
+
+    def test_nothing_is_left_behind_by_a_failed_download(
+            self, manager, tmp_path, monkeypatch):
+        def broken(url, **kwargs):
+            raise RuntimeError("connection reset")
+
+        self._patch_requests(monkeypatch, broken)
+        folder = tmp_path / "weights"
+        folder.mkdir()
+        assert manager._download_file(
+            "https://example.com/model.pt", str(folder / "model.pt"),
+            "model") is False
+        assert list(folder.iterdir()) == []
+
+    def test_a_pinned_file_must_be_the_published_one(
+            self, manager, tmp_path, monkeypatch):
+        """Any file over a certain size used to pass."""
+        import hashlib
+        from bambi_wildlife_detection.core.model_pins import Pin
+
+        published = b"the weights" * 500
+        pin = Pin("abc", len(published), hashlib.sha256(published).hexdigest())
+        target = tmp_path / "model.pt"
+
+        self._patch_requests(
+            monkeypatch, lambda url, **kw: FakeResponse(chunks=[b"x" * 5500]))
+        logs = []
+        assert manager._download_file(
+            "https://example.com/model.pt", str(target), "model",
+            log_fn=logs.append, pin=pin) is False
+        assert not target.exists()
+        assert any("not the published file" in m for m in logs)
+
+        self._patch_requests(
+            monkeypatch, lambda url, **kw: FakeResponse(chunks=[published]))
+        assert manager._download_file(
+            "https://example.com/model.pt", str(target), "model",
+            pin=pin) is True
+        assert target.read_bytes() == published
 
 
 class TestReidDownloaders:
-    def test_osnet_reuses_existing_file(self, manager):
+    """The weights are pinned: the file in the models folder has to be the
+    published one, or it is fetched again."""
+
+    WEIGHTS = b"\x01\x02" * 100000
+
+    @pytest.fixture
+    def pinned(self, monkeypatch):
+        """Pins that fit :attr:`WEIGHTS`, and no network."""
+        import hashlib
+        from bambi_wildlife_detection.core import model_pins
+
+        pin = model_pins.Pin("abc", len(self.WEIGHTS),
+                             hashlib.sha256(self.WEIGHTS).hexdigest())
+        monkeypatch.setattr(model_pins, "OSNET_X0_25_MSMT17", pin)
+        monkeypatch.setattr(model_pins, "pin_of", lambda repo, path: pin)
+        calls = []
+
+        def get(url, **kwargs):
+            calls.append(url)
+            return FakeResponse(chunks=[self.WEIGHTS])
+
+        monkeypatch.setattr(tm_module, "requests",
+                            types.SimpleNamespace(get=get))
+        return calls
+
+    def test_osnet_reuses_existing_file(self, manager, pinned):
+        import os
+        path = os.path.join(manager.models_folder, manager.OSNET_REID_FILENAME)
+        with open(path, "wb") as fh:
+            fh.write(self.WEIGHTS)
+        assert manager._download_osnet_reid() == path
+        assert pinned == []                       # nothing was downloaded
+
+    def test_a_file_that_is_not_the_published_one_is_replaced(
+            self, manager, pinned):
+        """What an interrupted download left behind used to be used."""
         import os
         path = os.path.join(manager.models_folder, manager.OSNET_REID_FILENAME)
         with open(path, "wb") as fh:
             fh.write(b"\x00" * 200000)
-        assert manager._download_osnet_reid() == path
+        logs = []
+
+        assert manager._download_osnet_reid(logs.append) == path
+        with open(path, "rb") as fh:
+            assert fh.read() == self.WEIGHTS
+        assert len(pinned) == 1
+        assert os.path.isfile(path + ".previous")
+        assert any("not the published version" in m for m in logs)
+
+    def test_the_bambi_weights_come_from_their_pinned_commit(
+            self, manager, pinned, monkeypatch):
+        from bambi_wildlife_detection.core import model_pins
+
+        monkeypatch.setattr(
+            model_pins, "REVISIONS", {manager.BAMBI_REPO: "0123abc"})
+        path = manager._download_bambi_reid()
+        assert path and path.endswith(manager.BAMBI_REID_LOCAL_NAME)
+        assert pinned == [
+            f"https://huggingface.co/{manager.BAMBI_REPO}/resolve/0123abc/"
+            f"{manager.BAMBI_REID_FILENAME}"]
 
     def test_osnet_falls_back_to_boxmot_name_on_failure(self, manager, monkeypatch):
         monkeypatch.setattr(manager, "_download_file", lambda *a, **kw: False)
         assert manager._download_osnet_reid() == manager.OSNET_REID_FILENAME
 
-    def test_bambi_reuses_existing_file(self, manager):
+    def test_bambi_reuses_existing_file(self, manager, pinned):
         import os
         path = os.path.join(manager.models_folder, manager.BAMBI_REID_LOCAL_NAME)
         with open(path, "wb") as fh:
-            fh.write(b"\x00" * 200000)
+            fh.write(self.WEIGHTS)
         assert manager._download_bambi_reid() == path
+        assert pinned == []
 
     def test_bambi_returns_none_on_failure(self, manager, monkeypatch):
         monkeypatch.setattr(manager, "_download_file", lambda *a, **kw: False)

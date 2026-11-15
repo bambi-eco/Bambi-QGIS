@@ -829,99 +829,51 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
         return correction_for_frame_config(frame_idx, config)
 
     def download_default_model(self, log_fn=None, camera: str = "T") -> str:
-        """Download the default detection model from HuggingFace to the shared
-        ``bambi_deps/models/`` folder in the QGIS profile directory.
+        """The default detection model of *camera*, in the shared
+        ``bambi_deps/models/`` folder of the QGIS profile - downloaded from
+        Hugging Face where it is not there yet.
+
+        The file is the one this release was tested with
+        (:mod:`core.model_pins`): fetched at its pinned commit and checked
+        against its published size and SHA-256, also when it is already
+        there. It used to come from the repository's current state, and any
+        file over a megabyte passed - a model could change unnoticed, and a
+        download cut off half-way was used.
 
         :param log_fn: Optional logging function
         :param camera: Modality to fetch the model for ("T" thermal, "W" RGB)
-        :return: Path to the downloaded model
+        :return: Path to the model
         """
-        import urllib.parse
-        import requests
+        from .core import model_pins
 
         model_spec = self.DEFAULT_MODELS.get(camera, self.DEFAULT_MODELS["T"])
-
         models_folder = self._get_default_model_dir()
         os.makedirs(models_folder, exist_ok=True)
-
         model_path = os.path.join(models_folder, model_spec["filename"])
 
-        if os.path.exists(model_path):
-            # Check if file is not empty (incomplete download)
-            if os.path.getsize(model_path) > 1000000:  # > 1MB
-                if log_fn:
-                    log_fn(f"Model already exists at {model_path}")
-                return model_path
-            else:
-                # Remove incomplete file
-                os.remove(model_path)
-
-        if log_fn:
-            log_fn(f"Downloading model from HuggingFace: {model_spec['repo']}")
+        repo, remote = model_spec["repo"], model_spec["remote_path"]
+        pin = model_pins.pin_of(repo, remote)
+        url = model_pins.resolve_url(repo, remote)
+        if log_fn and not os.path.isfile(model_path):
+            log_fn(f"Downloading model from HuggingFace: {repo}")
             log_fn("This may take a few minutes...")
-
-        # Direct download URL from HuggingFace
-        url = f"https://huggingface.co/{model_spec['repo']}/resolve/main/{model_spec['remote_path']}"
-
         try:
-            # Validate URL scheme before downloading
-            _scheme = urllib.parse.urlparse(url).scheme
-            if _scheme not in ('https', 'http'):
-                raise ValueError(f"Unexpected URL scheme: {_scheme!r}")
-
-            def _write_stream(resp):
-                total_size = int(resp.headers.get('content-length', 0))
-                downloaded = 0
-                with open(model_path, 'wb') as f:
-                    for chunk in resp.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
-                            downloaded += len(chunk)
-                            if log_fn and downloaded % 819200 == 0:
-                                if total_size > 0:
-                                    percent = min(100, (downloaded / total_size) * 100)
-                                    log_fn(f"Download progress: {percent:.1f}% ({downloaded // 1024} KB)")
-
-            # Try with SSL verification disabled first (for corporate networks)
-            try:
-                resp = requests.get(url, stream=True, verify=True, timeout=300)
-                resp.raise_for_status()
-                _write_stream(resp)
-            except Exception as e1:
-                if log_fn:
-                    log_fn(f"Download with custom SSL failed: {e1}")
-                    log_fn("Trying standard download...")
-                resp = requests.get(url, stream=True, timeout=300)
-                resp.raise_for_status()
-                _write_stream(resp)
-
-            # Verify download
-            if os.path.exists(model_path) and os.path.getsize(model_path) > 1000000:
-                if log_fn:
-                    log_fn(f"Model downloaded successfully to: {model_path}")
-                return model_path
-            else:
-                raise RuntimeError("Downloaded file is too small or missing")
-
+            path = model_pins.ensure(
+                model_path, url, pin, what="detection model",
+                min_size=1000000, log_fn=log_fn)
         except Exception as e:
-            # Clean up partial download
-            if os.path.exists(model_path):
-                try:
-                    os.remove(model_path)
-                except Exception:  # nosec B110
-                    pass
-
-            error_msg = (
+            from .core.redaction import redact
+            raise RuntimeError(
                 f"Failed to download model automatically.\n\n"
                 f"Please download manually:\n"
-                f"1. Go to: https://huggingface.co/{model_spec['repo']}\n"
-                f"2. Download: {model_spec['remote_path']}\n"
+                f"1. Download: {url}\n"
                 f"   (rename it to: {model_spec['filename']})\n"
-                f"3. Save to: {model_path}\n\n"
+                f"2. Save to: {model_path}\n\n"
                 f"Or specify a local model path in the Parameters tab.\n\n"
-                f"Error: {str(e)}"
-            )
-            raise RuntimeError(error_msg)
+                f"Error: {redact(e)}") from e
+        if log_fn:
+            log_fn(f"Detection model: {path}")
+        return path
 
     def _get_extraction_prerequisites(self, config: Dict[str, Any]):
         """Get common prerequisites for frame extraction.
@@ -3735,12 +3687,15 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
                     f"There is no default {task} classifier yet. Choose a "
                     "custom model in the Classification tab, or switch this "
                     "task off.")
-            path = hf_access.head_local_path(
-                models_dir, task, projection, modality_in)
-            if not os.path.isfile(path):
-                path = self._download_head(
-                    repo, task, projection, modality_in, path,
-                    config.get("hf_token", ""), log_fn)
+            # The published classifier as this release was tested with it:
+            # downloaded where missing, and replaced where the file here is
+            # another version (hf_access.ensure_head).
+            path = hf_access.ensure_head(
+                repo, task, projection, modality_in,
+                hf_access.head_local_path(
+                    models_dir, task, projection, modality_in),
+                config.get("hf_token", ""), log_fn,
+                download=self._download_head)
 
         dim = hf_access.feature_dim(
             modality_in, int(config.get("classification_backbone_dim",

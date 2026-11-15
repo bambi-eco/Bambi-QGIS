@@ -13,6 +13,11 @@ See [Installation problems](installation.md#installation-problems) for Git/PATH 
 - Check your internet connection
 - Download manually from HuggingFace: [Thermal detection (thermal_animal_detector.pt)](https://huggingface.co/cpraschl/bambi-thermal-detection), [RGB detection (rgb/weights/best.pt)](https://huggingface.co/cpraschl/bambi-models), [Re-ID (osnet_x0_5_bambi_thermal_omni.pt)](https://huggingface.co/cpraschl/bambi-thermal-omni)
 - Place `thermal_animal_detector.pt` (thermal) or the RGB weights renamed to `rgb_animal_detector.pt` in `%APPDATA%\QGIS\QGIS3\profiles\default\bambi_deps\models\` (or specify a custom path in the **Thermal/RGB Model Path** fields of the Detection configuration)
+- The error message names the exact file to fetch: the default models are the ones this plugin release was tested with, identified by the commit of their repository and their SHA-256. A file placed by hand that is another version is set aside as `*.previous` and the tested one downloaded; without a network the file that is there is used, and the log says that it is not the tested version. A model of your own goes into the **Model Path** fields, where nothing is checked.
+
+## "... is not the published file"
+
+A download arrived, but it is not the model that was published - it was cut off, or a proxy answered with a page of its own. Nothing of it is kept. Try again; if it persists, download the file in a browser from the address in the message and place it as described above.
 
 ## Geo-referencing issues
 

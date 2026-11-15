@@ -204,7 +204,7 @@ Use **→ Add Flight Route to QGIS** to load both layers with styling applied.
 
 ### A1. Detect Animals
 
-Runs YOLO-based detection on all extracted frames. Separate model paths can be configured for the thermal and the RGB modality; the model matching the selected camera is used. The default wildlife detection model for each modality is downloaded automatically from HuggingFace on first use.
+Runs YOLO-based detection on all extracted frames. Separate model paths can be configured for the thermal and the RGB modality; the model matching the selected camera is used. The default wildlife detection model for each modality is downloaded automatically from HuggingFace on first use - the version this plugin release was tested with, fetched at the commit of its repository and checked against its published size and SHA-256 (so is every other default model: the Re-ID weights, the classifiers, the DINOv3 backbone and SAM3). A model therefore does not change under a survey unless the plugin is updated or you choose another one.
 
 **Projection** (Configuration → Detection): detection normally looks at the
 extracted camera frames (*Perspective*). With *Orthorectified (GeoTIFF)* it

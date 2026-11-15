@@ -18,7 +18,6 @@ The manager handles:
 import json
 import inspect
 import os
-import urllib.parse
 import requests
 from typing import Dict, Any, Optional, Tuple, Type
 from enum import Enum
@@ -495,67 +494,29 @@ class TrackerManager:
 
         return None
 
-    def _download_file(self, url: str, target_path: str, description: str, min_size: int = 100000, log_fn=None) -> bool:
-        """
-        Download a file from URL to target path.
-        Uses the same approach as the detection model download.
+    def _download_file(self, url: str, target_path: str, description: str,
+                       min_size: int = 100000, log_fn=None, pin=None) -> bool:
+        """Make sure the weights file at *target_path* is there and whole.
 
-        :param url: URL to download from
-        :param target_path: Local path to save file
-        :param description: Description for logging
-        :param min_size: Minimum file size to consider valid
-        :param log_fn: Optional logging function
-        :return: True if successful, False otherwise
+        With a *pin* (``core.model_pins.Pin``) the file must be the
+        published one - by size and SHA-256 - whether it was just downloaded
+        or was there already; without, it must have *min_size* bytes. A
+        download is written beside its destination and only moved into place
+        once it has been checked.
+
+        :return: True when the file is in place, False otherwise
         """
+        from .core import model_pins
+
         try:
-            # Validate URL scheme before downloading
-            _scheme = urllib.parse.urlparse(url).scheme
-            if _scheme not in ('https', 'http'):
-                raise ValueError(f"Unexpected URL scheme: {_scheme!r}")
-
-            def _write_stream(resp):
-                total_size = int(resp.headers.get('content-length', 0))
-                downloaded = 0
-                with open(target_path, 'wb') as f:
-                    for chunk in resp.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
-                            downloaded += len(chunk)
-                            if log_fn and downloaded % 819200 == 0:
-                                if total_size > 0:
-                                    percent = min(100, (downloaded / total_size) * 100)
-                                    log_fn(f"{description} download progress: {percent:.1f}% ({downloaded // 1024} KB)")
-
-            # Try with SSL verification disabled first (for corporate networks)
-            try:
-                resp = requests.get(url, stream=True, verify=True, timeout=300)
-                resp.raise_for_status()
-                _write_stream(resp)
-            except Exception as e1:
-                if log_fn:
-                    log_fn(f"Download with custom SSL failed: {e1}")
-                    log_fn("Trying standard download...")
-                resp = requests.get(url, stream=True, timeout=300)
-                resp.raise_for_status()
-                _write_stream(resp)
-
-            # Verify download
-            if os.path.exists(target_path) and os.path.getsize(target_path) > min_size:
-                if log_fn:
-                    log_fn(f"{description} downloaded successfully to: {target_path}")
-                return True
-            else:
-                raise RuntimeError("Downloaded file is too small or missing")
-
+            model_pins.ensure(target_path, url, pin, what=description,
+                              min_size=min_size, get=requests.get,
+                              log_fn=log_fn)
+            return True
         except Exception as e:
-            # Clean up partial download
-            if os.path.exists(target_path):
-                try:
-                    os.remove(target_path)
-                except Exception:  # nosec B110
-                    pass
+            from .core.redaction import redact
             if log_fn:
-                log_fn(f"Failed to download {description}: {e}")
+                log_fn(f"Failed to download {description}: {redact(e)}")
             return False
 
     def _download_osnet_reid(self, log_fn=None) -> Optional[str]:
@@ -565,22 +526,21 @@ class TrackerManager:
         :param log_fn: Optional logging function
         :return: Path to downloaded model or None
         """
+        from .core import model_pins
+
         model_path = os.path.join(self.models_folder, self.OSNET_REID_FILENAME)
-
-        # Check if already downloaded
-        if os.path.exists(model_path) and os.path.getsize(model_path) > 100000:
-            if log_fn:
-                log_fn(f"OSNET ReID model already exists at {model_path}")
-            return model_path
-
-        if log_fn:
+        if log_fn and not os.path.isfile(model_path):
             log_fn("Downloading OSNET ReID model from Google Drive...")
             log_fn("This may take a moment...")
 
-        # Google Drive direct download URL (same source as BoxMOT uses)
+        # Google Drive direct download URL (same source as BoxMOT uses). The
+        # file has no repository behind it, so its checksum is what says it
+        # is still the file BoxMOT published.
         url = f"https://drive.google.com/uc?id={self.OSNET_GOOGLE_DRIVE_ID}&export=download"
 
-        if self._download_file(url, model_path, "OSNET ReID", min_size=100000, log_fn=log_fn):
+        if self._download_file(url, model_path, "OSNET ReID model",
+                               min_size=100000, log_fn=log_fn,
+                               pin=model_pins.OSNET_X0_25_MSMT17):
             return model_path
 
         # If download failed, fall back to letting BoxMOT handle it
@@ -595,23 +555,21 @@ class TrackerManager:
         :param log_fn: Optional logging function
         :return: Path to downloaded model or None
         """
+        from .core import model_pins
+
         # Save locally with a clear name
         model_path = os.path.join(self.models_folder, self.BAMBI_REID_LOCAL_NAME)
-
-        # Check if already downloaded
-        if os.path.exists(model_path) and os.path.getsize(model_path) > 100000:
-            if log_fn:
-                log_fn(f"BAMBI Thermal-Omni ReID model already exists at {model_path}")
-            return model_path
-
-        if log_fn:
+        if log_fn and not os.path.isfile(model_path):
             log_fn("Downloading BAMBI Thermal-Omni ReID model from HuggingFace...")
             log_fn("This may take a moment...")
 
-        # Direct download URL from HuggingFace
-        url = f"https://huggingface.co/{self.BAMBI_REPO}/resolve/main/{self.BAMBI_REID_FILENAME}"
+        # At the commit this release was tested with, not the repository's
+        # current state.
+        url = model_pins.resolve_url(self.BAMBI_REPO, self.BAMBI_REID_FILENAME)
+        pin = model_pins.pin_of(self.BAMBI_REPO, self.BAMBI_REID_FILENAME)
 
-        if self._download_file(url, model_path, "BAMBI Thermal-Omni ReID", min_size=100000, log_fn=log_fn):
+        if self._download_file(url, model_path, "BAMBI Thermal-Omni ReID model",
+                               min_size=100000, log_fn=log_fn, pin=pin):
             return model_path
 
         # Download failed

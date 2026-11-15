@@ -2371,10 +2371,12 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             "The DINOv3 model producing the features the classifier heads "
             "consume. Leave empty for the model every published head was "
             "trained against.\n\n"
-            "Append '@' and a commit hash to pin a revision "
-            "(repo@abc123…). Without one, Hugging Face resolves the model to "
-            "whatever its main branch holds at the time, so a repository that "
-            "changes would change your features."
+            "The default model is fetched at the commit this plugin "
+            "release was tested with. For a model of your own, append '@' "
+            "and a commit hash to pin it (repo@abc123…): without one, "
+            "Hugging Face resolves a repository to whatever its main branch "
+            "holds at the time, so one that changes would change your "
+            "features. 'repo@main' follows the latest state on purpose."
         )
         hf_layout.addRow("Backbone:", self.classification_backbone_edit)
 

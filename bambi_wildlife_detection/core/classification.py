@@ -193,6 +193,21 @@ def split_revision(model_id: str) -> Tuple[str, str]:
     return text, ""
 
 
+def resolve_revision(model_id: str) -> Tuple[str, str]:
+    """:func:`split_revision`, with the commit this release was tested with
+    where none is named and the repository is one the plugin knows
+    (:mod:`core.model_pins`) - its default backbone, SAM3.
+
+    So the defaults are pinned and a repository of the user's own is not:
+    that one is theirs to pin with ``@<commit>``. ``@main`` on a default
+    follows its latest state deliberately.
+    """
+    from . import model_pins
+
+    repo, revision = split_revision(model_id)
+    return repo, revision or model_pins.revision_of(repo)
+
+
 def resolve_device(preference: str = "auto") -> str:
     """``"cuda"`` or ``"cpu"``, honouring the user's choice where possible."""
     if preference == "cpu":
@@ -244,7 +259,7 @@ class Backbone:
                  # hardcoded credential.
                  token: str = "",  # nosec B107
                  device: str = "auto", fp16: bool = True, log_fn=None):
-        self.model_id, self.revision = split_revision(
+        self.model_id, self.revision = resolve_revision(
             model_id or hf_access.DEFAULT_BACKBONE)
         self.models_dir = models_dir
         self.token = token

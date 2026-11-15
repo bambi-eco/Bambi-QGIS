@@ -141,9 +141,9 @@ class LocalSam3:
                  # "no token supplied" is a state, not a credential.
                  token: str = "",  # nosec B107
                  device: str = "auto", log_fn=None):
-        from .classification import split_revision
+        from .classification import resolve_revision
 
-        self.model_id, self.revision = split_revision(
+        self.model_id, self.revision = resolve_revision(
             model_id or DEFAULT_SAM3_REPO)
         self.models_dir = models_dir
         self.token = token

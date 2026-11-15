@@ -368,8 +368,16 @@ def download_head(repo: str, task: str, projection: str, modality: str,
     mapping needs the model's class list, the model only used to arrive
     when the classifier ran, and telling a user to run a classifier in order
     to configure it was the wrong way round.
+
+    A head of the plugin's own repositories is fetched at the commit this
+    release was tested with and checked against its published size and
+    SHA-256 (:mod:`core.model_pins`). It used to be whatever the repository
+    held that day - and the stored predictions name the model by its file
+    name, which is the same for every version of it.
     """
     import shutil
+
+    from . import model_pins
 
     try:
         from huggingface_hub import hf_hub_download
@@ -379,18 +387,27 @@ def download_head(repo: str, task: str, projection: str, modality: str,
             "dependencies from the Dependency Manager.") from exc
 
     remote = head_repo_path(task, projection, modality)
+    revision = model_pins.revision_of(repo)
+    pin = model_pins.pin_of(repo, remote)
     if log_fn:
         log_fn(f"Downloading {repo}/{remote} …")
     os.makedirs(os.path.dirname(destination), exist_ok=True)
+    kwargs = {"revision": revision} if revision else {}
     try:
-        # nosec B615 - deliberately unpinned, for the same reason as the
-        # backbone: the repository is user-overridable, so a hardcoded
-        # revision would be wrong for a custom head. Reproducibility comes
-        # from the model file itself, which is recorded with every
-        # prediction.
+        # nosec B615 - pinned to the tested commit for the plugin's own
+        # repositories (model_pins); a repository that is not ours has no
+        # pin to give.
         fetched = hf_hub_download(  # nosec B615
             repo_id=repo, filename=remote, token=token or None,
-            local_dir=os.path.dirname(os.path.dirname(destination)))
+            local_dir=os.path.dirname(os.path.dirname(destination)),
+            **kwargs)
+        if pin is not None and model_pins.difference(fetched, pin):
+            # The hub puts the file straight into the local layout: what is
+            # not the published file must not stay there to be used.
+            found = model_pins.difference(fetched, pin)
+            os.remove(fetched)
+            raise model_pins.ModelIntegrityError(
+                f"what arrived is not the published file: {found}")
     except Exception as exc:
         raise RuntimeError(
             f"Could not download the {task} classifier "
@@ -399,6 +416,51 @@ def download_head(repo: str, task: str, projection: str, modality: str,
         os.makedirs(os.path.dirname(destination), exist_ok=True)
         shutil.copyfile(fetched, destination)
     return destination
+
+
+def ensure_head(repo: str, task: str, projection: str, modality: str,
+                destination: str, token: str = "",  # nosec B107
+                log_fn=None, download=None) -> str:
+    """The head at *destination*, as this release was tested with it.
+
+    A file that is already there is used when it is the pinned one - or
+    when the repository has no pin. One that is not (an earlier version of
+    the classifier, or a broken download) is set aside as ``*.previous``
+    and the pinned one fetched; if that fails, the file that was there is
+    put back and used, with a line in the log saying so.
+
+    :param download: ``download_head``-like, for callers that route the
+        download through a hook of their own
+    """
+    from . import model_pins
+
+    download = download or download_head
+    pin = model_pins.pin_of(repo, head_repo_path(task, projection, modality))
+    previous = None
+    if os.path.isfile(destination):
+        found = None if pin is None else model_pins.difference(
+            destination, pin)
+        if found is None:
+            return destination
+        if log_fn:
+            log_fn(f"The {task} classifier on this computer is not the "
+                   f"published version this release was tested with "
+                   f"({found}). Downloading that one; the present file is "
+                   f"kept as {os.path.basename(destination)}.previous")
+        previous = f"{destination}.previous"
+        os.replace(destination, previous)
+    try:
+        return download(repo, task, projection, modality, destination,
+                        token, log_fn)
+    except Exception:
+        if previous is None:
+            raise
+        os.replace(previous, destination)
+        if log_fn:
+            log_fn(f"The published {task} classifier could not be "
+                   "downloaded; the file that was here is used instead. It "
+                   "is not the version this release was tested with.")
+        return destination
 
 
 def missing_heads(models_dir: str, wanted: List[Tuple[str, str, str]]

@@ -330,7 +330,7 @@ One row per task - occlusion, species, sex - in the order they run.
 | Column | What it decides |
 |--------|-----------------|
 | **Input** | Which camera's features the classifier reads: *Thermal*, *RGB*, or *Matched* (both at once). Matched is the default, because it is where the two sensors complement each other most. |
-| **Model** | *Default* (our published model, downloaded on first use), *Custom* (your own file), or *Off*. |
+| **Model** | *Default* (our published model, downloaded on first use - the version this release was tested with, checked by SHA-256; a file on disk that is another version is replaced and kept as `*.previous`), *Custom* (your own file), or *Off*. |
 | **File / repository** | The model file, for a custom choice. |
 | **Labels** | Opens the class mapping, below. |
 | **Species…** | Sex and life stage: which classifier to use per species. |
