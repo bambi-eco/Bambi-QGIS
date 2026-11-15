@@ -35,7 +35,7 @@ except ImportError:  # Qt6
 
 from .core import flight_viewer as fv
 from .core import flight_viewer_geometry as geo
-from .gui_utils import let_thread_finish
+from .gui_utils import ClosesOnce, let_thread_finish
 
 SETTINGS_GROUP = "bambi/flight_viewer"
 
@@ -245,7 +245,7 @@ class _FallbackView(QLabel):
             Qt.TransformationMode.SmoothTransformation))
 
 
-class FlightViewerDialog(QDialog):
+class FlightViewerDialog(ClosesOnce, QDialog):
     """The 3D Flight Viewer window."""
 
     def __init__(self, iface, dock_widget=None, parent=None):
@@ -1726,7 +1726,7 @@ class FlightViewerDialog(QDialog):
             self.viewport.grabFramebuffer().save(path)
             self.status(f"Saved {path}")
 
-    def closeEvent(self, event):
+    def _when_closed(self):
         self.stop()
         self._save_settings()
         # Workers that are still busy after the wait end by themselves; a
@@ -1745,4 +1745,3 @@ class FlightViewerDialog(QDialog):
             self.cache.shutdown()
         if self.viewport is not None:
             self.viewport.dispose()
-        super().closeEvent(event)

@@ -26,6 +26,7 @@ from qgis.PyQt.QtGui import QPixmap, QImage
 from qgis.PyQt.QtCore import Qt
 
 from .bambi_curve_widget import CurveEditorPanel
+from .gui_utils import ClosesOnce
 
 
 _COLORMAPS = ['white-hotspot', 'black-hotspot', 'plasma', 'inferno', 'magma', 'viridis', 'jet']
@@ -128,7 +129,7 @@ class _ThermalLabel(QLabel):
 # Dialog
 # ---------------------------------------------------------------------------
 
-class ThermalViewerDialog(QDialog):
+class ThermalViewerDialog(ClosesOnce, QDialog):
     """Non-modal dialog for viewing DJI radiometric thermal JPG images."""
 
     def __init__(self, parent=None):
@@ -547,8 +548,7 @@ class ThermalViewerDialog(QDialog):
                 return
         super().keyPressEvent(event)
 
-    def closeEvent(self, event):
+    def _when_closed(self):
         if self._thermal is not None:
             self._thermal.close()
             self._thermal = None
-        super().closeEvent(event)

@@ -35,7 +35,7 @@ from qgis.core import (
 )
 
 
-from .gui_utils import fit_to_screen
+from .gui_utils import ClosesOnce, fit_to_screen
 from .core.tile_math import latlon_to_tile, tile_to_latlon
 # Track colours and all data loaders moved to core.video_export;
 # re-exported under their old names for compatibility.
@@ -172,7 +172,7 @@ class _Cancelled(Exception):
     """Raised internally when the user cancels the render."""
 
 
-class VideoCreatorDialog(QDialog):
+class VideoCreatorDialog(ClosesOnce, QDialog):
     """Non-modal dialog that composes an MP4 from processed BAMBI results."""
 
     def __init__(self, iface, dock_widget=None, parent=None):
@@ -1206,7 +1206,6 @@ class VideoCreatorDialog(QDialog):
     # Cleanup
     # ------------------------------------------------------------------
 
-    def closeEvent(self, event):
+    def _when_closed(self):
         if self._rendering:
             self._cancel = True
-        super().closeEvent(event)

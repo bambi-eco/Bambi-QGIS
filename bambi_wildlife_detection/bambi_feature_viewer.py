@@ -34,8 +34,10 @@ from qgis.PyQt.QtWidgets import (
 from qgis.PyQt.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QFont
 from qgis.PyQt.QtCore import Qt, pyqtSignal
 
+from .gui_utils import ClosesOnce
 
-class FeatureViewerDialog(QDialog):
+
+class FeatureViewerDialog(ClosesOnce, QDialog):
     """
     Singleton non-modal dialog showing a frame image with bounding boxes.
 
@@ -1091,6 +1093,5 @@ class FeatureViewerDialog(QDialog):
         super().resizeEvent(event)
         self._render_current_frame()
 
-    def closeEvent(self, event):
+    def _when_closed(self):
         self._stop_projection_worker()
-        super().closeEvent(event)

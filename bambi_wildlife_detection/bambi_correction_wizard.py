@@ -57,6 +57,7 @@ from qgis.PyQt.QtGui import (
 
 # Angle wrapping and circle-intersection helpers moved to
 # core.correction_solver; re-exported under their old names.
+from .gui_utils import ClosesOnce
 from .core.correction_solver import (  # noqa: F401 - re-exported API
     circles_intersect as _circles_intersect,
     wrap_deg as _wrap_deg,
@@ -1211,7 +1212,7 @@ class _LightFieldRenderWorker(QThread):
 # Main wizard dialog
 # ---------------------------------------------------------------------------
 
-class BambiCorrectionWizard(QDialog):
+class BambiCorrectionWizard(ClosesOnce, QDialog):
     """Three-step wizard for calibrating camera correction factors.
 
     Parameters
@@ -1280,32 +1281,24 @@ class BambiCorrectionWizard(QDialog):
         self.setMinimumSize(920, 660)
         self.resize(1120, 760)
 
+        # Why the wizard cannot open, said once it is on screen. The timer
+        # calls a method of this dialog, so it is dropped with the dialog:
+        # a lambda fired all the same, into a dialog that was gone.
+        self._refusal = None
         err = self._validate_config()
         if err:
-            QTimer.singleShot(
-                0,
-                lambda: (
-                    QMessageBox.critical(self, "Cannot open wizard", err),
-                    self.reject(),
-                ),
-            )
+            self._refusal = (QMessageBox.critical, "Cannot open wizard", err)
+            QTimer.singleShot(0, self._refuse)
             return
 
         self._load_poses()
 
         if not any(self._poses.values()):
-            QTimer.singleShot(
-                0,
-                lambda: (
-                    QMessageBox.warning(
-                        self,
-                        "No Poses Found",
-                        "No poses file was found in the target folder.\n\n"
-                        "Please extract thermal or RGB frames first.",
-                    ),
-                    self.reject(),
-                ),
-            )
+            self._refusal = (
+                QMessageBox.warning, "No Poses Found",
+                "No poses file was found in the target folder.\n\n"
+                "Please extract thermal or RGB frames first.")
+            QTimer.singleShot(0, self._refuse)
             return
 
         self._setup_ui()
@@ -2641,15 +2634,25 @@ class BambiCorrectionWizard(QDialog):
 
         dlg.exec()
 
-    def closeEvent(self, event) -> None:
-        self._plot_timer.stop()
+    def _refuse(self) -> None:
+        if self._refusal is None or self._closed_once:
+            return
+        box, title, text = self._refusal
+        self._refusal = None
+        box(self, title, text)
+        self.reject()
+
+    def _when_closed(self) -> None:
+        # a wizard that could not open has built none of this
+        timer = getattr(self, "_plot_timer", None)
+        if timer is not None:
+            timer.stop()
         from .gui_utils import let_thread_finish
-        for worker in (self._dem_worker, self._probe_worker, self._render_worker):
+        for name in ("_dem_worker", "_probe_worker", "_render_worker"):
             # Still running after the wait: left to end by itself, not
             # destroyed with the window.
-            let_thread_finish(worker, wait_ms=3000)
+            let_thread_finish(getattr(self, name, None), wait_ms=3000)
         self._tri_mesh = None
         self._ray_caster = None
         self._raw_mesh_data = None
         self._raw_texture_data = None
-        super().closeEvent(event)

@@ -25,6 +25,7 @@ from qgis.PyQt.QtWidgets import (
 )
 
 from .core import agl_profile
+from .gui_utils import ClosesOnce
 
 #: x-axis key of the profile points -> axis title
 AXES = {
@@ -406,7 +407,7 @@ class _ProfileWorker(QThread):
         self.finished_ok.emit(profile)
 
 
-class AglToolDialog(QDialog):
+class AglToolDialog(ClosesOnce, QDialog):
     """Non-modal window with the AGL profile of the loaded flight."""
 
     def __init__(self, iface, dock_widget=None, parent=None):
@@ -674,7 +675,7 @@ class AglToolDialog(QDialog):
         self.canvas.set_markers(self._marker_counts,
                                 self.marker_combo.currentText().lower())
 
-    def closeEvent(self, event):
+    def _when_closed(self):
         worker = self._worker
         if worker is not None:
             self._pending = None
@@ -683,7 +684,6 @@ class AglToolDialog(QDialog):
             # than destroyed with the window.
             from .gui_utils import let_thread_finish
             let_thread_finish(worker, wait_ms=3000)
-        super().closeEvent(event)
 
     def _on_hover(self, point: Optional[dict]):
         if point is None:

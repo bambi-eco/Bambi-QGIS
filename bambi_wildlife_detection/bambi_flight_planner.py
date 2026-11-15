@@ -60,6 +60,7 @@ from qgis.core import (  # noqa: E402
 )
 
 
+from .gui_utils import ClosesOnce  # noqa: E402
 from .core.flight_plan_io import (  # noqa: E402,F401 - re-exported API
     _DEFAULTS,
     _FlightPlanWorker,
@@ -102,7 +103,7 @@ _ROUTE_COLORS = [
 ]
 
 
-class FlightPlannerDialog(QDialog):
+class FlightPlannerDialog(ClosesOnce, QDialog):
     """Dialog for configuring and running the random flight strategy planner."""
 
     def __init__(self, iface, parent=None):
@@ -781,7 +782,7 @@ class FlightPlannerDialog(QDialog):
     # Cleanup
     # ------------------------------------------------------------------
 
-    def closeEvent(self, event):
+    def _when_closed(self):
         self._save_settings()
         # Planning cannot be interrupted: its thread ends by itself.
         from .gui_utils import let_thread_finish
@@ -793,4 +794,3 @@ class FlightPlannerDialog(QDialog):
             except Exception:  # nosec B110
                 pass
         self._temp_files.clear()
-        super().closeEvent(event)

@@ -40,7 +40,7 @@ from qgis.PyQt.QtWidgets import (
     QSizePolicy, QScrollArea, QFrame,
 )
 
-from .gui_utils import fit_to_screen
+from .gui_utils import ClosesOnce, fit_to_screen
 from .core.labelling import track_color_rgb
 from .core.transects import (
     Transect,
@@ -332,7 +332,7 @@ class _TransectTimeline(QWidget):
 # Dialog
 # ---------------------------------------------------------------------------
 
-class TransectToolDialog(QDialog):
+class TransectToolDialog(ClosesOnce, QDialog):
     """Non-modal tool for splitting a flight into transects."""
 
     def __init__(self, iface, dock_widget=None, parent=None):
@@ -989,8 +989,5 @@ class TransectToolDialog(QDialog):
             self._dirty = False
         return True
 
-    def closeEvent(self, event):
-        if not self._maybe_save_dirty():
-            event.ignore()
-            return
-        super().closeEvent(event)
+    def _before_closing(self) -> bool:
+        return self._maybe_save_dirty()

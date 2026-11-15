@@ -47,6 +47,7 @@ from qgis.PyQt.QtGui import (
 
 # Constants and image/intrinsics helpers moved to core.camera_calibration;
 # re-exported under their old names.
+from .gui_utils import ClosesOnce
 from .core.camera_calibration import (  # noqa: F401 - re-exported API
     _DEFAULT_SFM_FRAMES,
     _IMAGE_EXTS,
@@ -360,7 +361,7 @@ class _CalibWorker(QObject):
 # Main wizard dialog
 # ---------------------------------------------------------------------------
 
-class CameraCalibrationWizard(QDialog):
+class CameraCalibrationWizard(ClosesOnce, QDialog):
     """Camera calibration wizard (single-camera SfM or stereo RGB+thermal).
 
     Signals
@@ -2496,10 +2497,5 @@ class CameraCalibrationWizard(QDialog):
     # Cleanup
     # =========================================================================
 
-    def closeEvent(self, event) -> None:
+    def _when_closed(self) -> None:
         self._stop_worker()
-        super().closeEvent(event)
-
-    def reject(self) -> None:
-        self._stop_worker()
-        super().reject()

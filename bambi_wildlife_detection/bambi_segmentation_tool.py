@@ -47,7 +47,8 @@ from qgis.PyQt.QtWidgets import (
 
 from .core import ortho_segmentation as ortho
 from .core import segmentation as seg
-from .gui_utils import fit_to_screen, read_hf_token, write_hf_token
+from .gui_utils import (
+    ClosesOnce, fit_to_screen, read_hf_token, write_hf_token)
 
 _SETTINGS_PREFIX = "bambi/segmentation_tool/"
 _SIDE_PANEL_WIDTH = 360
@@ -317,7 +318,7 @@ class _GeoRefWorker(QThread):
 # Dialog
 # ---------------------------------------------------------------------------
 
-class SegmentationToolDialog(QDialog):
+class SegmentationToolDialog(ClosesOnce, QDialog):
     """Non-modal window: frames, prompts, backend, results, follow-ups."""
 
     def __init__(self, iface, dock_widget=None, parent=None):
@@ -1900,23 +1901,24 @@ class SegmentationToolDialog(QDialog):
         self._sync_token_from_dock()
         super().showEvent(event)
 
-    def closeEvent(self, event):
+    def _before_closing(self) -> bool:
+        if self._worker is None and self._georef_worker is None:
+            return True
+        reply = QMessageBox.question(
+            self, "Segmentation running",
+            "A run is still in progress. Cancel it and close?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        return reply == QMessageBox.StandardButton.Yes
+
+    def _when_closed(self):
         from .gui_utils import let_thread_finish
 
         # A worker still busy after the wait ends by itself: destroying its
         # thread with the window would take QGIS down.
         let_thread_finish(self._preview_worker, wait_ms=5000)
         if self._worker is not None or self._georef_worker is not None:
-            reply = QMessageBox.question(
-                self, "Segmentation running",
-                "A run is still in progress. Cancel it and close?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No)
-            if reply != QMessageBox.StandardButton.Yes:
-                event.ignore()
-                return
             self._cancel()
             for worker in (self._worker, self._georef_worker):
                 let_thread_finish(worker, wait_ms=5000)
         self._save_settings()
-        super().closeEvent(event)

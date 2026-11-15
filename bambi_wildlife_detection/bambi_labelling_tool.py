@@ -108,7 +108,7 @@ from qgis.PyQt.QtWidgets import (
 # so existing imports keep working.
 # ---------------------------------------------------------------------------
 
-from .gui_utils import fit_to_screen
+from .gui_utils import ClosesOnce, fit_to_screen
 
 from .core.labelling import (  # noqa: F401 - re-exported API
     AGE_CLASSES,
@@ -870,7 +870,7 @@ class _MergeProposalsDialog(QDialog):
 # Main dialog
 # ---------------------------------------------------------------------------
 
-class LabellingToolDialog(QDialog):
+class LabellingToolDialog(ClosesOnce, QDialog):
     """Non-modal key-frame labelling tool for extracted frames."""
 
     def __init__(self, iface, dock_widget=None, parent=None):
@@ -3147,8 +3147,5 @@ class LabellingToolDialog(QDialog):
             self._render_frame()
         return True
 
-    def closeEvent(self, event):
-        if not self._maybe_save_dirty():
-            event.ignore()
-            return
-        super().closeEvent(event)
+    def _before_closing(self) -> bool:
+        return self._maybe_save_dirty()

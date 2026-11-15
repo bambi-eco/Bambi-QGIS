@@ -12,6 +12,7 @@ from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction
 
 from .bambi_dock_widget import BambiDockWidget
+from .gui_utils import forget_when_finished
 
 
 class BambiWildlifeDetection:
@@ -425,6 +426,7 @@ class BambiWildlifeDetection:
         from .bambi_camera_calibration import CameraCalibrationWizard
         dlg = CameraCalibrationWizard(self.iface.mainWindow())
         dlg.exec()
+        dlg.deleteLater()       # a child of the QGIS window otherwise stays
 
     def _on_thermal_viewer(self):
         """Toolbar action: open the thermal image viewer (non-modal)."""
@@ -442,9 +444,7 @@ class BambiWildlifeDetection:
             self._flight_planner_dlg = FlightPlannerDialog(
                 self.iface, parent=self.iface.mainWindow()
             )
-            self._flight_planner_dlg.finished.connect(
-                lambda _: setattr(self, '_flight_planner_dlg', None)
-            )
+            forget_when_finished(self, '_flight_planner_dlg')
         self._flight_planner_dlg.show()
         self._flight_planner_dlg.raise_()
         self._flight_planner_dlg.activateWindow()
@@ -459,9 +459,7 @@ class BambiWildlifeDetection:
                 dock_widget=self.dock_widget,
                 parent=self.iface.mainWindow(),
             )
-            self._video_creator_dlg.finished.connect(
-                lambda _: setattr(self, '_video_creator_dlg', None)
-            )
+            forget_when_finished(self, '_video_creator_dlg')
         else:
             # Re-seed defaults from the panel in case the target folder or CRS
             # changed since the dialog was last opened.
@@ -480,9 +478,7 @@ class BambiWildlifeDetection:
                 dock_widget=self.dock_widget,
                 parent=self.iface.mainWindow(),
             )
-            self._labelling_tool_dlg.finished.connect(
-                lambda _: setattr(self, '_labelling_tool_dlg', None)
-            )
+            forget_when_finished(self, '_labelling_tool_dlg')
         else:
             # Re-seed defaults in case the target folder changed since the
             # dialog was last opened.
@@ -501,9 +497,7 @@ class BambiWildlifeDetection:
                 dock_widget=self.dock_widget,
                 parent=self.iface.mainWindow(),
             )
-            self._segmentation_tool_dlg.finished.connect(
-                lambda _: setattr(self, '_segmentation_tool_dlg', None)
-            )
+            forget_when_finished(self, '_segmentation_tool_dlg')
         else:
             self._segmentation_tool_dlg.apply_dock_defaults()
         self._segmentation_tool_dlg.show()
@@ -520,9 +514,7 @@ class BambiWildlifeDetection:
                 dock_widget=self.dock_widget,
                 parent=self.iface.mainWindow(),
             )
-            self._agl_tool_dlg.finished.connect(
-                lambda _: setattr(self, '_agl_tool_dlg', None)
-            )
+            forget_when_finished(self, '_agl_tool_dlg')
         else:
             self._agl_tool_dlg.apply_dock_defaults()
         self._agl_tool_dlg.show()
@@ -539,9 +531,7 @@ class BambiWildlifeDetection:
                 dock_widget=self.dock_widget,
                 parent=self.iface.mainWindow(),
             )
-            self._flight_viewer_dlg.finished.connect(
-                lambda _: setattr(self, '_flight_viewer_dlg', None)
-            )
+            forget_when_finished(self, '_flight_viewer_dlg')
         else:
             self._flight_viewer_dlg.apply_dock_defaults()
         self._flight_viewer_dlg.show()
@@ -558,9 +548,7 @@ class BambiWildlifeDetection:
                 dock_widget=self.dock_widget,
                 parent=self.iface.mainWindow(),
             )
-            self._transect_tool_dlg.finished.connect(
-                lambda _: setattr(self, '_transect_tool_dlg', None)
-            )
+            forget_when_finished(self, '_transect_tool_dlg')
         else:
             # Re-seed defaults in case the target folder changed since the
             # dialog was last opened.

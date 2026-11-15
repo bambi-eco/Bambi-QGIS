@@ -169,6 +169,101 @@ class FitTabWidget(QTabWidget):
 
 
 # ---------------------------------------------------------------------------
+# One way out of a dialog
+# ---------------------------------------------------------------------------
+
+class ClosesOnce:
+    """For a ``QDialog``: one place to ask before it closes, and one place to
+    tidy up afterwards - whichever way it is closed.
+
+    A dialog goes away in several ways, and only one of them is a close
+    event: the window's close button. Escape calls ``reject()``, a dialog's
+    own Close or OK button calls ``reject()`` or ``accept()``, code calls
+    ``done()``. The tools did their tidying up in ``closeEvent`` - so a
+    viewer closed with Escape was hidden with its worker threads running,
+    its files open and everything it had loaded still in memory, and since
+    the plugin lets go of a tool when it is finished, opening the tool again
+    made a second one next to it.
+
+    All of those ways end in ``done()``, and the close event of a dialog
+    on screen gets there through ``reject()``. So, listed first among the
+    bases
+    (``class Tool(ClosesOnce, QDialog)``), this offers:
+
+    * :meth:`_before_closing` - may the dialog close? Asked for the close
+      button and for ``reject()``; ``False`` keeps it open. For unsaved
+      work, a run in progress.
+    * :meth:`_when_closed` - called once per time the dialog is closed, for
+      workers, files, settings.
+    """
+
+    _closed_once = False
+
+    def _before_closing(self) -> bool:
+        return True
+
+    def _when_closed(self) -> None:
+        pass
+
+    def reject(self):
+        # also the close button: QDialog's close event rejects, and stays
+        # open - ignoring the event - when that did not hide the dialog
+        if not self._before_closing():
+            return
+        super().reject()
+
+    def done(self, result):
+        self._tidy_up()
+        super().done(result)
+
+    def closeEvent(self, event):
+        # A dialog that is not on screen is not rejected by its close
+        # event. One that was never shown is asked and tidied up here: what
+        # it started still has to end. One that was closed before has had
+        # both.
+        if not self.isVisible() and not self._closed_once:
+            if not self._before_closing():
+                event.ignore()
+                return
+            self._tidy_up()
+        super().closeEvent(event)
+
+    def showEvent(self, event):
+        self._closed_once = False       # shown again: closed again later
+        super().showEvent(event)
+
+    def _tidy_up(self) -> None:
+        if self._closed_once:
+            return
+        self._closed_once = True
+        try:
+            self._when_closed()
+        except Exception:  # noqa: BLE001 - it has to close all the same
+            import traceback
+            traceback.print_exc()
+
+
+def forget_when_finished(owner, attribute: str) -> None:
+    """Have the dialog held in ``owner.<attribute>`` deleted when it has
+    finished, and the attribute emptied.
+
+    Emptying the attribute alone - what the plugin did - let go of the
+    Python object, not of the dialog: a child of the QGIS window lives as
+    long as that window does. Every tool that had been opened and closed
+    stayed, hidden, with all it had loaded, and opening it again put a new
+    one next to it.
+    """
+    dialog = getattr(owner, attribute)
+
+    def let_go(_result=None):
+        if getattr(owner, attribute, None) is dialog:
+            setattr(owner, attribute, None)
+        dialog.deleteLater()
+
+    dialog.finished.connect(let_go)
+
+
+# ---------------------------------------------------------------------------
 # Threads that outlive what started them
 # ---------------------------------------------------------------------------
 

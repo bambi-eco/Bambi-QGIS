@@ -7832,6 +7832,8 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         wizard = BambiCorrectionWizard(self.iface, config, parent=self)
         wizard.correctionFileSaved.connect(self.load_correction_values)
         wizard.exec()
+        # a child of this panel otherwise stays, with the DEM it loaded
+        wizard.deleteLater()
 
     def _refresh_thermal_sdk_status(self):
         """Re-check DJI Thermal SDK availability and update the Thermal Visualisation group."""
