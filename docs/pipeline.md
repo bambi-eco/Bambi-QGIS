@@ -471,7 +471,7 @@ An animal the classifier cannot call is **left unknown, never discarded**: it ke
 
 **The animals follow the latest run.** Running a classifier again - with another model, or re-voting at another quorum - replaces what the earlier run wrote, on the track and on its boxes (which is where the exports and the analytics read the species), and takes a call back from an animal the new run no longer calls. Only what a classifier wrote is replaced or taken back: a species from the detector's class mapping, a value synced across from the other camera after the call, and hand labels stay.
 
-**Frames used** decides what may vote. *Visible frames only* uses the occlusion classifier when it ran, otherwise occlusion values you annotated by hand, and otherwise every frame - the run log always says which of the three it used.
+**Frames used** decides what may vote. *Visible frames only* is decided frame by frame, by the best that is known about that frame: the occlusion classifier's call where it has one, otherwise the occlusion value stored on the box (what the labelling tool writes), and otherwise the frame votes - nobody called it occluded. The run log says which of these the tracks went by, and how many frames voted without a label. (Up to 9.0 a frame without a label counted as occluded as soon as any box of the flight had one: a single hand-labelled track left every other track without a frame to vote with, and so without a species.)
 
 **Applying the classifications to tracks and detections** copies the answers onto the animals themselves, which is what makes them visible to the exports, the map layers, the survey analytics and the labelling tool. It runs automatically unless switched off, and is safe to repeat.
 

@@ -558,6 +558,21 @@ def _describe_frame_source(source: str) -> str:
     }.get(source, source)
 
 
+def _describe_frame_sources(sources: Dict[int, str]) -> str:
+    """:func:`_describe_frame_source` for the tracks of a run - one phrase
+    when they all agree, else each with the number of tracks it holds for."""
+    counts: Dict[str, int] = {}
+    for source in sources.values():
+        counts[source] = counts.get(source, 0) + 1
+    if not counts:
+        return "no tracks"
+    if len(counts) == 1:
+        return _describe_frame_source(next(iter(counts)))
+    return "; ".join(
+        f"{_describe_frame_source(source)}: {n} track(s)"
+        for source, n in sorted(counts.items(), key=lambda item: -item[1]))
+
+
 def _plugin_version() -> str:
     """The plugin version, read from ``metadata.txt``.
 
@@ -2744,10 +2759,13 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
         clear_annotations = tuple(
             (models.get("occlusion") or {}).get("clear_values") or (0,))
 
+        # Decided frame by frame, and recorded track by track: one track may
+        # have calls of the occlusion classifier, the next hand annotations,
+        # a third nothing at all.
         voting_frames: Dict[int, List[int]] = {}
-        frame_source = classification.FRAMES_FROM_ALL
+        frame_source: Dict[int, str] = {}
         for track_id, members in by_track.items():
-            chosen, frame_source = classification.visible_detections(
+            chosen, frame_source[track_id] = classification.visible_detections(
                 [row["detection_id"] for row in members],
                 head_labels=occlusion_labels, annotated=annotated,
                 clear_head_labels=clear_head,
@@ -2758,7 +2776,14 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
         if log_fn:
             total = sum(len(v) for v in voting_frames.values())
             log_fn(f"{total} of {len(rows)} frame(s) will vote "
-                   f"({_describe_frame_source(frame_source)})")
+                   f"({_describe_frame_sources(frame_source)})")
+            unlabelled = 0 if use_all_frames else \
+                classification.unlabelled_voters(
+                    voting_frames, occlusion_labels, annotated)
+            if unlabelled and (occlusion_labels or annotated):
+                log_fn(f"{unlabelled} of them have no occlusion label - "
+                       "neither from the occlusion classifier nor by hand - "
+                       "and vote unfiltered")
 
         # -- species, then the demographic heads over the same frames -------
         # Sex and life stage both reuse exactly the species frames, and both
@@ -3321,7 +3346,7 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
                     "fraction": probability,
                     "modality_in": modality_in,
                     "model": os.path.basename(head.path),
-                    "evidence": {"frames": frame_source,
+                    "evidence": {"frames": frame_source.get(track_id, ""),
                                  "class_index": index, "level": "track"},
                 })
                 continue
@@ -3351,7 +3376,7 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
                 "votes": vote.votes, "n": vote.n, "fraction": vote.fraction,
                 "modality_in": modality_in,
                 "model": os.path.basename(head.path),
-                "evidence": {"frames": frame_source,
+                "evidence": {"frames": frame_source.get(track_id, ""),
                              "class_index": vote.class_index},
             })
 

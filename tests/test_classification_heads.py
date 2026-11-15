@@ -178,10 +178,13 @@ class TestVisibleDetections:
             [1, 2], head_labels={1: "occluded", 2: "occluded"})
         assert chosen == []
 
-    def test_a_frame_the_head_did_not_reach_does_not_vote(self):
+    def test_a_frame_the_head_did_not_reach_still_votes(self):
+        """Nobody called it occluded - and a filter that drops what it knows
+        nothing about left whole tracks without a vote
+        (``test_voting_frames.py``)."""
         chosen, _source = cl.visible_detections(
             [1, 2, 3], head_labels={1: "clear"})
-        assert chosen == [1]
+        assert chosen == [1, 2, 3]
 
     def test_custom_clear_labels_are_honoured(self):
         """A third-party head may name its classes anything."""

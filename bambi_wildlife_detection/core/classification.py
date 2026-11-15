@@ -1088,29 +1088,66 @@ def visible_detections(detection_ids: Sequence[int],
     """The frames a track's species and sex votes may use.
 
     Occlusion is a *quality filter, not a prerequisite*: species and sex have
-    to work whether or not it ran. Three sources, in order - the occlusion
-    head if it ran, otherwise the stored annotations (which is what the
-    labelling tool writes, and a hand annotation is better evidence than a
-    78 %-accurate head), otherwise every frame.
+    to work whether or not it ran. So it is decided **frame by frame**, by
+    the best that is known about that frame:
 
-    The third case is reported rather than silent: voting over occluded frames
-    while the UI claims "visible only" would be the wrong kind of quiet.
+    * the occlusion head's call, where the head has one;
+    * otherwise the value stored on the detection - what the labelling tool
+      writes;
+    * otherwise nothing is known, and a frame that nobody called occluded
+      votes.
+
+    It used to be decided once for the whole flight: as soon as *any*
+    detection had a label, every frame without one counted as occluded. One
+    hand-labelled track with an occlusion value therefore left every tracker
+    track without a single frame to vote with, and none of them got a
+    species; calls of the head left over from before a detection re-run did
+    the same.
+
+    :return: ``(frames that may vote, where the answer came from)`` - the
+        second one of the ``FRAMES_FROM_*``: the head when it had a call for
+        any of the track's frames, else the annotations, else
+        :data:`FRAMES_FROM_NOTHING`, which is reported rather than silent
+        (voting over occluded frames while the UI claims "visible only"
+        would be the wrong kind of quiet).
     """
     ids = [int(i) for i in detection_ids]
     if use_all:
         return ids, FRAMES_FROM_ALL
 
-    if head_labels:
-        clear = set(clear_head_labels)
-        chosen = [i for i in ids if head_labels.get(i) in clear]
+    head_labels = head_labels or {}
+    annotated = annotated or {}
+    clear_head = set(clear_head_labels)
+    clear_noted = set(clear_annotations)
+    chosen = []
+    by_head = by_annotation = 0
+    for detection_id in ids:
+        if detection_id in head_labels:
+            by_head += 1
+            if head_labels[detection_id] in clear_head:
+                chosen.append(detection_id)
+        elif detection_id in annotated:
+            by_annotation += 1
+            if annotated[detection_id] in clear_noted:
+                chosen.append(detection_id)
+        else:
+            chosen.append(detection_id)
+
+    if by_head:
         return chosen, FRAMES_FROM_HEAD
-
-    if annotated:
-        clear = set(clear_annotations)
-        chosen = [i for i in ids if annotated.get(i) in clear]
+    if by_annotation:
         return chosen, FRAMES_FROM_ANNOTATIONS
+    return chosen, FRAMES_FROM_NOTHING
 
-    return ids, FRAMES_FROM_NOTHING
+
+def unlabelled_voters(voting_frames: Dict[int, Sequence[int]],
+                      head_labels: Optional[Dict[int, str]] = None,
+                      annotated: Optional[Dict[int, object]] = None) -> int:
+    """How many of the frames that vote do so without any occlusion label -
+    for the log, so that an unfiltered vote is never a silent one."""
+    known = set(head_labels or ()) | set(annotated or ())
+    return sum(1 for frames in voting_frames.values()
+               for detection_id in frames if detection_id not in known)
 
 
 # ---------------------------------------------------------------------------
