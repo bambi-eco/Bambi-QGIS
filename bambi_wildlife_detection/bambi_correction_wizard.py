@@ -975,9 +975,12 @@ class _ProbeWorker(QThread):
         # Single source: core.camera_pose (1× rotation correction rule)
         try:
             from .core.camera_pose import build_camera
+            # The frame's own shape: with "Preserve original aspect ratio"
+            # the frames are not square, and a square camera casts the ray
+            # of a point off the image centre in the wrong direction.
             camera = build_camera(
                 pose, correction['translation'], correction['rotation'],
-                aspect_ratio=1.0)
+                aspect_ratio=(img_w / img_h) if img_h else 1.0)
         except RuntimeError:
             return None
 
@@ -1119,10 +1122,15 @@ class _LightFieldRenderWorker(QThread):
             cam_pos, cam_rot = shot_pose(
                 {'location': loc, 'rotation': rot}, cor_t, cor_r)
 
+            # The shot has the shape of its image (see above).
+            from .core import poses as poses_core
+            shot_aspect = poses_core.aspect_ratio(
+                poses_core.image_size(img_path))
+
             try:
                 shot = CtxShot(
                     ctx, img_path, cam_pos, cam_rot,
-                    fovy, 1, None, lazy=False,
+                    fovy, shot_aspect, None, lazy=False,
                 )
                 shots.append(shot)
             except Exception:  # nosec B110
@@ -1955,11 +1963,15 @@ class BambiCorrectionWizard(QDialog):
             return None
         return images[frame_idx]
 
-    def _build_camera(self, frame_type: str, frame_idx: int, correction: dict):
+    def _build_camera(self, frame_type: str, frame_idx: int, correction: dict,
+                      aspect_ratio: float = 1.0):
         """Build a Camera from pose data and correction.  Returns Camera or raises.
 
         Single source: :func:`core.camera_pose.build_camera` (mirrors
         alfspy's ``get_camera_for_frame``, 1× rotation correction).
+
+        :param aspect_ratio: width over height of the frame the camera
+            took - the frames are only square by default
         """
         from .core.camera_pose import build_camera
 
@@ -1970,7 +1982,7 @@ class BambiCorrectionWizard(QDialog):
             )
         return build_camera(
             pose, correction['translation'], correction['rotation'],
-            aspect_ratio=1.0)
+            aspect_ratio=aspect_ratio)
 
     def _geo_ref_pt(
         self, side: int, correction: dict,
@@ -1992,7 +2004,9 @@ class BambiCorrectionWizard(QDialog):
         img_w, img_h = self._img_size[side]
 
         try:
-            cam = self._build_camera(ft, fi, correction)
+            cam = self._build_camera(
+                ft, fi, correction,
+                aspect_ratio=(img_w / img_h) if img_h else 1.0)
         except Exception:
             return None
 

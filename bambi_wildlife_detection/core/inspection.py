@@ -591,24 +591,18 @@ def project_map_point(
             fovy = fovy[0]
         rot_vals = meta["rotation"]
 
-        camera = build_camera(meta, t_corr, r_corr, aspect_ratio=1.0)
-
         # ---- Image dimensions (same approach as BoxProjectionWorker) -
         # Read from the first frame in the poses file, not from the
         # specific image_path - matches BoxProjectionWorker exactly.
-        frames_dir = os.path.join(target_folder, f"frames_{modality}")
-        img_width, img_height = 640, 512  # fallback
-        if images:
-            first_file = images[0].get("imagefile", "")
-            candidate = os.path.join(frames_dir, first_file)
-            if first_file and os.path.isfile(candidate):
-                try:
-                    import cv2
-                    img = cv2.imread(candidate)
-                    if img is not None:
-                        img_height, img_width = img.shape[:2]
-                except Exception:  # nosec B110
-                    pass
+        from . import poses as poses_core
+
+        size = poses_core.frame_size(target_folder, modality, images)
+        img_width, img_height = size or (640, 512)  # fallback
+
+        # The camera has the shape of its frames; built square, the cross
+        # hair of a 16:9 frame sat too far from the image centre.
+        camera = build_camera(meta, t_corr, r_corr,
+                              aspect_ratio=poses_core.aspect_ratio(size))
 
         # ---- Project (single point, same as _project_georef_box_to_pixels)
         ox, oy, oz = origin

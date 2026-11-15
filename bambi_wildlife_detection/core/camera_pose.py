@@ -192,8 +192,9 @@ def build_camera(meta: dict, t_corr: dict, r_corr: dict,
         (keys ``location``, ``rotation`` in degrees, optional ``fovy``)
     :param t_corr: translation correction dict (``x``/``y``/``z``, metres)
     :param r_corr: rotation correction dict (``x``/``y``/``z``, radians)
-    :param aspect_ratio: camera aspect ratio (width / height); the
-        geo-referencing and box-projection paths use 1.0
+    :param aspect_ratio: camera aspect ratio (width / height) - that of
+        the frames the camera took (``core.poses.frame_size``). The rays
+        depend on it: 1.0 is right for square frames only.
     """
     try:
         from alfspy.core.rendering import Camera

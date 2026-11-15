@@ -181,3 +181,55 @@ def flag_setting(target_folder: str, modality: str) -> Optional[bool]:
     if not data.get("images"):
         return None
     return bool(data.get(FLAGGED_KEY, False))
+
+
+def image_size(path: str) -> Optional[Tuple[int, int]]:
+    """``(width, height)`` of the image at *path*, read from its header;
+    ``None`` when it cannot be read."""
+    if not path or not os.path.isfile(path):
+        return None
+    try:
+        from PIL import Image
+        with Image.open(path) as image:
+            width, height = image.size
+    except Exception:  # nosec B110 - no PIL, or not an image it knows
+        try:
+            import cv2
+            image = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+        except Exception:  # nosec B110
+            return None
+        if image is None:
+            return None
+        height, width = image.shape[:2]
+    if width <= 0 or height <= 0:
+        return None
+    return int(width), int(height)
+
+
+def frame_size(target_folder: str, modality: str,
+               images: Optional[Sequence[dict]] = None
+               ) -> Optional[Tuple[int, int]]:
+    """``(width, height)`` of the extracted frames of a camera - of the
+    first one that is on disk; ``None`` when none is.
+
+    Frame extraction writes square frames unless "Preserve original aspect
+    ratio" is ticked, so the shape of a camera's frames is a property of the
+    flight, not a constant - and a camera model that assumes a square frame
+    casts every ray of a 16:9 frame too close to the image centre.
+    """
+    if images is None:
+        images = load_images(target_folder, modality)
+    folder = os.path.join(target_folder, f"frames_{modality}")
+    for entry in images or ():
+        name = (entry or {}).get("imagefile") or ""
+        size = image_size(os.path.join(folder, name)) if name else None
+        if size is not None:
+            return size
+    return None
+
+
+def aspect_ratio(size: Optional[Tuple[int, int]]) -> float:
+    """Width over height of a frame *size*; 1.0 when the size is unknown."""
+    if not size or not size[1]:
+        return 1.0
+    return float(size[0]) / float(size[1])

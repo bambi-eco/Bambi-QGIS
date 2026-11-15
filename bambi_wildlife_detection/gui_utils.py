@@ -242,4 +242,3 @@ def let_thread_finish(thread, *companions, wait_ms: int = 0) -> bool:
         _thread_keeper = _ThreadKeeper()
     _thread_keeper.keep(thread, companions)
     return False
-

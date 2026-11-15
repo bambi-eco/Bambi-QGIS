@@ -180,6 +180,8 @@ mask_W.png         # Undistortion mask (RGB)
 
 > **Note:** For large datasets or long videos this step may take several minutes. Progress is updated between frames.
 
+**Square or not.** Frames are written square (1:1) unless **Preserve original aspect ratio** is ticked. Every step and tool reads the shape off the frames themselves, so both work - since 9.1 also in the inspector (the boxes shown in the other camera, the cross hair of a map click) and in the Correction Wizard, which until then assumed square frames and placed everything on a 16:9 frame too far from the image centre.
+
 **Extracting again** replaces the frames: every image is written anew, so a changed calibration or "preserve aspect ratio" shows in the pictures and not only in the poses and the mask, and video frames of the earlier extraction that the new one does not have (another sampling rate or range) are removed from the folder. Other files in the folder are left alone. Everything computed from the previous frames is marked out of date. An extraction that is aborted half-way leaves some new images under the previous frame list - the log says so; run it again before using the frames.
 
 ### P2. Generate Flight Route

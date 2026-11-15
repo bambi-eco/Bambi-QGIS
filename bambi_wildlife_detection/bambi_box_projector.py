@@ -66,11 +66,16 @@ def _match_boxes_to_georef(
     viewer_boxes: List[tuple],
     georef_on_frame: List[dict],
     tol: float = 0.0015,
+    taken: Optional[set] = None,
 ) -> List[dict]:
     """Return the georef entries that match the given viewer box tuples.
 
-    Matching is by (class_id, confidence ± tol).
+    Matching is by (class_id, confidence ± tol), each entry for one box
+    only: *taken* collects the ``detection_id`` of every entry used, across
+    calls, so that two look-alike boxes get an entry each.
     """
+    if taken is None:
+        taken = set()
     matched: List[dict] = []
     for box in viewer_boxes:
         if len(box) < 6:
@@ -78,8 +83,11 @@ def _match_boxes_to_georef(
         conf = float(box[4])
         cls = int(box[5])
         for g in georef_on_frame:
+            if g.get("detection_id") in taken:
+                continue
             if g["class_id"] == cls and abs(g["confidence"] - conf) < tol:
                 matched.append(g)
+                taken.add(g.get("detection_id"))
                 break
     return matched
 
@@ -284,21 +292,15 @@ class BoxProjectionWorker(QThread):
         self.progress.emit(35)
 
         # ---- Image resolution of target modality -------------------------
-        frames_dir = os.path.join(
-            self._target_folder, f"frames_{dst_modality}"
-        )
-        img_width, img_height = 640, 512  # fallback
-        if images:
-            first_file = images[0].get("imagefile", "")
-            candidate = os.path.join(frames_dir, first_file)
-            if first_file and os.path.isfile(candidate):
-                try:
-                    import cv2
-                    img = cv2.imread(candidate)
-                    if img is not None:
-                        img_height, img_width = img.shape[:2]
-                except Exception:  # nosec B110
-                    pass
+        from .core import poses as poses_core
+
+        size = poses_core.frame_size(
+            self._target_folder, dst_modality, images)
+        img_width, img_height = size or (640, 512)  # fallback
+        # The camera has the shape of its frames. It was built square
+        # whatever they were, which puts every box of a 16:9 frame too far
+        # from the image centre - by the aspect ratio, sideways.
+        aspect_ratio = poses_core.aspect_ratio(size)
 
         self.progress.emit(45)
 
@@ -325,14 +327,19 @@ class BoxProjectionWorker(QThread):
             # the same correction as used for geo-referencing (1× rule).
             t_corr, r_corr = _correction_for_frame(dst_idx, corr)
             camera = build_camera(
-                images[dst_idx], t_corr, r_corr, aspect_ratio=1.0)
+                images[dst_idx], t_corr, r_corr, aspect_ratio=aspect_ratio)
 
             # Match viewer boxes to geo-referenced entries - these were
-            # geo-referenced on the source camera's frame.
+            # geo-referenced on the source camera's frame. Each entry
+            # answers for one box: two boxes of one class and confidence
+            # used to be matched to the same entry, and one of the two was
+            # then drawn twice.
             on_frame = georef_by_frame.get(frame_idx, [])
+            taken: set = set()
 
             def _project_list(viewer_boxes):
-                matched = _match_boxes_to_georef(viewer_boxes, on_frame)
+                matched = _match_boxes_to_georef(
+                    viewer_boxes, on_frame, taken=taken)
                 proj_boxes = []
                 for g in matched:
                     bbox = _project_georef_box_to_pixels(
