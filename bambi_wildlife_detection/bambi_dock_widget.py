@@ -13360,10 +13360,23 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         Also fires when an existing project is opened (QGIS clears before
         reading), in which case readProject re-loads the saved config
         right after this reset.
+
+        The flights go with the project they belong to. They used to stay:
+        the form was emptied, but the selector still listed the previous
+        project's flights with one of them active - so the target folder
+        entered for the new project pointed *that* flight at it, and saving
+        the new project wrote the old one's flights into it.
         """
         self._loading_config = True
         try:
+            self._flight_list = []
+            self._active_flight_index = 0
+            self._refresh_flight_combo()
             self.reset_config_to_defaults()
+            self.flight_name_edit.clear()
+            # nothing is processed in a project without a flight
+            self._check_existing_outputs("")
+            self._refresh_migrate_button()
         finally:
             self._loading_config = False
 

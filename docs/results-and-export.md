@@ -126,6 +126,8 @@ Input tab shows the active one; **Rename…** renames it and 🗑 removes it.
   [Layer groups and order](#layer-groups-and-order)).
 - **Exactly one flight is active.** Everything else in the plugin reads that
   one flight, so nothing changes about how the steps work.
+- **The flights belong to the QGIS project.** A new project starts without
+  any, and opening a project brings back its own.
 
 ### Layer groups and order
 

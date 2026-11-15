@@ -1051,3 +1051,71 @@ def test_the_stored_defaults_the_classifiers_depend_on_are_the_forms(dock):
         CropConfig().padding
     assert defaults["Classification/CropSize"] == CropConfig().size == \
         dock._pristine_config["Classification/CropSize"]
+
+
+# ---------------------------------------------------------------------------
+# A new QGIS project starts without flights
+# ---------------------------------------------------------------------------
+
+def test_a_new_project_has_no_flights(dock, quiet, two_flights):
+    """The form was emptied but the flights stayed, one of them active."""
+    a, _b = two_flights
+    _first_flight(dock, a)
+    dock.flight_name_edit.setText("half typed")
+
+    QgsProject.instance().clear()
+
+    assert dock._flights() == []
+    assert dock._active_flight() is None
+    assert dock.flight_combo.count() == 0
+    assert dock.target_folder_edit.text() == ""
+    assert dock.flight_name_edit.text() == ""
+    assert not dock.flight_remove_btn.isEnabled()
+
+
+def test_the_previous_projects_flight_is_not_pointed_at_the_new_folder(
+        dock, quiet, monkeypatch, two_flights):
+    a, b = two_flights
+    monkeypatch.setattr(type(dock), "_prompt_flight_name",
+                        lambda self, folder: "Meadow")
+    _first_flight(dock, a)
+    dock.confidence_spin.setValue(0.9)
+    dock.save_config_to_project()
+
+    QgsProject.instance().clear()
+    monkeypatch.setattr(type(dock), "_prompt_flight_name",
+                        lambda self, folder: "Forest")
+    dock.target_folder_edit.setText(b)
+    dock._on_target_folder_changed()
+
+    assert dock._flights() == [{"name": "Forest", "target_folder": b}]
+    assert flights.load_config(a)["Detection/Confidence"] == "0.9"
+
+
+def test_saving_the_new_project_does_not_carry_the_old_flights(
+        dock, quiet, two_flights):
+    import json
+
+    from bambi_wildlife_detection.gui_utils import PLUGIN_SCOPE
+
+    a, _b = two_flights
+    _first_flight(dock, a)
+    project = QgsProject.instance()
+    project.clear()
+
+    dock._on_project_write(None)
+
+    stored, _ok = project.readEntry(PLUGIN_SCOPE, "Flights/List", "")
+    assert json.loads(stored) == []
+
+
+def test_a_new_project_shows_nothing_as_processed(dock, quiet, two_flights):
+    a, _b = two_flights
+    _first_flight(dock, a)
+    for step in ("extract_thermal_frames", "detection", "tracking"):
+        dock.update_status(step, "🟢 Completed")
+
+    QgsProject.instance().clear()
+
+    for label in (dock.extract_status, dock.detect_status, dock.track_status):
+        assert "Completed" not in label.text()
