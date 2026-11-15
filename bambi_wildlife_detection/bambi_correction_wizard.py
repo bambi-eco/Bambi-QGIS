@@ -2612,10 +2612,11 @@ class BambiCorrectionWizard(QDialog):
 
     def closeEvent(self, event) -> None:
         self._plot_timer.stop()
+        from .gui_utils import let_thread_finish
         for worker in (self._dem_worker, self._probe_worker, self._render_worker):
-            if worker is not None and worker.isRunning():
-                worker.quit()
-                worker.wait(3000)
+            # Still running after the wait: left to end by itself, not
+            # destroyed with the window.
+            let_thread_finish(worker, wait_ms=3000)
         self._tri_mesh = None
         self._ray_caster = None
         self._raw_mesh_data = None

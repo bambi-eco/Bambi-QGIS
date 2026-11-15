@@ -363,6 +363,9 @@ class BambiWildlifeDetection:
         if self.dock_widget:
             # Disconnect project signals to prevent issues
             self.dock_widget.disconnect_project_signals()
+            # A step may be running: its thread must not go down with the
+            # dock.
+            self.dock_widget.shut_down()
 
             self.iface.removeDockWidget(self.dock_widget)
             self.dock_widget.deleteLater()

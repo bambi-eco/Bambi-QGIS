@@ -678,9 +678,11 @@ class AglToolDialog(QDialog):
         worker = self._worker
         if worker is not None:
             self._pending = None
-            # The mesh read cannot be interrupted; it is short and the
-            # thread is daemon-like to Qt, so a bounded wait is enough.
-            worker.wait(3000)
+            # The mesh read cannot be interrupted. It is usually short - and
+            # where it is not, the thread is left to end by itself rather
+            # than destroyed with the window.
+            from .gui_utils import let_thread_finish
+            let_thread_finish(worker, wait_ms=3000)
         super().closeEvent(event)
 
     def _on_hover(self, point: Optional[dict]):

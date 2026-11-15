@@ -1901,8 +1901,11 @@ class SegmentationToolDialog(QDialog):
         super().showEvent(event)
 
     def closeEvent(self, event):
-        if self._preview_worker is not None:
-            self._preview_worker.wait(5000)
+        from .gui_utils import let_thread_finish
+
+        # A worker still busy after the wait ends by itself: destroying its
+        # thread with the window would take QGIS down.
+        let_thread_finish(self._preview_worker, wait_ms=5000)
         if self._worker is not None or self._georef_worker is not None:
             reply = QMessageBox.question(
                 self, "Segmentation running",
@@ -1914,7 +1917,6 @@ class SegmentationToolDialog(QDialog):
                 return
             self._cancel()
             for worker in (self._worker, self._georef_worker):
-                if worker is not None:
-                    worker.wait(5000)
+                let_thread_finish(worker, wait_ms=5000)
         self._save_settings()
         super().closeEvent(event)

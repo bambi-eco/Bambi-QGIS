@@ -10857,6 +10857,36 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         self.log(f"Starting {step}...")
         self.worker_thread.start()
 
+    def shut_down(self) -> None:
+        """Before the dock is removed (the plugin is unloaded or reloaded):
+        cancel the running step and let its thread end by itself.
+
+        The dock used to be deleted with the step still running, and its
+        thread object with it - which Qt answers by aborting the process:
+        unloading the plugin during a run took QGIS down. The step stops at
+        its next check; until then its thread is kept alive outside the
+        dock (``gui_utils.let_thread_finish``).
+        """
+        from .gui_utils import let_thread_finish
+
+        worker, thread = self.worker, self.worker_thread
+        self.worker = None
+        self.worker_thread = None
+        if worker is not None:
+            try:
+                worker.cancel()
+                for signal in (worker.finished, worker.error,
+                               worker.progress, worker.log):
+                    try:
+                        signal.disconnect()
+                    except (TypeError, RuntimeError):  # nosec B110
+                        pass
+                # ... but the thread still has to be told when it is done
+                worker.finished.connect(thread.quit)
+            except RuntimeError:  # nosec B110 - already deleted by Qt
+                pass
+        let_thread_finish(thread, worker, wait_ms=1000)
+
     def on_worker_finished(self, step: str, success: bool):
         """Handle worker completion."""
         self.set_buttons_enabled(True)

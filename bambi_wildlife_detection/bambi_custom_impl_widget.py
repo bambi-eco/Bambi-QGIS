@@ -191,12 +191,6 @@ def describe(spec: dict, kind: str, camera: str = "", task: str = "",
 # Running user code off the GUI thread
 # ---------------------------------------------------------------------------
 
-#: Workers still running after the user stopped waiting for them. A thread
-#: inside somebody's setup() cannot be killed safely, so it is left to
-#: finish - and kept here so it is not destroyed while it runs.
-_ABANDONED = []
-
-
 class _Worker(QThread):
     """Runs ``fn(status)`` in the background.
 
@@ -233,15 +227,17 @@ def _failure(exc: Exception):
 
 
 def _abandon(worker):
+    """Stop waiting for *worker*. A thread inside somebody's setup() cannot
+    be killed safely, so it is left to finish."""
     for signal in (worker.status, worker.succeeded, worker.failed):
         try:
             signal.disconnect()
         except (TypeError, RuntimeError):
             pass
-    if worker.isRunning():
-        _ABANDONED.append(worker)
-        worker.finished.connect(lambda w=worker: w in _ABANDONED
-                                and _ABANDONED.remove(w))
+    # Kept alive until it has ended (gui_utils.let_thread_finish): a thread
+    # object must not be destroyed while its thread runs.
+    from .gui_utils import let_thread_finish
+    let_thread_finish(worker)
 
 
 def run_with_feedback(parent, title: str, fn):

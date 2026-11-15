@@ -35,6 +35,7 @@ except ImportError:  # Qt6
 
 from .core import flight_viewer as fv
 from .core import flight_viewer_geometry as geo
+from .gui_utils import let_thread_finish
 
 SETTINGS_GROUP = "bambi/flight_viewer"
 
@@ -1011,8 +1012,7 @@ class FlightViewerDialog(QDialog):
         self._detail_worker.start()
 
     def _finish_detail_worker(self):
-        if self._detail_worker is not None:
-            self._detail_worker.wait(2000)
+        let_thread_finish(self._detail_worker, wait_ms=2000)
         self._detail_worker = None
 
     def _on_detail_ready(self, fraction, result):
@@ -1441,8 +1441,7 @@ class FlightViewerDialog(QDialog):
         self._ortho_worker.start()
 
     def _finish_ortho_worker(self):
-        if self._ortho_worker is not None:
-            self._ortho_worker.wait(2000)
+        let_thread_finish(self._ortho_worker, wait_ms=2000)
         self._ortho_worker = None
 
     def _on_ortho_loaded(self, modality, data):
@@ -1500,7 +1499,7 @@ class FlightViewerDialog(QDialog):
         self._outlines = {}
         if self._outline_worker is not None:
             self._outline_worker.stop()
-            self._outline_worker.wait(2000)
+            let_thread_finish(self._outline_worker, wait_ms=2000)
             self._outline_worker = None
         if self.scene is None or self.scene.image_size is None \
                 or self.annotation_combo.currentData() == ANNOTATION_NONE \
@@ -1730,13 +1729,14 @@ class FlightViewerDialog(QDialog):
     def closeEvent(self, event):
         self.stop()
         self._save_settings()
-        if self._detail_worker is not None:
-            self._detail_worker.wait(10000)
+        # Workers that are still busy after the wait end by themselves; a
+        # thread destroyed with the window while it runs takes QGIS down.
+        let_thread_finish(self._detail_worker, wait_ms=10000)
         if self._outline_worker is not None:
             self._outline_worker.stop()
-            self._outline_worker.wait(5000)
-        if self._ortho_worker is not None:
-            self._ortho_worker.wait(10000)
+            let_thread_finish(self._outline_worker, wait_ms=5000)
+        let_thread_finish(self._ortho_worker, wait_ms=10000)
+        let_thread_finish(getattr(self, "_worker", None), wait_ms=2000)
         for panel in ("alfs_panel", "corrections_panel", "recon_panel"):
             p = getattr(self, panel, None)
             if p is not None and hasattr(p, "shutdown"):

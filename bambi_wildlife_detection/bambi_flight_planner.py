@@ -783,6 +783,9 @@ class FlightPlannerDialog(QDialog):
 
     def closeEvent(self, event):
         self._save_settings()
+        # Planning cannot be interrupted: its thread ends by itself.
+        from .gui_utils import let_thread_finish
+        let_thread_finish(self._thread, self._worker)
         for tmp in self._temp_files:
             try:
                 if os.path.exists(tmp):

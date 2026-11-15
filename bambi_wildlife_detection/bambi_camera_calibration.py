@@ -2012,18 +2012,32 @@ class CameraCalibrationWizard(QDialog):
         self._worker_thread.start()
 
     def _stop_worker(self) -> None:
-        if self._worker:
-            self._worker.cancel()
-        if self._worker_thread and self._worker_thread.isRunning():
-            self._worker_thread.quit()
-            self._worker_thread.wait(3000)
+        """Cancel a running calibration. The reconstruction cannot be
+        interrupted in the middle of a step, so its thread may well run on
+        for a while: it is left to end by itself rather than destroyed -
+        which is what used to happen after three seconds, and took QGIS
+        down with it."""
+        from .gui_utils import let_thread_finish
+
+        worker, thread = self._worker, self._worker_thread
         self._worker = None
         self._worker_thread = None
+        if worker:
+            worker.cancel()
+            for signal in (worker.finished, worker.error, worker.progress,
+                           worker.log):
+                try:
+                    signal.disconnect()
+                except (TypeError, RuntimeError):  # nosec B110
+                    pass
+        let_thread_finish(thread, worker, wait_ms=500)
 
     def _append_log(self, msg: str) -> None:
         self._calib_log.append(msg)
 
     def _on_calib_finished(self, result: dict) -> None:
+        if self._worker_thread is None:
+            return      # cancelled meanwhile; the answer was already on its way
         self._worker_thread.quit()
         self._worker_thread.wait()
         self._worker = None
@@ -2040,6 +2054,8 @@ class CameraCalibrationWizard(QDialog):
         ))
 
     def _on_calib_error(self, msg: str) -> None:
+        if self._worker_thread is None:
+            return
         self._worker_thread.quit()
         self._worker_thread.wait()
         self._worker = None

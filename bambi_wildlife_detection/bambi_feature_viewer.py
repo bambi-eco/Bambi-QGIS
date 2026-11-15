@@ -506,10 +506,18 @@ class FeatureViewerDialog(QDialog):
         self._projection_worker.start()
 
     def _stop_projection_worker(self):
-        if self._projection_worker is not None and self._projection_worker.isRunning():
-            self._projection_worker.quit()
-            self._projection_worker.wait(3000)
-        self._projection_worker = None
+        worker, self._projection_worker = self._projection_worker, None
+        if worker is None:
+            return
+        for signal in (worker.progress, worker.finished, worker.error):
+            try:
+                signal.disconnect()
+            except (TypeError, RuntimeError):  # nosec B110
+                pass
+        # The projection cannot be interrupted; a thread still at it after
+        # the wait ends by itself instead of being destroyed.
+        from .gui_utils import let_thread_finish
+        let_thread_finish(worker, wait_ms=3000)
 
     def _on_proj_progress(self, value: int):
         self.proj_progress.setValue(value)

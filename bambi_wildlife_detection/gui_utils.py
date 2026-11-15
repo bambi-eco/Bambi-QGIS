@@ -2,7 +2,7 @@
 """Small Qt helpers shared by the plugin's dialogs."""
 
 from qgis.PyQt.QtGui import QCursor
-from qgis.PyQt.QtCore import QEvent, QSize
+from qgis.PyQt.QtCore import QEvent, QObject, QSize, Qt
 from qgis.PyQt.QtWidgets import QApplication, QStackedWidget, QTabWidget
 
 
@@ -166,3 +166,80 @@ class FitTabWidget(QTabWidget):
         if event.type() == QEvent.Type.LayoutRequest:
             self.updateGeometry()
         return handled
+
+
+# ---------------------------------------------------------------------------
+# Threads that outlive what started them
+# ---------------------------------------------------------------------------
+
+class _ThreadKeeper(QObject):
+    """Holds on to threads that are still running, until they are not."""
+
+    def __init__(self):
+        super().__init__()
+        self._held = []
+
+    def keep(self, thread, companions) -> None:
+        self._held.append((thread,) + tuple(companions))
+        # Queued: handled here, in the thread this object lives in, once
+        # the other thread has really ended - never from inside it.
+        thread.finished.connect(self._release,
+                                Qt.ConnectionType.QueuedConnection)
+
+    def _release(self) -> None:
+        still = []
+        for entry in self._held:
+            try:
+                if entry[0].isRunning():
+                    still.append(entry)
+                else:
+                    entry[0].wait()
+            except RuntimeError:
+                pass        # deleted on the Qt side already: nothing to hold
+        self._held = still
+
+    def held(self) -> int:
+        return len(self._held)
+
+
+_thread_keeper = None
+
+
+def let_thread_finish(thread, *companions, wait_ms: int = 0) -> bool:
+    """Stop caring about a ``QThread`` without destroying it while it runs.
+
+    Qt aborts the whole process when a thread object is destroyed while its
+    thread is still running ("QThread: Destroyed while thread is still
+    running") - and dropping the last Python reference destroys it, as does
+    deleting the window it belongs to. The plugin's tools used to wait a few
+    seconds and then let go: closing a window, cancelling a calibration or
+    unloading the plugin during work that cannot be interrupted (a 3D
+    reconstruction, a model loading, a mesh being read) took QGIS down.
+
+    The thread is asked to stop, waited for *wait_ms*, and if it is still
+    running after that it is taken out of its parent and kept alive here
+    until it has ended by itself. Its results go nowhere: the caller has
+    disconnected, or is gone.
+
+    :param companions: objects the thread works on and which must live as
+        long as it does - a worker moved onto it
+    :return: True when the thread has ended, False when it was kept
+    """
+    global _thread_keeper
+
+    if thread is None:
+        return True
+    try:
+        if not thread.isRunning():
+            return True
+        thread.quit()
+        if wait_ms and thread.wait(int(wait_ms)):
+            return True
+        thread.setParent(None)
+    except RuntimeError:
+        return True         # the Qt object is gone, and with it the thread
+    if _thread_keeper is None:
+        _thread_keeper = _ThreadKeeper()
+    _thread_keeper.keep(thread, companions)
+    return False
+
