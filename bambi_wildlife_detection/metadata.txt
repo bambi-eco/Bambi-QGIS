@@ -43,6 +43,7 @@ changelog=Version 9.1.0
     Fixed:
     - "Run All Four" (Environmental Context) no longer takes QGIS down when the second source starts.
     - The flight planner no longer deletes its target folder. A plan started by removing the whole folder, with everything else in it; it now replaces only the files of an earlier plan.
+    - Labelling tool: the labels are opened from the project's store, which is what the rest of the plugin reads and changes. The tool used to read its own labels.json alone, so a labelled track deleted in the inspector came back with the next save, a species renamed in the Project Schema lost its labels, and a missing or damaged labels.json made the next save empty the stored labels. labels.json is still written, and is loaded instead when it is the newer of the two (for example copied in from another computer); where the two disagree, the side that is not loaded is kept as a file.
     - Labelling tool: a species whose name has capital letters ("Alpine ibex") is stored as that species. The name was lower-cased before it was looked up, so such labels were stored as "animal".
     - Frame-range corrections and the thermal curve are kept. Both were written to the QGIS project but read back from the flight's own store, so they were gone after reopening the project or switching flights, and the frames were then geo-referenced without the corrections. They are now stored with the flight like every other setting, and a new flight starts without the previous flight's frame ranges.
 

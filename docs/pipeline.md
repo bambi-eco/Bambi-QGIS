@@ -831,7 +831,7 @@ target_folder/
 ├── tracks_w/
 │   └── ...
 ├── labels_t/                                # Manual labels (Labelling Tool, thermal)
-│   ├── labels.json                          # Key-frame label tracks (source of truth)
+│   ├── labels.json                          # The labelling tool's copy of the label tracks (read from bambi_t/labels.gpkg)
 │   └── labels.csv                           # Per-frame interpolated label export
 ├── labels_w/
 │   └── ...

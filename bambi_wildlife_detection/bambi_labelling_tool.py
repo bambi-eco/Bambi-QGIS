@@ -11,7 +11,9 @@ Features
 * Visualises the pipeline's detections and tracks (from ``bambi_{m}/*.gpkg``)
   as read-only overlays, so what is drawn is what every other tool counts.
 * Modality selector: label either on thermal or RGB frames - never mixed.
-  Label tracks are stored per modality in ``labels_{m}/labels.json``.
+  Label tracks are stored per modality: in the project's store
+  (``bambi_{m}/labels.gpkg``), which is where they are read from, and as the
+  tool's own copy in ``labels_{m}/labels.json``.
 * Key-frame based annotation: bounding boxes are only stored on key frames
   (e.g. every 10th frame); all frames in between are linearly interpolated.
 * Stop frames: a key frame can be flagged as "stop" when the animal
@@ -51,14 +53,20 @@ Features
 
 Files written (relative to *target_folder*, ``{m}`` = ``t`` / ``w``)
 --------------------------------------------------------------------
-``labels_{m}/labels.json``  - key-frame source of truth, including the custom
-    field schema (``custom_fields``) and their values (``attributes``)
+``bambi_{m}/labels.gpkg``   - the key frames as the rest of the plugin reads
+    and changes them (only when the folder has a project store); what the tool
+    loads, so a track deleted in the inspector or a species renamed in the
+    Project Schema is what the tool shows
+``labels_{m}/labels.json``  - the tool's copy of the key frames, and the one
+    place the custom field schema (``custom_fields``) is written. Loaded
+    instead of the store when it is the newer of the two - copied in from
+    elsewhere, say - and all there is on a folder without a project store
 ``labels_{m}/labels.csv``   - per-frame interpolated export
     format: ``frame,track_id,x1,y1,x2,y2,species,sex,age,occlusion,keyframe``
 
-Custom field values live in ``labels.json`` alone: the CSV export and
-``detections.txt`` keep their fixed column layouts because the rest of the
-pipeline parses them positionally.
+Custom field values are not part of the CSV export and ``detections.txt``,
+which keep their fixed column layouts because the rest of the pipeline parses
+them positionally.
 
 "Add detections to project" additionally merges the interpolated label boxes
 into ``detections_{m}/detections.txt`` in the exact format of the "Detect
@@ -1743,6 +1751,13 @@ class LabellingToolDialog(QDialog):
             QMessageBox.warning(
                 self, "BAMBI Labelling Tool",
                 f"Could not load existing labels:\n{exc}")
+        else:
+            # Only when labels.json and the project's store disagreed in a
+            # way the user should know about (see LabelStore.load).
+            if self._store.load_notes:
+                QMessageBox.information(
+                    self, "BAMBI Labelling Tool",
+                    "\n\n".join(self._store.load_notes))
         if not self._store.schema_defined:
             # Labels written before / without a schema: start from the fields
             # the user configured last instead of showing none.

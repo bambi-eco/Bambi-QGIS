@@ -22,6 +22,7 @@ the labelling workflow. Contains:
   modalities (lazy alfspy/trimesh/bambi imports).
 """
 
+import hashlib
 import math
 import os
 import json
@@ -745,6 +746,159 @@ def resolve_species_id(name: str, species_by_name: Dict[str, int]
     return None
 
 
+# ---------------------------------------------------------------------------
+# Where the label tracks are read from
+# ---------------------------------------------------------------------------
+
+FROM_JSON = "json"
+FROM_STORE = "store"
+
+#: A save writes ``labels.json`` first and the store right after it, so a
+#: file this much newer than the store was written without it.
+_NEWER_BY_S = 2.0
+
+#: What a load leaves beside ``labels.json`` when the file and the store
+#: disagreed: the side that was not loaded, so neither is lost to a wrong
+#: guess.
+JSON_BACKUP_SUFFIX = ".bak"
+JSON_UNREADABLE_SUFFIX = ".unreadable"
+REPLACED_NAME = "labels.replaced.json"
+
+
+def choose_label_source(json_readable: bool, json_fingerprint: Optional[str],
+                        json_mtime: float, store_present: bool,
+                        recorded_fingerprint: Optional[str],
+                        store_mtime: float, stored_tracks: int) -> str:
+    """Whether the label tracks come from ``labels.json`` or from the store.
+
+    The store is what every other tool reads and changes - the inspector
+    deletes a labelled track there, the Project Schema renames a species
+    there - so it wins as long as ``labels.json`` is still the copy the tool
+    wrote beside it (*recorded_fingerprint* is the file's fingerprint at that
+    save). The file wins when it is the newer of the two: put there from
+    outside, or saved when the store could not be written.
+    """
+    if not store_present:
+        return FROM_JSON
+    if not json_readable:
+        return FROM_STORE
+    if recorded_fingerprint is not None:
+        if recorded_fingerprint == json_fingerprint:
+            return FROM_STORE
+        return FROM_JSON
+    # A store from before fingerprints were recorded, so nothing says whether
+    # the file is its copy. An empty store was never written by the tool, and
+    # a clearly newer file was saved without it.
+    if not stored_tracks:
+        return FROM_JSON
+    if json_mtime > store_mtime + _NEWER_BY_S:
+        return FROM_JSON
+    return FROM_STORE
+
+
+def tracks_from_store(rows: Iterable[dict],
+                      vocabulary: dict) -> Dict[int, "LabelTrack"]:
+    """Label tracks as the tool holds them, from their rows in the store -
+    the inverse of :meth:`LabelStore.to_store_tracks`."""
+    species_names = {entry["species_id"]: entry["name"]
+                     for entry in vocabulary.get("species", [])}
+    labels = {name: {value["value_id"]: value["label"] for value in values}
+              for name, values in vocabulary.get("enums", {}).items()}
+
+    def label(enum_name: str, attributes: dict, default: str) -> str:
+        value_id = attributes.pop(enum_name, None)
+        if isinstance(value_id, (dict, list)):
+            return default
+        return labels.get(enum_name, {}).get(value_id, default)
+
+    tracks: Dict[int, LabelTrack] = {}
+    for row in rows:
+        attributes = dict(row.get("attributes") or {})
+        sex = label("sex", attributes, "unknown")
+        age = label("age", attributes, "unknown")
+        track = LabelTrack(
+            int(row["label_track_id"]),
+            species_names.get(row.get("species_id"), "unknown"), sex, age,
+            attributes=attributes, origin_track_id=row.get("origin_track_id"))
+        for keyframe in row.get("keyframes") or []:
+            kf_attributes = dict(keyframe.get("attributes") or {})
+            entry = {
+                "x1": float(keyframe["x1"]), "y1": float(keyframe["y1"]),
+                "x2": float(keyframe["x2"]), "y2": float(keyframe["y2"]),
+                # no value stored: not annotated, which is not "clear"
+                "occlusion": label("occlusion", kf_attributes, "none"),
+            }
+            if keyframe.get("stop"):
+                entry["stop"] = True
+            if kf_attributes:
+                entry["attributes"] = kf_attributes
+            if keyframe.get("origin_detection_id") is not None:
+                entry["origin_detection_id"] = keyframe["origin_detection_id"]
+            track.keyframes[int(keyframe["frame"])] = entry
+        tracks[track.track_id] = track
+    return tracks
+
+
+def _value_type(value: Any) -> str:
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, int):
+        return "int"
+    if isinstance(value, float):
+        return "float"
+    return "string"
+
+
+def infer_custom_fields(tracks: Iterable["LabelTrack"],
+                        known: Iterable[CustomField] = ()
+                        ) -> List[CustomField]:
+    """*known*, plus a field for every custom value on *tracks* that no known
+    field describes.
+
+    The field schema is written to ``labels.json`` only. Label tracks read
+    from the store may carry values it does not name - the file is gone, or a
+    field was renamed in the store - and a value without a field is dropped
+    the next time the tracks are brought in line with the schema.
+    """
+    fields = list(known)
+    described = {field.name.lower() for field in fields}
+    found: Dict[str, List[str]] = {}       # lower-cased name -> [name, type, scope]
+
+    def note(name: str, value: Any, scope: str) -> None:
+        key = str(name).lower()
+        if key in described or value is None:
+            return
+        kind = _value_type(value)
+        entry = found.setdefault(key, [str(name), kind, scope])
+        if entry[1] != kind:
+            numbers = {entry[1], kind} == {"int", "float"}
+            entry[1] = "float" if numbers else "string"
+
+    tracks = list(tracks)
+    for track in tracks:
+        for name, value in track.attributes.items():
+            note(name, value, "track")
+    for track in tracks:
+        for entry in track.keyframes.values():
+            for name, value in (entry.get("attributes") or {}).items():
+                note(name, value, "keyframe")
+
+    for name, kind, scope in found.values():
+        try:
+            fields.append(CustomField(name, kind, scope))
+        except ValueError:
+            continue                        # a reserved name: not a custom value
+    return fields
+
+
+def _file_sha256(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 16), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 class LabelStore:
     """Loads / saves the label tracks of one modality."""
 
@@ -757,6 +911,12 @@ class LabelStore:
         #: lets the GUI tell "no schema configured yet" (seed it from the
         #: user's defaults) from "schema deliberately empty".
         self.schema_defined = False
+        #: Where the last :meth:`load` took the tracks from, and what the
+        #: user should be told about it (nothing, when file and store agreed).
+        self.loaded_from = FROM_JSON
+        self.load_notes: List[str] = []
+        self._json_unreadable = False
+        self._refuse_saving = ""
 
     @property
     def folder(self) -> str:
@@ -774,35 +934,242 @@ class LabelStore:
         return max(self.tracks.keys(), default=0) + 1
 
     def load(self) -> None:
+        """Load the label tracks - from the project's store when it has them.
+
+        ``labels.gpkg`` is what the rest of the plugin reads and changes: the
+        inspector deletes a labelled track there, the Project Schema renames
+        a species there. ``labels.json`` is the tool's own copy beside it,
+        and the only place the custom field schema is written. Reading the
+        file alone brought deleted tracks back, and a missing or unreadable
+        file made the next save empty the store. See
+        :func:`choose_label_source` for which of the two is read.
+        """
         self.tracks = {}
         self.custom_fields = []
         self.schema_defined = False
-        if not os.path.isfile(self.json_path):
+        self.loaded_from = FROM_JSON
+        self.load_notes = []
+        self._json_unreadable = False
+        self._refuse_saving = ""
+
+        document, problem = self._read_json()
+        json_tracks: Dict[int, LabelTrack] = {}
+        if document is not None:
+            if "custom_fields" in document:
+                self.schema_defined = True
+                self.custom_fields = custom_fields_from_dicts(
+                    document.get("custom_fields") or [])
+            for entry in document.get("tracks", []):
+                track = LabelTrack.from_dict(entry)
+                json_tracks[track.track_id] = track
+
+        try:
+            stored = self._stored_tracks()
+        except Exception as exc:
+            # What could not be read must not be written over.
+            self._refuse_saving = (
+                f"The labels stored in the project could not be read when "
+                f"the tool opened ({exc}), so saving now would replace them. "
+                f"Close the labelling tool and open it again.")
+            raise
+
+        if stored is None:
+            if self._json_unreadable:
+                raise ValueError(
+                    f"{self.json_path} could not be read ({problem}). It is "
+                    f"kept as {os.path.basename(self.json_path)}"
+                    f"{JSON_UNREADABLE_SUFFIX} when you save.")
+            self.tracks = json_tracks
+            self._prune_to_schema()
             return
-        with open(self.json_path, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        if "custom_fields" in data:
+
+        recorded = self._recorded_fingerprint()
+        readable = document is not None
+        source = choose_label_source(
+            readable,
+            _file_sha256(self.json_path) if readable else None,
+            os.path.getmtime(self.json_path) if readable else 0.0,
+            True, recorded, self._store_mtime(), len(stored))
+        self.loaded_from = source
+
+        if source == FROM_JSON:
+            self.tracks = json_tracks
+            self._prune_to_schema()
+            kept = self._keep_replaced(stored)
+            if recorded is not None:
+                why = ("labels.json was changed outside the labelling tool "
+                       "since it last saved, so the file was loaded as it is.")
+            elif stored:
+                why = ("labels.json is newer than the labels stored in the "
+                       "project, so the file was loaded.")
+            else:
+                why = ""
+            if why:
+                self.load_notes.append(why + kept)
+            return
+
+        self._keep_species_names(stored, json_tracks)
+        self.tracks = stored
+        self.custom_fields = infer_custom_fields(
+            stored.values(), self.custom_fields)
+        if self.custom_fields:
             self.schema_defined = True
-            self.custom_fields = custom_fields_from_dicts(
-                data.get("custom_fields") or [])
-        for td in data.get("tracks", []):
-            track = LabelTrack.from_dict(td)
-            self.tracks[track.track_id] = track
         self._prune_to_schema()
 
+        if self._json_unreadable:
+            self.load_notes.append(
+                f"labels.json could not be read ({problem}). The labels were "
+                f"loaded from the project's store instead; the unreadable "
+                f"file is kept as labels.json{JSON_UNREADABLE_SUFFIX} when "
+                f"you save.")
+        elif readable and recorded is None and \
+                self._as_dicts(json_tracks) != self._as_dicts(self.tracks):
+            # A store from before fingerprints: nothing says for certain
+            # which side is right, so the file is kept as it was.
+            backup = self.json_path + JSON_BACKUP_SUFFIX
+            shutil.copy2(self.json_path, backup)
+            self.load_notes.append(
+                "The labels stored in the project differ from labels.json. "
+                "The stored labels were loaded, because they are what the "
+                "rest of the plugin uses and changes; the file as it was is "
+                f"kept as {os.path.basename(backup)}.")
+
     def save(self) -> None:
+        if self._refuse_saving:
+            raise RuntimeError(self._refuse_saving)
         os.makedirs(self.folder, exist_ok=True)
+        if self._json_unreadable and os.path.isfile(self.json_path):
+            os.replace(self.json_path,
+                       self.json_path + JSON_UNREADABLE_SUFFIX)
+        self._json_unreadable = False
         data = {
             "modality": self.modality,
             "custom_fields": [f.to_dict() for f in self.custom_fields],
             "tracks": [t.to_dict() for t in sorted(
                 self.tracks.values(), key=lambda t: t.track_id)],
         }
-        with open(self.json_path, "w", encoding="utf-8") as fh:
+        # Written beside the file and moved into place, so a save that is
+        # cut short leaves the previous labels rather than half a file.
+        temporary = self.json_path + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as fh:
             json.dump(data, fh, indent=2)
+        os.replace(temporary, self.json_path)
         self.schema_defined = True
         self._export_csv()
         self._save_to_store()
+
+    # -- reading the two copies ---------------------------------------------
+
+    def _read_json(self) -> Tuple[Optional[dict], str]:
+        """``(document, problem)`` of ``labels.json``: ``(None, "")`` when
+        there is no file, ``(None, why)`` when it cannot be read."""
+        if not os.path.isfile(self.json_path):
+            return None, ""
+        try:
+            with open(self.json_path, "r", encoding="utf-8") as fh:
+                document = json.load(fh)
+            if not isinstance(document, dict):
+                raise ValueError("it does not hold a labels document")
+            # every track has to be readable, not only the file
+            for entry in document.get("tracks", []):
+                LabelTrack.from_dict(entry)
+        except (OSError, ValueError, TypeError, KeyError,
+                AttributeError) as exc:
+            self._json_unreadable = True
+            return None, str(exc) or type(exc).__name__
+        return document, ""
+
+    def _stored_tracks(self) -> Optional[Dict[int, LabelTrack]]:
+        """The label tracks in the project's store; ``None`` when this
+        modality has no labels store (or no vocabulary to name its ids)."""
+        from . import label_store
+
+        if not label_store.has_labels_store(self.target_folder, self.modality):
+            return None
+        vocabulary = self._vocabulary()
+        if not vocabulary:
+            return None
+        return tracks_from_store(
+            label_store.load_tracks(self.target_folder, self.modality),
+            vocabulary)
+
+    def _recorded_fingerprint(self) -> Optional[str]:
+        from . import label_store
+
+        return label_store.json_fingerprint(self.target_folder, self.modality)
+
+    def _store_mtime(self) -> float:
+        from . import store
+
+        return os.path.getmtime(store.stage_path(
+            self.target_folder, store.LABELS, self.modality))
+
+    def _as_dicts(self, tracks: Dict[int, LabelTrack]) -> List[dict]:
+        """*tracks* as documents with their custom values in the schema's
+        types - what the file and the store are compared by."""
+        track_fields = self.fields_for("track")
+        kf_fields = self.fields_for("keyframe")
+        documents = []
+        for track_id in sorted(tracks):
+            document = tracks[track_id].to_dict()
+            attributes = coerce_attributes(
+                document.pop("attributes", {}), track_fields)
+            if attributes:
+                document["attributes"] = attributes
+            keyframes = {}
+            for frame, entry in document["keyframes"].items():
+                entry = dict(entry)
+                kf_attributes = coerce_attributes(
+                    entry.pop("attributes", {}), kf_fields)
+                if kf_attributes:
+                    entry["attributes"] = kf_attributes
+                keyframes[frame] = entry
+            document["keyframes"] = keyframes
+            documents.append(document)
+        return documents
+
+    def _keep_species_names(self, stored: Dict[int, LabelTrack],
+                            json_tracks: Dict[int, LabelTrack]) -> None:
+        """Where the store only knows a track as the fallback species, keep
+        the name ``labels.json`` has for it.
+
+        The store holds the fallback for every name the vocabulary did not
+        have when the track was saved - typed before the project had a
+        vocabulary, or (before 9.1) spelled with a capital letter. The name
+        resolves the next time the track is saved, if it can by then.
+        """
+        from . import store as _store
+
+        vocabulary = self._vocabulary()
+        fallback = next(
+            (entry["name"] for entry in vocabulary.get("species", [])
+             if entry["species_id"] == _store.FALLBACK_SPECIES_ID), None)
+        if fallback is None:
+            return
+        for track_id, track in stored.items():
+            other = json_tracks.get(track_id)
+            if other is None or track.species != fallback:
+                continue
+            name = (other.species or "").strip()
+            if name and name.lower() != fallback.lower():
+                track.species = other.species
+
+    def _keep_replaced(self, stored: Dict[int, LabelTrack]) -> str:
+        """Write the store's label tracks beside ``labels.json`` when they
+        are about to be replaced by different ones from the file; returns
+        the sentence that says so (empty when nothing was written)."""
+        if not stored or self._as_dicts(stored) == self._as_dicts(self.tracks):
+            return ""
+        path = os.path.join(self.folder, REPLACED_NAME)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({
+                "modality": self.modality,
+                "custom_fields": [f.to_dict() for f in infer_custom_fields(
+                    stored.values(), self.custom_fields)],
+                "tracks": [stored[i].to_dict() for i in sorted(stored)],
+            }, fh, indent=2)
+        return (" The labels stored in the project until now are kept in "
+                f"{REPLACED_NAME}.")
 
     # -- 6.0 store --------------------------------------------------------
 
@@ -883,6 +1250,10 @@ class LabelStore:
 
         label_store.save_tracks(
             self.target_folder, self.modality, self.to_store_tracks())
+        # Last: only a file whose tracks did reach the store counts as its
+        # copy at the next load.
+        label_store.record_json_fingerprint(
+            self.target_folder, self.modality, _file_sha256(self.json_path))
 
     # -- custom field schema ---------------------------------------------
 

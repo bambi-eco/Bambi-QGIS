@@ -185,8 +185,12 @@ exports.
 | File                       | Contents                                                                                            |
 |----------------------------|-----------------------------------------------------------------------------------------------------|
 | `bambi_{t,w}/labels.gpkg`  | Key-frame label tracks and their attributes (source of truth since 6.0)                             |
-| `labels_{t,w}/labels.json` | The same tracks in the 5.x format, still written                                                    |
+| `labels_{t,w}/labels.json` | The tool's own copy of the same tracks, and where the custom field definitions are kept             |
 | `labels_{t,w}/labels.csv`  | Per-frame interpolated export: `frame,track_id,x1,y1,x2,y2,species,sex,age,occlusion,keyframe`      |
+
+The tool **opens the labels from the store**, so it shows what the rest of the plugin did to them: a labelled track deleted in the inspector stays deleted, and a species renamed in the Project Schema keeps its labels. `labels.json` is read instead only when it is the newer of the two - a file copied in from another computer, or a save during which the store could not be written - and it is all there is in a folder without a project store. A missing or damaged `labels.json` no longer costs anything: the labels come from the store and the file is written afresh with the next save.
+
+Whenever the file and the store disagree and it is not certain which is right, the side that is not loaded is kept beside `labels.json` and the tool says so: `labels.json.bak` (the file, when the store was loaded), `labels.replaced.json` (the store's labels, when the file was loaded) or `labels.json.unreadable` (a file that could not be read).
 
 **Add detections to project** turns the interpolated label boxes into detections the rest of the pipeline consumes. The detector's output is untouched - each producer owns its own rows - so the two can coexist and either can be re-run without disturbing the other.
 

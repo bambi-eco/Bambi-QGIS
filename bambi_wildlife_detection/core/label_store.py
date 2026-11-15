@@ -161,6 +161,42 @@ def save_tracks(target_folder: str, modality: str, tracks: Iterable[dict],
     return len(tracks)
 
 
+#: Meta key of the labels store: the SHA-256 of ``labels.json`` as the
+#: labelling tool last wrote it, next to these label tracks. It tells a later
+#: load whether the file is still the tool's own copy of the store (then what
+#: other tools changed in the store counts) or was put there from outside.
+JSON_FINGERPRINT_KEY = "labels_json_sha256"
+
+
+def has_labels_store(target_folder: str, modality: str) -> bool:
+    """True when this modality has a labels store on disk."""
+    return os.path.isfile(
+        store.stage_path(target_folder, store.LABELS, modality))
+
+
+def json_fingerprint(target_folder: str, modality: str) -> Optional[str]:
+    """The recorded fingerprint of ``labels.json``; ``None`` when the store
+    is missing or was last written by a version that recorded none."""
+    if not has_labels_store(target_folder, modality):
+        return None
+    conn = _labels_conn(target_folder, modality)
+    try:
+        return store.get_meta(conn, JSON_FINGERPRINT_KEY)
+    finally:
+        conn.close()
+
+
+def record_json_fingerprint(target_folder: str, modality: str,
+                            fingerprint: str) -> None:
+    """Remember ``labels.json`` as the tool wrote it beside these tracks."""
+    conn = _labels_conn(target_folder, modality)
+    try:
+        with store.transaction(conn):
+            store.set_meta(conn, JSON_FINGERPRINT_KEY, fingerprint)
+    finally:
+        conn.close()
+
+
 def load_tracks(target_folder: str, modality: str) -> List[dict]:
     """Load this modality's label tracks, key frames ordered by frame."""
     path = store.stage_path(target_folder, store.LABELS, modality)
