@@ -599,6 +599,98 @@ def test_migration_refuses_a_folder_the_pipeline_already_wrote(tmp_path):
     conn.close()
 
 
+# ---------------------------------------------------------------------------
+# A folder that only has its settings stored is not a migrated folder
+# ---------------------------------------------------------------------------
+
+def _settings_only(folder):
+    """What saving the QGIS project does to a flight's folder."""
+    from bambi_wildlife_detection.core import flights
+    flights.save_config(folder, {"Input/TargetFolder": folder,
+                                 "Detection/Confidence": "0.42"})
+
+
+def test_stored_settings_do_not_make_a_folder_migrated(legacy):
+    """``project.gpkg`` appears as soon as the folder is a flight's, long
+    before anything is imported - and used to end the migration there."""
+    _settings_only(legacy)
+
+    assert os.path.isfile(store.project_path(legacy))
+    assert migration.holds_only_settings(legacy)
+    assert migration.existing_stores(legacy) == []
+    assert not migration.is_migrated(legacy)
+
+
+def test_a_folder_with_only_its_settings_is_migrated_in_full(legacy):
+    from bambi_wildlife_detection.core import flights
+
+    _settings_only(legacy)
+    report = migration.migrate_project(legacy)
+
+    assert report.counts["detections_detector"] == 3
+    assert not any("already has a 6.0 store" in w for w in report.warnings)
+    assert migration.is_migrated(legacy)
+    # ... and the settings are still there
+    assert flights.load_config(legacy)["Detection/Confidence"] == "0.42"
+
+
+def test_the_result_is_the_same_as_without_stored_settings(legacy, tmp_path):
+    import shutil
+
+    twin = str(tmp_path / "twin")
+    shutil.copytree(legacy, twin)
+    _settings_only(twin)
+
+    plain = migration.migrate_project(legacy)
+    over_settings = migration.migrate_project(twin)
+
+    assert over_settings.counts == plain.counts
+    for root in (legacy, twin):
+        conn = store.open_store(store.project_path(root), store.PROJECT)
+        assert [r["name"] for r in conn.execute(
+            "SELECT name FROM species WHERE name = 'wolf'")] == ["wolf"]
+        conn.close()
+
+
+def test_a_species_added_before_migrating_still_blocks(legacy):
+    """Legacy species keep the ids 5.x gave them; one the user added in the
+    meantime may sit on such an id, and labels would change species."""
+    _settings_only(legacy)
+    conn = store.open_store(store.project_path(legacy), store.PROJECT)
+    conn.execute("INSERT INTO species (species_id, name) VALUES (10, 'lynx')")
+    conn.commit()
+    conn.close()
+
+    assert not migration.holds_only_settings(legacy)
+    assert migration.existing_stores(legacy) == ["project.gpkg"]
+    report = migration.migrate_project(legacy)
+    assert report.counts == {}
+    assert any("already has a 6.0 store" in w for w in report.warnings)
+
+
+def test_a_detection_source_still_blocks(legacy):
+    _settings_only(legacy)
+    conn = store.open_store(store.project_path(legacy), store.PROJECT)
+    conn.execute("INSERT INTO detection_sources (kind, model, created_at) "
+                 "VALUES ('detector', 'model.pt', '')")
+    conn.commit()
+    conn.close()
+
+    assert migration.existing_stores(legacy) == ["project.gpkg"]
+
+
+def test_an_unreadable_project_store_is_not_only_settings(legacy):
+    with open(store.project_path(legacy), "w") as handle:
+        handle.write("not a GeoPackage")
+
+    assert not migration.holds_only_settings(legacy)
+    assert migration.existing_stores(legacy) == ["project.gpkg"]
+
+
+def test_no_project_store_is_not_only_settings(legacy):
+    assert not migration.holds_only_settings(legacy)
+
+
 def test_existing_stores_lists_what_is_there(legacy):
     assert migration.existing_stores(legacy) == []
     migration.migrate_project(legacy)

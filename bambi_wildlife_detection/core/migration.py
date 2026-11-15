@@ -86,15 +86,75 @@ def is_migrated(target_folder: str) -> bool:
     return bool(existing_stores(target_folder))
 
 
+#: What a migration adds to in ``project.gpkg``, and so could collide with.
+_VOCABULARY = ("species", "enums", "enum_values", "field_schema",
+               "detection_sources", "class_mapping")
+
+#: The contents of those tables in a store nothing has been done to yet.
+_PRISTINE_VOCABULARY: Optional[dict] = None
+
+
+def _vocabulary(conn) -> dict:
+    return {table: sorted(tuple(row) for row in conn.execute(
+        f"SELECT * FROM {table}"))  # nosec B608 - fixed table names
+        for table in _VOCABULARY}
+
+
+def _pristine_vocabulary() -> dict:
+    """The vocabulary a new ``project.gpkg`` starts with."""
+    global _PRISTINE_VOCABULARY
+    if _PRISTINE_VOCABULARY is None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as folder:
+            conn = store.open_store(
+                os.path.join(folder, "project.gpkg"), store.PROJECT)
+            try:
+                _PRISTINE_VOCABULARY = _vocabulary(conn)
+            finally:
+                conn.close()
+    return _PRISTINE_VOCABULARY
+
+
+def holds_only_settings(target_folder: str) -> bool:
+    """True when ``project.gpkg`` holds a flight's settings and nothing else:
+    no detection source, and the species, value lists and fields every new
+    store starts with.
+
+    That file is where a flight keeps its configuration, so it appears as
+    soon as the folder is a flight's - when the QGIS project is saved, when
+    a project from an earlier version is opened. It then counted as "this
+    folder has been migrated": *Migrate 5.x...* disappeared and the migration
+    refused to run, although not one result had been imported.
+
+    Everything a migration writes to ``project.gpkg`` it adds beside what is
+    there, which is safe exactly as long as nothing of its kind is there
+    yet. A store that cannot be read is not "only settings".
+    """
+    path = store.project_path(target_folder)
+    if not os.path.isfile(path):
+        return False
+    try:
+        conn = store.open_store(path, store.PROJECT)
+        try:
+            return _vocabulary(conn) == _pristine_vocabulary()
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 - unreadable: not something to add to
+        return False
+
+
 def existing_stores(target_folder: str) -> List[str]:
-    """Names of the 6.0 store files already present, if any.
+    """Names of the 6.0 store files that already hold results, if any.
 
     Used to refuse a migration that would duplicate live data - the store may
     have been written by the pipeline itself rather than by an earlier
-    migration.
+    migration. A ``project.gpkg`` with nothing but the flight's settings in
+    it is not one of them (:func:`holds_only_settings`).
     """
     found = []
-    if os.path.isfile(store.project_path(target_folder)):
+    if os.path.isfile(store.project_path(target_folder)) and \
+            not holds_only_settings(target_folder):
         found.append("project.gpkg")
     for modality in store.MODALITIES:
         for kind in store.STAGE_KINDS:

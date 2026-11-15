@@ -60,6 +60,24 @@ def test_button_disappears_once_migrated(dock, legacy_folder):
     assert not dock.migrate_btn.isVisibleTo(dock)
 
 
+def test_button_survives_the_settings_being_saved(dock, legacy_folder):
+    """Saving the QGIS project stores the flight's settings in its folder.
+    That ``project.gpkg`` used to count as "migrated": the button was gone
+    and the migration refused, with nothing imported."""
+    dock.target_folder_edit.setText(legacy_folder)
+    dock._on_target_folder_changed()
+    dock._on_project_write(None)
+    dock._refresh_migrate_button()
+
+    assert os.path.isfile(store.project_path(legacy_folder))
+    assert dock.migrate_btn.isVisibleTo(dock)
+
+    report = migration.migrate_project(legacy_folder, log_fn=dock.log)
+    assert report.counts["detections_detector"] == 2
+    dock._refresh_migrate_button()
+    assert not dock.migrate_btn.isVisibleTo(dock)
+
+
 def test_migration_writes_a_store_the_widget_can_see(dock, legacy_folder):
     dock.target_folder_edit.setText(legacy_folder)
     migration.migrate_project(legacy_folder, log_fn=dock.log)

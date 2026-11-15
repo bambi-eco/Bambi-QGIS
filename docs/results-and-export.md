@@ -67,6 +67,11 @@ the generated `.gpkg` files and trying again.
 
 Migration refuses to run over a folder that already has a store, because it
 adds rows rather than reconciling them - it would duplicate what is there.
+A `project.gpkg` that holds nothing but the flight's settings does not count:
+that file appears as soon as the folder is a flight's (when the QGIS project
+is saved, when a project from an earlier version is opened), and the button
+stays until results have been imported. Once species or fields have been
+added to it, or a step has run, the folder is no longer migrated over.
 
 Two limits of 5.x data, both reported when they apply:
 
