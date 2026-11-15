@@ -256,6 +256,9 @@ CONFIG_ENTRIES: List[ConfigEntry] = [
     ConfigEntry("Environment/BufferMetres", "int_double", 200),
     ConfigEntry("Environment/IncludeSurveyArea", "bool", True),
     ConfigEntry("Environment/SamplingRadius", "double", 30.0),
+    # ===== Map symbols of detections and tracks (core.map_symbols) =====
+    ConfigEntry("Display/PinsEnabled", "bool", True),
+    ConfigEntry("Display/PinScale", "int_double", 500),
 ]
 
 CONFIG_KEYS = [entry.key for entry in CONFIG_ENTRIES]
@@ -410,6 +413,8 @@ WIDGET_BINDINGS: Dict[str, Tuple[str, str]] = {
     "Environment/BufferMetres": ("environment_buffer_spin", "spin"),
     "Environment/IncludeSurveyArea": ("environment_area_check", "check"),
     "Environment/SamplingRadius": ("habitat_radius_spin", "spin"),
+    "Display/PinsEnabled": ("map_pins_check", "check"),
+    "Display/PinScale": ("map_pin_scale_spin", "spin"),
 }
 
 

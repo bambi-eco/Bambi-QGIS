@@ -42,6 +42,8 @@ from .bambi_survey_area import SurveyAreaPanel
 from .bambi_survey_panel import CensusTableDialog, SurveyFlightsPanel
 from .bambi_environment import ENVIRONMENT_STEPS
 from .bambi_environment_panel import EnvironmentDockMixin
+from .bambi_map_symbols import (
+    animal_fields, animal_values, restyle, style_boxes, style_path)
 # Built-in calibration presets live in bambi_calibrations.py (Qt-free module
 # so they are importable without QGIS, e.g. by the integration tests).
 from .bambi_calibrations import THERMAL_CALIBRATIONS, RGB_CALIBRATIONS  # noqa: F401
@@ -1157,6 +1159,47 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         vocabulary_layout.addWidget(self.schema_editor_btn)
 
         project_tab_layout.addWidget(vocabulary_group)
+
+        # How detections and tracks are drawn on the map.
+        symbols_group = QGroupBox("Map Symbols")
+        symbols_layout = QFormLayout(symbols_group)
+        symbols_info = QLabel(
+            "Detections and tracks are drawn in the colour of their species "
+            "(set per species in the Project Schema). Zoomed out, where a "
+            "bounding box is too small to see, a pin with the animal's sex "
+            "and age takes its place.")
+        symbols_info.setWordWrap(True)
+        symbols_info.setStyleSheet("color: gray; font-size: 10px;")
+        symbols_layout.addRow(symbols_info)
+
+        self.map_pins_check = QCheckBox("Show pins when zoomed out")
+        self.map_pins_check.setChecked(True)
+        self.map_pins_check.setToolTip(
+            "Off: the bounding boxes are drawn at every scale.")
+        symbols_layout.addRow("", self.map_pins_check)
+
+        self.map_pin_scale_spin = QSpinBox()
+        self.map_pin_scale_spin.setRange(10, 1000000)
+        self.map_pin_scale_spin.setSingleStep(100)
+        self.map_pin_scale_spin.setValue(500)
+        self.map_pin_scale_spin.setPrefix("1:")
+        self.map_pin_scale_spin.setToolTip(
+            "Map scale at which the boxes give way to pins. At 1:500 a "
+            "one-metre animal is two millimetres on screen. The scale can "
+            "also be changed per layer in the layer's Symbology.")
+        self.map_pins_check.toggled.connect(
+            self.map_pin_scale_spin.setEnabled)
+        symbols_layout.addRow("Pins beyond:", self.map_pin_scale_spin)
+
+        self.map_restyle_btn = QPushButton("Apply to Layers in QGIS")
+        self.map_restyle_btn.setToolTip(
+            "Apply the species colours and these settings to the detection "
+            "and track layers already added. New layers take them anyway.")
+        self.map_restyle_btn.clicked.connect(
+            lambda _checked=False: self.restyle_animal_layers())
+        symbols_layout.addRow("", self.map_restyle_btn)
+
+        project_tab_layout.addWidget(symbols_group)
         project_tab_layout.addStretch()
 
         # ----- Sub-Tab: Extraction -----
@@ -4779,6 +4822,14 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
 
             # Environmental context and habitat summary
             **self._environment_config(),
+
+            # Map symbols of detections and tracks
+            "map_pins_enabled": (
+                self.map_pins_check.isChecked()
+                if hasattr(self, 'map_pins_check') else True),
+            "map_pin_scale": (
+                self.map_pin_scale_spin.value()
+                if hasattr(self, 'map_pin_scale_spin') else 500),
         }
 
     def _on_pop_study_area_mode_changed(self, checked: bool):
@@ -7535,7 +7586,11 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             return False
 
         dialog = BambiSchemaDialog(folder, parent=self, initial_tab=initial_tab)
-        return dialog.exec() == QDialog.DialogCode.Accepted
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        if accepted:
+            # A species may have a new colour: the layers on the map follow.
+            self.restyle_animal_layers(quiet=True)
+        return accepted
 
     def open_correction_wizard(self) -> None:
         """Open the correction calibration wizard as a modal dialog."""
@@ -11297,29 +11352,19 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             # Create main group for all tracks at top of layer tree
             main_group = self._create_layer_group(f"BAMBI Wildlife Tracks ({camera_label})")
 
-            # Generate colors for tracks (cycle through a palette)
-            colors = [
-                (255, 0, 0),  # Red
-                (0, 150, 0),  # Green
-                (0, 100, 255),  # Blue
-                (255, 165, 0),  # Orange
-                (128, 0, 128),  # Purple
-                (0, 200, 200),  # Cyan
-                (255, 105, 180),  # Pink
-                (139, 69, 19),  # Brown
-                (0, 0, 139),  # Dark Blue
-                (34, 139, 34),  # Forest Green
-            ]
+            # Colour means species (core.map_symbols): each track is drawn
+            # in the colour of what it is, with its sex and age beside the
+            # pin it turns into when zoomed out.
+            from .core import map_symbols
+            animals = map_symbols.track_attributes(
+                config["target_folder"], trk_suffix)
 
             total_tracks = 0
 
             for idx, ((file_basename, track_id), detections) in enumerate(all_tracks.items()):
                 # Sort detections by frame
                 detections_sorted = sorted(detections, key=lambda d: d['frame'])
-
-                # Get color for this track
-                color = colors[idx % len(colors)]
-                color_str = f"{color[0]},{color[1]},{color[2]}"
+                animal = animal_values(animals.get(int(track_id)))
 
                 # Create subgroup for this track
                 track_name = f"Track {track_id}"
@@ -11342,7 +11387,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
                         QgsField("end_frame", QVariant.Int),
                         QgsField("num_detections", QVariant.Int),
                         QgsField("avg_confidence", QVariant.Double)
-                    ])
+                    ] + animal_fields())
                     path_layer.updateFields()
 
                     center_points = [
@@ -11359,11 +11404,9 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
                         detections_sorted[-1]['frame'],
                         len(detections_sorted),
                         round(avg_conf, 4)
-                    ])
+                    ] + animal)
                     path_provider.addFeatures([path_feat])
                     path_layer.updateExtents()
-
-                    self._style_path_layer(path_layer, color_str)
 
                 # Create final position layer (polygon)
                 bbox_layer = QgsVectorLayer(
@@ -11377,7 +11420,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
                     QgsField("frame", QVariant.Int),
                     QgsField("confidence", QVariant.Double),
                     QgsField("class_id", QVariant.Int)
-                ])
+                ] + animal_fields())
                 bbox_layer.updateFields()
 
                 # Create final bbox feature
@@ -11396,19 +11439,16 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
                     final_det['frame'],
                     final_det['confidence'],
                     final_det['class_id']
-                ])
+                ] + animal)
                 bbox_provider.addFeatures([bbox_feat])
                 bbox_layer.updateExtents()
-
-                # Style bbox layer
-                self._style_bbox_layer(bbox_layer, color_str)
 
                 # Persist layers to GeoPackage (using unique file names, keeping display names)
                 bbox_layer = self._persist_memory_layer(
                     bbox_layer, f"Track{track_id}_FinalPosition_{trk_suffix}", "tracks_layers",
                     display_name="Final Position"
                 )
-                self._style_bbox_layer(bbox_layer, color_str)
+                self._style_animal_boxes(bbox_layer, config)
                 # Tag layer so the inspector tool can identify and handle it
                 bbox_layer.setCustomProperty("bambi_layer_type", "track_final")
                 bbox_layer.setCustomProperty("bambi_target_folder", config["target_folder"])
@@ -11426,7 +11466,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
                         path_layer, f"Track{track_id}_Path_{trk_suffix}", "tracks_layers",
                         display_name="Path"
                     )
-                    self._style_path_layer(path_layer, color_str)
+                    self._style_animal_path(path_layer, config)
                     # Tag layer so the inspector tool can identify and handle it
                     path_layer.setCustomProperty("bambi_layer_type", "track_path")
                     path_layer.setCustomProperty("bambi_target_folder", config["target_folder"])
@@ -11456,81 +11496,74 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             self.update_status("add_layers", "🔴 Error")
             QMessageBox.critical(self, "Error", f"Failed to add tracks: {str(e)}")
 
-    def _style_path_layer(self, layer, color_str: str):
-        """Apply styling to a track path layer.
+    # ------------------------------------------------------------------ #
+    # Animal symbology: colour by species, pins when zoomed out
+    # ------------------------------------------------------------------ #
 
-        :param layer: Line layer to style
-        :param color_str: RGB color string like "255,0,0"
-        """
-        from qgis.core import QgsLineSymbol, QgsSingleSymbolRenderer
+    def _animal_style_settings(self, config: Optional[dict] = None):
+        """``(species colours, switch-over scale, pins on)`` for the layers
+        of the flight in *config* (the active one by default)."""
+        from .core import map_symbols
 
+        config = config if config is not None else self.get_config()
+        colours = map_symbols.species_colours(config.get("target_folder", ""))
+        return (colours,
+                float(config.get("map_pin_scale",
+                                 map_symbols.DEFAULT_SWITCH_SCALE)),
+                bool(config.get("map_pins_enabled", True)))
+
+    def _style_animal_boxes(self, layer, config: Optional[dict] = None):
+        """Style a layer of animal boxes (detections, a track's final
+        position): species colours, and pins beyond the switch-over scale
+        (:mod:`bambi_map_symbols`)."""
         try:
-            symbol = QgsLineSymbol.createSimple({
-                'color': f"{color_str},255",
-                'width': '1.2',
-                'capstyle': 'round',
-                'joinstyle': 'round'
-            })
-            layer.setRenderer(QgsSingleSymbolRenderer(symbol))
-            layer.triggerRepaint()
-        except Exception:  # nosec B110
-            pass
+            colours, scale, pins = self._animal_style_settings(config)
+            style_boxes(layer, colours, scale, pins)
+        except Exception as exc:  # nosec B110 - an unstyled layer still shows
+            self.log(f"Note: could not style {layer.name()}: {exc}")
 
-    def _style_bbox_layer(self, layer, color_str: str):
-        """Apply styling to a final position (bbox) layer.
-
-        :param layer: Polygon layer to style
-        :param color_str: RGB color string like "255,0,0"
-        """
-        from qgis.core import QgsFillSymbol, QgsSingleSymbolRenderer
-
+    def _style_animal_path(self, layer, config: Optional[dict] = None):
+        """Style a track's path in the colour of the track's species."""
         try:
-            symbol = QgsFillSymbol.createSimple({
-                'color': f"{color_str},80",  # Semi-transparent fill
-                'outline_color': f"{color_str},255",
-                'outline_width': '0.8'
-            })
-            layer.setRenderer(QgsSingleSymbolRenderer(symbol))
-            layer.triggerRepaint()
-        except Exception:  # nosec B110
-            pass
+            colours, _scale, _pins = self._animal_style_settings(config)
+            style_path(layer, colours)
+        except Exception as exc:  # nosec B110
+            self.log(f"Note: could not style {layer.name()}: {exc}")
 
-    def _style_track_layers(self, final_pos_layer, paths_layer):
-        """Apply default styling to track visualization layers (legacy method).
+    def restyle_animal_layers(self, quiet: bool = False) -> int:
+        """Apply the current species colours and pin settings to the animal
+        layers already in the project - after a colour was changed in the
+        Project Schema, or the switch-over scale on the Project tab.
 
-        :param final_pos_layer: Polygon layer with final bounding boxes
-        :param paths_layer: Line layer with track paths
+        Every flight's layers take their own flight's colours. Layers added
+        by an earlier version have no species to colour by and are left as
+        they are; adding them again brings them up to date.
         """
-        from qgis.core import (
-            QgsFillSymbol, QgsLineSymbol,
-            QgsSingleSymbolRenderer
-        )
+        from .bambi_map_symbols import STYLE_PROPERTY
+        from .core import map_symbols
 
-        try:
-            # Style final positions (semi-transparent red fill)
-            final_symbol = QgsFillSymbol.createSimple({
-                'color': '255,100,100,100',  # Semi-transparent red
-                'outline_color': '255,0,0,255',  # Solid red outline
-                'outline_width': '0.5'
-            })
-            final_pos_layer.setRenderer(QgsSingleSymbolRenderer(final_symbol))
-
-            # Style track paths (bold colored line)
-            path_symbol = QgsLineSymbol.createSimple({
-                'color': '0,100,255,255',  # Blue
-                'width': '1.0',
-                'capstyle': 'round',
-                'joinstyle': 'round'
-            })
-            paths_layer.setRenderer(QgsSingleSymbolRenderer(path_symbol))
-
-            # Trigger repaint
-            final_pos_layer.triggerRepaint()
-            paths_layer.triggerRepaint()
-
-        except Exception as e:
-            # Styling is optional, don't fail if it doesn't work
-            self.log(f"Note: Could not apply default styling: {e}")
+        config = self.get_config()
+        scale = float(config.get("map_pin_scale",
+                                 map_symbols.DEFAULT_SWITCH_SCALE))
+        pins = bool(config.get("map_pins_enabled", True))
+        by_folder: Dict[str, list] = {}
+        for layer in QgsProject.instance().mapLayers().values():
+            if not layer.customProperty(STYLE_PROPERTY, ""):
+                continue
+            folder = layer.customProperty("bambi_target_folder", "") or \
+                config.get("target_folder", "")
+            by_folder.setdefault(folder, []).append(layer)
+        count = 0
+        for folder, layers in by_folder.items():
+            count += restyle(layers, map_symbols.species_colours(folder),
+                             scale, pins)
+        if count:
+            self.iface.mapCanvas().refresh()
+        if not quiet:
+            self.log(f"Restyled {count} animal layer(s)" if count else
+                     "No animal layers to restyle - add detections or "
+                     "tracks to QGIS first.")
+        return count
 
     def load_tracks_from_csv(self, csv_path: str) -> Dict[int, list]:
         """Load tracks from a CSV file (core.pipeline_outputs)."""
@@ -11949,11 +11982,20 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             self.update_status("add_frame_detections", "🔴 Error")
             QMessageBox.critical(self, "Error", f"Failed to add detection layers: {str(e)}")
 
+    def _detection_animals(self, camera_label: str) -> Dict[int, dict]:
+        """``detection_id -> species / sex / age`` of the camera's
+        detections, for the layers' attributes (core.map_symbols)."""
+        from .core import map_symbols
+        return map_symbols.detection_attributes(
+            self.target_folder_edit.text().strip(),
+            _camera_suffix(camera_label))
+
     def _add_detections_separate_layers(self, frame_detections: Dict[int, list], target_crs,
                                         camera_label: str = "Thermal"):
         """Add detections as separate layers for each frame."""
         # Create a group for the layers at top of layer tree
         group = self._create_layer_group(f"BAMBI Frame Detections ({camera_label})")
+        animals = self._detection_animals(camera_label)
 
         for frame_idx, detections in frame_detections.items():
             if not detections:
@@ -11971,7 +12013,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
                 QgsField("frame", QVariant.Int),
                 QgsField("confidence", QVariant.Double),
                 QgsField("class_id", QVariant.Int)
-            ])
+            ] + animal_fields())
             layer.updateFields()
 
             # Add features
@@ -11993,7 +12035,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
                     det['frame'],
                     det['confidence'],
                     det['class_id']
-                ])
+                ] + animal_values(animals.get(det.get('detection_id'))))
                 features.append(feat)
 
             provider.addFeatures(features)
@@ -12002,6 +12044,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             # Persist layer to GeoPackage
             layer = self._persist_memory_layer(
                 layer, f"{layer_name}_{_camera_suffix(camera_label)}", "detection_layers")
+            self._style_animal_boxes(layer)
 
             # Tag layer so the inspector tool can identify and handle it
             layer.setCustomProperty("bambi_layer_type", "detection")
@@ -12024,6 +12067,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         """Add all detections in a single combined layer."""
         layer_name = f"BAMBI Detections - All Frames ({camera_label})"
         layer = QgsVectorLayer("Polygon?crs=" + target_crs.authid(), layer_name, "memory")
+        animals = self._detection_animals(camera_label)
 
         provider = layer.dataProvider()
 
@@ -12033,7 +12077,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             QgsField("frame", QVariant.Int),
             QgsField("confidence", QVariant.Double),
             QgsField("class_id", QVariant.Int)
-        ])
+        ] + animal_fields())
         layer.updateFields()
 
         features = []
@@ -12055,7 +12099,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
                     det['frame'],
                     det['confidence'],
                     det['class_id']
-                ])
+                ] + animal_values(animals.get(det.get('detection_id'))))
                 features.append(feat)
 
         provider.addFeatures(features)
@@ -12064,6 +12108,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         # Persist layer to GeoPackage
         layer = self._persist_memory_layer(
             layer, f"Detections_AllFrames_{_camera_suffix(camera_label)}", "detection_layers")
+        self._style_animal_boxes(layer)
 
         # Tag layer so the inspector tool can identify and handle it
         layer.setCustomProperty("bambi_layer_type", "detection")

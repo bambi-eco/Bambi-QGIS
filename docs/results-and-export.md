@@ -155,6 +155,20 @@ layers - the plugin leaves them where they are and fits new results in around
 them. Layer groups created by an earlier version (directly in the flight
 group) are replaced by the new ones the next time the step adds its layers.
 
+### How animals are drawn
+
+Detections and tracks are drawn **in the colour of their species**, so the map says what is where. Every species has a default colour - the seeded ones a fixed one, any species you add a colour derived from its name, the same in every flight - and each can be changed in **Configuration → Project → Edit Project Schema… → Species → Colour…** (*Default Colour* goes back). The colours are stored with the flight and follow a species when it is renamed. A detection that belongs to a track takes its track's species - the classifier's vote and the labelling tool's annotations included - so the map agrees with the track inventory.
+
+Zoomed in, an animal is its geo-referenced **bounding box**. Zoomed out, where a one-metre box is a speck, it becomes a **pin** of fixed size on screen whose tip is the box's centre, with a short **sex / age indicator** beside it: `♀`, `♂ juv`, `♀ ad`. Unknown is not shown - no indicator means nobody knows.
+
+| Setting (Configuration → Project → Map Symbols) | Default | Meaning |
+|---|---|---|
+| Show pins when zoomed out | on | Off draws the boxes at every scale |
+| Pins beyond | 1:500 | Map scale at which boxes give way to pins |
+| Apply to Layers in QGIS | | Restyle the animal layers already added (new ones take the settings anyway; changing a colour in the Project Schema restyles them by itself) |
+
+This is ordinary QGIS symbology - a rule-based style with a "Boxes" and a "Pins" rule, each with its scale range and one rule per species below it - so it can be inspected and changed per layer under *Layer Properties → Symbology*. Layers added by an earlier version have no species attribute and keep their look until they are added again.
+
 ### Adding a flight that was processed before
 
 Because a target folder describes itself, a folder that has already been
@@ -205,6 +219,8 @@ labelling tool's gear button and from *Manage species…* beside any species
 list) edits three things that belong to the whole project.
 
 ### Species
+
+Each species also has a map colour, set here with **Colour…** - see [How animals are drawn](#how-animals-are-drawn).
 
 Every project has three base classes that cannot be renamed or removed:
 

@@ -98,6 +98,41 @@ class SchemaEditor:
             "SELECT species_id, name, protected, scientific_name, taxon_rank, "
             "gbif_taxon_key FROM species ORDER BY species_id")]
 
+    def species_colours(self) -> Dict[int, str]:
+        """``species_id -> colour`` of every species: the project's own
+        choice where it made one, the default otherwise
+        (:mod:`core.map_symbols`)."""
+        from . import map_symbols
+
+        overrides = map_symbols.stored_colours(self.conn)
+        colours = {}
+        for row in self.species():
+            own = overrides.get(row["species_id"])
+            colours[row["species_id"]] = (
+                own or map_symbols.default_colour(row["name"]))
+        return colours
+
+    def has_own_colour(self, species_id: int) -> bool:
+        """True when the project chose this species' colour itself."""
+        from . import map_symbols
+        return int(species_id) in map_symbols.stored_colours(self.conn)
+
+    def set_species_colour(self, species_id: int,
+                           colour: Optional[str]) -> None:
+        """Give a species its map colour (``#rrggbb``); ``None`` goes back
+        to the default. Any species, the base classes included - a colour
+        changes how it looks, not what it means."""
+        from . import map_symbols
+
+        if self.conn.execute(
+                "SELECT 1 FROM species WHERE species_id = ?",
+                (species_id,)).fetchone() is None:
+            raise SchemaError(f"No species with id {species_id}.")
+        try:
+            map_symbols.store_colour(self.conn, species_id, colour)
+        except ValueError as exc:
+            raise SchemaError(str(exc)) from exc
+
     def species_by_name(self, name: str) -> Optional[dict]:
         row = self.conn.execute(
             "SELECT species_id, name, protected, scientific_name, taxon_rank, "
@@ -219,6 +254,14 @@ class SchemaEditor:
                 f"'{row['name']}' is still in use ({where}). Reassign those "
                 "first, or rename the species instead of deleting it.")
         self.conn.execute("DELETE FROM species WHERE species_id = ?", (species_id,))
+        # Its colour goes with it: ids are never reused, but a stale entry
+        # would still be exported with the project.
+        self._drop_colour(species_id)
+
+    def _drop_colour(self, species_id: int) -> None:
+        from . import map_symbols
+        if int(species_id) in map_symbols.stored_colours(self.conn):
+            map_symbols.store_colour(self.conn, species_id, None)
 
     # ------------------------------------------------------------------
     # Enums

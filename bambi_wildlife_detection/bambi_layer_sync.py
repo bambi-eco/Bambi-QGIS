@@ -245,11 +245,18 @@ def redraw_track(target_folder: str, modality: str, track_id: int) -> dict:
         return {"removed": len(layers["track_final"] + layers["track_path"]),
                 "points": 0}
 
+    # What the animal is travels with the redrawn feature, so its colour
+    # and its sex / age indicator stay true (core.map_symbols).
+    from .core import map_symbols
+    animal = map_symbols.track_attributes(
+        target_folder, modality, [track_id]).get(int(track_id), {})
+
     last = points[-1]
     for layer in layers["track_final"]:
         _set_feature(layer, _polygon(last), {
             "track_id": track_id, "frame": last["frame"],
-            "confidence": last["confidence"], "class_id": last["class_id"]})
+            "confidence": last["confidence"], "class_id": last["class_id"],
+            **animal})
 
     if len(points) < 2:
         _remove_layers(layers["track_path"])
@@ -263,7 +270,7 @@ def redraw_track(target_folder: str, modality: str, track_id: int) -> dict:
                 "start_frame": points[0]["frame"],
                 "end_frame": points[-1]["frame"],
                 "num_detections": len(points),
-                "avg_confidence": round(avg_conf, 4)})
+                "avg_confidence": round(avg_conf, 4), **animal})
 
     _refresh_canvas()
     return {"removed": 0 if len(points) >= 2 else len(layers["track_path"]),

@@ -21,8 +21,9 @@ from qgis.PyQt.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTabWidget, QWidget, QPushButton,
     QListWidget, QListWidgetItem, QLabel, QMessageBox, QInputDialog,
     QDialogButtonBox, QComboBox, QTableWidget, QTableWidgetItem,
-    QHeaderView, QAbstractItemView,
+    QHeaderView, QAbstractItemView, QColorDialog,
 )
+from qgis.PyQt.QtGui import QColor, QIcon, QPixmap
 
 from .core import store
 from .core.schema_editor import SchemaEditor, SchemaError
@@ -78,7 +79,8 @@ class BambiSchemaDialog(QDialog):
         layout = QVBoxLayout(tab)
         layout.addWidget(QLabel(
             "Species available throughout the project. The three base classes "
-            "are part of every project and cannot be changed."))
+            "are part of every project and cannot be changed. The colour is "
+            "how a species is drawn on the map."))
 
         self.species_list = QListWidget()
         self.species_list.itemSelectionChanged.connect(self._sync_species_buttons)
@@ -91,6 +93,16 @@ class BambiSchemaDialog(QDialog):
             "Scientific name and GBIF taxon key, used when publishing to "
             "GBIF or Camtrap DP. Optional otherwise.")
         self.species_delete_btn = QPushButton("Delete")
+        self.species_colour_btn = QPushButton("Colour…")
+        self.species_colour_btn.setToolTip(
+            "The colour detections and tracks of this species are drawn in "
+            "on the map. Any species, the base classes included.")
+        self.species_colour_reset_btn = QPushButton("Default Colour")
+        self.species_colour_reset_btn.setToolTip(
+            "Go back to the colour the plugin gives this species.")
+        self.species_colour_btn.clicked.connect(self._choose_species_colour)
+        self.species_colour_reset_btn.clicked.connect(
+            self._reset_species_colour)
         self.species_add_btn.clicked.connect(self._add_species)
         self.species_rename_btn.clicked.connect(self._rename_species)
         self.species_taxonomy_btn.clicked.connect(self._edit_taxonomy)
@@ -102,11 +114,21 @@ class BambiSchemaDialog(QDialog):
         row.addWidget(self.species_taxonomy_btn)
         row.addWidget(self.species_delete_btn)
         row.addStretch()
+        row.addWidget(self.species_colour_btn)
+        row.addWidget(self.species_colour_reset_btn)
         layout.addLayout(row)
         return tab
 
+    @staticmethod
+    def _swatch(colour: str) -> QIcon:
+        pixmap = QPixmap(14, 14)
+        pixmap.fill(QColor(colour))
+        return QIcon(pixmap)
+
     def _reload_species(self) -> None:
+        selected = self._selected_species_id()
         self.species_list.clear()
+        colours = self.editor.species_colours()
         for species in self.editor.species():
             label = f"{species['species_id']:>3}  {species['name']}"
             if species["protected"]:
@@ -115,11 +137,14 @@ class BambiSchemaDialog(QDialog):
                 label += f"   - {species['scientific_name']}"
                 if species.get("gbif_taxon_key"):
                     label += f" [GBIF {species['gbif_taxon_key']}]"
-            item = QListWidgetItem(label)
+            item = QListWidgetItem(
+                self._swatch(colours[species["species_id"]]), label)
             item.setData(Qt.ItemDataRole.UserRole, species["species_id"])
             if species["protected"]:
                 item.setForeground(Qt.GlobalColor.gray)
             self.species_list.addItem(item)
+            if species["species_id"] == selected:
+                self.species_list.setCurrentItem(item)
         self._sync_species_buttons()
 
     def _selected_species_id(self):
@@ -132,6 +157,33 @@ class BambiSchemaDialog(QDialog):
         self.species_rename_btn.setEnabled(editable)
         self.species_taxonomy_btn.setEnabled(editable)
         self.species_delete_btn.setEnabled(editable)
+        # A colour changes how a species looks, not what it means, so the
+        # base classes can have one too.
+        self.species_colour_btn.setEnabled(species_id is not None)
+        own = species_id is not None and self.editor.has_own_colour(species_id)
+        self.species_colour_reset_btn.setEnabled(own)
+
+    def _choose_species_colour(self) -> None:
+        species_id = self._selected_species_id()
+        if species_id is None:
+            return
+        current = QColor(self.editor.species_colours()[species_id])
+        chosen = QColorDialog.getColor(current, self, "Species colour")
+        if not chosen.isValid():
+            return
+        try:
+            self.editor.set_species_colour(species_id, chosen.name())
+        except SchemaError as exc:
+            self._warn(exc)
+            return
+        self._reload_species()
+
+    def _reset_species_colour(self) -> None:
+        species_id = self._selected_species_id()
+        if species_id is None:
+            return
+        self.editor.set_species_colour(species_id, None)
+        self._reload_species()
 
     def _add_species(self) -> None:
         name, ok = QInputDialog.getText(self, "Add species", "Name:")
