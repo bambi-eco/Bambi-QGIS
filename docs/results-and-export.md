@@ -409,7 +409,7 @@ receives an internal id, and custom fields travel where the format has room.
 | **COCO** | detection training; carries custom fields as annotation attributes | dropped |
 | **YOLO** | training dataset: `images/`, `labels/` and `data.yaml` | dropped |
 | **MOT** | tracking benchmarks, with a sidecar for what the columns cannot hold | dropped |
-| **TRex `.npz`** | back to TRex | dropped |
+| **TRex `.npz`** | back to TRex, or into another flight with the [TRex import](pipeline.md#trex-tracklet-import): one file per track with the fields that import reads, boxes in the pixels of the extracted frames (tick *Labels already in undistorted frame space* when importing them), and `classes.txt` naming the class numbers | dropped |
 | **GeoJSON (animals)** | detections as points, or tracks as lines, in the project CRS | kept |
 | **GeoJSON (segmentations)** | SAM3 mask outlines as polygons - exported from the [Segmentation Tool](tools.md#segmentation-tool), one feature per object with prompt, frame, object id and confidence | n/a |
 | **Camtrap DP** | survey package: deployment, media, observations | kept as `blank` |

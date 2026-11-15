@@ -228,33 +228,63 @@ def export_trex_npz(target_folder: str, modality: str, output_folder: str,
                     include_not_an_animal: bool = False, log_fn=None) -> List[str]:
     """Write one ``.npz`` per track, in the shape the TRex importer reads.
 
-    Closes the loop with ``run_trex_import``: BAMBI has been able to read TRex
-    tracklets since 5.x and never to write them, so tracks corrected here could
-    not go back the way they came.
+    Closes the loop with ``run_trex_import``: tracks corrected here can go
+    back the way they came. Each file carries what
+    :func:`core.trex_tracklets.read_tracklets` looks for - ``id``, ``frame``,
+    ``detection_p``, ``detection_class`` and the box as two pose points
+    (``poseX0``/``poseY0`` its top left corner, ``poseX1``/``poseY1`` its
+    bottom right) - and ``video_size`` where the frame size is known.
+
+    It used to write ``X``, ``Y``, ``conf`` and ``cls``, which that importer
+    does not read: the export could not be imported again.
+
+    The boxes are in the pixels of the extracted frames, so an import of
+    these files needs "Labels already in undistorted frame space" ticked.
+    ``detection_class`` is a class number per species, listed in
+    ``classes.txt`` beside the tracklets.
     """
     import numpy as np
 
-    rows = common.load_detections(
-        target_folder, modality, include_not_an_animal, include_geo=False)
+    vocabulary = common.load_vocabulary(target_folder)
+    rows, _animals = common.load_export_rows(
+        target_folder, modality, vocabulary, include_not_an_animal,
+        include_geo=False)
     grouped = common.tracks_of(rows)
     if not grouped:
         hint = common.no_tracks_hint(target_folder, modality)
         raise common.ExportError(f"No tracks to export.{hint}")
 
+    mapping, names = common.class_map(
+        (row["species_id"] for points in grouped.values() for row in points),
+        vocabulary["species"])
+    size = common.frame_size(target_folder, modality)
+
     common.ensure_folder(output_folder)
     written = []
     for track_id, points in sorted(grouped.items()):
         ordered = sorted(points, key=lambda r: r["frame"])
+        arrays = {
+            "id": np.array([track_id], dtype=np.int64),
+            "frame": np.array([p["frame"] for p in ordered], dtype=np.int64),
+            "detection_p": np.array(
+                [p["confidence"] for p in ordered], dtype=np.float32),
+            "detection_class": np.array(
+                [mapping[p["species_id"]] for p in ordered], dtype=np.int64),
+            "poseX0": np.array([p["x1"] for p in ordered], dtype=np.float32),
+            "poseY0": np.array([p["y1"] for p in ordered], dtype=np.float32),
+            "poseX1": np.array([p["x2"] for p in ordered], dtype=np.float32),
+            "poseY1": np.array([p["y2"] for p in ordered], dtype=np.float32),
+        }
+        if size is not None:
+            arrays["video_size"] = np.array(size, dtype=np.int64)
         path = os.path.join(output_folder, f"track_{track_id}.npz")
-        np.savez(
-            path,
-            frame=np.array([p["frame"] for p in ordered], dtype=np.int64),
-            X=np.array([[p["x1"], p["x2"]] for p in ordered], dtype=np.float32),
-            Y=np.array([[p["y1"], p["y2"]] for p in ordered], dtype=np.float32),
-            conf=np.array([p["confidence"] for p in ordered], dtype=np.float32),
-            cls=np.array([p["species_id"] for p in ordered], dtype=np.int64),
-        )
+        np.savez(path, **arrays)
         written.append(path)
+
+    with open(os.path.join(output_folder, "classes.txt"), "w",
+              encoding="utf-8") as fh:
+        for index, name in enumerate(names):
+            fh.write(f"{index} {name}\n")
 
     if log_fn:
         log_fn(f"TRex: {len(written)} tracklet file(s) → {output_folder}")

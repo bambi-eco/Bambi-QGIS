@@ -553,7 +553,63 @@ def test_trex_round_trips_through_numpy(survey, tmp_path):
     written = exporters.export_trex_npz(survey, "t", folder)
     data = np.load(sorted(written)[0])
     assert list(data["frame"]) == [0, 1]
-    assert data["X"].shape == (2, 2)
+    assert data["poseX0"].shape == (2,) and data["poseY1"].shape == (2,)
+
+
+def test_trex_export_is_what_the_trex_import_reads(survey, tmp_path):
+    """"Closes the loop" - but it wrote X, Y, conf and cls, and the importer
+    reads detection_p, detection_class and pose points: importing an export
+    ended in a KeyError."""
+    from bambi_wildlife_detection.core import trex_tracklets
+
+    folder = str(tmp_path / "trex")
+    exporters.export_trex_npz(survey, "t", folder)
+
+    boxes, _size = trex_tracklets.read_tracklets(folder)
+
+    stored = common.load_detections(survey, "t", include_geo=False)
+    assert [(b["frame"], b["x1"], b["y1"], b["x2"], b["y2"])
+            for b in sorted(boxes, key=lambda b: (b["track_id"], b["frame"]))] \
+        == [(r["frame"], r["x1"], r["y1"], r["x2"], r["y2"])
+            for r in sorted(stored, key=lambda r: (r["track_id"], r["frame"]))]
+    assert {b["track_id"] for b in boxes} == {r["track_id"] for r in stored}
+    assert [b["confidence"] for b in boxes if b["frame"] == 1] == \
+        pytest.approx([0.8])
+
+
+def test_trex_classes_are_numbered_and_listed(survey, tmp_path):
+    """Internal species ids are sparse and can be negative; no id leaves."""
+    from bambi_wildlife_detection.core import trex_tracklets
+
+    folder = str(tmp_path / "trex")
+    exporters.export_trex_npz(survey, "t", folder, include_not_an_animal=True)
+    boxes, _size = trex_tracklets.read_tracklets(folder)
+
+    with open(os.path.join(folder, "classes.txt"), encoding="utf-8") as fh:
+        listed = dict(line.rstrip("\n").split(" ", 1) for line in fh)
+    assert sorted(int(index) for index in listed) == list(range(len(listed)))
+    assert "not-an-animal" in listed.values()
+    assert {b["class_id"] for b in boxes} == {int(i) for i in listed}
+
+
+def test_trex_export_names_the_frame_size_when_it_is_known(survey, tmp_path):
+    import numpy as np
+    cv2 = pytest.importorskip("cv2")
+
+    frames = os.path.join(survey, "frames_t")
+    os.makedirs(frames)
+    cv2.imwrite(os.path.join(frames, "frame_000000.png"),
+                np.zeros((512, 640, 3), dtype=np.uint8))
+    folder = str(tmp_path / "trex")
+    written = exporters.export_trex_npz(survey, "t", folder)
+    assert list(np.load(written[0])["video_size"]) == [640, 512]
+
+
+def test_trex_export_without_frames_leaves_the_size_out(survey, tmp_path):
+    import numpy as np
+
+    written = exporters.export_trex_npz(survey, "t", str(tmp_path / "trex"))
+    assert "video_size" not in np.load(written[0])
 
 
 def test_trex_without_tracks_is_refused(tmp_path):

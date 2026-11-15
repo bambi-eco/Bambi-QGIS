@@ -335,3 +335,28 @@ def test_raw_boxes_need_the_video_size(flight):
     with pytest.raises(ValueError, match="Raw video size unknown"):
         _import(flight, trex_already_undistorted=False,
                 thermal_calibration_data={"mtx": MATRIX, "dist": DISTORTION})
+
+
+# ---------------------------------------------------------------------------
+# Out and back in
+# ---------------------------------------------------------------------------
+
+def test_exported_tracklets_can_be_imported_again(flight, tmp_path):
+    """The export wrote arrays the import does not read."""
+    from bambi_wildlife_detection.core import exporters
+
+    _import(flight)
+    root = flight["root"]
+    before = sorted(
+        [(p["frame"], round(p["x1"], 4), round(p["y1"], 4)) for p in points]
+        for points in pipeline_outputs.geo_tracks(root, "t").values())
+
+    exported = str(tmp_path / "exported")
+    exporters.export_trex_npz(root, "t", exported)
+    _import(flight, trex_npz_dir=exported)
+
+    after = sorted(
+        [(p["frame"], round(p["x1"], 4), round(p["y1"], 4)) for p in points]
+        for points in pipeline_outputs.geo_tracks(root, "t").values())
+    assert after == before
+    assert detection_store.detection_counts(root, "t") == {"trex": 6}
