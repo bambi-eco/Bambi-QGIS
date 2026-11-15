@@ -1,29 +1,21 @@
 # -*- coding: utf-8 -*-
-"""Camtrap DP and Darwin Core Archive exporters (EXCHANGE_FORMAT_PLAN.md §8.1).
-
-These are the two formats that make a BAMBI survey publishable rather than just
-portable, and they are the reason the extensible attribute model was worth
-building: both carry arbitrary observation fields natively, so a user-defined
-field reaches GBIF without anyone writing mapping code for it.
-
-**Camtrap DP** (Frictionless Data) models camera-trap surveys as deployments,
-media and observations. A drone flight maps cleanly: the flight is the
-deployment, extracted frames are media, detections are observations.
+"""Darwin Core Archive exporter, and what it shares with Camtrap DP.
 
 **Darwin Core Archive** is the GBIF publishing format: an ``occurrence.txt``
 plus ``meta.xml`` describing it. One occurrence per *track* rather than per
 detection - a track is one animal seen once, whereas emitting every detection
 would publish the same roe deer two hundred times.
 
-Both need world coordinates in latitude/longitude. The store holds them in the
+It needs world coordinates in latitude/longitude. The store holds them in the
 project CRS, so *epsg* must be given and ``pyproj`` must be available; without
 it the export refuses rather than publishing coordinates in the wrong system.
+
+The Camtrap DP exporter is in :mod:`.camtrap`; the two share how a species is
+named and how sex, age and the approval are worded.
 """
 
 import csv
-import json
 import os
-from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from . import common
@@ -121,150 +113,6 @@ def _life_stage(attributes: dict) -> str:
 def _approved(attributes: dict) -> bool:
     """Whether a person has confirmed what is said about the animal."""
     return attributes.get("approved") in (True, 1, "true", "True", "yes")
-
-
-# ---------------------------------------------------------------------------
-# Camtrap DP
-# ---------------------------------------------------------------------------
-
-def export_camtrap_dp(target_folder: str, modality: str, output_folder: str,
-                      epsg: Optional[int] = None,
-                      deployment_id: str = "",
-                      include_not_an_animal: bool = True,
-                      include_images: bool = True, log_fn=None) -> str:
-    """Write a Camtrap DP package: deployments, media, observations.
-
-    ``not-an-animal`` is kept by default and published as an observation of
-    type ``blank``: a survey record should say what was looked at and rejected,
-    not silently omit it.
-
-    *include_images* copies the frames into ``media/`` and points ``filePath``
-    there, which is what makes the package self-contained. Without it the paths
-    stay relative to the target folder, so the package only resolves next to
-    the flight it came from.
-    """
-    vocabulary = common.load_vocabulary(target_folder)
-    taxonomy = vocabulary["taxonomy"]
-    rows, _animals = common.load_export_rows(
-        target_folder, modality, vocabulary, include_not_an_animal)
-    frames = {f["frame"]: f for f in common.load_frames(target_folder, modality)}
-    rows = common.without_duplicated(rows, frames)
-    common.ensure_folder(output_folder)
-
-    deployment_id = deployment_id or os.path.basename(
-        os.path.normpath(target_folder)) or "deployment"
-
-    located = [row for row in rows if row.get("gx1") is not None]
-    lonlat = _to_wgs84(
-        [((r["gx1"] + r["gx2"]) / 2.0, (r["gy1"] + r["gy2"]) / 2.0)
-         for r in located], epsg) if located else []
-    positions = {row["detection_id"]: pair
-                 for row, pair in zip(located, lonlat)}
-
-    lons = [lon for lon, _ in lonlat] or [0.0]
-    lats = [lat for _, lat in lonlat] or [0.0]
-    timestamps = [t for t in
-                  (_timestamp(frames, f) for f in sorted(frames)) if t]
-
-    deployments = os.path.join(output_folder, "deployments.csv")
-    with open(deployments, "w", encoding="utf-8", newline="") as fh:
-        writer = csv.writer(fh)
-        writer.writerow([
-            "deploymentID", "locationID", "latitude", "longitude",
-            "deploymentStart", "deploymentEnd", "cameraModel",
-            "deploymentComments"])
-        writer.writerow([
-            deployment_id, deployment_id,
-            f"{sum(lats) / len(lats):.7f}", f"{sum(lons) / len(lons):.7f}",
-            timestamps[0] if timestamps else "",
-            timestamps[-1] if timestamps else "",
-            f"BAMBI drone survey ({'thermal' if modality == 't' else 'RGB'})",
-            "Aerial survey exported from the BAMBI QGIS plugin"])
-
-    used_frames = sorted({row["frame"] for row in rows})
-    used_names = [frames.get(frame, {}).get(
-        "imagefile", f"frame_{frame:06d}.jpg") for frame in used_frames]
-
-    copied = None
-    if include_images:
-        copied = common.copy_frames(target_folder, modality, used_names,
-                                    os.path.join(output_folder, "media"))
-
-    media_path = os.path.join(output_folder, "media.csv")
-    with open(media_path, "w", encoding="utf-8", newline="") as fh:
-        writer = csv.writer(fh)
-        writer.writerow(["mediaID", "deploymentID", "timestamp",
-                         "filePath", "fileName", "captureMethod"])
-        for frame, name in zip(used_frames, used_names):
-            # The path has to describe where the file actually is, so it
-            # follows whether the media travelled with the package.
-            path = os.path.join("media" if include_images
-                                else f"frames_{modality}", name)
-            writer.writerow([
-                f"{deployment_id}-{frame}", deployment_id,
-                _timestamp(frames, frame), path, name, "timeLapse"])
-
-    extra_names = sorted({key for row in rows for key in row["properties"]})
-
-    observations = os.path.join(output_folder, "observations.csv")
-    with open(observations, "w", encoding="utf-8", newline="") as fh:
-        writer = csv.writer(fh)
-        writer.writerow([
-            "observationID", "deploymentID", "mediaID", "eventID",
-            "observationLevel", "observationType", "scientificName",
-            "vernacularName", "taxonID",
-            "count", "latitude", "longitude", "classificationProbability",
-        ] + extra_names)
-        for row in rows:
-            lon, lat = positions.get(row["detection_id"], (None, None))
-            is_blank = row["species_id"] == common.NOT_AN_ANIMAL
-            attributes = row["properties"]
-            writer.writerow([
-                f"{deployment_id}-obs-{row['detection_id']}",
-                deployment_id,
-                f"{deployment_id}-{row['frame']}",
-                (f"{deployment_id}-track-{row['track_id']}"
-                 if row.get("track_id") is not None else ""),
-                "media",
-                "blank" if is_blank else "animal",
-                # scientificName only when there is one; the working label goes
-                # to vernacularName, where it belongs.
-                "" if is_blank else _scientific_name(
-                    taxonomy.get(row["species_id"], {})),
-                "" if is_blank else vocabulary["species"].get(
-                    row["species_id"], ""),
-                "" if is_blank else _gbif_taxon_id(
-                    taxonomy.get(row["species_id"], {})),
-                1,
-                f"{lat:.7f}" if lat is not None else "",
-                f"{lon:.7f}" if lon is not None else "",
-                row["confidence"],
-            ] + [attributes.get(name, "") for name in extra_names])
-
-    package = {
-        "name": deployment_id.lower().replace(" ", "-"),
-        "profile": "https://raw.githubusercontent.com/tdwg/camtrap-dp/1.0/camtrap-dp-profile.json",
-        "created": datetime.now(timezone.utc).isoformat(),
-        "title": f"BAMBI aerial survey - {deployment_id}",
-        "sources": [{"title": "BAMBI QGIS plugin"}],
-        "resources": [
-            {"name": "deployments", "path": "deployments.csv",
-             "profile": "tabular-data-resource"},
-            {"name": "media", "path": "media.csv",
-             "profile": "tabular-data-resource"},
-            {"name": "observations", "path": "observations.csv",
-             "profile": "tabular-data-resource"},
-        ],
-    }
-    package_path = os.path.join(output_folder, "datapackage.json")
-    with open(package_path, "w", encoding="utf-8") as fh:
-        json.dump(package, fh, indent=2)
-
-    if log_fn:
-        log_fn(f"Camtrap DP: {len(rows)} observation(s) → {output_folder}")
-        for line in common.describe_copy(copied) if copied else []:
-            log_fn(f"Camtrap DP: {line}")
-    return output_folder
 
 
 # ---------------------------------------------------------------------------

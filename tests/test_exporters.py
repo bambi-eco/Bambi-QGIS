@@ -736,8 +736,16 @@ def test_camtrap_observations_carry_species_and_fields(survey, tmp_path):
         rows = list(csv.DictReader(fh))
     animals = [r for r in rows if r["observationType"] == "animal"]
     assert animals[0]["scientificName"] == "Capreolus capreolus"
-    assert animals[0]["vernacularName"] == "roe deer"
-    assert animals[0]["occlusion"] == "occluded"
+    # a custom field has no column in the format: it is a tag
+    assert "occlusion:occluded" in animals[0]["observationTags"]
+    assert "collar:R-114" in animals[0]["observationTags"]
+    # ... and the working name is the taxon's vernacular name
+    with open(os.path.join(folder, "datapackage.json"),
+              encoding="utf-8") as fh:
+        taxa = {taxon["scientificName"]: taxon
+                for taxon in json.load(fh)["taxonomic"]}
+    assert taxa["Capreolus capreolus"]["vernacularNames"] == \
+        {"eng": "roe deer"}
 
 
 def test_camtrap_records_false_positives_as_blank(survey, tmp_path):
@@ -748,8 +756,10 @@ def test_camtrap_records_false_positives_as_blank(survey, tmp_path):
     with open(os.path.join(folder, "observations.csv"), encoding="utf-8") as fh:
         rows = list(csv.DictReader(fh))
     blanks = [r for r in rows if r["observationType"] == "blank"]
-    assert len(blanks) == 1
-    assert blanks[0]["scientificName"] == ""
+    # the box, and the track it is the only box of
+    assert sorted(r["observationLevel"] for r in blanks) == ["event", "media"]
+    assert {r["scientificName"] for r in blanks} == {""}
+    assert {r["count"] for r in blanks} == {""}
 
 
 def test_camtrap_coordinates_are_latitude_longitude(survey, tmp_path):
@@ -758,9 +768,15 @@ def test_camtrap_coordinates_are_latitude_longitude(survey, tmp_path):
     exporters.export_camtrap_dp(survey, "t", folder, epsg=32633)
     with open(os.path.join(folder, "observations.csv"), encoding="utf-8") as fh:
         rows = list(csv.DictReader(fh))
-    latitudes = [float(r["latitude"]) for r in rows if r["latitude"]]
-    assert all(-90 <= lat <= 90 for lat in latitudes)
+    latitudes = [float(tag.split(":", 1)[1])
+                 for r in rows for tag in r["observationTags"].split(" | ")
+                 if tag.startswith("latitude:")]
+    assert len(latitudes) == len(rows)
     assert all(45 < lat < 55 for lat in latitudes)     # UTM 33N, ~5300 km north
+    with open(os.path.join(folder, "deployments.csv"), encoding="utf-8") as fh:
+        deployment = next(csv.DictReader(fh))
+    assert 45 < float(deployment["latitude"]) < 55
+    assert 10 < float(deployment["longitude"]) < 20
 
 
 def test_camtrap_media_reference_the_frames(survey, tmp_path):
@@ -998,9 +1014,15 @@ def test_camtrap_separates_scientific_from_vernacular(survey, tmp_path):
         rows = [r for r in csv.DictReader(fh)
                 if r["observationType"] == "animal"]
 
-    roe = [r for r in rows if r["vernacularName"] == "roe deer"][0]
-    assert roe["scientificName"] == "Capreolus capreolus"
+    assert "Capreolus capreolus" in {r["scientificName"] for r in rows}
+    with open(os.path.join(folder, "datapackage.json"),
+              encoding="utf-8") as fh:
+        taxa = {taxon["scientificName"]: taxon
+                for taxon in json.load(fh)["taxonomic"]}
+    roe = taxa["Capreolus capreolus"]
     assert roe["taxonID"] == "https://www.gbif.org/species/2440947"
+    assert roe["taxonRank"] == "species"
+    assert roe["vernacularNames"] == {"eng": "roe deer"}
 
 
 # ---------------------------------------------------------------------------
@@ -1526,9 +1548,12 @@ def test_camtrap_observations_name_the_animals_species(classified, tmp_path):
     of_first = [row for row in rows
                 if row["eventID"].endswith(f"-track-{first}")]
 
-    assert len(of_first) == 3
+    assert sorted(row["observationLevel"] for row in of_first) == \
+        ["event", "media", "media", "media"]
     assert {row["scientificName"] for row in of_first} == \
         {"Capreolus capreolus"}
+    assert {(row["sex"], row["lifeStage"]) for row in of_first} == \
+        {("female", "adult")}
 
 
 def test_darwin_core_publishes_a_classified_animal(classified, tmp_path):

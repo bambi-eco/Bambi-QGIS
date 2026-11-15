@@ -15,7 +15,8 @@ Two families:
   not one).
 """
 
-from .biodiversity import export_camtrap_dp, export_darwin_core
+from .biodiversity import export_darwin_core
+from .camtrap import export_camtrap_dp
 from .common import ExportError
 from .detections import export_coco, export_mot, export_yolo
 from .geo import (

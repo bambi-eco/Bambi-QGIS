@@ -412,7 +412,7 @@ receives an internal id, and custom fields travel where the format has room.
 | **TRex `.npz`** | back to TRex, or into another flight with the [TRex import](pipeline.md#trex-tracklet-import): one file per track with the fields that import reads, boxes in the pixels of the extracted frames (tick *Labels already in undistorted frame space* when importing them), and `classes.txt` naming the class numbers | dropped |
 | **GeoJSON (animals)** | detections as points, or tracks as lines, in the project CRS | kept |
 | **GeoJSON (segmentations)** | SAM3 mask outlines as polygons - exported from the [Segmentation Tool](tools.md#segmentation-tool), one feature per object with prompt, frame, object id and confidence | n/a |
-| **Camtrap DP** | survey package: deployment, media, observations | kept as `blank` |
+| **Camtrap DP** | survey package after [Camtrap DP 1.0](https://camtrap-dp.tdwg.org): deployment, media, observations (see below) | kept as `blank` |
 | **Darwin Core Archive** | GBIF publishing | never included |
 
 Things worth knowing:
@@ -466,6 +466,52 @@ Things worth knowing:
 
   `val` in `data.yaml` names the training images so the file is valid as
   written; split it before believing any validation number.
+
+### The Camtrap DP package
+
+The package follows **Camtrap DP 1.0**: `datapackage.json` names the profile
+and the three table schemas, and each table has every field of its schema, in
+the schema's order (readers take the column names from the schema and the
+values by position).
+
+- **Deployment** - the flight. Its location is the centre of the animals
+  seen, and `coordinateUncertainty` says how far the furthest one is from it.
+- **Media** - the frames that carry a box, with their capture time,
+  `fileMediatype` and a `filePath` inside the package (`media/…` with
+  *Include images*, else relative to the flight's folder).
+- **Observations** - two kinds, as the format provides:
+  - one **media** observation per box, with its place on the frame
+    (`bboxX` … `bboxHeight`, as fractions of the frame);
+  - one **event** observation per tracked animal, from its first frame to
+    its last, with its species, `sex` and `lifeStage`. The boxes of an animal
+    carry the same `eventID`.
+
+  `classificationMethod` is `human` for a hand-labelled box and for an animal
+  approved in the inventory or the labelling tool, otherwise `machine` with
+  the detector's confidence as `classificationProbability`.
+- What the format has no column for is in `observationTags`, as `key:value`
+  pairs: the **position** of the animal (`latitude`, `longitude` - a
+  deployment has one location, and a drone's animals are spread over the
+  flight), your custom fields, and the plugin's name for a species that has
+  no scientific name yet.
+- The package's `taxonomic` list names every species seen that has a
+  scientific name, with its GBIF taxon key where one is set.
+
+Three things are yours to check before publishing: **`contributors`** (the
+plugin enters itself - add the people responsible), **`project.samplingDesign`**
+(`systematicRandom`, which fits a flight along planned lines) and the
+licences, which the plugin does not know.
+
+The export **refuses** rather than write something false: without the target
+CRS, when no box is geo-referenced (the deployment needs a location - it used
+to be written as latitude 0, longitude 0), and when frames have no capture
+time with a time zone.
+
+Before 9.1 the package named the Camtrap DP profile and met little of it: no
+`contributors`, `project`, `spatial`, `temporal` or `taxonomic`, no table
+schemas, no `filePublic` / `fileMediatype`, no `eventStart` / `eventEnd`, and
+columns of its own (`vernacularName`, `taxonID`, `latitude`, `longitude`, one
+per custom field) that the schema does not know.
 
 ### The MOT sequence
 
