@@ -41,6 +41,7 @@ from .dock.layer_groups import LayerGroupsMixin
 from .dock.settings import SettingsMixin
 from .dock.inspectors import InspectorsMixin
 from .dock.run_panel import RunPanelMixin
+from .dock.step_runner import StepRunner
 
 # What was importable from this module before its code was split by tab, and
 # still is: the tests and the tools take these names from here.
@@ -85,10 +86,11 @@ class BambiDockWidget(
         self.iface = iface
         self.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
 
-        # Processing state
+        # Processing state: the steps themselves, and what runs them one at
+        # a time on a thread of its own (self.worker and self.worker_thread
+        # are the runner's - see dock/run_panel.py).
         self.processor = BambiProcessor()
-        self.worker = None
-        self.worker_thread = None
+        self.steps = StepRunner()
 
         # Track if initial check has been done
         self._initial_check_done = False

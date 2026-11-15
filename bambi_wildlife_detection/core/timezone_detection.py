@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Timezone-offset detection for flight inputs.
 
-Moved from ``bambi_dock_widget.py`` (whose methods delegate here). SRT and
+Moved from the dock widget (whose methods delegate here). SRT and
 EXIF timestamps are local wall-clock time while the AirData log is UTC; the
 offset between them is the timezone offset the extraction stages must apply.
 

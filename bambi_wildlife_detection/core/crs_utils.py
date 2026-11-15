@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """EPSG parsing and UTM-zone detection.
 
-Moved from ``bambi_dock_widget.py`` (whose methods delegate here). The
+Moved from the dock widget (whose methods delegate here). The
 pipeline requires a metric UTM CRS; the zone is derived from the flight's
 first valid GPS position in the AirData log.
 """

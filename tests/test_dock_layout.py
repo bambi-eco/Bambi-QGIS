@@ -143,6 +143,27 @@ def test_the_dock_module_is_the_frame_only():
     assert len(methods) <= 12, methods
 
 
+def test_the_step_runner_is_an_object_that_knows_no_form():
+    """The one part that is not mixed in: it is handed the step and the
+    settings, and whoever shows a running step is told through callbacks."""
+    tree = _tree(os.path.join(DOCK, "step_runner.py"))
+    runner = next(node for node in tree.body
+                  if isinstance(node, ast.ClassDef) and node.name == "StepRunner")
+    assert runner.bases == []
+    assert {"start", "ended", "cancel", "shut_down",
+            "is_running"} <= set(_members(runner))
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            imported.add(node.module or "")
+    assert "qgis.PyQt.QtWidgets" not in imported
+    # the dock makes one, and its parts reach it as self.steps
+    main = open(MAIN, encoding="utf-8").read()
+    assert "self.steps = StepRunner()" in main
+    panel = open(os.path.join(DOCK, "run_panel.py"), encoding="utf-8").read()
+    assert "self.steps.start(" in panel and "QThread" not in panel
+
+
 def test_the_package_says_what_is_where():
     described = ast.get_docstring(_tree(os.path.join(DOCK, "__init__.py")))
     for module in _part_modules():

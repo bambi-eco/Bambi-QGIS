@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Detection of already-completed pipeline steps in a target folder.
 
-Moved from ``bambi_dock_widget._check_existing_outputs`` (which delegates
+Moved from the dock widget's ``_check_existing_outputs`` (which delegates
 here and maps the result onto its status labels). The camera selection of
 each step is passed in as a suffix dict so this stays widget-free.
 """

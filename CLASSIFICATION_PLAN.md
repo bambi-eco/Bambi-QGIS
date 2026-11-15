@@ -56,7 +56,7 @@ Face, so the user requests access themselves and supplies a token. Needs
 
 ## 2. Where it lands in the UI
 
-**Processing tab** (`bambi_dock_widget.py`, `proc_steps_layout`), between the
+**Processing tab** (`dock/step_tabs.py`, `proc_steps_layout`), between the
 tracking block and the SAM3 block. SAM3 renumbers A3 → A4.
 
 ```
@@ -683,7 +683,7 @@ crops).
 | `core/labelling.py` | `OCCLUSION_LEVELS`; import `_FrameMatcher` from `core.frame_matching` |
 | `bambi_labelling_tool.py` | four `occlusion="none"` defaults → `OCCLUSION_LEVELS[0]` |
 | `bambi_processing.py` | `run_track_matching`, `run_embeddings`, `run_classification`, `run_life_stage`; `ProcessingWorker` dispatch |
-| `bambi_dock_widget.py` | Classification config sub-tab, A3 rows, statuses, `get_config`, QGIS layer, info text |
+| the dock (`dock/classification_settings.py`, `step_tabs.py`, `step_status.py`, `settings.py`, `result_layers.py`) | Classification config sub-tab, A3 rows, statuses, `get_config`, QGIS layer, info text |
 | `bambi_classification_model_dialog.py` | **new** - per-species model choice for sex and life stage |
 | `bambi_label_mapping_dialog.py` | **new** - head class → project value mapping (§5.3) |
 | `bambi_dependency_manager.py` | Classification dependency group |

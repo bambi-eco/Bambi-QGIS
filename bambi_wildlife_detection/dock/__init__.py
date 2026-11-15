@@ -4,7 +4,8 @@
 ``bambi_dock_widget.BambiDockWidget`` is one class when the plugin runs -
 every control is an attribute of the dock widget itself - and its code is
 kept here, one module per tab or concern. Each module holds a class that is
-mixed into ``BambiDockWidget``; none of them is a widget of its own.
+mixed into ``BambiDockWidget``; none of them is a widget of its own. The one
+exception is the step runner, which is an object the dock has.
 
 The tabs
     ``input_tab``                the Input tab
@@ -17,6 +18,8 @@ The tabs
 
 What they share
     ``run_panel``                starting a step, its progress, the log
+    ``step_runner``              the step runner: one step at a time, on a
+                                 thread of its own (an object, ``dock.steps``)
     ``flights``                  the flights of a project, switching between them
     ``settings``                 reading the form (``get_config``), keeping it
     ``step_status``              what has been done, Reset Step

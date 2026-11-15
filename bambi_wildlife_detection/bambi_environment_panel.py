@@ -14,8 +14,8 @@ Mixed into :class:`BambiDockWidget`; it adds
 * the **Habitat Context** group on the Survey Analytics tab - the summary,
   its charts and the per-track layer.
 
-Kept out of ``bambi_dock_widget.py`` so the feature can be read in one
-place.
+A class of its own, like the parts of the dock in ``dock/``, so the
+feature can be read in one place.
 """
 
 import os

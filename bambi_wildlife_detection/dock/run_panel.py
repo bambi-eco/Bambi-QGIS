@@ -1,24 +1,23 @@
 # -*- coding: utf-8 -*-
-"""Running a step: start, progress, the log.
+"""Running a step, as the panel shows it: start, progress, the log.
 
-Whichever tab a step is started from, it runs here: one at a time, with the
+Whichever tab a step is started from, it runs one at a time, with the
 progress bar and Abort above the tabs and the log below them. This part
-starts the step, shows how it goes and what it writes, and puts the panel
-back when it has ended - or when it is aborted, or the plugin is unloaded
-while it runs.
+gets the step ready - the settings, the questions that have to be asked
+first - and hands it to the step runner (``step_runner``, here
+``self.steps``); it shows how the step goes and what it writes, and puts
+the panel back when the step has ended or was aborted.
 """
 
 import json
 import os
 
-from qgis.PyQt.QtCore import QThread
 from qgis.PyQt.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QPushButton, QFileDialog,
     QTextEdit, QMessageBox,
 )
 from qgis.PyQt.QtGui import QFont
 
-from ..bambi_processing import ProcessingWorker
 from ..bambi_environment import ENVIRONMENT_STEPS
 from ..core import quiet
 
@@ -104,15 +103,35 @@ class RunPanelMixin:
             return
         self.log(f"Log exported to {path}")
 
+    @property
+    def worker(self):
+        """The worker of the running step, ``None`` while no step runs -
+        the step runner's, under the name the dock has always had for it."""
+        return self.steps.worker
+
+    @worker.setter
+    def worker(self, value):
+        self.steps.worker = value
+
+    @property
+    def worker_thread(self):
+        """The thread of the step that was started last (the step
+        runner's)."""
+        return self.steps.thread
+
+    @worker_thread.setter
+    def worker_thread(self, value):
+        self.steps.thread = value
+
     def _step_is_running(self) -> bool:
         """True while a background step runs.
 
-        ``worker`` is what :meth:`start_worker` sets. The flight guards used
-        to look at an attribute nothing ever set, so they never held: flights
-        could be switched, added and removed under a running step, whose log
-        and status then described a flight no longer shown.
+        The flight guards used to look at an attribute nothing ever set, so
+        they never held: flights could be switched, added and removed under
+        a running step, whose log and status then described a flight no
+        longer shown.
         """
-        return self.worker is not None
+        return self.steps.is_running()
 
     #: Survey Analytics steps: they run on config["survey"] (core.survey).
     _SURVEY_STEPS = frozenset({
@@ -122,7 +141,7 @@ class RunPanelMixin:
 
     def start_worker(self, step: str):
         """Start a background worker for the given step."""
-        if self.worker is not None:
+        if self.steps.is_running():
             QMessageBox.warning(self, "Processing", "Another process is already running.")
             return
 
@@ -150,22 +169,15 @@ class RunPanelMixin:
             except Exception:  # no survey, no area
                 quiet.detail("No survey is set up: the step runs without a survey area")
 
-        self.worker_thread = QThread()
-        self.worker = ProcessingWorker(self.processor, step, config)
-        self.worker.moveToThread(self.worker_thread)
+        self.steps.start(
+            self.processor, step, config,
+            finished=self.on_worker_finished, error=self.on_worker_error,
+            progress=self.on_worker_progress, log=self.log,
+            starting=lambda: self._show_step_running(step))
 
-        # Connect signals
-        self.worker_thread.started.connect(self.worker.run)
-        self.worker.finished.connect(self.on_worker_finished)
-        self.worker.error.connect(self.on_worker_error)
-        self.worker.progress.connect(self.on_worker_progress)
-        self.worker.log.connect(self.log)
-
-        # Cleanup connections
-        self.worker.finished.connect(self.worker_thread.quit)
-        self.worker.finished.connect(self.worker.deleteLater)
-        self.worker_thread.finished.connect(self.worker_thread.deleteLater)
-
+    def _show_step_running(self, step: str) -> None:
+        """The panel while a step runs: no other can be started, this one
+        can be aborted."""
         # Update UI
         self.set_buttons_enabled(False)
         self.abort_btn.setEnabled(True)  # Enable abort button during processing
@@ -173,43 +185,18 @@ class RunPanelMixin:
         self.progress_bar.setValue(0)
 
         self.log(f"Starting {step}...")
-        self.worker_thread.start()
 
     def shut_down(self) -> None:
         """Before the dock is removed (the plugin is unloaded or reloaded):
-        cancel the running step and let its thread end by itself.
-
-        The dock used to be deleted with the step still running, and its
-        thread object with it - which Qt answers by aborting the process:
-        unloading the plugin during a run took QGIS down. The step stops at
-        its next check; until then its thread is kept alive outside the
-        dock (``gui_utils.let_thread_finish``).
-        """
-        from ..gui_utils import let_thread_finish
-
-        worker, thread = self.worker, self.worker_thread
-        self.worker = None
-        self.worker_thread = None
-        if worker is not None:
-            try:
-                worker.cancel()
-                for signal in (worker.finished, worker.error,
-                               worker.progress, worker.log):
-                    try:
-                        signal.disconnect()
-                    except (TypeError, RuntimeError):  # nosec B110
-                        pass
-                # ... but the thread still has to be told when it is done
-                worker.finished.connect(thread.quit)
-            except RuntimeError:  # nosec B110 - already deleted by Qt
-                pass
-        let_thread_finish(thread, worker, wait_ms=1000)
+        cancel the running step and let its thread end by itself
+        (``StepRunner.shut_down``)."""
+        self.steps.shut_down()
 
     def on_worker_finished(self, step: str, success: bool):
         """Handle worker completion."""
         self.set_buttons_enabled(True)
         self.abort_btn.setEnabled(False)  # Disable abort button when done
-        self.worker = None
+        self.steps.ended()
 
         if success:
             self.update_status(step, "🟢 Completed")
@@ -274,7 +261,7 @@ class RunPanelMixin:
         """Handle worker error."""
         self.set_buttons_enabled(True)
         self.abort_btn.setEnabled(False)  # Disable abort button on error
-        self.worker = None
+        self.steps.ended()
         self.update_status(step, "🔴 Error")
         self.log(f"ERROR: {error_msg}")
         QMessageBox.critical(self, "Processing Error", error_msg)
@@ -285,12 +272,12 @@ class RunPanelMixin:
 
     def _abort_current_process(self):
         """Abort the currently running process."""
-        if self.worker is not None:
+        if self.steps.is_running():
             self.log("Aborting current process...")
             self.abort_btn.setEnabled(False)  # Prevent multiple clicks
             # Aborting stops the whole "Run All Four" queue, not one source.
             self._environment_queue = []
-            self.worker.cancel()
+            self.steps.cancel()
             # The worker will emit finished signal when it detects cancellation
 
     def set_buttons_enabled(self, enabled: bool):

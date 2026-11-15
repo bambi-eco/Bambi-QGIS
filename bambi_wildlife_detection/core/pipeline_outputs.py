@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Readers for pipeline output files used by the QGIS layer builders.
 
-Moved from ``bambi_dock_widget.py`` (whose methods delegate here). Further
+Moved from the dock widget (whose methods delegate here). Further
 format-specific readers live in :mod:`core.inspection`,
 :mod:`core.video_export` and :mod:`core.labelling`; they return different
 shapes for their specific consumers and are deliberately not unified.

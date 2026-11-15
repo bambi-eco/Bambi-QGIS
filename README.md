@@ -77,6 +77,30 @@ What you need as input: MP4 videos + SRT subtitle files (video mode) *or* a fold
 
 ## Development
 
+### Code layout
+
+`bambi_wildlife_detection/` has three layers:
+
+- `core/` - what the steps compute and how results are stored. No QGIS and
+  no Qt in here: this is what the unit tests in `tests/` run.
+- `bambi_processing.py` - the steps as the panel runs them
+  (`BambiProcessor`), each on a worker thread (`ProcessingWorker`).
+- the panel and the tools - `bambi_dock_widget.py`, the `bambi_*` dialogs
+  and `viewer3d/`.
+
+The main panel is one widget, `BambiDockWidget`: every control is an
+attribute of it. Its code is kept by tab in `dock/` - `input_tab.py`,
+`configuration_tab.py`, `step_tabs.py`, `analytics_tab.py` and the modules
+for what the tabs share - each a class that is mixed into the dock widget;
+`dock/__init__.py` says what is where. Every step, whichever tab it is
+started from, goes through `dock.start_worker(step)` and is run by the step
+runner (`dock/step_runner.py`): one at a time, on a thread of its own.
+
+Imports inside `dock/` and `viewer3d/` reach the rest of the plugin with two
+dots (`from ..core import store`). Most of them are made inside functions,
+so a wrong one is not noticed until that function runs;
+`tests/test_relative_imports.py` follows every one of them.
+
 ### Running everything (combined coverage)
 
 The three test tiers below run in separate images (they need mutually

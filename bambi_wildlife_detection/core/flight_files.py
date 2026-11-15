@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """DJI flight-folder conventions: input auto-detection and SRT extraction.
 
-Moved from ``bambi_dock_widget.py`` (whose methods delegate here).
+Moved from the dock widget (whose methods delegate here).
 """
 
 import os

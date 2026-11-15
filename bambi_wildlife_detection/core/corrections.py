@@ -13,7 +13,7 @@ plugin and are both kept here:
   returns a ``{"translation":…, "rotation":…}`` dict).
 
 Consolidated from ``bambi_box_projector.py``, ``bambi_processing.py`` and
-``bambi_dock_widget.py`` (which re-export / delegate for compatibility).
+the dock widget (which re-export / delegate for compatibility).
 """
 
 import os
