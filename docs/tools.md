@@ -198,7 +198,7 @@ Editing a label and exporting again **re-uses the detections it already produced
 
 Label tracks are also written as **real tracks**, so labelled animals reach the survey analytics and the exports without re-running tracking. A track imported with *Import as label track* replaces the pipeline track it came from, so refining a detector track does not count the animal twice. A labelled animal keeps its track across exports - the same track id, and with it its **Approved** tick and its thermal/RGB pairing.
 
-**Replace detections in project** is the destructive variant: after a confirmation dialog the detector's detections are removed and the labels remain. Re-run **Geo-Reference Detections** and **Track Animals** afterwards to rebuild the QGIS layers from the labels.
+**Replace detections in project** is the destructive variant: after a confirmation dialog the detector's detections are removed and the labels remain. Re-run **Geo-Reference Detections** and **Track Animals** afterwards to rebuild the QGIS layers from the labels: with nothing but labelled boxes left, tracking has nothing to associate - the labelled tracks are tracks already - and it records that the tracker's earlier tracks are gone.
 
 ### Controls
 

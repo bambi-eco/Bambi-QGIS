@@ -238,7 +238,7 @@ detections_t/    # or detections_w/ depending on camera selection
 └── detections.txt    # Bounding box detections (frame, x1, y1, x2, y2, confidence, class)
 ```
 
-Manual annotations created with the [Labelling Tool](tools.md#labelling-tool) can be added alongside the detector's output (via its **Add detections to project** button) - or can replace it entirely (via **Replace detections in project**, after confirmation) - so they flow through geo-referencing and tracking like regular detections.
+Manual annotations created with the [Labelling Tool](tools.md#labelling-tool) can be added alongside the detector's output (via its **Add detections to project** button) - or can replace it entirely (via **Replace detections in project**, after confirmation). They are geo-referenced like regular detections. A label track is a track already, so the trackers leave its boxes out and associate only the detector's: a labelled animal is one track, not two.
 
 Since 6.0 the two never interfere: each producer owns its own rows, so
 re-running the detector leaves manual labels untouched and vice versa. Editing

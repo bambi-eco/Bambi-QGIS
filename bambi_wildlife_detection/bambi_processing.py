@@ -331,6 +331,32 @@ def _frames_reextracted(config: Dict[str, Any], modality: str,
         log_fn("Now out of date after re-extracting the frames: " + ", ".join(stale))
 
 
+def _only_labelled_boxes(target_folder: str, modality: str,
+                         log_fn=None) -> bool:
+    """True when a tracker found nothing to associate because every box of
+    the camera is hand-labelled - which is no error: label tracks are tracks
+    already, and the (empty) tracker run is recorded beside them."""
+    from .core import track_store
+
+    labelled = track_store.labelled_boxes(target_folder, modality)
+    if labelled and log_fn:
+        log_fn(f"All {labelled} box(es) of this camera are hand-labelled. "
+               "They are tracks already, so there is nothing for the "
+               "tracker to associate.")
+    return bool(labelled)
+
+
+def _note_labelled_boxes(target_folder: str, modality: str,
+                         log_fn=None) -> None:
+    """Say that the hand-labelled boxes were left out of a tracker's input."""
+    from .core import track_store
+
+    labelled = track_store.labelled_boxes(target_folder, modality)
+    if labelled and log_fn:
+        log_fn(f"{labelled} hand-labelled box(es) are tracks already and "
+               "are not tracked again")
+
+
 def _extraction_interrupted(config: Dict[str, Any], modality: str,
                             log_fn=None) -> None:
     """Say what a video extraction that stopped half-way leaves behind.
@@ -5923,8 +5949,10 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
 
         self._require_store(target_folder, _store.GEOREFERENCED,
                             camera_suffix, "Geo-Reference Detections")
-        stored_geo = track_store.load_georeferenced(target_folder, camera_suffix)
-        if not stored_geo:
+        stored_geo = track_store.load_georeferenced(
+            target_folder, camera_suffix, for_tracking=True)
+        if not stored_geo and not _only_labelled_boxes(
+                target_folder, camera_suffix, log_fn):
             raise RuntimeError(
                 "No geo-referenced detections in the store. Run "
                 "'Geo-Reference Detections' again, then tracking.")
@@ -5941,6 +5969,8 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
 
         if log_fn:
             log_fn(f"Loaded {sum(len(v) for v in frames.values())} detections in {len(frames)} frames")
+        if frames:
+            _note_labelled_boxes(target_folder, camera_suffix, log_fn)
 
         if progress_fn:
             progress_fn(20)
@@ -6189,8 +6219,10 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
 
         self._require_store(target_folder, _store.DETECTIONS, camera_suffix,
                             "Detect Animals")
-        stored_dets = track_store.load_detections(target_folder, camera_suffix)
-        if not stored_dets:
+        stored_dets = track_store.load_detections(
+            target_folder, camera_suffix, for_tracking=True)
+        if not stored_dets and not _only_labelled_boxes(
+                target_folder, camera_suffix, log_fn):
             raise RuntimeError(
                 "No detections in the store. Run 'Detect Animals' first.")
 
@@ -6206,6 +6238,8 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
         if log_fn:
             log_fn(
                 f"Loaded {sum(len(v) for v in frames_pixel.values())} pixel detections in {len(frames_pixel)} frames")
+        if frames_pixel:
+            _note_labelled_boxes(target_folder, camera_suffix, log_fn)
 
         # Check if this is a geo-referenced tracker that needs geodets
         is_geo_tracker = backend in [TrackerBackend.GEOREF_NATIVE, TrackerBackend.GEOREF_HYBRID]
@@ -6214,8 +6248,8 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
         if is_geo_tracker:
             # GeoNative/GeoHybrid also want the world coordinates. Same source
             # as everything else, so the ids line up with frames_pixel.
-            for row in track_store.load_georeferenced(target_folder,
-                                                      camera_suffix):
+            for row in track_store.load_georeferenced(
+                    target_folder, camera_suffix, for_tracking=True):
                 frames_geo[row["frame"]].append({
                     'source_id': row["detection_id"],
                     'frame': row["frame"],
@@ -6238,7 +6272,29 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
         # Run tracking frame by frame
         all_frames = sorted(frames_pixel.keys())
         if not all_frames:
-            raise RuntimeError("No detections found to track")
+            # Every box is hand-labelled (checked above): record that the
+            # tracker has no tracks, so its earlier run - of boxes that are
+            # gone - stops being the one that is read.
+            tracks_folder = os.path.join(
+                target_folder, f"tracks_{camera_suffix}")
+            os.makedirs(tracks_folder, exist_ok=True)
+            with open(os.path.join(tracks_folder, "tracks_pixel.csv"), "w",
+                      encoding="utf-8") as f:
+                f.write("# frame,track_id,x1,y1,x2,y2,conf,cls,interpolated\n")
+            stale_csv = os.path.join(tracks_folder, "tracks.csv")
+            if os.path.isfile(stale_csv):
+                open(stale_csv, "w", encoding="utf-8").close()
+            track_store.record_tracks(
+                target_folder, camera_suffix, [],
+                kind="boxmot", tracker=tracker_id, log_fn=log_fn)
+            _record_stage(config, "tracking", camera_suffix, row_count=0,
+                          log_fn=log_fn)
+            if log_fn:
+                log_fn("Tracking complete: no tracker tracks; the "
+                       "hand-labelled tracks stay as they are")
+            if progress_fn:
+                progress_fn(100)
+            return
 
         pixel_tracks = []  # List of PixelTrack
 
