@@ -198,66 +198,95 @@ def export_yolo(target_folder: str, modality: str, output_folder: str,
     return output_folder
 
 
+#: MOTChallenge class numbers: the object the benchmark is about, and
+#: something a tracker should neither find nor be punished for finding.
+MOT_TARGET_CLASS = 1
+MOT_DISTRACTOR_CLASS = 8
+
+
 def export_mot(target_folder: str, modality: str, output_folder: str,
                include_not_an_animal: bool = False,
                include_images: bool = True, log_fn=None) -> str:
-    """Write MOT ``gt.txt`` plus a sidecar for anything the format cannot hold.
+    """Write the flight as a MOTChallenge sequence.
 
-    Columns are ``frame,id,bb_left,bb_top,bb_width,bb_height,conf,x,y,z`` with
-    1-based frame numbers, as MOT expects. Only detections belonging to a track
-    are written - MOT is a tracking format, and a detection with no track has no
-    id to give.
+    ::
 
-    *include_images* fills the ``img1`` folder MOTChallenge sequences use, which
-    is what makes the export a sequence rather than a bare ground truth file.
+        <output>/
+        ├── seqinfo.ini        name, frame rate, length, image size
+        ├── gt/gt.txt          the tracks
+        ├── img1/000001.jpg …  the frames (with *include_images*)
+        └── attributes.csv     what the columns cannot hold
+
+    ``gt.txt`` has the nine ground-truth columns
+    ``frame,id,bb_left,bb_top,bb_width,bb_height,conf,class,visibility``:
+    frames count from 1, ``conf`` is the "evaluate this row" flag and
+    ``class`` is 1 for every animal - the class the benchmark tools
+    evaluate. A box kept although it is ``not-an-animal`` is written the way
+    the format marks such things: flag 0, class 8 (distractor).
+
+    Species, sex, age, the detector's confidence and every custom field are
+    in ``attributes.csv``, keyed by the same ``frame`` and ``id``.
+
+    Only boxes that belong to a track are written - MOT is a tracking
+    format, and a box without a track has no id to give.
+
+    *include_images* copies **every** frame of the flight into ``img1``
+    under the number MOT knows it by. A sequence is its frames, with or
+    without an animal on them: a tracker run on ``img1`` numbers its output
+    by image, and that number has to be the one in ``gt.txt``.
+
+    Up to 9.0 this wrote ``gt.txt`` beside the images with the detector's
+    confidence as the flag, a class counted from 0 (the benchmark tools
+    refuse 0) and a tenth column; no ``seqinfo.ini``; and only the frames
+    with a box, under their own names.
     """
     vocabulary = common.load_vocabulary(target_folder)
     rows, _animals = common.load_export_rows(
         target_folder, modality, vocabulary, include_not_an_animal,
         include_geo=False)
-    tracked = [row for row in rows if row.get("track_id") is not None]
-
-    mapping, names = common.class_map(
-        (row["species_id"] for row in tracked), vocabulary["species"])
+    tracked = sorted((row for row in rows if row.get("track_id") is not None),
+                     key=lambda r: (r["frame"], r["track_id"]))
+    frames = common.load_frames(target_folder, modality)
 
     common.ensure_folder(output_folder)
-    gt_path = os.path.join(output_folder, "gt.txt")
+    gt_folder = common.ensure_folder(os.path.join(output_folder, "gt"))
+    gt_path = os.path.join(gt_folder, "gt.txt")
     with open(gt_path, "w", encoding="utf-8") as fh:
-        for row in sorted(tracked, key=lambda r: (r["frame"], r["track_id"])):
+        for row in tracked:
+            false_positive = row["species_id"] == common.NOT_AN_ANIMAL
             fh.write(f"{row['frame'] + 1},{row['track_id']},"
                      f"{row['x1']:.2f},{row['y1']:.2f},"
                      f"{row['x2'] - row['x1']:.2f},"
                      f"{row['y2'] - row['y1']:.2f},"
-                     f"{row['confidence']:.4f},"
-                     f"{mapping[row['species_id']]},1,-1\n")
+                     f"{0 if false_positive else 1},"
+                     f"{MOT_DISTRACTOR_CLASS if false_positive else MOT_TARGET_CLASS},"
+                     "1\n")
 
     # Everything MOT's fixed columns cannot carry, keyed back to (frame, id).
     sidecar_path = os.path.join(output_folder, "attributes.csv")
     extra_names = sorted({key for row in tracked for key in row["properties"]})
     with open(sidecar_path, "w", encoding="utf-8", newline="") as fh:
         writer = csv.writer(fh, lineterminator="\n")
-        writer.writerow(["frame", "id", "species"] + extra_names)
-        for row in sorted(tracked, key=lambda r: (r["frame"], r["track_id"])):
+        writer.writerow(["frame", "id", "species", "confidence"] + extra_names)
+        for row in tracked:
             cells = [_cell(row["properties"].get(name))
                      for name in extra_names]
             writer.writerow(
                 [row["frame"] + 1, row["track_id"],
-                 vocabulary["species"].get(row["species_id"], ""), *cells])
+                 vocabulary["species"].get(row["species_id"], ""),
+                 f"{row['confidence']:.4f}", *cells])
 
-    classes_path = os.path.join(output_folder, "classes.txt")
-    with open(classes_path, "w", encoding="utf-8") as fh:
-        for index, name in enumerate(names):
-            fh.write(f"{index} {name}\n")
+    length = max(len(frames),
+                 max((row["frame"] for row in tracked), default=-1) + 1)
+    extension = _frame_extension(frames)
+    size = common.frame_size(target_folder, modality)
+    _write_seqinfo(output_folder, length, _frame_rate(frames), size,
+                   extension)
 
     copied = None
     if include_images and tracked:
-        frames = {f["frame"]: f for f in common.load_frames(
-            target_folder, modality)}
-        copied = common.copy_frames(
-            target_folder, modality,
-            [frames.get(frame, {}).get("imagefile", f"frame_{frame:06d}.jpg")
-             for frame in sorted({row["frame"] for row in tracked})],
-            os.path.join(output_folder, "img1"))
+        copied = _copy_sequence(target_folder, modality, frames,
+                                os.path.join(output_folder, "img1"))
 
     if log_fn:
         skipped = len(rows) - len(tracked)
@@ -267,6 +296,73 @@ def export_mot(target_folder: str, modality: str, output_folder: str,
         if not tracked and rows:
             message += common.no_tracks_hint(target_folder, modality)
         log_fn(message)
+        if size is None:
+            log_fn("MOT: the frame size is not known (no extracted frame "
+                   "could be read), so seqinfo.ini has no imWidth/imHeight.")
         for line in common.describe_copy(copied) if copied else []:
             log_fn(f"MOT: {line}")
     return output_folder
+
+
+def _frame_extension(frames: List[dict]) -> str:
+    """The extension most of the flight's frames have (``.jpg`` when there
+    is nothing to go by) - MOT names one for the whole sequence."""
+    counts: Dict[str, int] = {}
+    for frame in frames:
+        extension = os.path.splitext(frame.get("imagefile") or "")[1]
+        if extension:
+            counts[extension] = counts.get(extension, 0) + 1
+    return max(counts, key=lambda e: (counts[e], e)) if counts else ".jpg"
+
+
+def _frame_rate(frames: List[dict], default: int = 30) -> int:
+    """Frames per second, from the capture times: the median step between
+    consecutive frames. *default* when the times are missing or useless."""
+    moments = [common.capture_time(frame.get("epoch")) for frame in frames]
+    steps = sorted(
+        (later - earlier).total_seconds()
+        for earlier, later in zip(moments, moments[1:])
+        if earlier is not None and later is not None)
+    steps = [step for step in steps if step > 0]
+    if not steps:
+        return default
+    return max(1, int(round(1.0 / steps[len(steps) // 2])))
+
+
+def _write_seqinfo(output_folder: str, length: int, frame_rate: int,
+                   size: Optional[Tuple[int, int]], extension: str) -> str:
+    name = os.path.basename(os.path.normpath(output_folder)) or "sequence"
+    lines = ["[Sequence]", f"name={name}", "imDir=img1",
+             f"frameRate={frame_rate}", f"seqLength={length}"]
+    if size is not None:
+        lines += [f"imWidth={size[0]}", f"imHeight={size[1]}"]
+    lines.append(f"imExt={extension}")
+    path = os.path.join(output_folder, "seqinfo.ini")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+    return path
+
+
+def _copy_sequence(target_folder: str, modality: str, frames: List[dict],
+                   destination: str) -> dict:
+    """Copy every frame of the flight into *destination* as
+    ``000001.<ext>``, ``000002.<ext>``, ... - frame *n* of the flight is
+    image *n + 1* of the sequence. Returns what :func:`common.copy_frames`
+    returns."""
+    import shutil
+
+    source_folder = os.path.join(target_folder, f"frames_{modality}")
+    common.ensure_folder(destination)
+    copied, missing = 0, []
+    for frame in frames:
+        name = frame.get("imagefile") or ""
+        source = os.path.join(source_folder, name)
+        if not name or not os.path.isfile(source):
+            missing.append(name or f"frame {frame['frame']}")
+            continue
+        extension = os.path.splitext(name)[1]
+        shutil.copy2(source, os.path.join(
+            destination, f"{frame['frame'] + 1:06d}{extension}"))
+        copied += 1
+    return {"copied": copied, "missing": missing, "source": source_folder,
+            "destination": destination}

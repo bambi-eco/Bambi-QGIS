@@ -56,26 +56,12 @@ def _gbif_taxon_id(taxonomy: dict) -> str:
 def _timestamp(frames: Dict[int, dict], frame: int) -> str:
     """ISO-8601 capture time of *frame*, or ``""`` when unknown.
 
-    The poses store the SRT capture time as an ISO-8601 string with its
-    timezone offset (``2023-09-20T10:00:00+02:00``); older files and the
-    tests carry epoch seconds instead. Both are accepted. The result is
-    written at second precision in the ``YYYY-MM-DDThh:mm:ss±hh:mm`` form
+    Written at second precision in the ``YYYY-MM-DDThh:mm:ss±hh:mm`` form
     Camtrap DP and Darwin Core expect - previously the ISO string was fed to
     ``float()`` and every media row silently lost its timestamp.
     """
-    value = frames.get(frame, {}).get("epoch")
-    if value in (None, ""):
-        return ""
-    try:
-        if isinstance(value, (int, float)):
-            moment = datetime.fromtimestamp(float(value), tz=timezone.utc)
-        else:
-            text = str(value).strip()
-            try:
-                moment = datetime.fromisoformat(text)
-            except ValueError:
-                moment = datetime.fromtimestamp(float(text), tz=timezone.utc)
-    except (ValueError, OSError, OverflowError):
+    moment = common.capture_time(frames.get(frame, {}).get("epoch"))
+    if moment is None:
         return ""
     # A naive timestamp is written as such rather than given a zone it
     # never had; the drone's SRT clock normally carries one.

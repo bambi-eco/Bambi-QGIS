@@ -24,6 +24,7 @@ the three decisions that would otherwise be made seven times live here:
 
 import json
 import os
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
 from .. import gpkg, store, track_store
@@ -282,6 +283,27 @@ def load_frames(target_folder: str, modality: str) -> List[dict]:
             "duplicated": bool(image.get("duplicated")),
         })
     return frames
+
+
+def capture_time(value) -> Optional[datetime]:
+    """The capture time a poses file gives for a frame, or ``None``.
+
+    The poses store the SRT capture time as an ISO-8601 string with its
+    timezone offset (``2023-09-20T10:00:00+02:00``); older files and the
+    tests carry epoch seconds instead. Both are accepted.
+    """
+    if value in (None, ""):
+        return None
+    try:
+        if isinstance(value, (int, float)):
+            return datetime.fromtimestamp(float(value), tz=timezone.utc)
+        text = str(value).strip()
+        try:
+            return datetime.fromisoformat(text)
+        except ValueError:
+            return datetime.fromtimestamp(float(text), tz=timezone.utc)
+    except (ValueError, OSError, OverflowError):
+        return None
 
 
 def without_duplicated(rows: List[dict], frames: Dict[int, dict]) -> List[dict]:

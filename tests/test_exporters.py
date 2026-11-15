@@ -316,13 +316,102 @@ def test_yolo_copies_nothing_it_was_not_asked_for(survey, tmp_path):
 # MOT
 # ---------------------------------------------------------------------------
 
+def _gt(folder):
+    with open(os.path.join(folder, "gt", "gt.txt"), encoding="utf-8") as fh:
+        return [line.rstrip("\n").split(",") for line in fh]
+
+
+def _seqinfo(folder):
+    import configparser
+
+    parser = configparser.ConfigParser()
+    parser.optionxform = str
+    parser.read(os.path.join(folder, "seqinfo.ini"), encoding="utf-8")
+    return dict(parser["Sequence"])
+
+
 def test_mot_frames_are_one_based(survey, tmp_path):
     folder = str(tmp_path / "mot")
     exporters.export_mot(survey, "t", folder)
-    with open(os.path.join(folder, "gt.txt"), encoding="utf-8") as fh:
-        first = fh.readline().split(",")
+    first = _gt(folder)[0]
     assert int(first[0]) == 1          # store frame 0
     assert float(first[4]) > 0         # width, not x2
+
+
+def test_mot_rows_are_ground_truth_rows(survey, tmp_path):
+    """frame,id,left,top,width,height,flag,class,visibility - nine columns.
+    The flag was the detector's confidence, the class counted from 0 (the
+    benchmark tools know 1 to 13 and refuse 0), and there was a tenth."""
+    folder = str(tmp_path / "mot")
+    exporters.export_mot(survey, "t", folder)
+    rows = _gt(folder)
+
+    assert rows and all(len(row) == 9 for row in rows)
+    assert all(int(row[1]) >= 1 for row in rows)             # ids
+    assert {row[6] for row in rows} == {"1"}                 # evaluate it
+    assert {row[7] for row in rows} == {"1"}                 # the target class
+    assert {row[8] for row in rows} == {"1"}                 # fully visible
+
+
+def test_mot_is_laid_out_as_a_sequence(survey, tmp_path):
+    folder = str(tmp_path / "mot")
+    exporters.export_mot(survey, "t", folder, include_images=False)
+
+    assert sorted(os.listdir(folder)) == ["attributes.csv", "gt",
+                                          "seqinfo.ini"]
+    assert os.listdir(os.path.join(folder, "gt")) == ["gt.txt"]
+
+
+def test_mot_seqinfo_describes_the_flight(survey, tmp_path):
+    folder = str(tmp_path / "mot")
+    exporters.export_mot(survey, "t", folder, include_images=False)
+    info = _seqinfo(folder)
+
+    assert info["name"] == "mot"
+    assert info["imDir"] == "img1"
+    assert info["seqLength"] == "2"            # the flight's frames
+    assert info["frameRate"] == "1"            # they are a second apart
+    assert info["imExt"] == ".jpg"
+    assert "imWidth" not in info               # no frame to read it from
+
+
+def test_mot_seqinfo_names_the_image_size(survey, tmp_path):
+    import numpy as np
+    cv2 = pytest.importorskip("cv2")
+
+    frames = os.path.join(survey, "frames_t")
+    os.makedirs(frames)
+    for name in ("frame_000000.jpg", "frame_000001.jpg"):
+        cv2.imwrite(os.path.join(frames, name),
+                    np.zeros((512, 640, 3), dtype=np.uint8))
+    folder = str(tmp_path / "mot")
+    exporters.export_mot(survey, "t", folder)
+    info = _seqinfo(folder)
+
+    assert (info["imWidth"], info["imHeight"]) == ("640", "512")
+
+
+def test_mot_frame_rate_falls_back_without_capture_times(survey, tmp_path):
+    with open(os.path.join(survey, "poses_t.json"), "w",
+              encoding="utf-8") as fh:
+        json.dump({"images": [{"imagefile": "frame_000000.jpg"},
+                              {"imagefile": "frame_000001.jpg"}]}, fh)
+    folder = str(tmp_path / "mot")
+    exporters.export_mot(survey, "t", folder, include_images=False)
+    assert _seqinfo(folder)["frameRate"] == "30"
+
+
+def test_mot_marks_a_kept_false_positive_as_a_distractor(survey, tmp_path):
+    """Flag 0 and class 8: what a tracker should neither find nor be
+    punished for finding."""
+    folder = str(tmp_path / "mot")
+    exporters.export_mot(survey, "t", folder, include_not_an_animal=True)
+    rows = _gt(folder)
+
+    false = [row for row in rows if row[2] == "90.00"]
+    assert len(false) == 1 and (false[0][6], false[0][7]) == ("0", "8")
+    assert {(row[6], row[7]) for row in rows if row[2] != "90.00"} == \
+        {("1", "1")}
 
 
 def test_mot_sidecar_carries_what_the_columns_cannot(survey, tmp_path):
@@ -334,11 +423,16 @@ def test_mot_sidecar_carries_what_the_columns_cannot(survey, tmp_path):
     assert rows[0]["occlusion"] == "occluded"
 
 
-def test_mot_classes_file_is_written(survey, tmp_path):
+def test_mot_sidecar_keeps_the_detectors_confidence(survey, tmp_path):
+    """The column it used to sit in is the "evaluate this row" flag."""
     folder = str(tmp_path / "mot")
     exporters.export_mot(survey, "t", folder)
-    with open(os.path.join(folder, "classes.txt"), encoding="utf-8") as fh:
-        assert fh.readline().startswith("0 ")
+    with open(os.path.join(folder, "attributes.csv"), encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    assert [row["confidence"] for row in rows] == ["0.9000", "0.7000",
+                                                   "0.8000"]
+    assert [(row["frame"], row["id"]) for row in rows] == \
+        [(gt[0], gt[1]) for gt in _gt(folder)]
 
 
 def test_mot_omits_untracked_detections(survey, tmp_path):
@@ -1082,13 +1176,45 @@ def test_coco_without_images_writes_only_the_json(survey, tmp_path):
 
 
 def test_mot_fills_the_img1_folder(survey, tmp_path):
-    """MOTChallenge sequences keep their frames in img1."""
+    """MOTChallenge sequences keep their frames in img1, under the number
+    the ground truth knows them by."""
     _with_frames(survey)
     folder = str(tmp_path / "mot")
     exporters.export_mot(survey, "t", folder)
 
     assert sorted(os.listdir(os.path.join(folder, "img1"))) == [
-        "frame_000000.jpg", "frame_000001.jpg"]
+        "000001.jpg", "000002.jpg"]
+
+
+def test_mot_copies_every_frame_of_the_flight(survey, tmp_path):
+    """A sequence is its frames, with or without an animal on them: a
+    tracker run on img1 counts images, and its count has to be gt.txt's
+    frame number. Only the frames with a box were copied."""
+    names = [f"frame_{index:06d}.jpg" for index in range(5)]
+    _with_frames(survey, names=names)
+    with open(os.path.join(survey, "poses_t.json"), "w",
+              encoding="utf-8") as fh:
+        json.dump({"images": [{"imagefile": name, "epoch": 1717000000 + i}
+                              for i, name in enumerate(names)]}, fh)
+    folder = str(tmp_path / "mot")
+    messages = []
+    exporters.export_mot(survey, "t", folder, log_fn=messages.append)
+
+    assert sorted(os.listdir(os.path.join(folder, "img1"))) == [
+        f"{number:06d}.jpg" for number in range(1, 6)]
+    assert _seqinfo(folder)["seqLength"] == "5"
+    assert {row[0] for row in _gt(folder)} == {"1", "2"}
+    assert any("copied 5 image" in m for m in messages)
+
+
+def test_mot_reports_frames_without_an_image(survey, tmp_path):
+    _with_frames(survey, names=("frame_000000.jpg",))
+    folder = str(tmp_path / "mot")
+    messages = []
+    exporters.export_mot(survey, "t", folder, log_fn=messages.append)
+
+    assert os.listdir(os.path.join(folder, "img1")) == ["000001.jpg"]
+    assert any("frame_000001.jpg" in m for m in messages)
 
 
 def test_mot_without_images_writes_no_img1(survey, tmp_path):
@@ -1097,7 +1223,7 @@ def test_mot_without_images_writes_no_img1(survey, tmp_path):
     exporters.export_mot(survey, "t", folder, include_images=False)
 
     assert not os.path.exists(os.path.join(folder, "img1"))
-    assert os.path.exists(os.path.join(folder, "gt.txt"))
+    assert os.path.exists(os.path.join(folder, "gt", "gt.txt"))
 
 
 def test_camtrap_media_paths_follow_the_files(survey, tmp_path):

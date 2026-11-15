@@ -408,7 +408,7 @@ receives an internal id, and custom fields travel where the format has room.
 |---|---|---|
 | **COCO** | detection training; carries custom fields as annotation attributes | dropped |
 | **YOLO** | training dataset: `images/`, `labels/` and `data.yaml` | dropped |
-| **MOT** | tracking benchmarks, with a sidecar for what the columns cannot hold | dropped |
+| **MOT** | tracking benchmarks: a MOTChallenge sequence (see below), with a sidecar for what the columns cannot hold | dropped |
 | **TRex `.npz`** | back to TRex, or into another flight with the [TRex import](pipeline.md#trex-tracklet-import): one file per track with the fields that import reads, boxes in the pixels of the extracted frames (tick *Labels already in undistorted frame space* when importing them), and `classes.txt` naming the class numbers | dropped |
 | **GeoJSON (animals)** | detections as points, or tracks as lines, in the project CRS | kept |
 | **GeoJSON (segmentations)** | SAM3 mask outlines as polygons - exported from the [Segmentation Tool](tools.md#segmentation-tool), one feature per object with prompt, frame, object id and confidence | n/a |
@@ -447,10 +447,11 @@ Things worth knowing:
   |---|---|
   | COCO | `images/` next to the JSON |
   | YOLO | `images/`, beside `labels/` |
-  | MOT | `img1/`, the MOTChallenge layout |
+  | MOT | `img1/`, the MOTChallenge layout - **every** frame of the flight, as `000001.jpg`, `000002.jpg`, … |
   | Camtrap DP | `media/`, and `filePath` points there |
 
-  Only frames carrying a detection are copied, and frames with no image on
+  Only frames carrying a detection are copied (MOT excepted: a sequence is
+  all of its frames), and frames with no image on
   disk are reported rather than silently skipped. Turn it off when the
   annotations are all you need - the frames are usually the heaviest part of a
   project. The GeoJSON formats and TRex `.npz` reference no image, so the option is
@@ -465,6 +466,34 @@ Things worth knowing:
 
   `val` in `data.yaml` names the training images so the file is valid as
   written; split it before believing any validation number.
+
+### The MOT sequence
+
+```
+<export folder>/
+├── seqinfo.ini        # name, frameRate, seqLength, imWidth, imHeight, imExt
+├── gt/gt.txt          # frame,id,bb_left,bb_top,bb_width,bb_height,conf,class,visibility
+├── img1/000001.jpg …  # with "Include images"
+└── attributes.csv     # frame,id,species,confidence,sex,age,approved,<your fields>
+```
+
+- `gt.txt` is a MOTChallenge **ground truth** file: frames count from 1,
+  `conf` is the "evaluate this row" flag (1), `class` is 1 for every animal -
+  the class the benchmark tools evaluate - and `visibility` is 1. Species
+  have no column in the format; they are in `attributes.csv`, with the
+  detector's confidence, keyed by the same `frame` and `id`.
+- A `not-an-animal` box is left out by default. Kept, it is written the way
+  the format marks such things: flag 0, class 8 (distractor).
+- Frame *n* of the flight is image *n + 1* of the sequence, whether or not an
+  animal is on it - a tracker run on `img1` numbers its output by image, and
+  that number has to be the one in `gt.txt`. `seqLength` is the number of the
+  flight's frames, `frameRate` comes from their capture times.
+- Only boxes that belong to a track are written.
+
+Before 9.1 the export wrote `gt.txt` beside the images, with the detector's
+confidence as the flag, classes counted from 0 (which the benchmark tools
+refuse) and a tenth column, without `seqinfo.ini`, and copied only the frames
+that had a box, under their own names.
 
 If a track export comes back empty it says why. The usual cause is a tracking
 run that never reached the store: `tracks.csv` exists, so tracking looks as
