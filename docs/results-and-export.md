@@ -516,7 +516,10 @@ Two consequences of that:
   they are gone.
 - **A step that has run is decided by the store**, not by its text file being
   on disk. Deleting `tracks.csv` no longer resets tracking - delete
-  `bambi_t/tracks.gpkg`, or use **Reset Step**.
+  `bambi_t/tracks.gpkg`, or use **Reset Step**. The same holds for what a
+  step or a button asks for before it starts: a flight folder that holds the
+  stores and none of the `detections_t`, `georeferenced_t` or `tracks_t`
+  folders can be geo-referenced, tracked, measured and added to the map.
 
 `fov_polygons.txt` is written both ways: to the store, which is what the
 coverage map, the transect areas and the FoV layers read, and as text for

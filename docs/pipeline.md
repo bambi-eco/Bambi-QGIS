@@ -330,6 +330,8 @@ tracks_t/    # or tracks_w/, follows the detection camera selection
 
 Use **→ Add Tracks to QGIS** to load each track as a grouped layer (movement path + final bounding box). Every track has a colour of its own for its box and path; zoomed out, the box becomes a pin in the colour of the track's species, with the sex in its middle and the age as a badge - see [How animals are drawn](results-and-export.md#how-animals-are-drawn).
 
+The tracks are read from the store (`bambi_t/tracks.gpkg`), so the button works whether or not the two text files above were written - they are only there while **Also write legacy text outputs** is on - and it shows animals that were labelled by hand as well, which are never written to them.
+
 ![Track Visualization](../images/tracks_qgis.png)
 
 #### → Calculate Track Perpendicular

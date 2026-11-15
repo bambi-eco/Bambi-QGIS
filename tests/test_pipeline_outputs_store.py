@@ -135,6 +135,24 @@ def test_geo_tracks_without_any_run_are_empty(populated):
     assert pipeline_outputs.load_geo_tracks_by_id(path) == {}
 
 
+def test_geo_tracks_need_no_legacy_path(populated):
+    """What "Add Tracks to QGIS" reads: the store, named by folder and
+    camera - no ``tracks_t`` folder, no ``tracks.csv``."""
+    assert not os.path.exists(os.path.join(populated, "tracks_t"))
+
+    tracks = pipeline_outputs.geo_tracks(populated, "t")
+
+    assert len(tracks) == 1
+    (points,) = tracks.values()
+    assert [p["frame"] for p in points] == [1, 2]
+    assert tracks == pipeline_outputs.load_geo_tracks_by_id(
+        os.path.join(populated, "tracks_t", "tracks.csv"))
+
+
+def test_geo_tracks_of_a_folder_without_stores_are_empty(tmp_path):
+    assert pipeline_outputs.geo_tracks(str(tmp_path), "t") == {}
+
+
 # ---------------------------------------------------------------------------
 # Geo-referenced detections
 # ---------------------------------------------------------------------------

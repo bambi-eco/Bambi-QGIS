@@ -102,6 +102,14 @@ def _no_store_message(path: str, kind: str) -> str:
             "re-run the step.")
 
 
+def geo_tracks(target_folder: str, modality: str) -> Dict[int, list]:
+    """The geo-referenced points of every track the analyses read (the
+    active tracker run and the hand-labelled tracks), keyed by track id and
+    in frame order - straight from the store, wherever the legacy
+    ``tracks.csv`` is or is not."""
+    return _geo_tracks_from_store(target_folder, modality)
+
+
 def geo_track_points(target_folder: str, modality: str,
                      track_id: int) -> list:
     """The geo-referenced points of one track of the active run, in frame

@@ -8779,10 +8779,11 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         det_camera = config.get("detection_camera", "T")
         det_suffix = "t" if det_camera == "T" else "w"
 
-        # Check if detections exist (camera-specific folder)
-        detections_folder = os.path.join(config["target_folder"], f"detections_{det_suffix}")
-
-        if not os.path.exists(detections_folder):
+        # Whether there are detections is what the store says - not whether
+        # the folder of the legacy text file exists, which a flight copied
+        # without it, or one that only has hand-labelled boxes, has not.
+        if not self.has_stage(_store_kinds.DETECTIONS, det_suffix,
+                              config["target_folder"]):
             camera_name = "Thermal" if det_camera == "T" else "RGB"
             QMessageBox.warning(
                 self,
@@ -8843,10 +8844,10 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         trk_camera = config.get("tracking_camera", "T")
         trk_suffix = "t" if trk_camera == "T" else "w"
 
-        # Check if georeferenced detections exist (camera-specific folder)
-        georef_folder = os.path.join(config["target_folder"], f"georeferenced_{trk_suffix}")
-
-        if not os.path.exists(georef_folder):
+        # Geo-referenced detections: in the store, wherever the legacy text
+        # file's folder is or is not.
+        if not self.has_stage(_store_kinds.GEOREFERENCED, trk_suffix,
+                              config["target_folder"]):
             camera_name = "Thermal" if trk_camera == "T" else "RGB"
             QMessageBox.warning(
                 self,
@@ -11268,12 +11269,11 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         trk_suffix = "t" if config.get("tracking_camera", "T") == "T" else "w"
 
         route_file = os.path.join(target_folder, f"flight_route_{fr_suffix}", "flight_route.geojson")
-        tracks_folder = os.path.join(target_folder, f"tracks_{trk_suffix}")
 
         missing = []
         if not os.path.exists(route_file):
             missing.append("Flight route (run Generate Flight Route first)")
-        if not os.path.exists(tracks_folder):
+        if not self.has_stage(_store_kinds.TRACKS, trk_suffix, target_folder):
             missing.append("Tracked animals (run Track Animals first)")
 
         if missing:
@@ -11429,9 +11429,13 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         trk_camera = config.get("tracking_camera", "T")
         trk_suffix = "t" if trk_camera == "T" else "w"
         camera_label = "Thermal" if trk_camera == "T" else "RGB"
-        tracks_folder = os.path.join(config["target_folder"], f"tracks_{trk_suffix}")
 
-        if not os.path.exists(tracks_folder):
+        # The tracks are in the store. This used to look for tracks.csv -
+        # which is only written while "Also write legacy text outputs" is
+        # on, and never for animals that were labelled by hand - and gave
+        # up without it, although it read nothing from the file.
+        if not self.has_stage(_store_kinds.TRACKS, trk_suffix,
+                              config["target_folder"]):
             QMessageBox.warning(
                 self,
                 "Missing Prerequisites",
@@ -11446,32 +11450,21 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             # Get target CRS
             target_crs = QgsCoordinateReferenceSystem(f"EPSG:{config['target_epsg']}")
 
-            # Find all track files
-            track_files = []
-            for root, dirs, files in os.walk(tracks_folder):
-                for f in files:
-                    if f.endswith(".csv") and not f.endswith("_pixel.csv"):
-                        track_files.append(os.path.join(root, f))
-
-            if not track_files:
-                QMessageBox.warning(self, "No Tracks", "No track files found.")
-                self.update_status("add_layers", "🔴 No files")
-                return
-
-            # Collect all tracks from all files
-            all_tracks = {}  # (file_basename, track_id) -> detections
-
-            for track_file in track_files:
-                tracks = self.load_tracks_from_csv(track_file)
-                if not tracks:
-                    continue
-                file_basename = os.path.basename(track_file).replace(".csv", "")
-                for track_id, detections in tracks.items():
-                    if detections:
-                        all_tracks[(file_basename, track_id)] = detections
+            # The geo-referenced tracks of the store: track id -> points.
+            # (Every .csv in the legacy folder used to stand for the whole
+            # store, so a second file there doubled every track.)
+            from .core.pipeline_outputs import geo_tracks
+            all_tracks = {
+                track_id: detections for track_id, detections in
+                geo_tracks(config["target_folder"], trk_suffix).items()
+                if detections}
 
             if not all_tracks:
-                QMessageBox.warning(self, "No Tracks", "No valid tracks found.")
+                QMessageBox.warning(
+                    self, "No Tracks",
+                    f"No {camera_label} track has a position on the map "
+                    "yet.\nRun Geo-Reference Detections (under step A1) "
+                    "and then Track Animals.")
                 self.update_status("add_layers", "🔴 No valid tracks")
                 return
 
@@ -11531,7 +11524,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
 
             total_tracks = 0
 
-            for idx, ((file_basename, track_id), detections) in enumerate(all_tracks.items()):
+            for idx, (track_id, detections) in enumerate(all_tracks.items()):
                 # Sort detections by frame
                 detections_sorted = sorted(detections, key=lambda d: d['frame'])
                 known = animals.get(int(track_id))
@@ -11541,8 +11534,6 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
 
                 # Create subgroup for this track
                 track_name = f"Track {track_id}"
-                if len(track_files) > 1:
-                    track_name = f"Track {file_basename}_{track_id}"
                 track_group = main_group.addGroup(track_name)
 
                 # Create path layer (polyline) - only when there are 2+ detections
@@ -11743,11 +11734,6 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
                      "No animal layers to restyle - add detections or "
                      "tracks to QGIS first.")
         return count
-
-    def load_tracks_from_csv(self, csv_path: str) -> Dict[int, list]:
-        """Load tracks from a CSV file (core.pipeline_outputs)."""
-        from .core.pipeline_outputs import load_geo_tracks_by_id
-        return load_geo_tracks_by_id(csv_path, log_fn=self.log)
 
     def add_fov_to_qgis(self):
         """Add Field of View polygons as QGIS layers."""
