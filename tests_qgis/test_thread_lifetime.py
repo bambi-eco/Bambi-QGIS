@@ -158,6 +158,35 @@ def test_a_worker_moved_onto_the_thread_lives_as_long(monkeypatch):
     assert _kept() == before
 
 
+class EndsWhenAsked(QThread):
+    """A thread that only waits for work - and has ended by the time
+    ``quit()`` returns, as an idle thread on a fast machine may have."""
+
+    def quit(self):
+        super().quit()
+        self.wait()
+
+
+def test_a_thread_that_ends_while_it_is_handed_over_is_let_go():
+    """The keeper listened for "finished" only after it had asked the
+    thread to stop. A thread that was merely waiting had ended by then: its
+    "finished" was over, nothing ever said so again, and the thread - with
+    the worker kept alongside it - was held until some other thread ended,
+    or for good."""
+    before = _kept()
+    thread = EndsWhenAsked()
+    thread.start()
+    for _ in range(200):
+        if thread.isRunning():
+            break
+        time.sleep(0.005)
+
+    let_thread_finish(thread, object())
+    _spin(0.2)
+
+    assert _kept() == before
+
+
 def test_unloading_during_a_step_lets_the_step_end(dock):
     """The dock was deleted with the step still running."""
     before = _kept()

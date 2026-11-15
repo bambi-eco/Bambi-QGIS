@@ -2,7 +2,7 @@
 """Small Qt helpers shared by the plugin's dialogs."""
 
 from qgis.PyQt.QtGui import QCursor
-from qgis.PyQt.QtCore import QEvent, QObject, QSize, Qt, pyqtSignal
+from qgis.PyQt.QtCore import QEvent, QObject, QSize, Qt, QTimer, pyqtSignal
 from qgis.PyQt.QtWidgets import QApplication, QStackedWidget, QTabWidget
 
 
@@ -365,6 +365,11 @@ class _ThreadKeeper(QObject):
         # the other thread has really ended - never from inside it.
         thread.finished.connect(self._release,
                                 Qt.ConnectionType.QueuedConnection)
+        # A thread that was only waiting for work may have ended between
+        # being asked to stop and the line above. Its "finished" is over
+        # then, and nothing would ever say again that it can be let go of:
+        # look once more, when this call has returned.
+        QTimer.singleShot(0, self._release)
 
     def _release(self) -> None:
         still = []
