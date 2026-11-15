@@ -55,8 +55,18 @@ def has_store(target_folder: str, modality: str) -> bool:
 #: What a tracker has to associate: every box that is not part of a track
 #: already. The boxes of a label track *are* a track - the labelling tool's
 #: own run, read together with the tracker's - so a tracker that picked them
-#: up as well made every hand-labelled animal exist twice.
-_FOR_TRACKING = " WHERE d.label_track_id IS NULL"
+#: up as well made every hand-labelled animal exist twice. The parameter is
+#: 1 to leave them out and 0 for every box.
+_DETECTIONS_SQL = (
+    "SELECT d.detection_id, d.frame, d.x1, d.y1, d.x2, d.y2, "
+    "d.confidence, d.species_id, d.source_class FROM detections d "
+    "WHERE (? = 0 OR d.label_track_id IS NULL) ORDER BY d.detection_id")
+_GEOREFERENCED_SQL = (
+    "SELECT d.detection_id, d.frame, d.confidence, d.species_id, "
+    "g.gx1, g.gy1, g.gz1, g.gx2, g.gy2, g.gz2 "
+    "FROM detections d JOIN geo.detections_geo g USING (detection_id) "
+    "WHERE (? = 0 OR d.label_track_id IS NULL) "
+    "ORDER BY d.frame, d.detection_id")
 
 
 def load_detections(target_folder: str, modality: str,
@@ -66,7 +76,7 @@ def load_detections(target_folder: str, modality: str,
     Reading the boxes from the store rather than re-parsing ``detections.txt``
     is what removes the ordering assumption: nothing downstream has to line two
     files up row by row. *for_tracking* leaves out the hand-labelled boxes
-    (see :data:`_FOR_TRACKING`).
+    (they are tracks already).
     """
     path = store.stage_path(target_folder, store.DETECTIONS, modality)
     if not os.path.isfile(path):
@@ -74,10 +84,7 @@ def load_detections(target_folder: str, modality: str,
     conn = store.open_store(path, store.DETECTIONS, modality)
     try:
         return [dict(row) for row in conn.execute(
-            "SELECT d.detection_id, d.frame, d.x1, d.y1, d.x2, d.y2, "
-            "d.confidence, d.species_id, d.source_class FROM detections d"
-            + (_FOR_TRACKING if for_tracking else "")
-            + " ORDER BY d.detection_id")]
+            _DETECTIONS_SQL, (1 if for_tracking else 0,))]
     finally:
         conn.close()
 
@@ -138,7 +145,7 @@ def load_georeferenced(target_folder: str, modality: str,
                        for_tracking: bool = False) -> List[dict]:
     """Geo-referenced boxes joined to their detections, ordered by id.
     *for_tracking* leaves out the hand-labelled boxes
-    (see :data:`_FOR_TRACKING`)."""
+    (they are tracks already)."""
     geo_path = store.stage_path(target_folder, store.GEOREFERENCED, modality)
     det_path = store.stage_path(target_folder, store.DETECTIONS, modality)
     if not (os.path.isfile(geo_path) and os.path.isfile(det_path)):
@@ -149,11 +156,7 @@ def load_georeferenced(target_folder: str, modality: str,
         from . import gpkg
         gpkg.attach(conn, geo_path, "geo")
         rows = [dict(row) for row in conn.execute(
-            "SELECT d.detection_id, d.frame, d.confidence, d.species_id, "
-            "g.gx1, g.gy1, g.gz1, g.gx2, g.gy2, g.gz2 "
-            "FROM detections d JOIN geo.detections_geo g USING (detection_id)"
-            + (_FOR_TRACKING if for_tracking else "")
-            + " ORDER BY d.frame, d.detection_id")]
+            _GEOREFERENCED_SQL, (1 if for_tracking else 0,))]
         gpkg.detach(conn, "geo")
         return rows
     finally:

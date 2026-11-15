@@ -101,10 +101,13 @@ def record_detections(target_folder: str, modality: str,
             store.DETECTIONS, modality)
         try:
             with store.transaction(conn):
-                cur = conn.execute(
-                    "DELETE FROM detections WHERE source_id IN "
-                    f"({', '.join('?' * len(of_kind))})", of_kind)
-                replaced = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+                replaced = 0
+                for earlier in of_kind:
+                    cur = conn.execute(
+                        "DELETE FROM detections WHERE source_id = ?",
+                        (earlier,))
+                    if cur.rowcount and cur.rowcount > 0:
+                        replaced += cur.rowcount
                 conn.executemany(
                     "INSERT INTO detections (frame, x1, y1, x2, y2, confidence, "
                     "species_id, source_id, source_class, attributes) "
