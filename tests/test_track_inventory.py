@@ -109,11 +109,19 @@ def flight(tmp_path):
                        "attributes": {}}],
     }])
 
-    route = os.path.join(root, "flight_route_t")
-    os.makedirs(route)
-    with open(os.path.join(route, "perpendicular_tracks_t.json"), "w") as fh:
-        json.dump([{"track_id": 1, "distance": 12.5}], fh)
+    _distances(root, [{"track_id": 1, "detection_id": ids[2],
+                       "last_frame": 2, "distance_m": 12.5}])
     return root
+
+
+def _distances(root, tracks, route="t"):
+    """``perpendicular_tracks_t.json`` as "Calculate Track Perpendicular"
+    writes it."""
+    folder = os.path.join(root, f"flight_route_{route}")
+    os.makedirs(folder, exist_ok=True)
+    with open(os.path.join(folder, "perpendicular_tracks_t.json"), "w") as fh:
+        json.dump({"crs": "EPSG:32633", "total_tracks": len(tracks),
+                   "tracks": tracks}, fh)
 
 
 def _by_track(rows):
@@ -296,3 +304,68 @@ class TestOneTrack:
         assert "Start" not in facts and "Movement" not in facts
         assert facts["Species"] == "animal"
         assert facts["Boxes"] == "1 box(es), 0 geo-referenced"
+
+
+# ---------------------------------------------------------------------------
+# The distance to the flight line
+# ---------------------------------------------------------------------------
+
+class TestDistanceToTheFlightLine:
+    """The column was always empty: the file is ``{"crs", "total_tracks",
+    "tracks": [...]}``, and was read as a dictionary of entries."""
+
+    def test_the_step_s_own_file_is_read(self, flight):
+        rows = _by_track(track_inventory.build_inventory(flight, "t"))
+        assert rows[1]["perpendicular_distance_m"] == 12.5
+        assert rows[2]["perpendicular_distance_m"] is None
+        assert rows[3]["perpendicular_distance_m"] is None
+
+    def test_the_file_shapes_it_can_have(self):
+        entries = track_inventory._perpendicular_entries
+        written = {"crs": "EPSG:32633", "total_tracks": 1,
+                   "tracks": [{"track_id": 4, "distance_m": 3.0}]}
+        assert entries(written) == [{"track_id": 4, "distance_m": 3.0}]
+        assert entries([{"track_id": 4, "distance": 3.0}]) == \
+            [{"track_id": 4, "distance": 3.0}]
+        # perpendicular_tracks_by_track_*.json
+        assert entries({"4": {"distance": 3.0}}) == \
+            [{"distance": 3.0, "track_id": "4"}]
+        assert entries("nonsense") == [] and entries(None) == []
+        assert entries({"crs": "EPSG:32633", "tracks": "none"}) == []
+
+    def test_the_route_of_the_other_camera_counts_too(self, flight):
+        os.remove(os.path.join(flight, "flight_route_t",
+                               "perpendicular_tracks_t.json"))
+        _distances(flight, [{"track_id": 3, "distance_m": 40.0}], route="w")
+
+        rows = _by_track(track_inventory.build_inventory(flight, "t"))
+        assert rows[3]["perpendicular_distance_m"] == 40.0
+        assert rows[1]["perpendicular_distance_m"] is None
+
+    def test_a_distance_measured_from_another_animals_box_is_not_used(
+            self, flight):
+        """The file is from before the tracks were numbered anew: its
+        "track 3" was measured from a box that is track 1's today."""
+        ids = [d["detection_id"]
+               for d in track_store.load_detections(flight, "t")]
+        _distances(flight, [
+            {"track_id": 3, "detection_id": ids[0], "distance_m": 99.0},
+            {"track_id": 1, "detection_id": ids[2], "distance_m": 12.5}])
+
+        rows = _by_track(track_inventory.build_inventory(flight, "t"))
+        assert rows[3]["perpendicular_distance_m"] is None
+        assert rows[1]["perpendicular_distance_m"] == 12.5
+
+    def test_an_entry_that_names_no_box_is_taken_as_it_is(self, flight):
+        """Files of earlier versions do not say which box."""
+        _distances(flight, [{"track_id": 3, "distance_m": 7.0}])
+        rows = _by_track(track_inventory.build_inventory(flight, "t"))
+        assert rows[3]["perpendicular_distance_m"] == 7.0
+
+    def test_a_broken_file_leaves_the_column_empty(self, flight):
+        path = os.path.join(flight, "flight_route_t",
+                            "perpendicular_tracks_t.json")
+        with open(path, "w") as handle:
+            handle.write("{ not json")
+        rows = _by_track(track_inventory.build_inventory(flight, "t"))
+        assert rows[1]["perpendicular_distance_m"] is None

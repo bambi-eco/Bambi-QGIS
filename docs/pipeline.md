@@ -345,14 +345,15 @@ For each track, takes the **last bounding box** (the animal's final recorded pos
 **Outputs:**
 ```
 flight_route_t/    # or flight_route_w/, uses the flight route camera selection
-├── perpendicular_tracks.json             # Flat list (used by QGIS layer)
-└── perpendicular_tracks_by_track.json    # Per-track keyed results
+├── perpendicular_tracks_t.json             # Flat list (used by QGIS layer); _w for the RGB tracks
+└── perpendicular_tracks_by_track_t.json    # Per-track keyed results
 ```
 
-`perpendicular_tracks_by_track.json` structure:
+`perpendicular_tracks_by_track_t.json` structure:
 ```json
 {
   "42": {
+    "detection_id": 1873,
     "last_frame": 123,
     "last_image": "frame_000123.jpg",
     "center": [UTM_x, UTM_y, altitude],
@@ -363,6 +364,8 @@ flight_route_t/    # or flight_route_w/, uses the flight route camera selection
 ```
 
 Use **→ Add Track Perpendicular Lines to QGIS** to visualize as line features.
+
+The distance is also the **Distance to the flight line** column of the [track inventory](#track-inventory) (`perpendicular_distance_m`). A distance is shown for a track only when it was measured from one of that track's own boxes - after tracking again the tracks are numbered anew, so run this step again to fill the column. (Before 9.1 the column was always empty: the inventory misread the file.)
 
 ### P3. Calculate Field of View
 

@@ -111,11 +111,34 @@ def _seconds(value) -> Optional[float]:
         return None
 
 
+def _perpendicular_entries(document) -> List[dict]:
+    """The per-track entries of a ``perpendicular_tracks_{m}.json``.
+
+    The step writes ``{"crs": ..., "total_tracks": n, "tracks": [...]}``.
+    That used to be read as a dictionary of entries - its values being a
+    string, a number and one list - so no entry was ever found and the
+    inventory's distance column stayed empty. A bare list and the per-track
+    dictionary (``perpendicular_tracks_by_track_{m}.json``) are read too.
+    """
+    if isinstance(document, dict):
+        if isinstance(document.get("tracks"), list):
+            document = document["tracks"]
+        else:
+            document = [dict(value, track_id=key)
+                        for key, value in document.items()
+                        if isinstance(value, dict)]
+    if not isinstance(document, list):
+        return []
+    return [entry for entry in document if isinstance(entry, dict)]
+
+
 def _perpendicular_distances(target_folder: str,
-                             modality: str) -> Dict[int, float]:
-    """``track_id -> metres`` from the flight-route step, whichever camera's
-    route it was computed against."""
-    result: Dict[int, float] = {}
+                             modality: str) -> Dict[int, dict]:
+    """``track_id -> {"distance_m", "detection_id"}`` from the flight-route
+    step, whichever camera's route it was computed against.
+    ``detection_id`` is the box the distance was measured from, where the
+    file records it."""
+    result: Dict[int, dict] = {}
     for route in ("t", "w"):
         path = os.path.join(target_folder, f"flight_route_{route}",
                             f"perpendicular_tracks_{modality}.json")
@@ -123,22 +146,43 @@ def _perpendicular_distances(target_folder: str,
             continue
         try:
             with open(path, "r", encoding="utf-8") as fh:
-                entries = json.load(fh)
+                entries = _perpendicular_entries(json.load(fh))
         except (OSError, ValueError):
             continue
-        if isinstance(entries, dict):
-            entries = list(entries.values())
-        for entry in entries or []:
-            if not isinstance(entry, dict) or entry.get("track_id") is None:
+        for entry in entries:
+            try:
+                track_id = int(entry["track_id"])
+            except (KeyError, TypeError, ValueError):
                 continue
             for key in ("distance_m", "perpendicular_distance", "distance"):
                 if entry.get(key) is not None:
-                    result.setdefault(int(entry["track_id"]),
-                                      float(entry[key]))
+                    result.setdefault(track_id, {
+                        "distance_m": float(entry[key]),
+                        "detection_id": entry.get("detection_id")})
                     break
         if result:
             break
     return result
+
+
+def _distance_of(track_id: int, members: List[dict],
+                 distances: Dict[int, dict]) -> Optional[float]:
+    """The distance to the flight line recorded for *track_id* - when it was
+    measured from one of the track's own boxes.
+
+    The distances are a file of their own, and a later tracking run numbers
+    its tracks anew: the entry for "track 12" may be about another animal.
+    The file says which box each distance was measured from, and a box that
+    is not this track's means the entry is not this track's either.
+    """
+    entry = distances.get(track_id)
+    if entry is None:
+        return None
+    measured_from = entry.get("detection_id")
+    if measured_from is not None and int(measured_from) not in {
+            int(member["detection_id"]) for member in members}:
+        return None
+    return entry["distance_m"]
 
 
 def build_inventory(target_folder: str, modality: str,
@@ -336,7 +380,8 @@ def build_inventory(target_folder: str, modality: str,
             "label_species": "; ".join(manual_species),
             "label_sex": _manual("sex"),
             "label_age": _manual("age"),
-            "perpendicular_distance_m": perpendicular.get(track_id),
+            "perpendicular_distance_m": _distance_of(
+                track_id, members, perpendicular),
             "attributes": json.dumps(extra, sort_keys=True) if extra else "",
         })
     return inventory
