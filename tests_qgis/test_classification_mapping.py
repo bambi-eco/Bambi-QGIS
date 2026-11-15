@@ -213,7 +213,7 @@ def test_a_custom_model_is_not_downloaded(dock, monkeypatch, tmp_path):
         combo.setCurrentIndex(combo.findData("custom"))
 
     monkeypatch.setattr(
-        "bambi_wildlife_detection.bambi_dock_widget.QMessageBox.information",
+        "qgis.PyQt.QtWidgets.QMessageBox.information",
         lambda *a, **k: None)
     dock.download_classification_models()
 
@@ -258,7 +258,7 @@ def test_a_failure_is_reported_and_the_button_recovers(dock, monkeypatch,
         "_download_head", staticmethod(_boom))
     warned = {}
     monkeypatch.setattr(
-        "bambi_wildlife_detection.bambi_dock_widget.QMessageBox.warning",
+        "qgis.PyQt.QtWidgets.QMessageBox.warning",
         lambda _p, title, text: warned.update(title=title, text=text))
 
     dock.download_classification_models()

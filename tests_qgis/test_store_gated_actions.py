@@ -18,7 +18,7 @@ import pytest
 from qgis.core import QgsProject
 from qgis.PyQt.QtWidgets import QDialog, QMessageBox
 
-from bambi_wildlife_detection import bambi_dock_widget
+from bambi_wildlife_detection.dock import result_layers
 from bambi_wildlife_detection.core import detection_store, track_store
 
 
@@ -78,7 +78,7 @@ def _track_groups():
 
 def test_tracks_are_added_without_any_legacy_file(dock, stores_only, quiet,
                                                   monkeypatch):
-    monkeypatch.setattr(bambi_dock_widget, "FrameRangeDialog", _WholeRange)
+    monkeypatch.setattr(result_layers, "FrameRangeDialog", _WholeRange)
     dock.add_tracks_to_qgis()
 
     assert quiet == []
@@ -93,7 +93,7 @@ def test_csv_files_in_the_legacy_folder_do_not_multiply_the_tracks(
     for name in ("tracks.csv", "tracks_backup.csv"):
         with open(os.path.join(folder, name), "w") as handle:
             handle.write("# old\n")
-    monkeypatch.setattr(bambi_dock_widget, "FrameRangeDialog", _WholeRange)
+    monkeypatch.setattr(result_layers, "FrameRangeDialog", _WholeRange)
     dock.add_tracks_to_qgis()
 
     assert _track_groups() == ["Track 1", "Track 2"]
@@ -177,7 +177,7 @@ def test_adding_the_tracks_twice_shows_them_once(dock, stores_only, quiet,
                                                  monkeypatch):
     """A second group of the same name appeared - and the first one stood
     empty beside it, its layers gone with the files that were rewritten."""
-    monkeypatch.setattr(bambi_dock_widget, "FrameRangeDialog", _WholeRange)
+    monkeypatch.setattr(result_layers, "FrameRangeDialog", _WholeRange)
     dock.add_tracks_to_qgis()
     once = _tree()
     dock.add_tracks_to_qgis()
@@ -189,7 +189,7 @@ def test_adding_the_tracks_twice_shows_them_once(dock, stores_only, quiet,
 
 def test_adding_the_frame_detections_twice_shows_them_once(
         dock, stores_only, quiet, monkeypatch):
-    monkeypatch.setattr(bambi_dock_widget, "FrameRangeDialog", _WholeRange)
+    monkeypatch.setattr(result_layers, "FrameRangeDialog", _WholeRange)
     dock.add_frame_detections_to_qgis()
     once = _tree()
     dock.add_frame_detections_to_qgis()
@@ -207,9 +207,9 @@ def test_another_range_replaces_the_one_shown(dock, stores_only, quiet,
         def selected_range(self):
             return (self._range[0], self._range[0])
 
-    monkeypatch.setattr(bambi_dock_widget, "FrameRangeDialog", _WholeRange)
+    monkeypatch.setattr(result_layers, "FrameRangeDialog", _WholeRange)
     dock.add_frame_detections_to_qgis()
-    monkeypatch.setattr(bambi_dock_widget, "FrameRangeDialog", FirstFrameOnly)
+    monkeypatch.setattr(result_layers, "FrameRangeDialog", FirstFrameOnly)
     dock.add_frame_detections_to_qgis()
 
     shown = [line.strip() for line in _tree()
@@ -280,7 +280,7 @@ def test_a_users_own_layer_of_another_name_is_left_alone(
 
     mine = QgsRasterLayer(_raster(str(tmp_path / "mine.tif")), "my notes")
     QgsProject.instance().addMapLayer(mine)
-    monkeypatch.setattr(bambi_dock_widget, "FrameRangeDialog", _WholeRange)
+    monkeypatch.setattr(result_layers, "FrameRangeDialog", _WholeRange)
     dock.add_tracks_to_qgis()
     dock.add_tracks_to_qgis()
 

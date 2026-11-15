@@ -14,9 +14,10 @@ def _gui_modules():
     for name in sorted(os.listdir(ROOT)):
         if name.endswith(".py") and name != "__init__.py":
             names.append(f"{PACKAGE}.{name[:-3]}")
-    for name in sorted(os.listdir(os.path.join(ROOT, "viewer3d"))):
-        if name.endswith(".py") and name != "__init__.py":
-            names.append(f"{PACKAGE}.viewer3d.{name[:-3]}")
+    for package in ("dock", "viewer3d"):
+        for name in sorted(os.listdir(os.path.join(ROOT, package))):
+            if name.endswith(".py") and name != "__init__.py":
+                names.append(f"{PACKAGE}.{package}.{name[:-3]}")
     return names
 
 

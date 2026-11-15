@@ -21,12 +21,12 @@ def no_modal_dialogs(monkeypatch):
     Left alone, that opens a modal dialog which aborts the headless process -
     the error itself never reaches the report. Raising instead surfaces it.
     """
-    from bambi_wildlife_detection import bambi_dock_widget as mod
+    from qgis.PyQt.QtWidgets import QMessageBox
 
     def fail(_parent, title, text, *args, **kwargs):
         raise AssertionError(f"unexpected error dialog: {title} - {text}")
 
-    monkeypatch.setattr(mod.QMessageBox, "critical", fail)
+    monkeypatch.setattr(QMessageBox, "critical", fail)
 
 
 @pytest.fixture
@@ -255,10 +255,10 @@ class TestAddTransectAreas:
 
     def test_missing_output_warns_instead_of_raising(self, dock, tmp_path,
                                                      monkeypatch):
-        from bambi_wildlife_detection import bambi_dock_widget as mod
+        from qgis.PyQt.QtWidgets import QMessageBox
 
         warned = []
-        monkeypatch.setattr(mod.QMessageBox, "warning",
+        monkeypatch.setattr(QMessageBox, "warning",
                             lambda *a, **k: warned.append(a))
         _configure(dock, tmp_path)
         dock.add_transect_areas_to_qgis()

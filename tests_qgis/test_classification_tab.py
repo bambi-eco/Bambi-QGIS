@@ -301,7 +301,7 @@ def test_matching_needs_both_modalities(dock, tmp_path, monkeypatch):
         warned["text"] = text
 
     monkeypatch.setattr(
-        "bambi_wildlife_detection.bambi_dock_widget.QMessageBox.warning",
+        "qgis.PyQt.QtWidgets.QMessageBox.warning",
         _warn)
     started = []
     monkeypatch.setattr(dock, "start_worker", started.append)
@@ -358,7 +358,7 @@ def test_embeddings_offer_the_same_choices_as_the_classifiers(dock):
 def test_embeddings_needs_tracking_first(dock, tmp_path, monkeypatch):
     warned = {}
     monkeypatch.setattr(
-        "bambi_wildlife_detection.bambi_dock_widget.QMessageBox.warning",
+        "qgis.PyQt.QtWidgets.QMessageBox.warning",
         lambda _p, title, text: warned.update(title=title, text=text))
     started = []
     monkeypatch.setattr(dock, "start_worker", started.append)
@@ -405,7 +405,7 @@ def test_syncing_without_matches_says_so(dock, tmp_path, monkeypatch):
 
     warned = {}
     monkeypatch.setattr(
-        "bambi_wildlife_detection.bambi_dock_widget.QMessageBox.warning",
+        "qgis.PyQt.QtWidgets.QMessageBox.warning",
         lambda _p, title, text: warned.update(title=title, text=text))
 
     store.open_store(store.project_path(str(tmp_path)),

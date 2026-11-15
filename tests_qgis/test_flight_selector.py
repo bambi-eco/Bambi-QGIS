@@ -873,7 +873,7 @@ def running(dock, monkeypatch):
     """A step that has been started the way the dock starts one - but never
     finishes. The guards used to look at an attribute nothing set, which the
     tests set by hand; this goes through start_worker instead."""
-    from bambi_wildlife_detection import bambi_dock_widget
+    from bambi_wildlife_detection.dock import run_panel
 
     class Idle:
         def __init__(self, *args, **kwargs):
@@ -898,8 +898,8 @@ def running(dock, monkeypatch):
         def deleteLater(self):
             pass
 
-    monkeypatch.setattr(bambi_dock_widget, "ProcessingWorker", Idle)
-    monkeypatch.setattr(bambi_dock_widget, "QThread", Idle)
+    monkeypatch.setattr(run_panel, "ProcessingWorker", Idle)
+    monkeypatch.setattr(run_panel, "QThread", Idle)
 
     def start():
         dock.start_worker("flight_route")
