@@ -40,6 +40,28 @@ class AnalyticsError(RuntimeError):
     """There is nothing to analyse, or the request cannot be honoured."""
 
 
+def has_no_animals(target_folder: str, modality: str) -> bool:
+    """True when a flight was searched and nothing was found: detection ran,
+    and no box that counts is left - none at all, or only ``not-an-animal``.
+
+    Such a flight has no tracks and can have none, so the steps that need
+    tracks cannot run on it. It still was surveyed: its ground counts, with
+    zero animals on it, and leaving it out of a density inflates the density.
+    A flight on which detection never ran is not one of these.
+    """
+    path = store.stage_path(target_folder, store.DETECTIONS, modality)
+    if not os.path.isfile(path):
+        return False
+    conn = store.open_store(path, store.DETECTIONS, modality)
+    try:
+        return not any(
+            int(row["species_id"]) not in EXCLUDED_SPECIES
+            for row in conn.execute(
+                "SELECT DISTINCT species_id FROM detections"))
+    finally:
+        conn.close()
+
+
 def species_options(target_folder: str) -> List[dict]:
     """Species available as a filter, excluding those that never count.
 

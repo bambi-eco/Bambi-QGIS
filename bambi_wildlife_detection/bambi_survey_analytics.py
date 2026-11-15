@@ -1879,13 +1879,26 @@ class SurveyAnalyticsMixin:
         perp_file = os.path.join(
             target_folder, f"flight_route_{fr_suffix}",
             f"perpendicular_tracks_{suffix}.json")
-        if not os.path.exists(perp_file):
+        # A flight on which nothing was found has no tracks, so "Calculate
+        # Track Perpendicular" cannot have run on it - but it was surveyed,
+        # and its transects count with zero animals. It used to be refused,
+        # and a density without the empty flights is too high.
+        from .core import analytics_source
+        searched_and_empty = analytics_source.has_no_animals(
+            target_folder, suffix)
+        if os.path.exists(perp_file) and not searched_and_empty:
+            with open(perp_file, 'r', encoding='utf-8') as f:
+                tracks = json.load(f).get("tracks", [])
+        elif searched_and_empty:
+            tracks = []
+            if log_fn:
+                log_fn("No animals were detected on this flight: its "
+                       "transects count with zero animals")
+        else:
             raise FileNotFoundError(
                 f"{os.path.basename(perp_file)} not found in {target_folder}. "
                 "Please run 'Calculate Track Perpendicular' first."
             )
-        with open(perp_file, 'r', encoding='utf-8') as f:
-            tracks = json.load(f).get("tracks", [])
 
         # class_id is the resolved species for anything the store wrote, so
         # the filter is applied here rather than where the file was written -
@@ -1912,18 +1925,21 @@ class SurveyAnalyticsMixin:
                 log_fn(f"{n_outside_survey_area} track(s) outside the survey "
                        "area are not counted")
 
-        if not tracks:
+        # No track left is a result, not an error: the flight's transects
+        # were flown and count with zero animals. Refusing the flight - as
+        # this did - left it out of the pooled density, which is then too
+        # high; and a species absent from one flight could not be estimated
+        # over the survey at all.
+        if not tracks and not searched_and_empty and log_fn:
             if survey_area is not None and n_outside_survey_area:
-                raise RuntimeError(
-                    f"Every track in {target_folder} lies outside its survey "
-                    "area (or inside an exclusion zone).")
-            if species_ids is not None:
-                raise RuntimeError(
-                    "No tracks with perpendicular distances match the "
-                    f"selected species in {target_folder}. Re-run 'Calculate "
-                    "Track Perpendicular' if the tracks changed since.")
-            raise RuntimeError(
-                f"No tracks with perpendicular distances found in {target_folder}.")
+                why = ("every track lies outside the survey area (or inside "
+                       "an exclusion zone)")
+            elif species_ids is not None:
+                why = "no track is of the selected species"
+            else:
+                why = "there are no tracks with perpendicular distances"
+            log_fn(f"Flight {flight.name}: {why} - its transects count with "
+                   "zero animals")
 
         # ---- Monitored area per transect (union of the frame FoVs) --------- #
         # Computed before the assignment: a track only counts towards a

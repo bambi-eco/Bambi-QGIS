@@ -460,3 +460,127 @@ class TestMultiProject:
         assert result["total_count"] == 4
         # A lone project keeps its plain transect names (no project prefix).
         assert {t["name"] for t in result["transects"]} == {"North", "Transect 2"}
+
+
+class TestFlightsWithoutAnimals:
+    """A flight on which nothing was found was still flown: its ground counts,
+    with zero animals. The step used to refuse such a flight, and a survey
+    without its empty flights has too high a density."""
+
+    def _two_flights(self, flight, tmp_path):
+        folder2 = tmp_path / "target2"
+        dem2 = _write_second_flight(str(folder2), origin=(600000.0, 5100000.0))
+        config = dict(flight)
+        config["survey"] = dict(flight["survey"])
+        config["survey"]["flights"] = list(flight["survey"]["flights"]) + [
+            {"name": "target2", "target_folder": str(folder2),
+             "epsg": 32633, "dem": dem2}]
+        return config, str(folder2)
+
+    def _searched(self, folder, classes=()):
+        """Detection ran on the flight and left these boxes."""
+        from bambi_wildlife_detection.core import detection_store
+
+        detection_store.record_detections(folder, "t", [
+            {"frame": 3, "x1": 1.0, "y1": 1.0, "x2": 2.0, "y2": 2.0,
+             "confidence": 0.9, "source_class": cls} for cls in classes])
+
+    def test_a_flight_on_which_nothing_was_detected_is_pooled(
+            self, processor, flight, tmp_path):
+        config, folder2 = self._two_flights(flight, tmp_path)
+        self._searched(folder2)
+        # no tracks, so "Calculate Track Perpendicular" never ran there
+        os.remove(os.path.join(folder2, "flight_route_t",
+                               "perpendicular_tracks_t.json"))
+        log = []
+
+        processor.run_population_estimation(config, log_fn=log.append)
+
+        result = _estimate(flight)
+        assert result["n_projects"] == 2
+        assert result["n_transects"] == 4
+        assert result["total_count"] == 4               # the first flight's
+        assert result["total_ha"] == pytest.approx(1.68, rel=1e-6)
+        # half the density of the first flight alone (4 / 0.84 ha)
+        assert result["estimates"]["naive"]["density_per_100ha"] == \
+            pytest.approx(4 / 1.68 * 100.0, rel=1e-6)
+        empty = [p for p in result["projects"] if p["name"] == "target2"][0]
+        assert empty["total_count"] == 0 and empty["n_transects"] == 2
+        assert any("No animals were detected on this flight" in line
+                   for line in log)
+
+    def test_false_positives_alone_are_no_animals(self, processor, flight,
+                                                  tmp_path):
+        """Every box of the flight was labelled "not an animal"."""
+        from bambi_wildlife_detection.core import analytics_source
+
+        config, folder2 = self._two_flights(flight, tmp_path)
+        self._searched(folder2, classes=("0", "0"))
+        conn = store.open_store(
+            store.stage_path(folder2, store.DETECTIONS, "t"),
+            store.DETECTIONS, "t")
+        with store.transaction(conn):
+            conn.execute("UPDATE detections SET species_id = ?",
+                         (store.NOT_AN_ANIMAL_SPECIES_ID,))
+        conn.close()
+        assert analytics_source.has_no_animals(folder2, "t")
+
+        processor.run_population_estimation(config)
+
+        assert _estimate(flight)["total_count"] == 4
+        assert _estimate(flight)["n_transects"] == 4
+
+    def test_a_flight_that_was_never_searched_is_still_refused(
+            self, processor, flight, tmp_path):
+        """No detection store: nobody looked, so "zero animals" is not known."""
+        config, folder2 = self._two_flights(flight, tmp_path)
+        os.remove(os.path.join(folder2, "flight_route_t",
+                               "perpendicular_tracks_t.json"))
+
+        with pytest.raises(FileNotFoundError, match="Track Perpendicular"):
+            processor.run_population_estimation(config)
+
+    def test_animals_without_perpendicular_distances_are_still_refused(
+            self, processor, flight, tmp_path):
+        """Animals were found, but the step that places them did not run."""
+        from bambi_wildlife_detection.core import analytics_source
+
+        config, folder2 = self._two_flights(flight, tmp_path)
+        self._searched(folder2, classes=("0",))
+        assert not analytics_source.has_no_animals(folder2, "t")
+        os.remove(os.path.join(folder2, "flight_route_t",
+                               "perpendicular_tracks_t.json"))
+
+        with pytest.raises(FileNotFoundError, match="Track Perpendicular"):
+            processor.run_population_estimation(config)
+
+    def test_a_flight_whose_tracks_all_lie_elsewhere_counts_zero(
+            self, processor, flight, tmp_path):
+        """No track is left once those outside the monitored ground are
+        dropped - the ground was still monitored."""
+        config, folder2 = self._two_flights(flight, tmp_path)
+        path = os.path.join(folder2, "flight_route_t",
+                            "perpendicular_tracks_t.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"crs": "EPSG:32633", "total_tracks": 0, "tracks": []},
+                      fh)
+        log = []
+
+        processor.run_population_estimation(config, log_fn=log.append)
+
+        assert _estimate(flight)["total_count"] == 4
+        assert _estimate(flight)["n_transects"] == 4
+        assert any("count with zero animals" in line for line in log)
+
+    def test_a_survey_without_any_animal_has_density_zero(self, processor,
+                                                          flight):
+        path = os.path.join(flight["target_folder"], "flight_route_t",
+                            "perpendicular_tracks_t.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"tracks": []}, fh)
+
+        processor.run_population_estimation(flight)
+
+        result = _estimate(flight)
+        assert result["total_count"] == 0
+        assert result["estimates"]["naive"]["density_per_100ha"] == 0.0
