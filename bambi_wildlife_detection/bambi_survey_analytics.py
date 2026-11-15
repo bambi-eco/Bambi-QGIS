@@ -634,10 +634,14 @@ class SurveyAnalyticsMixin:
     # Census summary
     # ------------------------------------------------------------------ #
 
-    def _census_records(self, survey, flight, source, area, log_fn=None):
-        """``{species, sex, age, x, y, approved}`` per counted animal (tracks)
-        or per box (detections) of one flight - the survey's animals, as
-        every tool sees them (``core.analytics_source.load_animals``)."""
+    def _census_records(self, survey, flight, source, area, log_fn=None,
+                        found=None):
+        """``{id, group, species, sex, age, x, y, approved}`` per counted
+        animal (tracks) or per box (detections) of one flight - the survey's
+        animals, as every tool sees them
+        (``core.analytics_source.load_animals``). ``group`` is the group the
+        animal is in (*found*, the flight's ``core.groups.FlightGroups``);
+        ``None`` without one."""
         from .core import analytics_source, store as _store
 
         ids = survey.species_ids(flight)
@@ -659,9 +663,23 @@ class SurveyAnalyticsMixin:
         if log_fn and facts["excluded_not_an_animal"]:
             log_fn(f"{flight.name}: {facts['excluded_not_an_animal']} "
                    "labelled not-an-animal are not counted")
-        return [{"species": animal["species"], "sex": animal["sex"],
+        key = "track_id" if source == "tracks" else "detection_id"
+        return [{"id": animal[key],
+                 "group": None if found is None else found.of(animal[key]),
+                 "species": animal["species"], "sex": animal["sex"],
                  "age": animal["age"], "x": animal["x"], "y": animal["y"],
                  "approved": animal["approved"]} for animal in animals]
+
+    def _flight_groups(self, survey, flight, source, log_fn=None):
+        """The animals of a flight divided into groups (``core.groups``), or
+        ``None`` where the flight has nothing stored to divide."""
+        from .core import analytics_source, groups
+
+        try:
+            return groups.for_flight(flight.target_folder, survey.modality,
+                                     source, survey.include_manual)
+        except analytics_source.AnalyticsError:
+            return None
 
     def _covered_m2(self, survey, flight, area, log_fn=None):
         """Ground the flight's frames saw inside *area* (``None`` without FoV)."""
@@ -705,15 +723,30 @@ class SurveyAnalyticsMixin:
                    f"({source}) of {self._flights_note(survey)}...")
         area = self._survey_area(survey, log_fn)
 
+        from .core import groups
+
         flights = []
+        group_rows = []
+        group_distances = {}
+        group_rule = ""
         for index, flight in enumerate(survey.flights):
             if cancel_check and cancel_check():
                 raise _cancelled("Census summary cancelled")
+            found = self._flight_groups(survey, flight, source, log_fn)
             records = self._census_records(survey, flight, source, area,
-                                           log_fn)
+                                           log_fn, found)
             covered = self._covered_m2(survey, flight, area, log_fn)
             flights.append({"name": flight.name, "records": records,
                             "covered_m2": covered})
+            if found is not None:
+                of_flight = groups.survey_rows(
+                    flight.name, found, records,
+                    lambda record: census.counts_inside(record, area))
+                group_rows.extend(of_flight)
+                group_distances[flight.name] = {
+                    name: found.distances.get(name, groups.DEFAULT_DISTANCE_M)
+                    for name in sorted({row["species"] for row in of_flight})}
+                group_rule = found.describe_rule()
             if log_fn:
                 log_fn(f"{flight.name}: {len(records)} {source}")
             if progress_fn:
@@ -727,6 +760,7 @@ class SurveyAnalyticsMixin:
             "crs": f"EPSG:{survey.epsg}" if survey.epsg else None,
             "survey_area": None if area is None else area.describe(),
             "species_filter": survey.species,
+            "group_distances_m": group_distances,
             "notes": (
                 "Minimum counts: no detection probability is modelled. "
                 "per_km2_plot divides by the survey areas minus the "
@@ -735,10 +769,31 @@ class SurveyAnalyticsMixin:
                 "per_km2_covered divides by the ground the frames actually "
                 "saw inside the survey areas, summed across flights."),
         })
+        if group_rule:
+            result["notes"] += (
+                f" Groups: {group_rule} A group counts with its members "
+                "that are counted inside.")
         folder = survey.ensure_analytics_folder()
         stem = f"census_summary_{source}"
         csv_path = census.write_csv(result, os.path.join(folder, f"{stem}.csv"))
         census.write_json(result, os.path.join(folder, f"{stem}.json"))
+
+        # The groups themselves, one row each - what the "groups" column of
+        # the census counts, and what "Add Groups to QGIS" draws.
+        sizes = groups.size_stats(row["counted"] for row in group_rows)
+        groups.write_table_csv(
+            group_rows, os.path.join(folder, f"groups_{source}.csv"))
+        groups.write_table_json({
+            "source": source,
+            "camera": survey.camera_label,
+            "crs": f"EPSG:{survey.epsg}" if survey.epsg else None,
+            "survey_area": None if area is None else area.describe(),
+            "species_filter": survey.species,
+            "rule": group_rule,
+            "group_distances_m": group_distances,
+            "summary": sizes,
+            "groups": group_rows,
+        }, os.path.join(folder, f"groups_{source}.json"))
 
         if log_fn:
             for row in result["rows"]:
@@ -748,6 +803,12 @@ class SurveyAnalyticsMixin:
                 note = f", {density:.2f} /km²" if density is not None else ""
                 log_fn(f"{row['flight']}: {row['inside']} counted"
                        f"{' inside the survey area' if area else ''}{note}")
+            if sizes["groups"]:
+                together = sizes["animals"] - sizes["alone"]
+                log_fn(f"Groups: {sizes['groups']} - {together} animal(s) in "
+                       f"{sizes['groups'] - sizes['alone']} group(s) of two "
+                       f"or more (largest {sizes['largest']}), "
+                       f"{sizes['alone']} alone")
             log_fn(f"Census summary written to {csv_path}")
         if progress_fn:
             progress_fn(100)

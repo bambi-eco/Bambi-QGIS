@@ -23,6 +23,13 @@ survey:
 A record that cannot be placed (no geo-referenced position) is counted, but
 cannot be tested against the plot: with a survey area it is reported as
 *unplaced* and not counted inside.
+
+**Groups.** Animals that were together are a group (:mod:`core.groups`); a
+record says which one it is in (``group``). Each row reports how many groups
+its counted animals formed, their mean size and the largest - of the
+animals that are counted *inside*: a herd of nine of which six stand in the
+plot is a group of six here. Records that carry no group leave these three
+columns empty.
 """
 
 import csv
@@ -38,6 +45,7 @@ UNKNOWN = "unknown"
 COLUMNS = [
     "flight", "species", "counted", "inside", "outside", "unplaced",
     "approved", "plot_ha", "covered_ha", "per_km2_plot", "per_km2_covered",
+    "groups", "mean_group_size", "largest_group",
 ]
 
 
@@ -46,18 +54,31 @@ def _label(value) -> str:
     return text.lower() if text else UNKNOWN
 
 
+def counts_inside(record: dict, area=None) -> bool:
+    """Whether a record is one of the animals a row counts as *inside*:
+    every record without a survey area, and with one those that lie in it -
+    a record without a place cannot be said to."""
+    if area is None:
+        return True
+    x, y = record.get("x"), record.get("y")
+    if x is None or y is None:
+        return False
+    return bool(area.contains(float(x), float(y)))
+
+
 def tally(records: Sequence[dict], area=None) -> Dict[str, dict]:
     """Per-species counts of one flight: ``{species: counts}``.
 
     *records* are ``{species, sex, age, x, y, approved}``; ``x``/``y`` may be
-    ``None`` for an animal that was never geo-referenced.
+    ``None`` for an animal that was never geo-referenced. With a ``group``
+    (the id of the group the animal is in, unique within the flight) the
+    counts say how the animals inside were grouped: ``group_sizes``.
     """
     out: Dict[str, dict] = OrderedDict()
+    members: Dict[str, Dict[object, int]] = {}
     for record in records:
         species = record.get("species") or UNKNOWN
-        counts = out.setdefault(species, {
-            "counted": 0, "inside": 0, "outside": 0, "unplaced": 0,
-            "approved": 0, "sex": {}, "age": {}})
+        counts = out.setdefault(species, _empty())
         counts["counted"] += 1
         x, y = record.get("x"), record.get("y")
         if area is None:
@@ -74,27 +95,53 @@ def tally(records: Sequence[dict], area=None) -> Dict[str, dict]:
         if not inside:
             continue
         counts["inside"] += 1
+        if record.get("group") is None:
+            counts["ungrouped"] += 1
+        else:
+            of_species = members.setdefault(species, {})
+            of_species[record["group"]] = of_species.get(record["group"], 0) + 1
         if record.get("approved"):
             counts["approved"] += 1
         for key in ("sex", "age"):
             label = _label(record.get(key))
             counts[key][label] = counts[key].get(label, 0) + 1
+    for species, of_species in members.items():
+        out[species]["group_sizes"] = sorted(of_species.values())
     return out
 
 
 def _merge(target: dict, source: dict) -> dict:
-    for key in ("counted", "inside", "outside", "unplaced", "approved"):
+    for key in ("counted", "inside", "outside", "unplaced", "approved",
+                "ungrouped"):
         target[key] = target.get(key, 0) + source.get(key, 0)
     for key in ("sex", "age"):
         bucket = target.setdefault(key, {})
         for label, n in source.get(key, {}).items():
             bucket[label] = bucket.get(label, 0) + n
+    # Groups never span species or flights, so the groups of a total are
+    # the groups of its parts.
+    sizes = list(target.get("group_sizes") or [])
+    sizes.extend(source.get("group_sizes") or [])
+    target["group_sizes"] = sorted(sizes)
     return target
 
 
 def _empty() -> dict:
     return {"counted": 0, "inside": 0, "outside": 0, "unplaced": 0,
-            "approved": 0, "sex": {}, "age": {}}
+            "approved": 0, "sex": {}, "age": {}, "group_sizes": [],
+            "ungrouped": 0}
+
+
+def _group_columns(counts: dict) -> dict:
+    """``groups``, ``mean_group_size`` and ``largest_group`` of a row -
+    ``None`` where an animal inside came without a group."""
+    sizes = counts.get("group_sizes") or []
+    if counts.get("ungrouped"):
+        return {"groups": None, "mean_group_size": None,
+                "largest_group": None}
+    return {"groups": len(sizes),
+            "mean_group_size": sum(sizes) / len(sizes) if sizes else None,
+            "largest_group": max(sizes) if sizes else None}
 
 
 def _density(count: int, area_m2: Optional[float]) -> Optional[float]:
@@ -139,6 +186,7 @@ def build(flights: Sequence[dict], area=None,
             "covered_ha": None if covered_m2 is None else covered_m2 / 1e4,
             "per_km2_plot": _density(counts["inside"], plot_area_m2),
             "per_km2_covered": _density(counts["inside"], covered_m2),
+            **_group_columns(counts),
             "sex": dict(counts["sex"]),
             "age": dict(counts["age"]),
         }

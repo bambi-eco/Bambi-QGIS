@@ -123,8 +123,10 @@ class AnalyticsTabMixin:
         census_desc = QLabel(
             "Counts per species and flight - inside the survey area when one "
             "is applied - with animals per km² of the survey areas and of the "
-            "ground the frames actually covered, and the sex and age "
-            "breakdown. Minimum counts: no detection probability is modelled."
+            "ground the frames actually covered, the sex and age breakdown, "
+            "and the groups the animals formed (how far apart the animals of "
+            "a group may be is set per species in the Project Schema). "
+            "Minimum counts: no detection probability is modelled."
         )
         census_desc.setWordWrap(True)
         census_desc.setStyleSheet("color: gray; font-size: 10px;")
@@ -147,6 +149,19 @@ class AnalyticsTabMixin:
         census_show_row.addWidget(self.census_show_btn)
         census_show_row.addStretch()
         census_layout.addLayout(census_show_row)
+
+        groups_add_row = QHBoxLayout()
+        self.add_groups_btn = QPushButton("→ Add Groups to QGIS")
+        self.add_groups_btn.clicked.connect(self.add_groups_to_qgis)
+        self.add_groups_btn.setToolTip(
+            "Outline every group of two or more animals the census found, "
+            "in the colour of its species and with the number of animals "
+            "in it. The groups are listed in analytics_{camera}/"
+            "groups_{source}.csv.")
+        self.add_groups_status = QLabel("⚪")
+        groups_add_row.addWidget(self.add_groups_btn)
+        groups_add_row.addWidget(self.add_groups_status)
+        census_layout.addLayout(groups_add_row)
 
         analytics_tab_layout.addWidget(census_group)
 

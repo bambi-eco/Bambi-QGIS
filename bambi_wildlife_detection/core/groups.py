@@ -467,3 +467,91 @@ def for_flight(target_folder: str, modality: str, source: str = "tracks",
         for record in records)
     return FlightGroups(records, species_distances(target_folder), source,
                         timed)
+
+
+# ---------------------------------------------------------------------------
+# The groups of a survey, as a table
+# ---------------------------------------------------------------------------
+
+#: Columns of the groups table (``groups_{source}.csv``).
+TABLE_COLUMNS = ["flight", "group", "species", "size", "counted", "x", "y",
+                 "radius_m", "first_time", "last_time", "members"]
+
+
+def _iso(seconds) -> Optional[str]:
+    if seconds is None:
+        return None
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(
+        float(seconds), tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def survey_rows(flight_name: str, found: FlightGroups,
+                records: Sequence[dict], inside=None) -> List[dict]:
+    """The groups of one flight as a survey counts them.
+
+    :param records: the animals the survey counts on this flight -
+        ``{"id", "x", "y", ...}``, already narrowed to its species
+    :param inside: ``inside(record) -> bool`` - whether the survey counts
+        the animal (it lies in the survey area); every one when ``None``
+    :return: one row per group of which at least one member is counted:
+        :data:`TABLE_COLUMNS` and ``positions``, the places of its members.
+        ``size`` is the whole group, ``counted`` its members that count.
+    """
+    by_id = {record["id"]: record for record in records}
+    rows = []
+    for group in found.rows:
+        members = [by_id[m] for m in group["members"] if m in by_id]
+        counted = sum(1 for member in members
+                      if inside is None or inside(member))
+        if not counted:
+            continue
+        rows.append({
+            "flight": flight_name,
+            "group": group["group"],
+            "species": group["species"],
+            "size": group["size"],
+            "counted": counted,
+            "x": group["x"], "y": group["y"],
+            "radius_m": group["radius_m"],
+            "first_time": _iso(group["first_time"]),
+            "last_time": _iso(group["last_time"]),
+            "members": list(group["members"]),
+            "positions": [[member["x"], member["y"]] for member in members
+                          if None not in (member.get("x"), member.get("y"))],
+        })
+    return rows
+
+
+def write_table_csv(rows: Sequence[dict], path: str) -> str:
+    """The groups table as CSV: :data:`TABLE_COLUMNS`, the members of a
+    group as their ids separated by blanks."""
+    import csv
+
+    def cell(row, column):
+        value = row.get(column)
+        if value is None:
+            return ""
+        if column == "members":
+            return " ".join(str(member) for member in value)
+        if isinstance(value, float):
+            return round(value, 2)
+        return value
+
+    with open(path, "w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(TABLE_COLUMNS)
+        for row in rows:
+            writer.writerow([cell(row, column) for column in TABLE_COLUMNS])
+    return path
+
+
+def write_table_json(document: dict, path: str) -> str:
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(document, handle, indent=2)
+    return path
+
+
+def read_table_json(path: str) -> dict:
+    with open(path, encoding="utf-8") as handle:
+        return json.load(handle)

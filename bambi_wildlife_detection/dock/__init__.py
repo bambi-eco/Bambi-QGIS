@@ -29,6 +29,7 @@ On the map
     ``result_layers``            the "Add ... to QGIS" buttons of the steps
     ``flight_route_layers``      the flight route and its markers
     ``transect_layers``          the transects of a survey
+    ``group_layers``             the groups the census found
     ``layer_groups``             where a layer goes in the layer tree
 
 ``range_dialogs`` and ``common`` hold the dialogs and helpers that more than

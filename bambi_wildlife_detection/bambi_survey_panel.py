@@ -442,7 +442,9 @@ class CensusTableDialog(QDialog):
             "inside": "Inside", "outside": "Outside", "unplaced": "Unplaced",
             "approved": "Approved", "plot_ha": "Plot (ha)",
             "covered_ha": "Covered (ha)", "per_km2_plot": "/km² (plot)",
-            "per_km2_covered": "/km² (covered)",
+            "per_km2_covered": "/km² (covered)", "groups": "Groups",
+            "mean_group_size": "Mean group size",
+            "largest_group": "Largest group",
         }
         table = QTableWidget(len(rows), len(columns))
         table.setHorizontalHeaderLabels([
