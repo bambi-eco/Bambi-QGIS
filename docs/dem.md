@@ -6,6 +6,8 @@ The processing pipeline needs a Digital Elevation Model as a GLB/GLTF mesh with 
 
 Use the **Download DEM (Austria)** option to download and tile Austrian elevation data from the BEV ATOM service automatically. The tiles are large (50 km a side) and are kept in a cache, so a second flight in the same region downloads nothing; from them only the flight's own area (plus the padding) is read, also where a flight crosses the edge between two tiles (up to 9.0 that case merged both tiles whole, which took some 20 GB of memory and as much disk space).
 
+**Interrupted downloads.** A tile is several hundred megabytes to gigabytes. It comes in under `<tile>.tif.part` in the cache (`~/.cache/austria_dem`) and gets its name only when it is as long as the server announced and a GeoTIFF whose contents all lie within the file. A connection that breaks is tried again from where it broke; a download that was cancelled, or cut off by closing QGIS, is **continued** by the next one instead of starting at zero. When a tile cannot be fetched the download stops and says so - run it again to continue. A tile already in the cache is checked the same way before it is used. (Up to 9.0 a tile was written straight to its place: a download cut short, or an error page sent in its place, stayed in the cache as the tile and was used by every later run - "Using cached" - until the file was deleted by hand; a tile that failed to download was left out and the elevation model built from the others, with a hole where it belongs.)
+
 ## 2. Convert a GeoTIFF DEM
 
 Any GeoTIFF DEM can be converted to the required GLB + metadata JSON format using the **GeoTIFF Input** panel:

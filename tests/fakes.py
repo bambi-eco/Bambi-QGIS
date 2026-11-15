@@ -68,13 +68,15 @@ def make_module(name, **attrs):
 class FakeResponse:
     """Streaming ``requests`` response with queued chunks."""
 
-    def __init__(self, status_code=200, chunks=None, content_length=None):
+    def __init__(self, status_code=200, chunks=None, content_length=None,
+                 headers=None):
         self.status_code = status_code
         self._chunks = chunks or []
         total = content_length
         if total is None:
             total = sum(len(c) for c in self._chunks)
         self.headers = {"content-length": str(total)} if total else {}
+        self.headers.update(headers or {})
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -82,7 +84,36 @@ class FakeResponse:
 
     def iter_content(self, chunk_size=None):
         for chunk in self._chunks:
+            if isinstance(chunk, Exception):
+                raise chunk             # the connection breaks here
             yield chunk
+
+
+def tiny_tiff(data_size: int = 4000, seed: int = 0) -> bytes:
+    """A small but structurally whole TIFF: a header, one strip of
+    *data_size* bytes, and the directory that points at it - at the end,
+    where a file that was cut short has lost it."""
+    width = 100
+    rows = max(1, data_size // width)
+    data = np.random.default_rng(seed).integers(
+        0, 255, rows * width, dtype=np.uint8).tobytes()
+    entries = [
+        (256, 4, 1, width),             # ImageWidth
+        (257, 4, 1, rows),              # ImageLength
+        (258, 3, 1, 8),                 # BitsPerSample
+        (259, 3, 1, 1),                 # Compression: none
+        (262, 3, 1, 1),                 # Photometric: black is zero
+        (273, 4, 1, 8),                 # StripOffsets
+        (278, 4, 1, rows),              # RowsPerStrip
+        (279, 4, 1, len(data)),         # StripByteCounts
+    ]
+    directory = struct.pack("<H", len(entries))
+    for tag, kind, count, value in entries:
+        directory += struct.pack("<HHI", tag, kind, count)
+        directory += struct.pack("<I" if kind == 4 else "<HH",
+                                 *((value,) if kind == 4 else (value, 0)))
+    directory += struct.pack("<I", 0)
+    return struct.pack("<2sHI", b"II", 42, 8 + len(data)) + data + directory
 
 
 class FakeSession:
@@ -91,10 +122,12 @@ class FakeSession:
     def __init__(self, responses):
         self.responses = list(responses)
         self.requested_urls = []
+        self.requested_headers = []
         self.headers = {}
 
     def get(self, url, **kwargs):
         self.requested_urls.append(url)
+        self.requested_headers.append(dict(kwargs.get("headers") or {}))
         item = self.responses.pop(0)
         if isinstance(item, Exception):
             raise item

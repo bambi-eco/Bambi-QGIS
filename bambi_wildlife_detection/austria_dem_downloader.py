@@ -381,6 +381,8 @@ class BEVDownloader:
         self.log_callback = log_callback
         self.progress_callback = progress_callback
         self._cancelled = False
+        #: how a broken connection is waited out before it is tried again
+        self._wait = None           # None: time.sleep
 
         try:
             import requests
@@ -412,25 +414,43 @@ class BEVDownloader:
 
     def download_tile(self, tile_name: str, force: bool = False,
                       tile_progress_callback: Optional[Callable[[int], None]] = None) -> Optional[Path]:
-        """Download a single tile.
+        """Download a single tile: whole and checked, or not at all.
+
+        A tile comes in under ``<tile>.tif.part`` and gets its name in the
+        cache only when it is as long as the server announced and a GeoTIFF
+        whose contents all lie within the file (``core.checked_download``).
+        What a cancelled or broken download left is continued by the next
+        one. A tile already in the cache is checked the same way before it
+        is used: what an interrupted download of an earlier version left
+        under a tile's name is fetched again instead of being used.
 
         :param tile_name: Name of the tile to download
         :param force: If True, re-download even if cached
         :param tile_progress_callback: Optional callback for reporting progress (0-100) during this tile's download
-        :return: Path to the downloaded tile, or None if failed
+        :return: Path to the tile, or None when it does not exist (the area
+            is not covered) or the download was cancelled
+        :raises DownloadError: the tile exists and could not be fetched
         """
+        from .core import checked_download as cd
+
         if self._cancelled:
             return None
 
         cache_path = self._get_cache_path(tile_name)
 
         if cache_path.exists() and not force:
-            self._log(f"Using cached: {tile_name}")
-            if tile_progress_callback:
-                tile_progress_callback(100)
-            return cache_path
+            problem = cd.tiff_problem(str(cache_path))
+            if problem is None:
+                self._log(f"Using cached: {tile_name}")
+                if tile_progress_callback:
+                    tile_progress_callback(100)
+                return cache_path
+            self._log(f"The cached {tile_name} cannot be used - {problem} - "
+                      "and is downloaded again")
+            cache_path.unlink()
 
         urls = self.tile_calculator.get_download_urls(tile_name)
+        wrong = None
 
         for url in urls:
             if self._cancelled:
@@ -440,56 +460,41 @@ class BEVDownloader:
             logger.debug(f"  URL: {url}")
 
             try:
-                response = self.session.get(url, stream=True, timeout=600)
-
-                if response.status_code == 404:
-                    logger.debug(f"  Not found at this URL ({url}), trying next...")
-                    continue
-
-                response.raise_for_status()
-
-                total_size = int(response.headers.get('content-length', 0))
-                if total_size > 0:
-                    size_mb = total_size / 1024 / 1024
-                    self._log(f"  Size: {size_mb:.1f} MB")
-
-                downloaded = 0
-                last_reported_percent = -1
-                with open(cache_path, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=1024 * 1024):
-                        if self._cancelled:
-                            f.close()
-                            if cache_path.exists():
-                                cache_path.unlink()
-                            return None
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        if total_size > 0:
-                            percent = int((downloaded / total_size) * 100)
-                            # Only report progress when it changes to avoid excessive updates
-                            if percent != last_reported_percent:
-                                logger.debug(f"  Progress: {percent}%")
-                                if tile_progress_callback:
-                                    tile_progress_callback(percent)
-                                last_reported_percent = percent
-
-                size_mb = cache_path.stat().st_size / 1024 / 1024
-                self._log(f"Downloaded: {tile_name} ({size_mb:.1f} MB)")
-                if tile_progress_callback:
-                    tile_progress_callback(100)
-                return cache_path
-
-            except Exception as e:
-                logger.debug(f"  Failed: {e}")
+                waiting = {"sleep": self._wait} if self._wait else {}
+                cd.fetch(self.session, url, str(cache_path),
+                         cancelled=lambda: self._cancelled,
+                         progress=tile_progress_callback, log=self._log,
+                         **waiting)
+            except cd.NotThere:
+                logger.debug(f"  Not found at this URL ({url}), trying next...")
                 continue
+            except cd.Cancelled:
+                return None
+            except cd.NotTheFile as exc:
+                # an error page sent as if it were the tile: not here, then
+                wrong = exc
+                logger.debug(f"  {exc}")
+                continue
+            # any other failure is the network's: the tile is there, and
+            # another year's edition of it is not what was asked for
 
+            size_mb = cache_path.stat().st_size / 1024 / 1024
+            self._log(f"Downloaded: {tile_name} ({size_mb:.1f} MB)")
+            return cache_path
+
+        if wrong is not None:
+            raise cd.DownloadError(f"Tile {tile_name}: {wrong}")
         self._log(f"Tile not found at any URL pattern: {tile_name}")
-        if cache_path.exists():
-            cache_path.unlink()
         return None
 
     def download_tiles_for_bbox(self, bbox: BoundingBox, force: bool = False) -> List[Path]:
-        """Download all tiles needed for a bounding box."""
+        """Download all tiles needed for a bounding box.
+
+        A tile that does not exist is left out - the area reaches beyond
+        what is covered. A tile that exists and could not be fetched raises
+        ``DownloadError``: the elevation model would have a hole where it
+        belongs, and nothing but a line in the log said so.
+        """
         self._cancelled = False
         tile_names = self.tile_calculator.get_required_tiles(bbox)
 
@@ -1260,6 +1265,14 @@ class DEMDownloadWorker(QObject):
             self.finished.emit(True, str(mesh_file))
 
         except Exception as e:
+            from .core.checked_download import DownloadError
+            if isinstance(e, DownloadError):
+                # nothing is built from the tiles that did arrive: the
+                # model would have a hole where the missing one belongs
+                self.log.emit(str(e))
+                self.finished.emit(
+                    False, f"The elevation data could not be downloaded. {e}")
+                return
             import traceback
             error_msg = f"Error during DEM download: {str(e)}"
             logger.error(error_msg)

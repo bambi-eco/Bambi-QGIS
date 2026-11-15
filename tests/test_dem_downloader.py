@@ -34,6 +34,7 @@ from tests.fakes import (  # noqa: E402
     SignalRecorder,
     install_fake_rasterio,
     parse_glb,
+    tiny_tiff,
 )
 
 
@@ -227,11 +228,29 @@ class TestBEVTileCalculator:
 # ---------------------------------------------------------------------------
 
 class TestBEVDownloader:
+    """A tile is in the cache whole, or not at all (the fetching itself:
+    ``tests/test_checked_download.py``)."""
+
     TILE = "N2650000E4400000"
+    WHOLE = tiny_tiff(30000)
+    ETAG = {"etag": '"2023-09"'}
 
     @pytest.fixture
     def downloader(self, tmp_path):
-        return BEVDownloader(cache_dir=tmp_path / "cache")
+        downloader = BEVDownloader(cache_dir=tmp_path / "cache")
+        downloader._wait = lambda seconds: None     # no pause between tries
+        # No test reaches the network: a request nobody queued an answer
+        # for fails at once.
+        downloader.session = FakeSession([])
+        return downloader
+
+    def _tile(self, **kwargs):
+        kwargs.setdefault("chunks", [self.WHOLE[:10000], self.WHOLE[10000:]])
+        return FakeResponse(content_length=len(self.WHOLE),
+                            headers=dict(self.ETAG), **kwargs)
+
+    def _cached(self, downloader):
+        return sorted(path.name for path in downloader.cache_dir.iterdir())
 
     def test_init_creates_cache_dir(self, tmp_path):
         cache = tmp_path / "brand_new"
@@ -240,57 +259,149 @@ class TestBEVDownloader:
 
     def test_cached_tile_is_reused(self, downloader):
         cached = downloader._get_cache_path(self.TILE)
-        cached.write_bytes(b"tif-data")
+        cached.write_bytes(self.WHOLE)
         progress = []
         result = downloader.download_tile(self.TILE, tile_progress_callback=progress.append)
         assert result == cached
         assert progress == [100]
+        assert downloader.session.requested_urls == []
+
+    def test_a_broken_tile_in_the_cache_is_fetched_again(self, downloader):
+        """What a QGIS closed during the download left under the tile's
+        name. "Using cached" was all that was said about it - by every run
+        from then on."""
+        cached = downloader._get_cache_path(self.TILE)
+        cached.write_bytes(self.WHOLE[:12000])
+        said = []
+        downloader.log_callback = said.append
+        downloader.session = FakeSession([self._tile()])
+
+        result = downloader.download_tile(self.TILE)
+
+        assert result == cached and cached.read_bytes() == self.WHOLE
+        assert any("cannot be used" in line and "downloaded again" in line
+                   for line in said)
+        assert not any(line.startswith("Using cached") for line in said)
 
     def test_cancelled_before_start_returns_none(self, downloader):
         downloader.cancel()
         assert downloader.download_tile(self.TILE) is None
 
     def test_successful_download_writes_file(self, downloader):
-        chunks = [b"a" * 1024, b"b" * 1024]
-        downloader.session = FakeSession([FakeResponse(chunks=chunks)])
+        downloader.session = FakeSession([self._tile()])
         progress = []
         result = downloader.download_tile(self.TILE, tile_progress_callback=progress.append)
         assert result is not None
-        assert result.read_bytes() == b"a" * 1024 + b"b" * 1024
+        assert result.read_bytes() == self.WHOLE
         assert progress[-1] == 100
+        assert self._cached(downloader) == [f"{self.TILE}.tif"]
 
     def test_404_falls_back_to_next_url_pattern(self, downloader):
         downloader.session = FakeSession([
             FakeResponse(status_code=404),
-            FakeResponse(chunks=[b"x" * 100]),
+            self._tile(),
         ])
         result = downloader.download_tile(self.TILE)
         assert result is not None
         assert len(downloader.session.requested_urls) == 2
 
-    def test_all_urls_failing_returns_none(self, downloader):
-        downloader.session = FakeSession([
-            FakeResponse(status_code=404),
-            FakeResponse(status_code=500),
-            RuntimeError("connection reset"),
-        ])
+    def test_a_tile_that_does_not_exist_returns_none(self, downloader):
+        """Not found under any of the editions: the area is not covered."""
+        said = []
+        downloader.log_callback = said.append
+        downloader.session = FakeSession([FakeResponse(status_code=404)] * 3)
+
+        assert downloader.download_tile(self.TILE) is None
+        assert said[-1] == f"Tile not found at any URL pattern: {self.TILE}"
+        assert self._cached(downloader) == []
+
+    def test_a_tile_that_cannot_be_fetched_is_not_a_tile_that_does_not_exist(
+            self, downloader):
+        """A server error, a dead connection: it used to end as "Tile not
+        found at any URL pattern" - after trying the older editions of the
+        tile in its place."""
+        from bambi_wildlife_detection.core.checked_download import DownloadError
+
+        downloader.session = FakeSession(
+            [FakeResponse(status_code=404)] + [FakeResponse(status_code=500)] * 4)
+
+        with pytest.raises(DownloadError, match="could not be downloaded"):
+            downloader.download_tile(self.TILE)
+        # the second edition four times - not the third in its place
+        assert len(set(downloader.session.requested_urls)) == 2
+        assert len(downloader.session.requested_urls) == 5
+
+    def test_a_tile_cut_short_is_not_put_in_the_cache(self, downloader):
+        """Shorter than announced, and nothing raised. It was the tile."""
+        from bambi_wildlife_detection.core.checked_download import DownloadError
+
+        short = [self._tile(chunks=[self.WHOLE[:8000]])]
+        downloader.session = FakeSession(short + [
+            FakeResponse(status_code=503)] * 3)
+
+        with pytest.raises(DownloadError):
+            downloader.download_tile(self.TILE)
+        assert f"{self.TILE}.tif" not in self._cached(downloader)
+
+    def test_a_broken_download_is_continued_by_the_next(self, downloader):
+        from bambi_wildlife_detection.core.checked_download import DownloadError
+
+        downloader.session = FakeSession(
+            [self._tile(chunks=[self.WHOLE[:8000], ConnectionError("reset")])]
+            + [ConnectionError("no route to host")] * 3)
+        with pytest.raises(DownloadError, match="continues from there"):
+            downloader.download_tile(self.TILE)
+        assert self._cached(downloader) == [
+            f"{self.TILE}.tif.part", f"{self.TILE}.tif.part.json"]
+
+        rest = self.WHOLE[8000:]
+        downloader.session = FakeSession([FakeResponse(
+            status_code=206, chunks=[rest], content_length=len(rest),
+            headers=dict(self.ETAG, **{
+                "content-range": f"bytes 8000-{len(self.WHOLE) - 1}/{len(self.WHOLE)}"}))])
+        said = []
+        downloader.log_callback = said.append
+
         result = downloader.download_tile(self.TILE)
-        assert result is None
-        assert not downloader._get_cache_path(self.TILE).exists()
 
-    def test_cancel_mid_download_removes_partial_file(self, downloader):
+        assert result.read_bytes() == self.WHOLE
+        assert downloader.session.requested_headers[0]["Range"] == "bytes=8000-"
+        assert "  Continuing at 0.0 MB" in said
+        assert self._cached(downloader) == [f"{self.TILE}.tif"]
+
+    def test_an_error_page_is_not_a_tile(self, downloader):
+        """Sent with "200 OK"; it was saved under the tile's name."""
+        from bambi_wildlife_detection.core.checked_download import DownloadError
+
+        page = FakeResponse(chunks=[b"<html>Bad gateway</html>"])
+        downloader.session = FakeSession([page, FakeResponse(status_code=404),
+                                          FakeResponse(status_code=404)])
+
+        with pytest.raises(DownloadError, match="it is not a TIFF file"):
+            downloader.download_tile(self.TILE)
+        assert self._cached(downloader) == []
+
+    def test_an_error_page_in_one_place_and_the_tile_in_the_next(self, downloader):
+        page = FakeResponse(chunks=[b"<html>Bad gateway</html>"])
+        downloader.session = FakeSession([page, self._tile()])
+
+        assert downloader.download_tile(self.TILE).read_bytes() == self.WHOLE
+
+    def test_cancel_mid_download_keeps_the_part_for_next_time(self, downloader):
         def chunk_gen():
-            yield b"a" * 1024
+            yield self.WHOLE[:8000]
             downloader.cancel()
-            yield b"b" * 1024
+            yield self.WHOLE[8000:]
 
-        response = FakeResponse(content_length=2048)
+        response = self._tile()
         response.iter_content = lambda chunk_size=None: chunk_gen()
         downloader.session = FakeSession([response])
 
         result = downloader.download_tile(self.TILE)
         assert result is None
         assert not downloader._get_cache_path(self.TILE).exists()
+        assert self._cached(downloader) == [
+            f"{self.TILE}.tif.part", f"{self.TILE}.tif.part.json"]
 
     def test_download_tiles_for_bbox_collects_successes(self, downloader, monkeypatch):
         progress = []
@@ -310,6 +421,23 @@ class TestBEVDownloader:
         assert result == [downloader._get_cache_path("A")]
         # Download phase maps to the 0-50% band of overall progress
         assert progress and all(0 <= p <= 50 for p in progress)
+
+    def test_a_tile_that_failed_stops_the_whole_download(self, downloader, monkeypatch):
+        """The elevation model was built from the tiles that had arrived,
+        with a hole where the other belongs."""
+        from bambi_wildlife_detection.core.checked_download import DownloadError
+
+        monkeypatch.setattr(
+            downloader.tile_calculator, "get_required_tiles", lambda bbox: ["A", "B"])
+
+        def fake_download(tile_name, force=False, tile_progress_callback=None):
+            if tile_name == "B":
+                raise DownloadError("B could not be downloaded")
+            return downloader._get_cache_path(tile_name)
+
+        monkeypatch.setattr(downloader, "download_tile", fake_download)
+        with pytest.raises(DownloadError, match="B could not be downloaded"):
+            downloader.download_tiles_for_bbox(BoundingBox(0, 0, 0, 0))
 
 
 # ---------------------------------------------------------------------------
@@ -482,6 +610,28 @@ class TestDEMDownloadWorker:
         worker.run()
         assert worker.finished.calls == [
             (False, "No tiles downloaded - area may be outside Austria")]
+
+    def test_a_tile_that_could_not_be_fetched_ends_the_run_saying_so(
+            self, tmp_path, monkeypatch):
+        from bambi_wildlife_detection.core.checked_download import DownloadError
+
+        csv_path = tmp_path / "flight.csv"
+        csv_path.write_text("latitude,longitude\n47.5,13.2\n47.9,13.6\n", encoding="utf-8")
+        worker = self._make_worker(tmp_path, str(csv_path))
+
+        def broken(self, bbox):
+            raise DownloadError(
+                "https://data.bev.gv.at/x.tif could not be downloaded: reset. "
+                "What arrived is kept; running it again continues from there.")
+
+        monkeypatch.setattr(BEVDownloader, "download_tiles_for_bbox", broken)
+        worker.run()
+
+        (success, message), = worker.finished.calls
+        assert success is False
+        assert message.startswith("The elevation data could not be downloaded")
+        assert "running it again continues from there" in message
+        assert not (tmp_path / "out" / "dem.tif").exists()
 
     def test_cancel_propagates_to_components(self, tmp_path):
         worker = self._make_worker(tmp_path)
