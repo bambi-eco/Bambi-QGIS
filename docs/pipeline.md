@@ -64,7 +64,7 @@ The tab has one sub-tab per topic:
 
 | Sub-tab | Settings |
 |---|---|
-| **Project** | The project schema: species, enums and custom fields ([Results, Flights and Export](results-and-export.md#the-project-schema)) |
+| **Project** | The project schema: species (with their map colour), enums and custom fields ([Results, Flights and Export](results-and-export.md#the-project-schema)); **Map Symbols**: pins in place of bounding boxes when zoomed out, and the map scale at which they switch ([How animals are drawn](results-and-export.md#how-animals-are-drawn)) |
 | **Extraction** | Frame skip, limit, sampling rate, aspect ratio, heading source, AirData margin, **duplicated thermal frames**, timezone, thermal visualisation (see below) |
 | **Flight Route** | Frame, distance and time marker intervals |
 | **Detection** | Thermal / RGB model, confidence, frame range, **Projection** (camera frames, GeoTIFFs or ALFS integrals), detector class mapping, **custom detector** per camera ([Custom Implementations](custom-implementations.md)) |
@@ -74,6 +74,7 @@ The tab has one sub-tab per topic:
 | **Field of View** | Custom mask, simplification, frame range and sample rate |
 | **ALFS/GeoTiff** | Ground resolution or fixed render size, frame range and step, crop to content, overviews, tile size, sampling mode; edge erosion of the frame GeoTIFFs |
 | **Orthomosaic** | Merge mode, frame range |
+| **Environment** | Sentinel-2 scene window and required clear share, buffer around the flight, whether to extend to the survey area ([Environmental Context](environment.md#configuration)) |
 
 
 ### Extraction
@@ -252,7 +253,7 @@ georeferenced_t/    # or georeferenced_w/, follows the detection camera selectio
 └── georeferenced.txt    # Detections with UTM bounding box coordinates
 ```
 
-Use **→ Add Detections to QGIS** to load per-frame detection layers.
+Use **→ Add Detections to QGIS** to load per-frame detection layers. Zoomed in, each detection is its bounding box, in the colour of the track it belongs to; zoomed out it becomes a pin in the colour of its species, with sex and age on it - see [How animals are drawn](results-and-export.md#how-animals-are-drawn).
 
 ![Detection Results](../images/detection_results.png)
 
@@ -308,7 +309,7 @@ tracks_t/    # or tracks_w/, follows the detection camera selection
 └── tracks.csv          # Geo-referenced tracks (UTM)
 ```
 
-Use **→ Add Tracks to QGIS** to load each track as a grouped layer (movement path + final bounding box).
+Use **→ Add Tracks to QGIS** to load each track as a grouped layer (movement path + final bounding box). Every track has a colour of its own for its box and path; zoomed out, the box becomes a pin in the colour of the track's species, with the sex in its middle and the age as a badge - see [How animals are drawn](results-and-export.md#how-animals-are-drawn).
 
 ![Track Visualization](../images/tracks_qgis.png)
 
