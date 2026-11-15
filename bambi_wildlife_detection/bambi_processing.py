@@ -331,6 +331,42 @@ def _frames_reextracted(config: Dict[str, Any], modality: str,
         log_fn("Now out of date after re-extracting the frames: " + ", ".join(stale))
 
 
+def _extraction_interrupted(config: Dict[str, Any], modality: str,
+                            log_fn=None) -> None:
+    """Say what a video extraction that stopped half-way leaves behind.
+
+    A re-extraction replaces the frame images as it goes, while the frame
+    list (the poses file) is written at the end. Stopped in between - Abort,
+    an error - the folder holds some new images under the previous list.
+    Nothing to say on a first extraction, or when no images are written.
+    """
+    if config.get("no_images", False):
+        return
+    target_folder = config.get("target_folder", "")
+    if not os.path.isfile(os.path.join(target_folder,
+                                       f"poses_{modality}.json")):
+        return
+    if log_fn:
+        log_fn("Warning: the frame extraction did not finish. Some frame "
+               "images are already replaced while the frame list is still "
+               "the previous one - run the extraction again before using "
+               "the frames.")
+    _frames_reextracted(config, modality, log_fn)
+
+
+def _remove_earlier_frames(config: Dict[str, Any], frames_folder: str,
+                           images, log_fn=None) -> None:
+    """After a video extraction: drop the frames an earlier one left in
+    *frames_folder* that the new frame list does not name."""
+    if config.get("input_mode") == "photo" or config.get("no_images", False):
+        return
+    from .core import poses as poses_core
+    removed = poses_core.remove_unlisted_frames(frames_folder, images)
+    if removed and log_fn:
+        log_fn(f"Removed {removed} frame image(s) of an earlier extraction "
+               "that this one does not have")
+
+
 def _drop_duplicated(frame_indices, images, log_fn=None):
     """*frame_indices* without the duplicated (frozen thermal) frames.
 
@@ -1008,18 +1044,27 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
             # index stays the video's frame number (core.poses).
             from .core import poses as poses_core
             flag_duplicates = bool(config.get("flag_duplicate_frames", False))
-            with patch_frame_extraction_progress(progress_fn, total_frames, log_fn, cancel_check=cancel_check):
-                poses_core.extract_with_flag(
-                    extractor.extract,
-                    frames_folder_t, airdata_path, thermal_video_paths, thermal_srt_paths,
-                    flag_duplicates=flag_duplicates,
-                    origin=ad_origin, include_gps=True,
-                    skip=config.get("extract_skip", 0),
-                    limit=config.get("extract_limit"),
-                    sampling_rate=config.get("extract_sampling_rate") or 0,
-                    timezone=_video_tz,
-                    no_images=config.get("no_images", False),
-                )
+            try:
+                with patch_frame_extraction_progress(progress_fn, total_frames, log_fn, cancel_check=cancel_check):
+                    poses_core.extract_with_flag(
+                        extractor.extract,
+                        frames_folder_t, airdata_path, thermal_video_paths, thermal_srt_paths,
+                        flag_duplicates=flag_duplicates,
+                        origin=ad_origin, include_gps=True,
+                        skip=config.get("extract_skip", 0),
+                        limit=config.get("extract_limit"),
+                        sampling_rate=config.get("extract_sampling_rate") or 0,
+                        timezone=_video_tz,
+                        no_images=config.get("no_images", False),
+                        # The library keeps an image that is already there.
+                        # With another calibration or aspect ratio the same
+                        # frame is a different picture, so a re-extraction
+                        # left the old pixels under the new poses and mask.
+                        overwrite_existing=True,
+                    )
+            except Exception:
+                _extraction_interrupted(config, "t", log_fn)
+                raise
             video_flagging = flag_duplicates
 
         # Move poses.json written into frames_folder to target folder with suffix
@@ -1055,6 +1100,8 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
             with open(target_poses_t, 'r') as f:
                 poses_t = json.load(f)
             thermal_frames = len(poses_t.get("images", []))
+            _remove_earlier_frames(config, frames_folder_t,
+                                   poses_t.get("images"), log_fn)
             _frames_reextracted(config, "t", log_fn)
             if log_fn:
                 log_fn(f"Thermal extraction complete: {thermal_frames} frames")
@@ -1224,16 +1271,23 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
             if log_fn:
                 log_fn(f"Processing {total_frames} frames...")
 
-            with patch_frame_extraction_progress(progress_fn, total_frames, log_fn, cancel_check=cancel_check):
-                extractor.extract(
-                    frames_folder_w, airdata_path, rgb_video_paths, rgb_srt_paths,
-                    origin=ad_origin, include_gps=True,
-                    skip=config.get("extract_skip", 0),
-                    limit=config.get("extract_limit"),
-                    sampling_rate=config.get("extract_sampling_rate") or 0,
-                    timezone=_video_tz,
-                    no_images=config.get("no_images", False),
-                )
+            try:
+                with patch_frame_extraction_progress(progress_fn, total_frames, log_fn, cancel_check=cancel_check):
+                    extractor.extract(
+                        frames_folder_w, airdata_path, rgb_video_paths, rgb_srt_paths,
+                        origin=ad_origin, include_gps=True,
+                        skip=config.get("extract_skip", 0),
+                        limit=config.get("extract_limit"),
+                        sampling_rate=config.get("extract_sampling_rate") or 0,
+                        timezone=_video_tz,
+                        no_images=config.get("no_images", False),
+                        # see extract_thermal_frames: an image that is
+                        # already there is otherwise kept as it is
+                        overwrite_existing=True,
+                    )
+            except Exception:
+                _extraction_interrupted(config, "w", log_fn)
+                raise
 
         # Move poses.json written into frames_folder to target folder with suffix
         poses_in_frames = os.path.join(frames_folder_w, "poses.json")
@@ -1260,6 +1314,8 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
             with open(target_poses_w, 'r') as f:
                 poses_w = json.load(f)
             rgb_frames = len(poses_w.get("images", []))
+            _remove_earlier_frames(config, frames_folder_w,
+                                   poses_w.get("images"), log_fn)
             _frames_reextracted(config, "w", log_fn)
             if log_fn:
                 log_fn(f"RGB extraction complete: {rgb_frames} frames")

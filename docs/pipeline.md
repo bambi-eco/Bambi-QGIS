@@ -180,6 +180,8 @@ mask_W.png         # Undistortion mask (RGB)
 
 > **Note:** For large datasets or long videos this step may take several minutes. Progress is updated between frames.
 
+**Extracting again** replaces the frames: every image is written anew, so a changed calibration or "preserve aspect ratio" shows in the pictures and not only in the poses and the mask, and video frames of the earlier extraction that the new one does not have (another sampling rate or range) are removed from the folder. Other files in the folder are left alone. Everything computed from the previous frames is marked out of date. An extraction that is aborted half-way leaves some new images under the previous frame list - the log says so; run it again before using the frames.
+
 ### P2. Generate Flight Route
 
 Builds two complementary vector layers from the mission data:

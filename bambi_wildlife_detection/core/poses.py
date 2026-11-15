@@ -16,6 +16,7 @@ skipped or marked at the point of use. The *pose* of a duplicated frame
 
 import json
 import os
+import re
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 #: The key a frozen frame carries in ``poses["images"][i]``.
@@ -122,6 +123,38 @@ def extract_with_flag(extract, *args, flag_duplicates: bool = False, **kwargs):
             "1.2.0 or newer, but an older version is installed. Update it in "
             "the Dependency Manager, or untick 'Keep duplicated thermal "
             "frames' on the Extraction tab.") from exc
+
+
+#: How the video extractor names a frame image: the frame's number in this
+#: extraction, in the video and in the subtitle track.
+_VIDEO_FRAME_NAME = re.compile(r"^\d+-\d+-\d+\.(jpe?g|png)$", re.IGNORECASE)
+
+
+def remove_unlisted_frames(frames_folder: str,
+                           images: Optional[Sequence[dict]]) -> int:
+    """Delete the video frames of an earlier extraction that *images* - the
+    frame list just written - no longer names; returns how many.
+
+    With another sampling rate or range the same video yields differently
+    named frames, and those of the previous extraction would stay beside the
+    new ones for good. Only files named like the extractor names its frames
+    are touched, and nothing at all when the new list is empty.
+    """
+    listed = {os.path.basename(str(image.get("imagefile") or ""))
+              for image in images or []}
+    listed.discard("")
+    if not listed or not os.path.isdir(frames_folder):
+        return 0
+    removed = 0
+    for name in os.listdir(frames_folder):
+        if name in listed or not _VIDEO_FRAME_NAME.match(name):
+            continue
+        try:
+            os.remove(os.path.join(frames_folder, name))
+        except OSError:
+            continue
+        removed += 1
+    return removed
 
 
 def record_flag_setting(path: str, flagged_on: bool) -> int:
