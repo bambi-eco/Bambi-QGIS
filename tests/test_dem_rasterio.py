@@ -109,6 +109,109 @@ class TestMergeAndClip:
             assert src.bounds.left <= min_x + 60
             assert src.bounds.right >= max_x - 60
 
+    @staticmethod
+    def _surface(tmp_path, bev_extent, split):
+        """One elevation surface around the bbox - as a single tile, or cut
+        in two along the middle of the bbox, on one cell grid."""
+        min_x, min_y, max_x, max_y = bev_extent
+        res = 50.0
+        west = np.floor((min_x - 5000) / res) * res
+        north = np.ceil((max_y + 5000) / res) * res
+        width = int((max_x + 5000 - west) / res) + 1
+        height = int((north - (min_y - 5000)) / res) + 1
+        rows, cols = np.mgrid[0:height, 0:width]
+        surface = 300.0 + 7.0 * rows + 0.5 * cols          # every cell differs
+        if not split:
+            return [_write_geotiff(tmp_path / "whole.tif", surface, west,
+                                   north, res, BEV_CRS_PROJ4)]
+        cut = int(((min_x + max_x) / 2 - west) / res)
+        return [
+            _write_geotiff(tmp_path / "w.tif", surface[:, :cut], west, north,
+                           res, BEV_CRS_PROJ4),
+            _write_geotiff(tmp_path / "e.tif", surface[:, cut:],
+                           west + cut * res, north, res, BEV_CRS_PROJ4)]
+
+    def test_across_a_tile_edge_only_the_flights_area_is_read(
+            self, tmp_path, bev_extent, monkeypatch):
+        """The tiles were merged whole, in memory, and written out again
+        before clipping - some 20 GB each way for two 1 m tiles."""
+        import rasterio.merge
+
+        tiles = self._surface(tmp_path, bev_extent, split=True)
+        seen = {}
+        real_merge = rasterio.merge.merge
+
+        def merge(sources, *args, **kwargs):
+            seen.update(kwargs)
+            mosaic, transform = real_merge(sources, *args, **kwargs)
+            seen["shape"] = mosaic.shape
+            return mosaic, transform
+
+        monkeypatch.setattr(rasterio.merge, "merge", merge)
+        out = tmp_path / "clipped.tif"
+        assert DEMProcessor().merge_and_clip(tiles, out, BBOX) == out
+
+        min_x, min_y, max_x, max_y = bev_extent
+        assert seen["bounds"][0] <= min_x and seen["bounds"][2] >= max_x
+        # the mosaic is the flight's area, not the two tiles
+        with rasterio.open(tiles[0]) as tile:
+            assert seen["shape"][1] < tile.height / 3
+        assert sorted(p.name for p in tmp_path.iterdir()) == [
+            "clipped.tif", "e.tif", "w.tif"]          # no temp_merged.tif
+
+    def test_the_result_does_not_depend_on_where_the_tiles_are_cut(
+            self, tmp_path, bev_extent):
+        """Cell for cell what one tile gives - the same cells, unshifted."""
+        whole = tmp_path / "whole"
+        halves = tmp_path / "halves"
+        whole.mkdir()
+        halves.mkdir()
+        one = DEMProcessor().merge_and_clip(
+            self._surface(whole, bev_extent, split=False),
+            whole / "out.tif", BBOX)
+        two = DEMProcessor().merge_and_clip(
+            self._surface(halves, bev_extent, split=True),
+            halves / "out.tif", BBOX)
+
+        with rasterio.open(one) as a, rasterio.open(two) as b:
+            assert a.transform == b.transform
+            assert (a.width, a.height) == (b.width, b.height)
+            assert np.array_equal(a.read(1), b.read(1))
+
+    def test_bounds_are_widened_to_whole_cells(self):
+        from bambi_wildlife_detection.austria_dem_downloader import (
+            snap_bounds_outward)
+
+        assert snap_bounds_outward(
+            (1012.0, 2012.0, 1088.0, 2088.0), (1000.0, 3000.0),
+            (50.0, 50.0)) == (1000.0, 2000.0, 1100.0, 2100.0)
+        # ... and bounds already on cell edges stay where they are
+        assert snap_bounds_outward(
+            (1000.0, 2000.0, 1100.0, 2100.0), (1000.0, 3000.0),
+            (50.0, -50.0)) == (1000.0, 2000.0, 1100.0, 2100.0)
+
+    def test_the_tiles_are_closed_when_processing_fails(
+            self, tmp_path, bev_extent, monkeypatch):
+        import rasterio.merge
+
+        tiles = self._surface(tmp_path, bev_extent, split=True)
+        opened = []
+        real_open = rasterio.open
+
+        def tracking_open(*args, **kwargs):
+            handle = real_open(*args, **kwargs)
+            opened.append(handle)
+            return handle
+
+        def broken(*_args, **_kwargs):
+            raise RuntimeError("no memory")
+
+        monkeypatch.setattr(rasterio, "open", tracking_open)
+        monkeypatch.setattr(rasterio.merge, "merge", broken)
+        assert DEMProcessor().merge_and_clip(
+            tiles, tmp_path / "o.tif", BBOX) is None
+        assert opened and all(handle.closed for handle in opened)
+
     def test_empty_input_returns_none(self, tmp_path):
         logs = []
         processor = DEMProcessor(log_callback=logs.append)

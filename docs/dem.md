@@ -4,7 +4,7 @@ The processing pipeline needs a Digital Elevation Model as a GLB/GLTF mesh with 
 
 ## 1. Automatic download (Austria only)
 
-Use the **Download DEM (Austria)** option to download and tile Austrian elevation data from the BEV ATOM service automatically.
+Use the **Download DEM (Austria)** option to download and tile Austrian elevation data from the BEV ATOM service automatically. The tiles are large (50 km a side) and are kept in a cache, so a second flight in the same region downloads nothing; from them only the flight's own area (plus the padding) is read, also where a flight crosses the edge between two tiles (up to 9.0 that case merged both tiles whole, which took some 20 GB of memory and as much disk space).
 
 ## 2. Convert a GeoTIFF DEM
 

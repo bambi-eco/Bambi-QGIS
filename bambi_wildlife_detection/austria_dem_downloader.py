@@ -71,6 +71,29 @@ EPSG_TO_PROJ4 = {
 }
 
 
+def snap_bounds_outward(bounds, origin, resolution):
+    """*bounds* ``(min_x, min_y, max_x, max_y)`` widened to whole cells of the
+    grid that has a corner at *origin* ``(x, y)`` and cells of *resolution*
+    ``(width, height)``.
+
+    Reading a mosaic by bounds that lie on the tiles' own cell edges copies
+    their cells as they are; bounds in between would resample every one of
+    them by a fraction of a cell.
+    """
+    import math
+
+    min_x, min_y, max_x, max_y = bounds
+    origin_x, origin_y = origin
+    width, height = abs(resolution[0]), abs(resolution[1])
+    tolerance = 1e-9        # a bound on an edge stays on that edge
+    return (
+        origin_x + math.floor((min_x - origin_x) / width + tolerance) * width,
+        origin_y + math.floor((min_y - origin_y) / height + tolerance) * height,
+        origin_x + math.ceil((max_x - origin_x) / width - tolerance) * width,
+        origin_y + math.ceil((max_y - origin_y) / height - tolerance) * height,
+    )
+
+
 def get_proj4_for_crs(crs_str: str) -> str:
     """Get PROJ4 string for a CRS, with fallback to the original string.
 
@@ -547,9 +570,9 @@ class DEMProcessor:
         self._log(f"Processing {len(input_files)} tile(s)...")
         self._progress(55)
 
+        src_files = []
         try:
             # Open all files, forcing CRS to EPSG:3035
-            src_files = []
             for f in input_files:
                 src = rasterio.open(f)
                 src_files.append(src)
@@ -571,28 +594,17 @@ class DEMProcessor:
                 )
                 out_meta = src.meta.copy()
             else:
-                mosaic, mosaic_transform = merge(src_files)
-
-                merged_meta = src_files[0].meta.copy()
-                merged_meta.update({
-                    "driver": "GTiff",  # Explicitly set driver
-                    "height": mosaic.shape[1],
-                    "width": mosaic.shape[2],
-                    "transform": mosaic_transform,
-                    "crs": src_crs,  # Force correct CRS
-                })
-
-                temp_merged = output_file.parent / "temp_merged.tif"
-                with rasterio.open(temp_merged, 'w', **merged_meta) as dst:
-                    dst.write(mosaic)
-
-                with rasterio.open(temp_merged) as src:
-                    out_image, out_transform = mask(
-                        src, [mapping(clip_box)], crop=True, all_touched=True
-                    )
-                    out_meta = src.meta.copy()
-
-                temp_merged.unlink()
+                # Only the part of the tiles the flight needs is read. The
+                # tiles used to be merged whole, in memory, and written out
+                # again before clipping: two 1 m tiles of 50 km a side are
+                # some 20 GB each way, for a flight that happens to cross
+                # the line between them.
+                first = src_files[0]
+                bounds = snap_bounds_outward(
+                    (min_x, min_y, max_x, max_y),
+                    (first.transform.c, first.transform.f), first.res)
+                out_image, out_transform = merge(src_files, bounds=bounds)
+                out_meta = first.meta.copy()
 
             # Force correct CRS in output metadata
             out_meta.update({
@@ -607,9 +619,6 @@ class DEMProcessor:
             with rasterio.open(output_file, "w", **out_meta) as dst:
                 dst.write(out_image)
 
-            for src in src_files:
-                src.close()
-
             self._log(f"Clipped to: {output_file} ({out_image.shape[2]}x{out_image.shape[1]})")
             return output_file
 
@@ -618,6 +627,9 @@ class DEMProcessor:
             import traceback
             traceback.print_exc()
             return None
+        finally:
+            for src in src_files:
+                src.close()
 
     def reproject_geotiff(self, input_file: Path, output_file: Path,
                           target_crs: Optional[str] = None) -> Optional[Path]:
