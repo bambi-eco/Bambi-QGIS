@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Point selection for the survey analytics (EXCHANGE_FORMAT_PLAN.md §8.2).
+"""Point selection for the survey analytics.
 
 The question every analytic starts from is *which animals count?*. 5.x answered
 it implicitly by reading whatever files were present, so a density figure gave
@@ -95,7 +95,7 @@ def test_the_active_tracker_run_is_recorded(survey):
 
 
 def test_manual_tracks_are_included_by_default(survey):
-    """Labels are usually animals the detector missed (§8.2)."""
+    """Labels are usually animals the detector missed."""
     label_store.save_tracks(survey, "t", [{
         "label_track_id": 1, "species_id": 1,
         "keyframes": [{"frame": 3, "x1": 1.0, "y1": 1.0, "x2": 2.0, "y2": 2.0}],
@@ -199,7 +199,7 @@ def test_species_filter_selects_one_species(survey):
 
 
 def test_stratification_groups_by_species_name(survey):
-    """Possible only now that species_id has a stable meaning (§1.3)."""
+    """Possible only now that species_id has a stable meaning."""
     strata, provenance = analytics_source.load_points_by_species(
         survey, "t", "tracks")
     assert set(strata) == {"roe deer", "chamois"}
@@ -236,7 +236,7 @@ def test_describe_filter_without_a_tracker_run(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Multi-project pooling: match species by name, never by id (§8.2)
+# Multi-project pooling: match species by name, never by id
 # ---------------------------------------------------------------------------
 
 def _project_with(tmp_path, name, extra_species=()):

@@ -47,7 +47,7 @@ PROJECTIONS = ("non_geo", "geo_1k", "geo_2k")
 MODALITIES = ("rgb", "thermal", "matched")
 
 #: The classification tasks, in the order they must run: occlusion decides
-#: which frames the others are allowed to see (see the plan, §5.2a), species
+#: which frames the others are allowed to see (see CLASSIFICATION_PLAN.md, §5.2a), species
 #: fixes what the animal is, and the two demographic heads are chosen by that
 #: species.
 TASKS = ("occlusion", "species", "sex", "life_stage")

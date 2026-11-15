@@ -938,7 +938,7 @@ UNNAMED_CLASS = "class %d"
 def head_classes(module, feature_dim: int = 0) -> Tuple[List[str], str]:
     """The head's class list and where it came from.
 
-    Three sources, in order of how much they tell us (see the plan, §5.3):
+    Three sources, in order of how much they tell us (see CLASSIFICATION_PLAN.md, §5.3):
 
     ``classes``
         the ``m.classes`` attribute our own heads export.
@@ -1084,7 +1084,7 @@ class Head:
 
 
 # ---------------------------------------------------------------------------
-# Which frames a track votes over (see the plan, §5.2a)
+# Which frames a track votes over (see CLASSIFICATION_PLAN.md, §5.2a)
 # ---------------------------------------------------------------------------
 
 #: Where the set of votable frames came from, recorded per track so two runs

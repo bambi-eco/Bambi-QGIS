@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Every "Add to QGIS" action puts its layers in a group (§10.2).
+"""Every "Add to QGIS" action puts its layers in a group.
 
 Flight products go into the flight's group; survey-wide products (density,
 coverage, inventory, survey area) belong to no single flight and go into the

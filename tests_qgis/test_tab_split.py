@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
-"""The Pre-Processing / Processing split (EXCHANGE_FORMAT_PLAN.md §10.1).
+"""The Pre-Processing / Processing split.
 
-The split follows the dependency graph of §7: Pre-Processing derives from the
+The split follows the dependency graph of the steps: Pre-Processing derives
+from the
 poses and the DEM and is independent of any animal, Processing depends on the
 detections. This is presentation only - config keys, step ids and
 ``output_inventory`` keys are unchanged - so the tests check that every step is
@@ -159,7 +160,7 @@ def test_the_two_groups_are_different_parents(dock):
 
 
 def test_geo_referencing_sits_with_the_detections(dock):
-    """It depends on detections, so it belongs in Processing (§10.1)."""
+    """It depends on detections, so it belongs in Processing."""
     assert dock.georef_btn.parent() is dock.detect_btn.parent()
 
 

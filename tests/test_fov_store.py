@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Field-of-view footprints in the store (§11).
+"""Field-of-view footprints in the store.
 
 The FoV step wrote only ``fov_polygons.txt`` until now, so ``fov.gpkg`` existed
 solely where a 5.x project had been migrated - while the coverage map, the

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Exporter tests (EXCHANGE_FORMAT_PLAN.md §8.1).
+"""Exporter tests.
 
 Three things are checked for every format: that internal ids never leak (they
 are sparse and negative), that enum values arrive as labels rather than
@@ -908,7 +908,7 @@ def test_dwca_refuses_when_nothing_is_identified(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Manual tracks reach the exports (§6.5)
+# Manual tracks reach the exports
 # ---------------------------------------------------------------------------
 
 def test_manual_tracks_are_exported_too(survey, tmp_path):
@@ -926,7 +926,7 @@ def test_manual_tracks_are_exported_too(survey, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Taxonomy: scientific names and GBIF keys (§8.1)
+# Taxonomy: scientific names and GBIF keys
 # ---------------------------------------------------------------------------
 
 def _set_taxonomy(root, species_id, scientific_name, rank="species", key=None):

@@ -2,7 +2,8 @@
 """The C3 classification step, end to end.
 
 Built on real TorchScript heads whose weights are chosen so the answers are
-known in advance - the point is to prove the *pipeline* does what §3.3 says:
+known in advance - the point is to prove the *pipeline* does what §3.3 of
+the paper says:
 occlusion gates the frames, species fixes what the animal is, and sex reuses
 exactly the species frames and picks its model from the species call.
 """
@@ -242,7 +243,7 @@ def test_the_frame_source_is_recorded(flight):
 
 
 # ---------------------------------------------------------------------------
-# Occlusion is optional (§5.2a)
+# Occlusion is optional
 # ---------------------------------------------------------------------------
 
 def test_species_and_sex_run_without_any_occlusion_model(flight):

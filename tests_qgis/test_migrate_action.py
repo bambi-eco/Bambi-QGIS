@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""The "Migrate 5.x…" action on the dock widget (EXCHANGE_FORMAT_PLAN.md §10, Phase 1).
+"""The "Migrate 5.x…" action on the dock widget.
 
 The migration logic itself is headless and covered by ``tests/test_migration.py``;
 what needs a real QGIS is the widget wiring - that the button appears exactly

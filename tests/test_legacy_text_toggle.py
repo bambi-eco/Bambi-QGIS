@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""The "Also write legacy text outputs" toggle (EXCHANGE_FORMAT_PLAN.md §9).
+"""The "Also write legacy text outputs" toggle.
 
 6.0 stores detections, geo-referencing and tracks in GeoPackages and keeps the
 5.x text files alongside them for one release. The toggle turns the text files

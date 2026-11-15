@@ -100,9 +100,10 @@ class SurveyAnalyticsMixin:
         for ``"tracks"`` one point per track (the centroid of its box centres),
         so an animal followed across many frames counts once.
 
-        Read from each flight's store, which applies the population filter of
-        §8.2 - false positives excluded, one tracker run plus the manual one,
-        superseded tracks dropped. *names* are species names (``None`` = all),
+        Read from each flight's store, which applies the population filter
+        (``core.analytics_source``) - false positives excluded, one tracker
+        run plus the manual one, superseded tracks dropped. *names* are
+        species names (``None`` = all),
         translated into each flight's own ids. The provenance lists every
         flight's filter, so a pooled number can be traced back to its rows.
         """
@@ -255,7 +256,7 @@ class SurveyAnalyticsMixin:
 
     def run_density_heatmap(self, config: Dict[str, Any], progress_fn=None,
                             log_fn=None, cancel_check=None):
-        """Generate a density raster - one, or one per species (§8.2)."""
+        """Generate a density raster - one, or one per species."""
         source = chosen_source(config, "density_source")
         self._per_stratum(
             config, source,
@@ -443,7 +444,7 @@ class SurveyAnalyticsMixin:
                 # The plain census figure: animals inside / adjusted area.
                 stats["points_per_ha_in_survey_area"] = (
                     len(points) / (area.adjusted_m2 / 10000.0))
-        # What went into the number, so it can be traced back (§8.2).
+        # What went into the number, so it can be traced back.
         if getattr(self, "_last_analytics_provenance", None):
             stats["population_filter"] = self._last_analytics_provenance
         with open(os.path.join(analytics_folder, f"{stem}.json"),
@@ -1059,7 +1060,7 @@ class SurveyAnalyticsMixin:
 
     def run_distance_sampling(self, config: Dict[str, Any], progress_fn=None,
                               log_fn=None, cancel_check=None):
-        """Fit a detection function - once, or once per species (§8.2).
+        """Fit a detection function - once, or once per species.
 
         A stratum too thin to fit is reported and skipped rather than failing
         the whole run.
@@ -1688,7 +1689,7 @@ class SurveyAnalyticsMixin:
     def run_population_estimation(self, config: Dict[str, Any],
                                   progress_fn=None, log_fn=None,
                                   cancel_check=None):
-        """Estimate a population - once, or once per species (§8.2)."""
+        """Estimate a population - once, or once per species."""
         self._per_stratum(
             config, chosen_source(config, "pop_source"),
             lambda survey, label, names, progress:
@@ -1889,8 +1890,8 @@ class SurveyAnalyticsMixin:
             "transects": combined_rows,
             "notes": notes,
         })
-        # An estimate without a record of what it counted is unauditable
-        # (§8.2). Built from this run's own filter rather than read off the
+        # An estimate without a record of what it counted is unauditable.
+        # Built from this run's own filter rather than read off the
         # processor, which would describe whichever analytic ran last.
         result["population_filter"] = {
             "modality": suffix,

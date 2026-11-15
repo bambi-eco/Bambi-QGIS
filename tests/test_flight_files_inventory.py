@@ -193,7 +193,7 @@ class TestStoreBackedOutputs:
     """A stage counts as done from its 6.0 store file too.
 
     Without this, a project running with legacy text output switched off would
-    report every stage as never started (EXCHANGE_FORMAT_PLAN.md §7).
+    report every stage as never started.
     """
 
     def test_store_file_alone_marks_the_stage_complete(self, tmp_path):

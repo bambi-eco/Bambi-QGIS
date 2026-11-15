@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Label materialisation against the store (EXCHANGE_FORMAT_PLAN.md §6).
+"""Label materialisation against the store.
 
-The upsert matrix of §6.2 is the contract: editing one key frame must not
+The upsert matrix is the contract: editing one key frame must not
 re-mint every detection in the flight, or the labelling loop becomes unusable.
 Everything else here follows from that.
 """
@@ -123,7 +123,8 @@ def test_single_keyframe_yields_one_box():
 
 
 # ---------------------------------------------------------------------------
-# The §6.2 upsert matrix
+# The upsert matrix: what a re-export does to a box that is new, changed,
+# unchanged or gone
 # ---------------------------------------------------------------------------
 
 def test_first_materialisation_adds_every_frame(tmp_path):
@@ -212,7 +213,7 @@ def test_changing_species_updates_without_re_minting(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Incremental geo-referencing (§6.2)
+# Incremental geo-referencing
 # ---------------------------------------------------------------------------
 
 def _georeference_everything(root, modality="t"):
@@ -257,7 +258,7 @@ def test_a_removed_label_drops_its_geo_row(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Manual tracks (§6.5) and producer isolation (§4.1)
+# Manual tracks and producer isolation
 # ---------------------------------------------------------------------------
 
 def test_label_tracks_become_real_tracks(tmp_path):
@@ -336,7 +337,7 @@ def test_a_detector_rerun_never_touches_manual_detections(tmp_path):
 
 
 def test_the_manual_run_is_not_a_tracker_run(tmp_path):
-    """It is additive, not an alternative (§8.2).
+    """It is additive, not an alternative.
 
     Tracker runs are alternatives - builtin, boxmot and TRex describe the same
     animals differently, so one is active at a time. The labelling tool's run
@@ -376,7 +377,7 @@ def test_clear_materialised_removes_the_labels_only(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Custom fields reach the detections (§5)
+# Custom fields reach the detections
 # ---------------------------------------------------------------------------
 
 def test_keyframe_attributes_land_on_the_detections(tmp_path):
@@ -485,7 +486,7 @@ def test_label_store_save_mirrors_into_the_store(tmp_path):
 
 
 def test_species_and_enums_are_stored_as_ids(tmp_path):
-    """Names would break on rename; ids do not (§5.1)."""
+    """Names would break on rename; ids do not."""
     root = str(tmp_path)
     _label_store(root).save()
     track = label_store.load_tracks(root, "t")[0]

@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Writing detections into the 6.0 store (EXCHANGE_FORMAT_PLAN.md §3.1, §4).
+"""Writing detections into the 6.0 store.
 
 Every producer of detections - the detector, the TRex importer, the labelling
 tool - goes through :func:`record_detections`, which is what makes the
-per-source generation model of §4.1 hold:
+per-source generation model hold:
 
 * a producer owns a ``detection_sources`` row and may only delete or re-mint
   rows carrying its ``source_id``;
@@ -277,7 +277,7 @@ def compare_with_legacy_text(target_folder: str, modality: str,
     """Check the store against the legacy text file for one producer.
 
     Returns ``None`` when they agree, otherwise a description of the first
-    disagreement. This is the dual-write parity gate of §10 Phase 2 - the
+    disagreement. This is the dual-write parity check - the
     strongest safety net available while both paths coexist, and it costs
     almost nothing to run.
     """

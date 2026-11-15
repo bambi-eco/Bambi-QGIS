@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Flights and stored configuration (EXCHANGE_FORMAT_PLAN.md §10.2).
+"""Flights and stored configuration.
 
 The constraint under test throughout is that one flight is one target folder.
 It is not a convention: the stage files are per folder and modality with no
@@ -112,7 +112,7 @@ def test_adding_a_flight(tmp_path):
 
 
 def test_two_flights_cannot_share_a_folder(tmp_path):
-    """They would overwrite each other's detections (§10.2)."""
+    """They would overwrite each other's detections."""
     folder = str(tmp_path / "a")
     existing = flights.add_flight([], "Meadow", folder)
     with pytest.raises(FlightError, match="already uses this folder"):
@@ -228,7 +228,7 @@ def test_find_by_folder(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Adding a flight to a multi-project analysis (§10.2)
+# Adding a flight to a multi-project analysis
 # ---------------------------------------------------------------------------
 
 def test_dem_metadata_comes_from_the_flights_own_config(tmp_path):
@@ -289,7 +289,7 @@ def test_analysis_entries_of_an_empty_project():
 
 
 # ---------------------------------------------------------------------------
-# What a new flight starts with (§10.2)
+# What a new flight starts with
 # ---------------------------------------------------------------------------
 
 RECORDINGS = ["Input/ThermalVideoPaths", "Input/RgbVideoPaths",

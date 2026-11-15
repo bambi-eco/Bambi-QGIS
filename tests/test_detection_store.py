@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Tests for the detection write path (EXCHANGE_FORMAT_PLAN.md §4.1, §10 Phase 2).
+"""Tests for the detection write path.
 
 The load-bearing property here is per-source ownership: re-running one producer
 must re-mint only its own rows. A global generation counter would mean any
@@ -84,7 +84,7 @@ def test_log_reports_what_was_written(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Per-source ownership and generations (§4.1)
+# Per-source ownership and generations
 # ---------------------------------------------------------------------------
 
 def test_rerunning_a_producer_replaces_only_its_own_rows(tmp_path):
@@ -213,7 +213,7 @@ def test_ensure_source_is_idempotent(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Dual-write parity (§10 Phase 2 gate)
+# Dual-write parity: the store and the legacy text file say the same
 # ---------------------------------------------------------------------------
 
 def _write_text(path, rows):

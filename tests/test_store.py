@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """Tests for store creation, paths, versioning and transactions.
 
-Covers EXCHANGE_FORMAT_PLAN.md §3 (schema), §10 Phase 0 and the version-guard
-ground rule of §11. The id/vocabulary invariants of §4.1 live in
-``test_store_ids.py``.
+Covers the schema, the creation of the files and the version guard (a
+store written by a newer plugin is refused, not read on a guess). The
+invariants of ids and vocabulary live in ``test_store_ids.py``.
 """
 import os
 import sqlite3
@@ -207,7 +207,7 @@ def test_transaction_commits_on_success(tmp_path):
 
 
 def test_transaction_rolls_back_on_error(tmp_path):
-    """A cancelled stage must leave no half-written table (§11)."""
+    """A cancelled stage must leave no half-written table."""
     path = str(tmp_path / "d.gpkg")
     conn = store.open_store(path, store.DETECTIONS)
     with pytest.raises(RuntimeError):
@@ -225,7 +225,7 @@ def test_transaction_rolls_back_on_error(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_label_materialisation_key_is_unique(tmp_path):
-    """The (label_track_id, frame) upsert key of §6.2."""
+    """The (label_track_id, frame) key a label box is found again by."""
     conn = store.open_store(str(tmp_path / "d.gpkg"), store.DETECTIONS)
     conn.execute("INSERT INTO detections (frame, source_id, label_track_id) "
                  "VALUES (10, 1, 4)")
@@ -273,7 +273,7 @@ def test_track_ids_are_never_reused(tmp_path):
 
 
 def test_species_id_defaults_to_animal(tmp_path):
-    """'No species' must never be representable (§3.1)."""
+    """'No species' must never be representable."""
     conn = store.open_store(str(tmp_path / "d.gpkg"), store.DETECTIONS)
     conn.execute("INSERT INTO detections (frame, source_id) VALUES (1, 1)")
     row = conn.execute("SELECT species_id FROM detections").fetchone()
@@ -290,7 +290,7 @@ def test_species_id_cannot_be_null(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# In-place schema upgrades (§11)
+# In-place schema upgrades
 # ---------------------------------------------------------------------------
 
 def _downgrade_to_v1(path):

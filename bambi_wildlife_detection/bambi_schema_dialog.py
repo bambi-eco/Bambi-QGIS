@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Project Schema dialog - species, enums and custom fields.
 
-The single editor for the project vocabulary (EXCHANGE_FORMAT_PLAN.md §5.3),
+The single editor for the project vocabulary,
 reached from three places:
 
 * the Detection configuration tab, which hosts it;

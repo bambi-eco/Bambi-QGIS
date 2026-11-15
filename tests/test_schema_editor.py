@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Tests for the project vocabulary editor (EXCHANGE_FORMAT_PLAN.md §3.1, §5.3).
+"""Tests for the project vocabulary editor.
 
 The rules under test all exist for one reason: after an edit, stored data must
 still mean what it meant before. Species and enum values are referenced by id
@@ -209,7 +209,7 @@ def test_rename_enum_value_keeps_its_id(editor):
 
 
 def test_rename_enum_value_leaves_stored_rows_untouched(editor_with_data, tmp_path):
-    """The point of storing value_id rather than the label (§5.1)."""
+    """The point of storing value_id rather than the label."""
     sex = editor_with_data.enum_by_name("sex")["enum_id"]
     editor_with_data.rename_enum_value(sex, 1, "Female")
     editor_with_data.commit()
@@ -331,7 +331,7 @@ def test_duplicate_field_in_one_scope_is_rejected(editor):
 
 
 def test_field_rename_rewrites_stored_attributes(editor_with_data, tmp_path):
-    """Fields are keyed by name, so a rename must migrate the rows (§5.1)."""
+    """Fields are keyed by name, so a rename must migrate the rows."""
     rewritten = editor_with_data.rename_field("collar_id", "track", "collar")
     editor_with_data.commit()
     assert rewritten == 1
@@ -637,7 +637,7 @@ def _set_the_detection(root, species_id):
 
 
 def test_reapply_mapping_updates_existing_detections(editor_with_data, tmp_path):
-    """A corrected mapping is applied to stored rows, not re-detected (§3.1)."""
+    """A corrected mapping is applied to stored rows, not re-detected."""
     # The detector is on record before its classes are mapped, as it is
     # once a detection has run - and its box says what an unmapped class
     # says: "animal".
@@ -751,7 +751,7 @@ def test_editor_works_on_a_project_without_stage_files(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Publishing taxonomy (§8.1)
+# Publishing taxonomy
 # ---------------------------------------------------------------------------
 
 def test_seeded_species_have_editable_scientific_names(editor):
@@ -803,7 +803,7 @@ def test_renaming_a_species_keeps_its_taxonomy(editor):
 
 
 # ---------------------------------------------------------------------------
-# What the detector actually emitted (§3.1)
+# What the detector actually emitted
 # ---------------------------------------------------------------------------
 
 def test_observed_classes_come_from_the_detections(editor_with_data):

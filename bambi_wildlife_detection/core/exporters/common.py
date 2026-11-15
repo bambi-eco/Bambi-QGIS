@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Shared loading and mapping for the exporters (EXCHANGE_FORMAT_PLAN.md §8.1).
+"""Shared loading and mapping for the exporters.
 
 Every exporter reads the same rows and then writes them in its own shape, so
 the three decisions that would otherwise be made seven times live here:
@@ -29,7 +29,7 @@ from typing import Dict, List, Optional, Tuple
 
 from .. import gpkg, store, track_store
 
-#: Detections whose species is this are labelled false positives (§3.1).
+#: Detections whose species is this are labelled false positives.
 NOT_AN_ANIMAL = store.NOT_AN_ANIMAL_SPECIES_ID
 
 

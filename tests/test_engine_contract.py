@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """The engine surface the plugin builds on: bambi-detection >= 1.0.0.
 
-The plugin is the GUI over the ``bambi`` engine; every processing step will
-call the array-in / array-out functions listed here (Phase 3 of the layer
-split swaps the step bodies onto them, family by family). This test pins
+The plugin is the GUI over the ``bambi`` engine; the processing steps are
+to call the array-in / array-out functions listed here (their bodies are
+moved onto them family by family). This test pins
 that surface *from the plugin's side*: the symbols must exist, their
 signatures must carry the parameters the plugin passes, and the version must
 be at least the floor in ``core.dependency_ops``. An engine release that

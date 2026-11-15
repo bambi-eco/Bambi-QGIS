@@ -580,7 +580,8 @@ def match_tracks(detections_t: Iterable[dict], detections_w: Iterable[dict],
                  world_t: Optional[Dict[int, Tuple[float, float]]] = None,
                  world_w: Optional[Dict[int, Tuple[float, float]]] = None,
                  log_fn=None) -> dict:
-    """Match thermal tracks to RGB tracks. The whole of §3.2 in one call.
+    """Match thermal tracks to RGB tracks. The whole of the paper's §3.2 in
+    one call.
 
     *detections_t* / *detections_w* are store rows carrying ``detection_id``,
     ``track_id``, ``frame``, the box, and ``confidence``; *frame_map* maps a

@@ -319,7 +319,7 @@ class LabelTrack:
         self.age = age
         self.attributes: Dict[str, Any] = dict(attributes or {})
         #: Pipeline track this label track was imported from, if any. Kept so
-        #: "this label came from track 7" stays answerable (§6.3); today the
+        #: "this label came from track 7" stays answerable; today the
         #: link is lost the moment the import happens.
         self.origin_track_id = origin_track_id
         self.keyframes: Dict[int, dict] = {}
@@ -1253,7 +1253,7 @@ class LabelStore:
         """Convert the in-memory label tracks into store rows.
 
         Species and enum values become ids: a later rename then costs nothing,
-        which is the whole reason ids rather than labels are stored (§5.1).
+        which is the whole reason ids rather than labels are stored.
         """
         from . import store as _store
 
@@ -1453,7 +1453,7 @@ class LabelStore:
         return det_file, n_boxes, removed
 
     def _materialise(self) -> dict:
-        """Upsert the interpolated boxes into the store (§6.2).
+        """Upsert the interpolated boxes into the store.
 
         Unchanged ``(track, frame)`` pairs keep their ``detection_id``, so
         editing one key frame does not invalidate the whole flight.

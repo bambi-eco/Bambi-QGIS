@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""One-directional exports from the 6.0 store (EXCHANGE_FORMAT_PLAN.md §8.1).
+"""One-directional exports from the 6.0 store.
 
 Every exporter reads the store and writes throwaway files. None of them is an
 input format, so nothing here has to survive a round trip - the store is the
@@ -46,7 +46,7 @@ NEEDS_CRS = frozenset({"geojson", "geojson_segmentation",
                        "camtrap", "dwca"})
 
 #: Formats describing boxes for training or tracking, which drop
-#: ``not-an-animal`` by default. The rest are survey records and keep it (§8.1).
+#: ``not-an-animal`` by default. The rest are survey records and keep it.
 TRAINING_FORMATS = frozenset({"coco", "yolo", "mot", "trex"})
 
 #: Formats needing the frame size to normalise or declare image dimensions.
@@ -67,8 +67,8 @@ def run_export(key: str, target_folder: str, modality: str, output: str,
 
     The formats differ in what they can carry, so the caller should not have to
     know which takes an ``epsg``, which needs the frame size, or which drops
-    false positives by default - those are the per-format decisions of §8.1,
-    made here once.
+    false positives by default - those are decisions per format, made here
+    once.
 
     *image_size* is optional even for the formats that need it: they fall back
     to probing an extracted frame, and say so clearly if there is none.

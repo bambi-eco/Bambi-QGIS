@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """Minimal GeoPackage container support, stdlib ``sqlite3`` only.
 
-The 6.0 exchange format stores every pipeline stage in its own SQLite file
-(see EXCHANGE_FORMAT_PLAN.md §2). Those files hold plain typed columns and no
+The 6.0 exchange format stores every pipeline stage in its own SQLite file.
+Those files hold plain typed columns and no
 geometry, but they are still written as valid *GeoPackages* using the
 **aspatial** profile so that QGIS's Browser panel opens them directly and the
 attribute-table / "toggle editing → delete rows" workflow works without any
@@ -138,7 +138,7 @@ def connect(path: str, create: bool = True) -> sqlite3.Connection:
 
     Journal mode is left at SQLite's default (``DELETE``) rather than WAL. WAL
     would allow a reader to run alongside the writer, but the plugin never lets
-    QGIS hold a stage file open (EXCHANGE_FORMAT_PLAN.md §11), so there is no
+    QGIS hold a stage file open, so there is no
     concurrency to buy - and WAL costs two things that matter here: it needs
     shared memory, so it fails outright on network shares where survey projects
     plausibly live, and it leaves ``-wal``/``-shm`` sidecars that a user copying
@@ -223,7 +223,7 @@ def attach(conn: sqlite3.Connection, path: str, alias: str) -> None:
     """``ATTACH`` another stage file under *alias* for cross-stage queries.
 
     Foreign keys are not enforced across attached databases; what the joins
-    rely on is stable ids, not enforcement (EXCHANGE_FORMAT_PLAN.md §2).
+    rely on is stable ids, not enforcement.
     """
     if not alias.isidentifier():
         raise ValueError(f"Invalid attach alias: {alias!r}")
@@ -250,7 +250,7 @@ def vacuum(conn: sqlite3.Connection) -> None:
     """Reclaim space after a stage reset.
 
     ``DELETE`` alone does not shrink the file, and a project folder that only
-    ever grows is a confusing thing to debug (EXCHANGE_FORMAT_PLAN.md §11).
+    ever grows is a confusing thing to debug.
     """
     conn.commit()
     conn.execute("VACUUM")

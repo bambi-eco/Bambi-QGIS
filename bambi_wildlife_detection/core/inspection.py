@@ -47,7 +47,7 @@ def load_pixel_detections(target_folder: str, modality: str) -> List[dict]:
     The inspector used to parse ``detections.txt`` and then identify the
     clicked box by matching its confidence and class to four decimal places.
     The store carries the detection_id the layer was built from, so nothing
-    has to be matched back (§1.2a).
+    has to be matched back.
     """
     from . import store, track_store
 

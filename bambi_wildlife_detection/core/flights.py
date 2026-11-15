@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Flights: configuration in the store, several flights per QGIS project.
 
-Implements EXCHANGE_FORMAT_PLAN.md §10.2. Two halves:
+Two halves:
 
 * **Configuration lives in the flight's own ``project.gpkg``**, beside the
   species, enums and stage state that describe the same outputs. That makes a
@@ -229,7 +229,7 @@ _MODALITY_LABELS = {"t": "thermal", "w": "RGB"}
 def describe_existing(target_folder: str) -> dict:
     """What a folder already holds, for adding a flight processed earlier.
 
-    A target folder is self-describing by design (§10.2), so a folder that has
+    A target folder is self-describing by design, so a folder that has
     been through the pipeline can simply be added back to a project - its
     configuration and results are already there and are read rather than
     overwritten. Returns ``configured``, a ``results`` summary per kind, and
@@ -314,7 +314,7 @@ def dem_metadata_path(target_folder: str) -> str:
 
     Read from the flight's own stored configuration, which is the point of
     putting it there: adding a flight to a multi-project analysis no longer
-    means remembering which ``dem.json`` went with which folder (§10.2).
+    means remembering which ``dem.json`` went with which folder.
     Falls back to the mesh path with its extension swapped, the convention the
     rest of the plugin already uses.
     """
@@ -354,7 +354,7 @@ def analysis_entries(flights: List[dict], exclude: Optional[str] = None
 #: Config keys describing *what was recorded* - the videos, photos, flight log,
 #: calibrations, DEM and correction. A new flight is a different recording, so
 #: these start empty: carrying them over would invite reprocessing the previous
-#: flight's data into the new folder (§10.2).
+#: flight's data into the new folder.
 INPUT_SCOPE = "Input/"
 
 #: Keys inside the Input scope that are settings rather than recordings, and so
@@ -441,7 +441,7 @@ def group_name(flight: dict) -> str:
     """QGIS layer-group name for a flight - its name, and nothing derived.
 
     Renaming a flight renames the group, so the name is the only thing tying
-    them together (§10.2). Deriving it from the folder instead would leave a
+    them together. Deriving it from the folder instead would leave a
     stale group behind on every rename.
     """
     return (flight.get("name") or "").strip() or "Flight"

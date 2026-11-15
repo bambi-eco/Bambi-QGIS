@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""The id-stability invariants of EXCHANGE_FORMAT_PLAN.md §4.1.
+"""The id-stability invariants of the store.
 
 These are the contract of the 6.0 rework: if renaming, reordering or deleting
 part of the vocabulary could change what stored data means, the format has
-merely reinvented ``species_class_ids()``. The table in §4.1 is only worth
-anything if it is executable, so it is asserted here row by row.
+merely reinvented ``species_class_ids()``. Such rules are only worth
+anything if they are executable, so they are asserted here one by one.
 """
 import sqlite3
 
@@ -50,13 +50,13 @@ def test_base_classes_are_protected(project):
 
 
 def test_sign_separates_base_from_concrete_species(project):
-    """`species_id <= 0` is a base class, `>= 1` a concrete species (§3.1)."""
+    """`species_id <= 0` is a base class, `>= 1` a concrete species."""
     for row in project.execute("SELECT species_id, protected FROM species"):
         assert (row["species_id"] <= 0) == bool(row["protected"])
 
 
 def test_legacy_taxonomy_keeps_its_indices(project):
-    """5.x class ids must keep their meaning after migration (§9)."""
+    """5.x class ids must keep their meaning after migration."""
     names = _species(project)
     assert names["roe deer"] == 1
     assert names["red deer"] == 2
@@ -157,7 +157,7 @@ def test_next_enum_value_id_of_empty_enum(project):
 
 
 # ---------------------------------------------------------------------------
-# Seeded enums and fields (§5.2)
+# Seeded enums and fields
 # ---------------------------------------------------------------------------
 
 def test_seeded_enums_exist_with_their_values(project):
@@ -194,7 +194,7 @@ def test_enum_labels_are_unique_within_an_enum(project):
 
 
 def test_renaming_an_enum_value_keeps_its_id(project):
-    """Stored rows hold value_id, so a rename must not touch them (§5.1)."""
+    """Stored rows hold value_id, so a rename must not touch them."""
     enum_id = project.execute(
         "SELECT enum_id FROM enums WHERE name = 'sex'").fetchone()["enum_id"]
     project.execute(
@@ -236,7 +236,7 @@ def test_string_fields_remain_available(project):
 
 
 # ---------------------------------------------------------------------------
-# Class mapping (§3.1)
+# Class mapping
 # ---------------------------------------------------------------------------
 
 def test_unmapped_class_falls_back_to_animal(project):
@@ -359,7 +359,7 @@ def test_an_existing_three_value_occlusion_enum_is_left_alone(tmp_path):
 
 
 def test_species_id_is_not_reissued_after_deleting_the_highest(project):
-    """A plain MAX()+1 would hand the id straight back (§4.1)."""
+    """A plain MAX()+1 would hand the id straight back."""
     first = store.reserve_species_id(project)
     project.execute("INSERT INTO species (species_id, name) VALUES (?, 'wolf')",
                     (first,))

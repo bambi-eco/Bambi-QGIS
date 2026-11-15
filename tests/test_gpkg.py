@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Tests for the aspatial GeoPackage container (``core/gpkg.py``).
 
-The whole per-stage-file layout of EXCHANGE_FORMAT_PLAN.md §2 rests on these
+The whole layout of the store - one file per stage - rests on these
 files being valid GeoPackages, so the boilerplate is checked directly rather
 than only through the higher-level store.
 """
@@ -171,7 +171,7 @@ def test_vacuum_runs_after_deletes(db):
 def test_geometry_columns_table_exists_and_is_empty(db):
     """GDAL refuses to open a GeoPackage without it, even with no geometry.
 
-    Established by the Phase 0 spike in tests_qgis/test_store_layers.py; this
+    Established by the trial in tests_qgis/test_store_layers.py; this
     guards the container against someone "tidying away" an unused table.
     """
     tables = {row["name"] for row in db.execute(

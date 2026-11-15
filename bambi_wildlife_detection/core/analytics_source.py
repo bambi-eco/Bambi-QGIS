@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Point selection for the survey analytics (EXCHANGE_FORMAT_PLAN.md §8.2).
+"""Point selection for the survey analytics.
 
 Density, coverage, distance sampling and population estimation all start from
 the same question - *which animals count?* - and 5.x answered it implicitly by
@@ -459,7 +459,7 @@ def resolve_species_names(target_folder: str,
                           names: Sequence[str]) -> Tuple[List[int], List[str]]:
     """Translate species *names* into this project's ids.
 
-    Returns ``(ids, missing)``. Ids are assigned per project (§3.1), so
+    Returns ``(ids, missing)``. Ids are assigned per project, so
     project A's species 12 is unrelated to project B's - anything pooling
     several projects must match on the name and translate, never carry an id
     across. ``missing`` names are reported rather than silently dropped.

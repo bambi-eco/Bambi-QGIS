@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Field-of-view footprints in the store (EXCHANGE_FORMAT_PLAN.md §11).
+"""Field-of-view footprints in the store.
 
 The FoV step long wrote only ``fov_{m}/fov_polygons.txt``, so ``fov.gpkg``
 existed solely where a 5.x project had been migrated. Everything that reads a

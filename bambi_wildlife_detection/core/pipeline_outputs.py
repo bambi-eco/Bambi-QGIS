@@ -85,7 +85,7 @@ def load_geo_tracks_by_id(csv_path: str, log_fn: LogFn = None) -> Dict[int, list
     ``<target>/bambi_{m}/tracks.gpkg`` beside it, and the file itself is never
     read. A project with no store returns nothing rather than being
     reconstructed from text, because a reconstruction is a guess about which
-    detection a track point came from and the store knows (§1.2a).
+    detection a track point came from and the store knows.
     """
     source = _store_source(csv_path, "tracks")
     if source is None:
@@ -204,7 +204,7 @@ def _georef_from_store(target_folder: str, modality: str) -> Dict[int, list]:
 
     Unlike the text reader this does not have to skip rows with a negative
     corner: a detection that failed to project has no ``detections_geo`` row at
-    all, and is accounted for in ``georef_failures`` instead (§3.2).
+    all, and is accounted for in ``georef_failures`` instead.
     """
     from . import track_store
 

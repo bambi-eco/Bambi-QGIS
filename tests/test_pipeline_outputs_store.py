@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""The QGIS layer readers preferring the store (EXCHANGE_FORMAT_PLAN.md §11).
+"""The QGIS layer readers preferring the store.
 
 The plugin never hands a stage file to QGIS as a layer source - layers are
 built in memory from rows. These readers are where those rows come from, and
 they read the store and nothing else: a legacy file path is taken only to
-locate the project beside it (§11).
+locate the project beside it.
 """
 import os
 
@@ -109,7 +109,7 @@ def test_the_missing_store_is_explained(tmp_path):
 
 
 def test_geo_tracks_use_the_active_run(populated):
-    """A second run supersedes the first for the layers (§3.3)."""
+    """A second run supersedes the first for the layers."""
     ids = [d["detection_id"] for d in track_store.load_detections(populated, "t")]
     track_store.record_tracks(populated, "t", [
         {"track_id": 1, "detection_id": ids[0]},
@@ -172,7 +172,7 @@ def test_georef_detections_do_not_fall_back_to_the_text(tmp_path):
 
 
 def test_failed_detections_are_simply_absent(populated):
-    """No negative-corner sentinel: a failure has no geo row at all (§3.2)."""
+    """No negative-corner sentinel: a failure has no geo row at all."""
     ids = [d["detection_id"] for d in track_store.load_detections(populated, "t")]
     track_store.record_georeference(
         populated, "t",

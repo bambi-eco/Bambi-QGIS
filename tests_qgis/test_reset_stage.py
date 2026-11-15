@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""The Reset Step action (EXCHANGE_FORMAT_PLAN.md §7, §10 Phase 5).
+"""The Reset Step action.
 
 The cascade itself is covered headlessly in ``tests/test_stages.py``; what needs
 a real QGIS is the wiring - that the button exists, refuses sensibly, and that
@@ -178,7 +178,7 @@ def test_cancelling_the_picker_changes_nothing(dock, quiet, monkeypatch,
 
 
 def test_a_locked_file_is_explained(dock, quiet, monkeypatch, project_folder):
-    """Windows locks a file open in the QGIS Browser (§13, Q1)."""
+    """Windows locks a file open in the QGIS Browser."""
     _choose(monkeypatch, "Track Animals - Thermal")
 
     def refuse(_path):

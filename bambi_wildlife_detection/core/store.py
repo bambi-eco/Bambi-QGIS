@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """The 6.0 pipeline store: schema, creation and invariant enforcement.
 
-Implements EXCHANGE_FORMAT_PLAN.md §3–§5. Every pipeline stage owns one
+Every pipeline stage owns one
 GeoPackage file (see :mod:`core.gpkg` for the container), plus one
 project-level file holding the vocabulary shared by all of them::
 
@@ -18,7 +18,7 @@ project-level file holding the vocabulary shared by all of them::
 
 The vocabulary lives in ``project.gpkg`` rather than in the detections stage
 because it must outlive any single stage: ``rm bambi_t/detections.gpkg`` is a
-supported reset (§7), and it must not take the project's species list with it.
+supported reset, and it must not take the project's species list with it.
 It is also modality-independent - thermal and RGB share one species list, which
 is what the cross-modality label copy assumes.
 
@@ -63,7 +63,7 @@ MODALITIES = ("t", "w")
 # Base vocabulary
 # ---------------------------------------------------------------------------
 
-#: The three protected base classes present in every project (§3.1).
+#: The three protected base classes present in every project.
 #: ``animal`` keeps id 0 because that is what the detector emits and what every
 #: unresolved detection falls back to; the other two are negative so they can
 #: never collide with a legacy class id (0–9 built-ins, 10+ custom species).
@@ -77,12 +77,12 @@ BASE_SPECIES = (
 FALLBACK_SPECIES_ID = 0
 
 #: ``species_id`` of the "this is not an animal" base class. Excluded from every
-#: survey analytic (§8.2) - a labelled false positive biases a density estimate.
+#: survey analytic - a labelled false positive biases a density estimate.
 NOT_AN_ANIMAL_SPECIES_ID = -2
 
 #: Concrete species seeded from the 5.x taxonomy at their existing indices, so
 #: class ids written by 5.x keep their meaning. Index 0 ("unknown") is *not*
-#: here: it becomes the base class ``animal``, see §9.
+#: here: it becomes the base class ``animal`` (see :mod:`core.migration`).
 SEEDED_SPECIES = (
     (1, "roe deer"), (2, "red deer"), (3, "fallow deer"), (4, "wild boar"),
     (5, "chamois"), (6, "fox"), (7, "hare"), (8, "bird"), (9, "other"),
@@ -116,7 +116,7 @@ SEEDED_TAXONOMY = {
 #:
 #: Seeding is ``INSERT OR IGNORE`` on ``(enum_id, value_id)``, so a project
 #: created before this change keeps its own three values untouched - the ids
-#: are append-only (§4.1) and could not be renumbered even deliberately.
+#: are append-only and could not be renumbered even deliberately.
 SEEDED_ENUMS = (
     ("sex", ("unknown", "female", "male"), "sex", "track"),
     ("age", ("unknown", "adult", "juvenile"), "age", "track"),
@@ -142,7 +142,7 @@ CREATE TABLE species (
     species_id      INTEGER PRIMARY KEY,
     name            TEXT UNIQUE NOT NULL,
     protected       INTEGER NOT NULL DEFAULT 0,
-    -- Taxonomy, for publishing (§8.1). `name` is the label the user works with
+    -- Taxonomy, for publishing. `name` is the label the user works with
     -- and is a *vernacular* name - Darwin Core needs the scientific one, and a
     -- GBIF taxon key lets the backbone resolve it exactly instead of matching
     -- a string. Both optional: a project that never publishes needs neither.
@@ -156,7 +156,7 @@ CREATE TABLE enums (
     name       TEXT UNIQUE NOT NULL,
     protected  INTEGER NOT NULL DEFAULT 0,
     -- Highest value_id ever handed out, so deleting the last value does not
-    -- let its id come back meaning something else (§4.1).
+    -- let its id come back meaning something else.
     high_water INTEGER NOT NULL DEFAULT -1
 );
 
@@ -185,7 +185,7 @@ CREATE TABLE detection_sources (
     model       TEXT,
     version     TEXT,
     -- 0 = never run; the first recorded run makes it 1. Bumped per source, so
-    -- one producer re-running leaves the others' generations alone (§4.1).
+    -- one producer re-running leaves the others' generations alone.
     generation  INTEGER NOT NULL DEFAULT 0,
     config_hash TEXT,
     created_at  TEXT
@@ -198,7 +198,7 @@ CREATE TABLE class_mapping (
     PRIMARY KEY (source_id, source_class)
 );
 
--- The form values that produced this flight's outputs (§10.2). Keeping them
+-- The form values that produced this flight's outputs. Keeping them
 -- beside the outputs makes the folder self-describing: hand someone the folder
 -- and the settings that produced it come with it.
 CREATE TABLE config (
@@ -218,7 +218,7 @@ CREATE TABLE stages (
     PRIMARY KEY (stage, modality)
 );
 
--- Invariant (§4.1): the base classes are permanent. Enforced in the database
+-- Invariant: the base classes are permanent. Enforced in the database
 -- so it holds for every caller, including a user poking at the file by hand.
 CREATE TRIGGER trg_species_no_delete_protected
 BEFORE DELETE ON species FOR EACH ROW WHEN OLD.protected = 1
@@ -233,7 +233,7 @@ BEGIN
     SELECT RAISE(ABORT, 'protected species cannot be renamed');
 END;
 
--- Invariant (§4.1): species and enum ids are append-only; nothing renumbers.
+-- Invariant: species and enum ids are append-only; nothing renumbers.
 CREATE TRIGGER trg_species_no_renumber
 BEFORE UPDATE OF species_id ON species FOR EACH ROW
 BEGIN
@@ -262,7 +262,7 @@ CREATE TABLE detections (
 CREATE INDEX ix_det_frame   ON detections(frame);
 CREATE INDEX ix_det_source  ON detections(source_id);
 CREATE INDEX ix_det_species ON detections(species_id);
--- The materialisation key of the labelling export (§6.2): re-exporting a label
+-- The materialisation key of the labelling export: re-exporting a label
 -- track keeps the detection ids of unchanged (track, frame) pairs.
 CREATE UNIQUE INDEX ux_det_label ON detections(label_track_id, frame)
     WHERE label_track_id IS NOT NULL;
@@ -761,7 +761,7 @@ def transaction(conn: sqlite3.Connection):
 # ---------------------------------------------------------------------------
 
 def seed_vocabulary(conn: sqlite3.Connection) -> None:
-    """Install the base species, the seeded enums and their fields (§3.1, §5.2).
+    """Install the base species, the seeded enums and their fields.
 
     Idempotent: re-running leaves an existing vocabulary untouched, so opening
     a project store never disturbs a user's taxonomy.
@@ -822,7 +822,8 @@ def reserve_species_id(conn: sqlite3.Connection) -> int:
     A plain ``MAX(species_id) + 1`` would reissue the id of a deleted species
     whenever it happened to be the highest - and a stale reference to it would
     then silently mean a different animal. The high-water mark is what makes
-    the ids append-only in the sense §4.1 claims.
+    the ids append-only: an id, once given, never comes to mean something
+    else.
     """
     species_id = next_species_id(conn)
     set_meta(conn, "species_high_water", species_id)

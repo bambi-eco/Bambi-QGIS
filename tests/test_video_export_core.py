@@ -5,7 +5,7 @@ checks and canvas maths).
 Everything the overlays draw comes from the store. The pairing strategies that
 used to sit below it - a pixel CSV, a geo-coordinate match, a row-index match -
 are gone: each could hand a box to the wrong animal when a file was re-sorted
-or a detection was dropped (§8.2).
+or a detection was dropped.
 """
 import json
 import os
@@ -330,7 +330,7 @@ class TestCanvasMath:
 
 
 class TestPixelTracksFromStore:
-    """The video creator reads the store rather than reconstructing (§8.2).
+    """The video creator reads the store rather than reconstructing.
 
     Steps 1-3 of load_pixel_tracks all recover something the pipeline knew and
     threw away; the store answers directly, so they only run for projects that
@@ -395,7 +395,7 @@ class TestPixelTracksFromStore:
         assert video_export.pixel_tracks_from_store(str(tmp_path), "x") == {}
 
     def test_a_dropped_detection_does_not_cost_its_frame_mates(self, tmp_path):
-        """What the positional pairing got wrong (§8.2)."""
+        """What the positional pairing got wrong."""
         from bambi_wildlife_detection.core import (
             detection_store, track_store, video_export)
 

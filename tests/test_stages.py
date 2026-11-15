@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Stage state and the dependency cascade (EXCHANGE_FORMAT_PLAN.md §7).
+"""Stage state and the dependency cascade.
 
 The cascade replaces the hand-maintained cleanup of latent bug 3: 5.x deleted
 ``tracks_{m}`` and ``tracks_pixel_{m}`` when labels replaced the detections, and
@@ -88,7 +88,7 @@ def test_resetting_the_embeddings_removes_the_vectors_too():
 
 
 def test_scene_products_do_not_depend_on_detections():
-    """Pre-Processing is independent of any animal (§10.1)."""
+    """Pre-Processing is independent of any animal."""
     found = stages.dependents("detection")
     for stage in ("alfs", "export_geotiffs", "orthomosaic", "calculate_fov"):
         assert stage not in found
@@ -236,7 +236,7 @@ def test_completed_stages_are_listed(project):
 
 
 # ---------------------------------------------------------------------------
-# Reconciliation - the files win (§7)
+# Reconciliation - the files win
 # ---------------------------------------------------------------------------
 
 def test_deleting_a_stage_file_by_hand_is_noticed(project):
@@ -343,7 +343,7 @@ def test_reset_logs_what_it_did(project):
 
 
 def test_reset_reports_a_locked_file(project, monkeypatch):
-    """Windows locks a file open in the QGIS Browser (§13, Q1)."""
+    """Windows locks a file open in the QGIS Browser."""
     _make_output(project, "tracking")
 
     def refuse(_path):

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""The Export action on the Processing tab (EXCHANGE_FORMAT_PLAN.md §8.1).
+"""The Export action on the Processing tab.
 
 The exporters themselves are covered headlessly in ``tests/test_exporters.py``;
 what needs a real QGIS is the wiring - that every format is offered, that the

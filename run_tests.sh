@@ -20,9 +20,8 @@ echo " BAMBI Plugin - Unit Tests"
 echo " $RUN_TS"
 echo "============================================"
 
-# --cov-fail-under is a regression ratchet: raise it as coverage grows
-# (see DECOUPLING_PLAN.md and EXCHANGE_FORMAT_PLAN.md §12.6), never lower it to
-# make a build pass. Raised to 28 by Phase 6 (see EXCHANGE_FORMAT_PLAN.md §12.6).
+# --cov-fail-under is a regression ratchet: raise it as coverage grows,
+# never lower it to make a build pass.
 pytest tests \
     --junitxml="$REPORTS_DIR/pytest.xml" \
     --cov=bambi_wildlife_detection \

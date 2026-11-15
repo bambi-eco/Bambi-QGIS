@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """Architecture guard for the headless ``core`` package.
 
-Enforces the boundary documented in ``bambi_wildlife_detection/core/__init__``
-and DECOUPLING_PLAN.md: core modules must be importable without QGIS and
+Enforces the boundary documented in
+``bambi_wildlife_detection/core/__init__``: core modules must be importable
+without QGIS and
 without the heavy runtime dependencies. GUI toolkits are forbidden outright;
 heavy dependencies are allowed only inside function bodies (lazy imports).
 """

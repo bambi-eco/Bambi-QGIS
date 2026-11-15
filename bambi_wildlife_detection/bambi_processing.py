@@ -332,7 +332,7 @@ def _legacy_text_writer(config: Dict[str, Any], path: str, stack):
 
     Only files with a complete equivalent in the 6.0 store may be routed
     through this - switching the toggle off must never remove the only copy of
-    something (EXCHANGE_FORMAT_PLAN.md §9).
+    something.
     """
     if not config.get("write_legacy_text_outputs", True):
         return _DiscardedWriter()
@@ -488,7 +488,7 @@ def _record_stage(config: Dict[str, Any], stage: str, modality: str,
 
     A no-op on projects without a 6.0 store. Failures are deliberately not
     recorded: the previous state stays, and reconciliation against the folder
-    is what keeps the answer honest either way (EXCHANGE_FORMAT_PLAN.md §7).
+    is what keeps the answer honest either way.
     """
     from .core import stages, store
 
@@ -3946,7 +3946,7 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
 
         # From the store: its track ids are the ones every other consumer uses,
         # and it applies the population filter - so false positives never
-        # reach the distance sampling that reads these distances (§8.2); the
+        # reach the distance sampling that reads these distances; the
         # survey's species filter is applied there, by class. The CSVs know nothing of either.
         from .core import analytics_source, store as _store
 
@@ -4031,7 +4031,7 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
             results.append({
                 'track_id': track_id,
                 # Which detection the distance was measured from, so the row
-                # can be traced back rather than re-derived (§1.2a).
+                # can be traced back rather than re-derived.
                 'detection_id': last.get('detection_id'),
                 'last_frame': frame_idx,
                 'last_image': last_image,
@@ -4101,7 +4101,7 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
         Every step reads its input from the store. The 5.x text files are no
         longer read - they are written for external scripts, and a project can
         turn that off - so "the text file is there" says nothing about whether
-        the step can run (EXCHANGE_FORMAT_PLAN.md §11).
+        the step can run.
         """
         from .core import store as _store
 
@@ -4441,7 +4441,8 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
         processed = 0
 
         # Rows for the 6.0 store, collected alongside the legacy text output so
-        # both paths see exactly the same boxes (dual-write parity, §10).
+        # both paths see exactly the same boxes: the text file and the store
+        # are written from one list, and compared afterwards.
         store_rows = []
 
         # Write detection results
@@ -4988,7 +4989,7 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
 
         # Mirror into the store, keyed on detection_id. A detection that could
         # not be placed is recorded as a failure rather than dropped, so every
-        # detection stays accounted for (§3.2).
+        # detection stays accounted for.
         if any(det.get("detection_id") for det in detections):
             track_store.record_georeference(
                 target_folder, camera_suffix,

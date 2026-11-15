@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Golden-file tests for the 5.x → 6.0 migration (EXCHANGE_FORMAT_PLAN.md §9).
+"""Golden-file tests for the 5.x → 6.0 migration.
 
 The fixtures below are written in the exact byte layout the 5.x pipeline
 produced, so they pin the parsers as much as the mapping. The migration has no
@@ -127,7 +127,7 @@ def test_is_migrated_reflects_the_project_store(legacy):
 
 
 # ---------------------------------------------------------------------------
-# The frozen species mapping (§1.3)
+# The frozen species mapping
 # ---------------------------------------------------------------------------
 
 def test_legacy_species_class_ids_reproduces_the_5x_rule():
@@ -159,7 +159,7 @@ def test_base_classes_survive_migration(legacy):
 
 
 # ---------------------------------------------------------------------------
-# detections.txt, and the class_id-0 disambiguation (§9)
+# detections.txt, and the class_id-0 disambiguation
 # ---------------------------------------------------------------------------
 
 def test_detections_split_by_the_marker(legacy):
@@ -197,7 +197,7 @@ def test_detection_ids_follow_file_order(legacy):
 
 
 def test_class_zero_above_the_marker_is_animal(legacy):
-    """The detector's 0 means 'an animal' (§1.3)."""
+    """The detector's 0 means 'an animal'."""
     migration.migrate_project(legacy)
     conn = store.open_store(
         store.stage_path(legacy, store.DETECTIONS, "t"), store.DETECTIONS, "t")
@@ -258,7 +258,7 @@ def test_valid_geo_rows_are_linked_to_their_detections(legacy):
 
 
 def test_invalid_geo_rows_become_failures_instead_of_vanishing(legacy):
-    """5.x dropped these silently; they are now accounted for (§3.2)."""
+    """5.x dropped these silently; they are now accounted for."""
     migration.migrate_project(legacy)
     conn = store.open_store(
         store.stage_path(legacy, store.GEOREFERENCED, "t"),
@@ -270,7 +270,7 @@ def test_invalid_geo_rows_become_failures_instead_of_vanishing(legacy):
 
 
 def test_every_detection_is_accounted_for(legacy):
-    """The assertion the old format could not express (§12.2)."""
+    """The assertion the old format could not express."""
     migration.migrate_project(legacy)
     det = store.open_store(
         store.stage_path(legacy, store.DETECTIONS, "t"), store.DETECTIONS, "t")
@@ -337,7 +337,7 @@ def test_track_run_records_where_the_linkage_came_from(legacy):
 
 
 def test_unmatched_track_point_does_not_cost_the_frame(tmp_path):
-    """The core/track_export.py regression, in migration form (§9).
+    """The core/track_export.py regression, in migration form.
 
     5.x discarded every detection in a frame whose counts disagreed. Here the
     one unmatchable point is dropped and the rest of the frame survives.
@@ -410,7 +410,7 @@ def test_label_tracks_and_keyframes(legacy):
 
 
 def test_sex_and_age_become_enum_value_ids(legacy):
-    """Stored by id, so a later rename cannot orphan them (§5.1)."""
+    """Stored by id, so a later rename cannot orphan them."""
     migration.migrate_project(legacy)
     conn = store.open_store(
         store.stage_path(legacy, store.LABELS, "t"), store.LABELS, "t")
@@ -551,7 +551,7 @@ def test_both_modalities_are_migrated(tmp_path):
 
 
 def test_trex_folder_is_flagged_as_indistinguishable(tmp_path):
-    """5.x wrote TRex detections in the detector's own format (§9)."""
+    """5.x wrote TRex detections in the detector's own format."""
     root = str(tmp_path / "flight")
     _write(os.path.join(root, "detections_t", "detections.txt"),
            "1 10.0 20.0 30.0 40.0 0.9 0\n")

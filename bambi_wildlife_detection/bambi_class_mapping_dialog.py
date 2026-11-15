@@ -4,7 +4,7 @@
 A detector reports whatever classes its weights were trained on: `0`, `1`, `2`,
 or names of its own. The project has its own species list, and the two are not
 the same thing - which is why detections store the **raw class** alongside the
-resolved species (EXCHANGE_FORMAT_PLAN.md §3.1).
+resolved species.
 
 This dialog is where the two are connected. It belongs with the model, not with
 the project vocabulary: the mapping is a property of the weights being used, so

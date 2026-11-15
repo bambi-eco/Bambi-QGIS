@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""The detector class mapping dialog (EXCHANGE_FORMAT_PLAN.md §3.1).
+"""The detector class mapping dialog.
 
 The rules live headlessly in ``tests/test_schema_editor.py``; what needs a real
 QGIS is that the table lists what the detector actually reported, that applying
@@ -134,7 +134,7 @@ def test_a_project_without_a_detector_says_so(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_applying_reassigns_the_stored_detections(project_folder):
-    """The raw class was kept, so the detector need not run again (§3.1)."""
+    """The raw class was kept, so the detector need not run again."""
     dialog = BambiClassMappingDialog(project_folder)
     _set_row(dialog, "0", "roe deer")
     _set_row(dialog, "3", "chamois")

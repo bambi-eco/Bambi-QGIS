@@ -11,8 +11,9 @@ only thing a head guarantees; the names are for the user's benefit and are
 stored with each prediction verbatim. That also means renaming a label here can
 never silently re-target a mapping.
 
-The class list is discovered where possible and defined by hand where not (see
-the plan, §5.3): a head may not carry names, and one that has not been
+The class list is discovered where possible and defined by hand where not
+(see CLASSIFICATION_PLAN.md, §5.3): a head may not carry names, and one that
+has not been
 downloaded yet cannot be asked at all.
 """
 

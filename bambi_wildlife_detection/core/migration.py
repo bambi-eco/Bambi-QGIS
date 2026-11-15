@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """One-shot import of a 5.x target folder into the 6.0 store.
 
-Implements EXCHANGE_FORMAT_PLAN.md §9. Reads the legacy text/JSON outputs and
+Reads the legacy text/JSON outputs and
 writes the equivalent rows into ``project.gpkg`` and the per-stage files. The
 legacy files are never modified - migration is additive, so a failed or
 half-finished run can simply be deleted and retried.
@@ -9,12 +9,12 @@ half-finished run can simply be deleted and retried.
 Two things happen here for the last time, and nowhere else in the codebase:
 
 * **The detection↔track linkage is recovered by matching coordinates.** That is
-  the very defect 6.0 removes (§1.2a), but a 5.x project holds no other record
+  the very defect 6.0 removes, but a 5.x project holds no other record
   of it. Unlike ``core/track_export.py``, a failed match costs one detection its
   track membership instead of discarding the whole frame.
 * **The species→class-id mapping is derived.** ``species_class_ids()`` computes
   it alphabetically on every export; migration reproduces that once, freezes it
-  into the ``species`` table and never derives it again (§1.3).
+  into the ``species`` table and never derives it again.
 
 The ambiguity of legacy ``class_id 0`` - "animal" to the detector, "unknown" to
 the labelling tool - is resolved by which side of ``DETECTIONS_MARKER`` a row
@@ -225,7 +225,7 @@ def read_legacy_georeferenced(path: str) -> List[dict]:
 
     ``core/pipeline_outputs.load_georef_detections_by_frame`` drops rows with a
     negative corner; migration keeps them so they can become ``georef_failures``
-    instead of vanishing (§9).
+    instead of vanishing.
     """
     rows: List[dict] = []
     if not os.path.isfile(path):
@@ -283,7 +283,7 @@ def read_legacy_tracks(path: str) -> List[dict]:
 
 
 def read_legacy_pixel_tracks(path: str) -> List[dict]:
-    """Parse ``tracks_pixel.csv`` - the preferred linkage source (§9)."""
+    """Parse ``tracks_pixel.csv`` - the preferred linkage source."""
     rows: List[dict] = []
     if not os.path.isfile(path):
         return rows
@@ -421,7 +421,7 @@ def migrate_vocabulary(project, target_folder: str,
         name = (field.get("name") or "").strip()
         if not name:
             continue
-        # 5.x scopes: "track" stays, "keyframe" becomes per-detection (§5).
+        # 5.x scopes: "track" stays, "keyframe" becomes per-detection.
         scope = "detection" if field.get("scope") == "keyframe" else "track"
         project.execute(
             "INSERT OR IGNORE INTO field_schema (name, type, scope) "
@@ -487,7 +487,7 @@ def migrate_detections(target_folder: str, modality: str, project,
     if label_rows:
         manual_source = _ensure_source(project, "manual")
         # Below the marker, class 0 is the labelling tool's "unknown", not the
-        # detector's "animal" - the one place that distinction survives (§1.3).
+        # detector's "animal" - the one place that distinction survives.
         _seed_class_mapping(project, manual_source,
                             [r["class_id"] for r in label_rows],
                             zero_species=-1)
@@ -603,7 +603,7 @@ def migrate_tracks(target_folder: str, modality: str,
                    pixel_index: Dict[tuple, int],
                    geo_index: Dict[tuple, int],
                    report: MigrationReport) -> None:
-    """Import tracks, preferring ``tracks_pixel.csv`` for the linkage (§9)."""
+    """Import tracks, preferring ``tracks_pixel.csv`` for the linkage."""
     folder = legacy_folder(target_folder, "tracks", modality)
     pixel_rows = read_legacy_pixel_tracks(
         os.path.join(folder, "tracks_pixel.csv"))
@@ -644,7 +644,7 @@ def migrate_tracks(target_folder: str, modality: str,
                 detection_id = index.get(key)
                 if detection_id is None:
                     # One detection loses its membership - not, as in 5.x, the
-                    # whole frame (§9).
+                    # whole frame.
                     unmatched += 1
                     continue
                 conn.execute(
@@ -695,7 +695,7 @@ def _resolve_enum_value(project, enum_name: str, label: str,
     """Map a legacy label string onto a ``value_id``, appending if unknown.
 
     Unmatched values are added rather than dropped, so hand-edited or older
-    files keep their data (§9).
+    files keep their data.
     """
     row = project.execute(
         "SELECT enum_id FROM enums WHERE name = ?", (enum_name,)).fetchone()

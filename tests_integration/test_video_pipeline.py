@@ -57,7 +57,7 @@ def synthetic_detections(thermal_extraction, base_config, target_folder):
                 f"{width / 2 + half:.1f} {height / 2 + half:.1f} 0.90 0\n"
             )
     # Mirror into the 6.0 store so run_georeference takes the store path and
-    # keys its results on detection_id (EXCHANGE_FORMAT_PLAN.md phase 3).
+    # keys its results on detection_id.
     from bambi_wildlife_detection.core import detection_store
 
     detection_store.record_detections(
@@ -273,7 +273,7 @@ class TestAlfs:
 
 
 # ---------------------------------------------------------------------------
-# 6.0 migration on real pipeline output (EXCHANGE_FORMAT_PLAN.md §9, §12.2)
+# 6.0 migration on real pipeline output
 # ---------------------------------------------------------------------------
 
 class TestMigrationOnRealOutput:
@@ -383,7 +383,7 @@ class TestMigrationOnRealOutput:
 
 
 # ---------------------------------------------------------------------------
-# Phase 3: geo-referencing against the store (EXCHANGE_FORMAT_PLAN.md §3.2, §12.2)
+# Geo-referencing against the store
 # ---------------------------------------------------------------------------
 
 class TestGeoreferenceStore:

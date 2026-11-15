@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
-"""Phase 0 de-risking spikes for the 6.0 store (EXCHANGE_FORMAT_PLAN.md §12.3).
+"""Two questions the layout of the 6.0 store rests on, asked of a real QGIS.
 
 Two questions have to be answered before any stage depends on the layout:
 
 1. Does an **aspatial GeoPackage** - payload tables with no geometry, announced
    via ``gpkg_contents`` with ``data_type='attributes'`` - actually open in
-   QGIS? If not, §2.1's fallback to plain ``.sqlite`` applies and the container
-   boilerplate goes away.
+   QGIS? If not, the stage files would have to be plain ``.sqlite`` and the
+   container boilerplate could go.
 2. What happens when a stage file is **rewritten while a layer is loaded from
-   it**? This decides whether Phase 5 reads the store directly or via exported
-   layers (§13, Q1).
+   it**? This decides whether QGIS layers may be read from the store's files
+   directly, or have to be copies of them.
 
 Run via the QGIS image only::
 
@@ -51,8 +51,8 @@ def _layer(path, table):
 def test_aspatial_geopackage_layer_is_valid(detections_file):
     layer = _layer(detections_file, "detections")
     assert layer.isValid(), (
-        "aspatial GeoPackage did not open in QGIS - §2.1 fallback to plain "
-        ".sqlite applies")
+        "aspatial GeoPackage did not open in QGIS - the stage files would "
+        "have to be plain .sqlite")
 
 
 def test_aspatial_layer_exposes_its_rows(detections_file):
@@ -102,21 +102,22 @@ def test_project_store_opens_in_qgis(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Spike 2 - rewriting a stage while a layer is loaded (§13, Q1)
+# Question 2 - rewriting a stage while a layer is loaded
 #
 # These record *Linux* behaviour and prove nothing about Windows, which locks a
 # file that a QGIS layer holds open - confirmed from the existing pain with
-# added layers and GeoTIFF exports. The conclusion drawn from that (§11) is that
+# added layers and GeoTIFF exports. The conclusion drawn from that is that
 # the plugin must never hand a stage file path to QGIS as a layer source; these
 # tests document what happens if it does anyway.
 # ---------------------------------------------------------------------------
 
 def test_stage_rewrite_while_layer_loaded_is_permitted_on_linux(detections_file):
-    """POSIX permits it; Windows does not - hence the memory-layer rule (§11).
+    """POSIX permits it; Windows does not - hence the memory-layer rule.
 
     Note what this test is *not*: evidence that file-backed layers are safe. It
-    only records that the permissive platform is permissive. The rule in §11
-    rests on Windows behaviour, which this tier cannot exercise.
+    only records that the permissive platform is permissive. The rule that
+    no layer is backed by a stage file rests on Windows behaviour, which
+    this tier cannot exercise.
     """
     layer = _layer(detections_file, "detections")
     assert layer.isValid()
@@ -169,7 +170,7 @@ def test_opening_a_stage_file_takes_no_exclusive_lock(detections_file):
 
 def test_stage_file_deletion_while_layer_loaded_is_permitted_on_linux(
         detections_file):
-    """`rm` of a stage file - unlocked here, blocked on Windows (§7)."""
+    """`rm` of a stage file - unlocked here, blocked on Windows."""
     import os
 
     layer = _layer(detections_file, "detections")
@@ -182,7 +183,7 @@ def test_store_leaves_no_journal_sidecars(tmp_path):
     """DELETE journal mode: the stage file is the whole stage file.
 
     WAL would leave ``-wal``/``-shm`` next to it - invisible state a user
-    copying "the .gpkg" would drop, and unusable on a network share (§2.1).
+    copying "the .gpkg" would drop, and unusable on a network share.
     """
     import os
 

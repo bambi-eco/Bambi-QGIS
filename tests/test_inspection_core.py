@@ -41,7 +41,7 @@ class TestSimpleLoaders:
         assert [d["frame"] for d in result] == [0, 1]
         assert result[0]["x1"] == 1.0
         # The detection_id is what the layer was built from, so the clicked
-        # box needs no matching back by confidence (§1.2a).
+        # box needs no matching back by confidence.
         assert result[0]["detection_id"]
 
     def test_pixel_detections_ignore_the_text_file(self, tmp_path):

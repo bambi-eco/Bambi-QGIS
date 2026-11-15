@@ -368,11 +368,11 @@ Red deer is the only species with a released sex model, so it is the only sex ro
 
 ## Interactive selection tools
 
-Three map-canvas click tools are available from the BAMBI toolbar to inspect layers that have already been loaded into QGIS.
+Three map-canvas click tools - the *inspectors* - are available from the BAMBI toolbar to inspect layers that have already been loaded into QGIS.
 
 ### Detection / track selection
 
-Click the **Select Detection or Track** tool in the toolbar, then click anywhere on the map canvas to highlight the detection or track bounding box nearest to the clicked point.
+Click the **Inspector: Click Detection / Track** tool in the toolbar, then click anywhere on the map canvas to highlight the detection or track bounding box nearest to the clicked point.
 
 - Works on any layer that was added via **→ Add Detections to QGIS** or **→ Add Tracks to QGIS**
 - The clicked feature is selected in the layer and its attributes are shown in the inspector panel
@@ -393,15 +393,15 @@ Both ask for confirmation and cannot be undone. The map follows: the box leaves 
 
 ### Field-of-view selection
 
-Click the **Select Field of View** tool in the toolbar, then click on the canvas to select the FoV(s) that contain the clicked point.
+Click one of the two field-of-view inspectors in the toolbar, then click on the canvas to select the FoV(s) that contain the clicked point.
 
 - Works on any layer that was added via **→ Add FoV Layers to QGIS** (not the merged FoV!)
 - If no Field of View layers are present, a warning dialog is shown
 
 There are two versions of the FoV tool:
 
-1. A fast version that just opens the related FoVs
-2. A **geo-referenced** version that also geo-references your click and shows it as a yellow cross. This requires loading the digital elevation model, which takes some time, and the result depends heavily on your calibration parameters and correction factors.
+1. **Inspector: Click FoV** - a fast version that just opens the related FoVs
+2. **Inspector: Click FoV (Geo-Referenced)** - a version that also geo-references your click and shows it as a yellow cross. This requires loading the digital elevation model, which takes some time, and the result depends heavily on your calibration parameters and correction factors.
 
 ![Field-of-View Selection Tool](../images/selection_tool_fov.png)
 

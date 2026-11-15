@@ -135,8 +135,9 @@ CONFIG_ENTRIES: List[ConfigEntry] = [
     ConfigEntry("Input/CorrectionPath", "str"),
     ConfigEntry("Input/TargetFolder", "str"),
     ConfigEntry("Input/TargetCrs", "str"),
-    # Legacy text outputs alongside the 6.0 store; see
-    # EXCHANGE_FORMAT_PLAN.md §9. On by default for 6.x.
+    # The text outputs of 5.x (detections.txt, tracks.csv, ...) written
+    # alongside the store, for scripts that still read them. Nothing in the
+    # plugin reads them any more. On by default.
     ConfigEntry("Input/WriteLegacyTextOutputs", "bool", True),
     # ===== Detection Settings =====
     ConfigEntry("Detection/ThermalModelPath", "str"),

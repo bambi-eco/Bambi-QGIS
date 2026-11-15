@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """Editing the project vocabulary: species, enums and custom fields.
 
-Implements EXCHANGE_FORMAT_PLAN.md §3.1 and §5.3. This is the *only* place the
+This is the *only* place the
 vocabulary changes - confining creation to one editor is what actually fixes the
-unstable-class-id bug (§1.3), because ``species_class_ids()`` can no longer mint
+unstable-class-id bug, because ``species_class_ids()`` can no longer mint
 an id from an arbitrary string typed into a combo box.
 
 The rules it enforces, all of which exist so that stored data cannot change
@@ -15,7 +15,7 @@ meaning behind the user's back:
 * renaming a species or an enum value touches no stored row, because rows hold
   ids rather than labels;
 * renaming a *field* does rewrite stored rows, because ``attributes`` is keyed
-  by field name - a deliberate trade for readable attribute blobs (§5.1).
+  by field name - a deliberate trade for readable attribute blobs.
 
 **Edits are made on a private copy and written back in one go.** The editor
 used to open the project store and keep its edits in an open transaction
@@ -342,7 +342,7 @@ class SchemaEditor:
                      gbif_taxon_key: Optional[int] = None) -> None:
         """Attach publishing taxonomy to a species.
 
-        Only these two formats care (§8.1): Darwin Core needs
+        Only these two formats care: Darwin Core needs
         ``scientificName``, and a GBIF taxon key lets the backbone resolve the
         record exactly instead of matching a name string. A project that never
         publishes can leave both empty.
@@ -612,7 +612,7 @@ class SchemaEditor:
         """Rename a field **and the stored rows that use it**.
 
         Unlike every other rename here this touches data, because ``attributes``
-        is a JSON object keyed by field name (§5.1). The rows are rewritten
+        is a JSON object keyed by field name. The rows are rewritten
         when the edits are committed; the number that will be is returned.
         Only the tables of the field's own scope are touched - a detection
         field of the same name keeps its values.
@@ -831,7 +831,7 @@ class SchemaEditor:
 
         Changing this moves no boxes, so nothing upstream is invalidated; the
         detections' ``species_id`` is re-resolved from the raw ``source_class``
-        they already carry (§3.1).
+        they already carry.
         """
         exists = self.conn.execute(
             "SELECT 1 FROM species WHERE species_id = ?", (species_id,)).fetchone()

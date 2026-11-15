@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""COCO, YOLO and MOT exporters (EXCHANGE_FORMAT_PLAN.md §8.1).
+"""COCO, YOLO and MOT exporters.
 
 All three are one-directional: they read the store and write throwaway files.
 None of them is an input format, so nothing has to survive a round trip.
@@ -36,7 +36,7 @@ def export_coco(target_folder: str, modality: str, output_path: str,
 
     The reference export: COCO permits extra keys on an annotation, so every
     custom field travels with its detection instead of being dropped the way
-    ``labels.csv`` dropped them (§1.2b).
+    ``labels.csv`` dropped them.
 
     ``file_name`` is a bare name, which readers resolve against an image root
     they are told about separately. *include_images* copies the frames into an

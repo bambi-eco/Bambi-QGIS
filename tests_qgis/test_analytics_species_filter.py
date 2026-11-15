@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""The species filter on the Survey Analytics tab (§8.2).
+"""The species filter on the Survey Analytics tab.
 
 The filtering itself is covered headlessly in ``tests/test_analytics_source.py``;
 what needs a real QGIS is the wiring - that the list comes from the

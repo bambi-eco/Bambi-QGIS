@@ -28,7 +28,7 @@ The layers cover the ground the flight saw - its field-of-view footprints (P3), 
 
 All rasters share one 10 m grid in the flight's target CRS, snapped to multiples of 10 m. A flight in the same UTM zone as its Sentinel-2 tile therefore gets the satellite's own pixels, not resampled ones.
 
-### E1. Satellite indices (Sentinel-2)
+### E1. Fetch Satellite Indices (Sentinel-2)
 
 Sentinel-2 passes every two to five days, and cloud decides what it sees. The step searches the scenes within the **scene window** (±10 days by default) of the flight and tries them **nearest first, before or after the flight alike**. A scene is used when the share of the *flight's extent* that is free of cloud, cloud shadow, cirrus and missing data reaches the **required clear share** (80 % by default) - judged from the scene's own classification over the flight, not from the cloud percentage of the 100 km tile. Cloudy cells of the chosen scene are written as no-data.
 
@@ -45,19 +45,19 @@ If no scene in the window is clear enough the step fails and names the best cand
 
 A sudden drop in NDVI between two flights' scenes over a meadow is usually mowing; over a field, harvest. The plugin fetches one scene per flight and does not compute change layers itself.
 
-### E2. Land cover (ESA WorldCover)
+### E2. Fetch Land Cover (ESA WorldCover)
 
 The class of every 10 m cell - tree cover, shrubland, grassland, cropland, built-up, bare, snow and ice, water, wetland, mangroves, moss and lichen - with the map's own colours. **Tree cover** is derived from it: the share of tree cells within 50 m of each cell, which is what separates closed forest from a hedge and what the canopy does to detectability.
 
 WorldCover maps 2021. Meadows and forest do not move between flights, but a clear-cut or a new field after 2021 is not in it.
 
-### E3. Terrain wetness (DEM)
+### E3. Compute Terrain Wetness (DEM)
 
 The topographic wetness index, `ln(a / tan β)`, with *a* the upslope area draining through a cell and *β* its slope: high in flat hollows and valley floors where water collects, low on ridges and steep slopes. It is static, needs no download and works under closed forest, which makes it the complement to NDMI.
 
 It is computed from the DEM mesh selected on the Input tab, sampled onto the grid with a 500 m margin around the flight (a cell's wetness depends on the slope above it). Depressions are filled and the flow is routed to all lower neighbours. The step fails when the DEM covers less than half of the extent, and on a flat-surface DEM (aquatic surveys), where there is no terrain to derive anything from.
 
-### E4. Weather (Open-Meteo)
+### E4. Fetch Weather (Open-Meteo)
 
 Not satellite data, but for a thermal flight the strongest explanation of detectability: what the air and the ground were at when the drone flew, and how much sun, rain and wind the hours before put into them.
 

@@ -54,8 +54,8 @@ def pixel_tracks_available(target, suffix):
     """True when there are tracks to draw.
 
     The overlay needs each box tied to a track id, which is what the store
-    records; the 5.x files could only be paired back together by guesswork
-    (§8.2), so they are not consulted.
+    records; the 5.x files could only be paired back together by
+    guesswork, so they are not consulted.
     """
     from . import store
 
@@ -212,7 +212,7 @@ def load_pixel_tracks(target, suffix, log_fn: Optional[Callable[[str], None]] = 
     store - a pixel CSV, a geo-coordinate match through georeferenced.txt, and
     finally a row-index match - each of which could silently mis-assign a box
     to the wrong animal when the files were re-sorted or a detection was
-    dropped (§8.2).
+    dropped.
     """
     stored = pixel_tracks_from_store(target, suffix)
     if not stored and log_fn:

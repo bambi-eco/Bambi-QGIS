@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Survey strata and pooled points (core.survey, §8.2).
+"""Survey strata and pooled points (core.survey).
 
 The survey analytics work on the flights ticked on the Survey Analytics tab,
 not on the flight selected for processing. Species are chosen by *name* -

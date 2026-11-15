@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
 """Stage state, the dependency cascade, and resetting a stage.
 
-Implements EXCHANGE_FORMAT_PLAN.md §7. Three jobs:
+Three jobs:
 
 * **record** what each stage produced, when, and from which inputs;
 * **invalidate** every transitive dependent when a stage is re-run or reset -
   replacing the hand-maintained cleanup in ``LabelStore.replace_detections``,
-  which knew about ``tracks_{m}`` and ``tracks_pixel_{m}`` and nothing else
-  (§1.3);
+  which knew about ``tracks_{m}`` and ``tracks_pixel_{m}`` and nothing else;
 * **reconcile** the recorded state with what is actually on disk, because
   deleting a stage file in Explorer has to keep working.
 
@@ -32,7 +31,7 @@ FRAMES = "frames"
 
 #: What each stage needs before it can run. Keys match the status keys
 #: ``output_inventory`` already uses, so saved configs and step ids are
-#: unaffected (§10.1).
+#: unaffected.
 STAGE_DEPENDENCIES: Dict[str, Tuple[str, ...]] = {
     "flight_route": (FRAMES,),
     "detection": (FRAMES,),
@@ -90,7 +89,7 @@ STAGE_SHARED_STORE_KIND: Dict[str, str] = {
 CROSS_MODAL = "tw"
 
 #: Legacy output folders per stage, still written during 6.x. A reset has to
-#: remove these too or the stage would still look complete (§7).
+#: remove these too or the stage would still look complete.
 STAGE_LEGACY_FOLDERS: Dict[str, Tuple[str, ...]] = {
     "detection": ("detections",),
     "georeference": ("georeferenced",),
@@ -319,7 +318,7 @@ class StageLockedError(RuntimeError):
     """A stage file could not be removed because something holds it open.
 
     On Windows a layer loaded in the QGIS Browser locks the file. The plugin
-    itself never file-backs a layer (§11), so this means the user opened it -
+    itself never file-backs a layer, so this means the user opened it -
     which is worth saying plainly rather than surfacing a raw ``PermissionError``.
     """
 
@@ -404,7 +403,7 @@ def fingerprint(config: dict, keys: Iterable[str],
     """Hash the config values a stage actually depends on, plus its inputs.
 
     Answers "was this really recomputed?" directly, which folder mtimes never
-    could (§7).
+    could.
     """
     import hashlib
     import json

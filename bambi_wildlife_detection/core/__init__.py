@@ -10,6 +10,8 @@ Modules in this package must be importable without a QGIS installation:
 * Heavy runtime dependencies (alfspy, cv2, rasterio, bambi, trimesh, …)
   are imported lazily inside functions.
 
-The boundary is enforced by ``tests/test_architecture.py``.
-See ``DECOUPLING_PLAN.md`` for the roadmap.
+The boundary is enforced by ``tests/test_architecture.py``. It is what lets
+the logic be tested without QGIS, and run outside it: the dock widget and the
+dialogs (``bambi_*.py``) collect settings and show results; everything that
+computes lives here.
 """

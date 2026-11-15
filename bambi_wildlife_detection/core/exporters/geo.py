@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""GeoJSON and TRex ``.npz`` exporters (EXCHANGE_FORMAT_PLAN.md §8.1).
+"""GeoJSON and TRex ``.npz`` exporters.
 
 GeoJSON keeps ``not-an-animal`` by default: it is a record of what was seen and
 decided, not a training set, so a labelled false positive is information rather

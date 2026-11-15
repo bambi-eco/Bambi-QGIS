@@ -1185,7 +1185,7 @@ class LabellingToolDialog(ClosesOnce, QDialog):
 
         # Editable only as a fallback: once the project has a 6.0 store the
         # combo becomes a closed list fed from it, because a species typed here
-        # is exactly how class ids used to become unstable (§6.8).
+        # is exactly how class ids used to become unstable.
         self.species_combo = QComboBox()
         self.species_combo.setEditable(True)
         self.species_combo.addItems(SPECIES_CLASSES)
@@ -1405,7 +1405,7 @@ class LabellingToolDialog(ClosesOnce, QDialog):
             return
 
         # With a 6.0 store the schema is project-wide, so it is edited in the
-        # one shared editor rather than in a labelling-only dialog (§5.3).
+        # one shared editor rather than in a labelling-only dialog.
         from .core import label_store
 
         if label_store.vocabulary(self._target_folder):
@@ -1469,7 +1469,7 @@ class LabellingToolDialog(ClosesOnce, QDialog):
 
         With a 6.0 store present the vocabulary is closed: the tool selects
         species and enum values, it never creates them. That is what removes
-        the last route by which a class id could become unstable (§6.8).
+        the last route by which a class id could become unstable.
         Without a store the built-in lists stay, so an un-migrated 5.x flight
         keeps working exactly as before.
         """
@@ -1508,7 +1508,7 @@ class LabellingToolDialog(ClosesOnce, QDialog):
             refill(self.occlusion_combo, list(OCCLUSION_LEVELS))
 
     def _on_manage_species(self):
-        """Open the shared Project Schema editor on its Species tab (§5.3)."""
+        """Open the shared Project Schema editor on its Species tab."""
         self._open_schema_dialog(initial_tab=0)
 
     def _open_schema_dialog(self, initial_tab: int = 0) -> bool:
@@ -2403,7 +2403,7 @@ class LabellingToolDialog(ClosesOnce, QDialog):
 
         Read from the store when there is one, because its rows carry a
         ``detection_id`` - that is what lets an imported label record which
-        detection each key frame came from (§6.3). Falls back to the legacy
+        detection each key frame came from. Falls back to the legacy
         ``tracks_pixel.csv`` otherwise.
         """
         from .core import track_store

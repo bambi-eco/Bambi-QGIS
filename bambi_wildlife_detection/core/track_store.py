@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """Geo-referencing and tracking against the 6.0 store.
 
-Implements EXCHANGE_FORMAT_PLAN.md §3.2, §3.3 and §12.2. This is where the
-identity model pays for itself:
+This is where the identity model - every detection has an id, and every
+later result refers to it - pays for itself:
 
 * geo-referencing keys its results on ``detection_id``, so a detection that
   cannot be placed on the DEM costs *itself* and is recorded in
@@ -235,7 +235,7 @@ def record_tracks(target_folder: str, modality: str,
 
     A new ``track_runs`` row is created and made active; earlier runs are kept
     but deactivated, so comparing trackers stays possible and re-running one
-    never disturbs another (§3.3).
+    never disturbs another.
     """
     members = list(members)
 
@@ -299,7 +299,7 @@ def superseded_track_ids(target_folder: str, modality: str) -> set:
     track; once that label track is materialised, both describe the same
     animal. Counting them together would double it, so the original is
     superseded - but *only* that one. A label track drawn from scratch has no
-    origin and supersedes nothing (§8.2).
+    origin and supersedes nothing.
 
     Which track is "the original" is told two ways:
 
@@ -663,7 +663,7 @@ def track_orphans(target_folder: str, modality: str) -> List[int]:
     """Track members pointing at a detection that no longer exists.
 
     Should always be empty: a producer may only delete rows it owns, and
-    deleting detections invalidates the tracking stage (§7).
+    deleting detections invalidates the tracking stage.
     """
     det_path = store.stage_path(target_folder, store.DETECTIONS, modality)
     trk_path = store.stage_path(target_folder, store.TRACKS, modality)

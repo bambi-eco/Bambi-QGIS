@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""The flight selector and flight-scoped configuration (§10.2).
+"""The flight selector and flight-scoped configuration.
 
 The headless rules live in ``tests/test_flights.py``; what needs a real QGIS is
 the wiring - that switching flights swaps the whole form, that configuration
@@ -336,7 +336,7 @@ def test_switching_flights_swaps_the_configuration(dock, quiet, monkeypatch,
 
 
 def test_configuration_lands_in_the_flights_own_store(dock, two_flights):
-    """The folder becomes self-describing (§10.2)."""
+    """The folder becomes self-describing."""
     a, _b = two_flights
     dock.target_folder_edit.setText(a)
     dock._on_target_folder_changed()
@@ -383,7 +383,7 @@ def test_layer_groups_nest_under_the_flight(dock, two_flights):
 
 def test_renaming_a_flight_renames_its_group(dock, quiet, monkeypatch,
                                              two_flights):
-    """A stale group per rename would accumulate quickly (§10.2)."""
+    """A stale group per rename would accumulate quickly."""
     a, _b = two_flights
     dock.target_folder_edit.setText(a)
     dock._on_target_folder_changed()
@@ -446,7 +446,7 @@ def test_renaming_onto_an_existing_name_is_refused(dock, quiet, monkeypatch,
 
 def test_a_new_flight_clears_the_recordings(dock, quiet, monkeypatch,
                                             two_flights):
-    """Otherwise the previous flight's data is processed again (§10.2)."""
+    """Otherwise the previous flight's data is processed again."""
     a, b = two_flights
     dock.target_folder_edit.setText(a)
     dock._on_target_folder_changed()

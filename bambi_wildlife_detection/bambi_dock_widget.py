@@ -480,7 +480,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
 
         # --- Flights ---
         # A QGIS project can hold several flights; exactly one is active, so
-        # everything downstream still reads a single configuration (§10.2).
+        # everything downstream still reads a single configuration.
         flight_group = QGroupBox("Flight")
         flight_box = QVBoxLayout(flight_group)
         flight_row = QHBoxLayout()
@@ -3094,8 +3094,8 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         processing_info_row.addWidget(self._preprocessing_info_btn)
         processing_layout.addLayout(processing_info_row)
 
-        # Step buttons. The split mirrors the dependency graph of
-        # EXCHANGE_FORMAT_PLAN.md §7: everything here derives from the poses and
+        # Step buttons. The split mirrors the dependency graph of the steps
+        # (core.stages): everything here derives from the poses and
         # the DEM and is independent of any animal, while the Processing tab
         # holds everything that depends on detections. Presenting them as one
         # numbered list implied a sequence that does not exist.
@@ -6757,7 +6757,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
     }
 
     # ------------------------------------------------------------------
-    # Flights (§10.2)
+    # Flights
     # ------------------------------------------------------------------
 
     def _restore_flights(self, project) -> None:
@@ -7236,7 +7236,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             return
 
         # A folder that has already been processed describes itself, so it is
-        # adopted as it stands rather than started from scratch (§10.2).
+        # adopted as it stands rather than started from scratch.
         try:
             existing = flights_core.describe_existing(folder)
         except Exception as exc:  # noqa: BLE001 - a store that cannot be read
@@ -7354,7 +7354,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
 
         Returns True to copy, False for defaults, or None when cancelled. The
         recordings are cleared either way - the choice is only about the
-        processing settings (§10.2).
+        processing settings.
         """
         box = QMessageBox(self)
         box.setWindowTitle("New flight")
@@ -7486,7 +7486,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         return box.clickedButton() is remove_btn
 
     # ------------------------------------------------------------------
-    # Which species the analytics count (§8.2)
+    # Which species the analytics count
     # ------------------------------------------------------------------
 
     def _on_analytics_species_mode_changed(self, all_species: bool):
@@ -7585,7 +7585,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
 
         On the store, not on the 5.x text file beside it: those are written for
         external scripts and can be switched off, so their presence says
-        nothing about whether a step has run (§11).
+        nothing about whether a step has run.
         """
         folder = folder or self.target_folder_edit.text().strip()
         if not folder or modality not in _store_kinds.MODALITIES:
@@ -7652,7 +7652,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             key in exporters.SUPPORTS_IMAGES)
 
     def run_export(self):
-        """Write the current project out in the selected format (§8.1)."""
+        """Write the current project out in the selected format."""
         from qgis.PyQt.QtWidgets import QApplication
 
         from .core import exporters
@@ -7738,7 +7738,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
 
         Replaces deleting a folder in Explorer: the cascade is applied, so the
         results further downstream are marked out of date instead of quietly
-        surviving as stale files (§7).
+        surviving as stale files.
         """
         from .core import stages
 
@@ -7800,7 +7800,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             f"Removed {len(result['removed'])} output(s).\n{stale_note}")
 
     def open_class_mapping_dialog(self) -> bool:
-        """Map the detector's raw classes onto the project's species (§3.1)."""
+        """Map the detector's raw classes onto the project's species."""
         from .bambi_class_mapping_dialog import BambiClassMappingDialog
 
         folder = self.target_folder_edit.text().strip()
@@ -7817,7 +7817,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
 
         if dialog.rows_changed:
             # Boxes did not move, so nothing upstream is invalidated; only the
-            # species-dependent analytics are now out of date (§3.1).
+            # species-dependent analytics are now out of date.
             self.log(f"Class mapping applied: {dialog.rows_changed} detection(s) "
                      "re-assigned to a different species")
             QMessageBox.information(
@@ -13738,7 +13738,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             raise ValueError(f"Unknown config role {role!r}")
 
     def save_config_to_project(self):
-        """Save the configuration of the active flight (§10.2).
+        """Save the configuration of the active flight.
 
         The form values go to the flight's own ``project.gpkg``, so the folder
         is self-describing; the QGIS project keeps only the flight list and
@@ -13796,8 +13796,8 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         from .core.config_schema import WIDGET_BINDINGS, load_config_entries
         project = QgsProject.instance()
 
-        # Which flight is active decides where the configuration is read from
-        # (§10.2), so the list has to be settled first.
+        # Which flight is active decides where the configuration is read
+        # from, so the list has to be settled first.
         if restore_flights:
             self._restore_flights(project)
             # The survey selection is a project-level setting beside the
@@ -13877,7 +13877,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
 
         # A project written before 6.0 keeps its configuration in the .qgz;
         # move it into the flight's store once, so the folder becomes
-        # self-describing from here on (§10.2).
+        # self-describing from here on.
         if migrated_from_project:
             self.save_config_to_project()
             self.log("Configuration moved into the flight's project.gpkg")
@@ -13984,7 +13984,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         """The layer group of the active flight, or the tree root.
 
         Layers are grouped per flight so it is obvious which outputs belong
-        together (§10.2). Renaming a flight renames this group rather than
+        together. Renaming a flight renames this group rather than
         leaving a stale one behind, which is why it is looked up by the current
         name every time instead of being cached.
         """

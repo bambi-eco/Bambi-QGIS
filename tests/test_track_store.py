@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Geo-referencing and tracking against the store (EXCHANGE_FORMAT_PLAN.md §3.2, §3.3).
+"""Geo-referencing and tracking against the store.
 
 The two properties that matter here are the ones the text format could not
 express: every detection is accounted for, and a detection that fails to
@@ -103,7 +103,7 @@ def test_log_reports_the_split(project):
 
 
 # ---------------------------------------------------------------------------
-# Total accounting (§12.2) - the assertion the text format could not express
+# Total accounting - the assertion the text format could not express
 # ---------------------------------------------------------------------------
 
 def test_everything_accounted_for_when_all_resolve(project):
@@ -248,7 +248,7 @@ def test_species_can_be_assigned_per_track(project):
 
 
 # ---------------------------------------------------------------------------
-# Runs coexist (§3.3)
+# Runs coexist
 # ---------------------------------------------------------------------------
 
 def test_a_new_run_deactivates_the_previous_one(project):
@@ -335,7 +335,7 @@ def test_orphans_of_an_empty_project(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Pooling manual with tracker tracks (§8.2)
+# Pooling manual with tracker tracks
 # ---------------------------------------------------------------------------
 
 def _manual_run(project, detection_ids, origin_track_id=None):
@@ -352,7 +352,7 @@ def _manual_run(project, detection_ids, origin_track_id=None):
 
 
 def test_manual_tracks_are_pooled_with_the_active_run(project):
-    """Labels are usually animals the detector missed, so they add (§8.2)."""
+    """Labels are usually animals the detector missed, so they add."""
     ids = _ids(project)
     track_store.record_tracks(
         project, "t", [{"track_id": 1, "detection_id": ids[0]}], kind="builtin")

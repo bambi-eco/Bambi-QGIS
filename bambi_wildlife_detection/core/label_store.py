@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Label persistence and materialisation against the 6.0 store.
 
-Implements EXCHANGE_FORMAT_PLAN.md §6. Two jobs:
+Two jobs:
 
 * **persistence** - the sparse key frames go to ``labels.gpkg`` instead of
   ``labels.json``, with species and enum values stored as ids;
@@ -9,7 +9,7 @@ Implements EXCHANGE_FORMAT_PLAN.md §6. Two jobs:
   under the labelling tool's own producer, and their grouping into ``tracks``
   under its own run.
 
-The upsert is the delicate part (§6.2). Labels are *generated*: every export
+The upsert is the delicate part. Labels are *generated*: every export
 re-derives every box from the key frames. If that re-minted ``detection_id``s,
 editing one key frame would invalidate geo-referencing and tracking for the
 whole flight - and labelling is inherently iterative, so that would make the
@@ -36,7 +36,7 @@ from . import store
 
 #: The labelling tool's producer and run names. It owns only rows carrying
 #: these, so a detector or tracker re-run never touches its work, and vice
-#: versa (§4.1).
+#: versa.
 MANUAL_KIND = "manual"
 
 #: Confidence recorded for a hand-drawn box.
@@ -305,7 +305,7 @@ def _box_changed(a: Tuple[float, ...], b: Tuple[float, ...]) -> bool:
 def materialise(target_folder: str, modality: str,
                 tracks: Optional[List[dict]] = None,
                 write_tracks: bool = True, log_fn=None) -> Dict[str, int]:
-    """Upsert the label boxes into ``detections`` and ``tracks`` (§6.2, §6.5).
+    """Upsert the label boxes into ``detections`` and ``tracks``.
 
     Returns counts of ``kept`` / ``moved`` / ``added`` / ``removed`` detections
     plus the number of tracks written. ``moved`` rows have had their geo row
@@ -416,7 +416,7 @@ def _invalidate_geo(target_folder: str, modality: str,
     """Drop the geo rows of detections whose box moved or vanished.
 
     Geo-referencing selects detections with neither a geo row nor a recorded
-    failure, so removing these is what makes the re-run incremental (§6.2).
+    failure, so removing these is what makes the re-run incremental.
     """
     if not detection_ids:
         return
@@ -484,7 +484,7 @@ def _write_manual_tracks(target_folder: str, modality: str,
 
     A label track *is* a track - its membership is given by the annotator
     rather than computed - so downstream consumers stop special-casing manual
-    data (§6.5). No association logic happens here (§6.6).
+    data. No association logic happens here.
 
     The run is rewritten as a whole, but a label track keeps **its track**:
     the same track id, and what the user decided about that track since

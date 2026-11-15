@@ -8,7 +8,7 @@ coverage, distance sampling, population estimation - works on all of them:
 
 * **one output folder** for the survey (``<survey folder>/analytics_{m}``),
   which also holds the survey area (``survey_area/survey_area.gpkg``);
-* **species by name**, because species ids are assigned per flight (§3.1) -
+* **species by name**, because species ids are assigned per flight -
   roe deer may be 3 in one flight and 7 in the next. A name missing from a
   flight is not an error: that flight simply has none of it;
 * **one CRS**: pooled points, rasters and areas need the flights to share

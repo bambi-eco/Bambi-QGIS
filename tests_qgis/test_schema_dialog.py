@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""The Project Schema dialog (EXCHANGE_FORMAT_PLAN.md §5.3, §10 Phase 2).
+"""The Project Schema dialog.
 
 The vocabulary rules are covered headlessly in ``tests/test_schema_editor.py``;
 what needs a real QGIS is that the dialog presents them - that base classes are
