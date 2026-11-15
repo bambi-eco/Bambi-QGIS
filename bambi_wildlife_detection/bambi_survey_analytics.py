@@ -11,6 +11,8 @@ import json
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
+from .core.survey import chosen_source
+
 
 def _cancelled(message):
     from .bambi_processing import CancelledException
@@ -240,7 +242,7 @@ class SurveyAnalyticsMixin:
     def run_density_heatmap(self, config: Dict[str, Any], progress_fn=None,
                             log_fn=None, cancel_check=None):
         """Generate a density raster - one, or one per species (§8.2)."""
-        source = config.get("density_source", "detections")
+        source = chosen_source(config, "density_source")
         self._per_stratum(
             config, source,
             lambda survey, label, names, progress: self._run_density_heatmap_once(
@@ -266,7 +268,7 @@ class SurveyAnalyticsMixin:
         import math
         import numpy as np
 
-        source = config.get("density_source", "detections")
+        source = chosen_source(config, "density_source")
         cell_size = float(config.get("density_cell_size", 5.0))
         bandwidth = float(config.get("density_bandwidth", 25.0))
         target_epsg = survey.epsg or config.get("target_epsg", 32633)
@@ -679,7 +681,7 @@ class SurveyAnalyticsMixin:
         from .core import census
 
         survey = self._survey(config)
-        source = config.get("census_source", "tracks")
+        source = chosen_source(config, "census_source")
         if log_fn:
             log_fn(f"Building the {survey.camera_label} census summary "
                    f"({source}) of {self._flights_note(survey)}...")
@@ -1025,7 +1027,7 @@ class SurveyAnalyticsMixin:
         A stratum too thin to fit is reported and skipped rather than failing
         the whole run.
         """
-        source = config.get("ds_source", "detections")
+        source = chosen_source(config, "ds_source")
         self._per_stratum(
             config, source,
             lambda survey, label, names, progress:
@@ -1058,7 +1060,7 @@ class SurveyAnalyticsMixin:
         import math
         import numpy as np
 
-        source = config.get("ds_source", "detections")
+        source = chosen_source(config, "ds_source")
         target_epsg = survey.epsg or config.get("target_epsg", 32633)
         project_folders = survey.flights
 

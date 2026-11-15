@@ -21,6 +21,7 @@ from qgis.core import QgsProject
 
 from .core import flights as flights_core
 from .core import store
+from .core import survey as survey_core
 from .core.survey import Survey, SurveyFlight, flight_settings
 from .gui_utils import PLUGIN_SCOPE
 
@@ -28,6 +29,7 @@ from .gui_utils import PLUGIN_SCOPE
 ENTRY_FLIGHTS = "Survey/Flights"
 ENTRY_CAMERA = "Survey/Camera"
 ENTRY_FOLDER = "Survey/Folder"
+ENTRY_SOURCE = "Survey/Source"
 DEFAULT_FOLDER_NAME = "bambi_survey"
 
 _FOLDER_ROLE = Qt.ItemDataRole.UserRole
@@ -36,7 +38,8 @@ _RIGHT = _ALIGN.AlignRight | _ALIGN.AlignVCenter
 
 
 class SurveyFlightsPanel(QGroupBox):
-    """The "Survey" box: flights, camera and survey folder."""
+    """The "Survey" box: flights, camera, what is counted and the survey
+    folder."""
 
     #: Emitted when the flights, the camera or the folder change.
     changed = pyqtSignal()
@@ -87,6 +90,21 @@ class SurveyFlightsPanel(QGroupBox):
         self.camera_combo.currentIndexChanged.connect(
             lambda _i: self._emit_changed())
         row.addWidget(self.camera_combo)
+        row.addSpacing(12)
+        row.addWidget(QLabel("Count:"))
+        self.source_combo = QComboBox()
+        for source in survey_core.SOURCES:
+            self.source_combo.addItem(
+                survey_core.SOURCE_LABELS[source], source)
+        self.source_combo.setToolTip(
+            "What every tool on this tab counts.\n"
+            "Animals (tracks): each tracked animal once, with the species, "
+            "sex and age of the track.\n"
+            "Boxes (detections): every box - for still-photo surveys "
+            "without tracking; an animal on two photos counts twice.")
+        self.source_combo.currentIndexChanged.connect(
+            lambda _i: self._emit_changed())
+        row.addWidget(self.source_combo)
         row.addStretch()
         layout.addLayout(row)
 
@@ -272,7 +290,11 @@ class SurveyFlightsPanel(QGroupBox):
         return Survey(folder=self.folder(), modality=self.modality(),
                       flights=self.survey_flights(), species=species,
                       per_species=per_species, include_manual=include_manual,
-                      area_enabled=area_enabled)
+                      area_enabled=area_enabled, source=self.source())
+
+    def source(self) -> str:
+        """What the survey's tools count: ``"tracks"`` or ``"detections"``."""
+        return self.source_combo.currentData() or survey_core.TRACKS
 
     def epsg(self):
         """The ticked flights' common CRS, else the form's (for drawing)."""
@@ -310,6 +332,7 @@ class SurveyFlightsPanel(QGroupBox):
         project.writeEntry(PLUGIN_SCOPE, ENTRY_CAMERA, self.modality())
         project.writeEntry(PLUGIN_SCOPE, ENTRY_FOLDER,
                            self.folder_edit.text().strip())
+        project.writeEntry(PLUGIN_SCOPE, ENTRY_SOURCE, self.source())
 
     def load(self, project):
         raw, ok = project.readEntry(PLUGIN_SCOPE, ENTRY_FLIGHTS, "")
@@ -321,20 +344,27 @@ class SurveyFlightsPanel(QGroupBox):
                           {flights_core.normalise(f) for f in folders})
         camera, _ok = project.readEntry(PLUGIN_SCOPE, ENTRY_CAMERA, "t")
         folder, _ok = project.readEntry(PLUGIN_SCOPE, ENTRY_FOLDER, "")
-        self._set_quietly(1 if camera == "w" else 0, folder or "")
+        source, _ok = project.readEntry(
+            PLUGIN_SCOPE, ENTRY_SOURCE, survey_core.TRACKS)
+        self._set_quietly(1 if camera == "w" else 0, folder or "", source)
         self.refresh()
 
     def reset(self):
         self._selected = None
-        self._set_quietly(0, "")
+        self._set_quietly(0, "", survey_core.TRACKS)
         self.refresh()
 
-    def _set_quietly(self, camera_index: int, folder: str):
-        """Set camera and folder without the change signal - which would
-        save them straight back into the project half-restored."""
+    def _set_quietly(self, camera_index: int, folder: str,
+                     source: str = survey_core.TRACKS):
+        """Set camera, folder and source without the change signal - which
+        would save them straight back into the project half-restored."""
         blocked = self.camera_combo.blockSignals(True)
         self.camera_combo.setCurrentIndex(camera_index)
         self.camera_combo.blockSignals(blocked)
+        blocked = self.source_combo.blockSignals(True)
+        self.source_combo.setCurrentIndex(
+            max(0, self.source_combo.findData(source)))
+        self.source_combo.blockSignals(blocked)
         blocked = self.folder_edit.blockSignals(True)
         self.folder_edit.setText(folder)
         self.folder_edit.blockSignals(blocked)

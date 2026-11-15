@@ -528,6 +528,7 @@ The box at the top of the tab defines the survey every tool below works on:
 |---|---|
 | **Flights** | Tick the processed flights of this QGIS project that make up the survey. Their counts, areas and distances are pooled; the census summary also lists them one by one. A flight that has not been processed, or whose folder is missing, cannot be ticked. |
 | **Camera** | Thermal or RGB - whose detections, tracks, footprints and transects are analysed. The flights must have been processed for it. (This is the survey's own selector; it is independent of the stage selectors on the processing tabs.) |
+| **Count** | What every tool on the tab counts. **Animals (tracks)** - the default - counts each tracked animal once, at the centre of its boxes, with the species, sex and age of the track. **Boxes (detections)** counts every geo-referenced box: what a still-photo survey without tracking has - an animal on two photos counts twice. |
 | **Survey folder** | Where the survey results (`analytics_t/` / `analytics_w/`) and the survey area are stored. Empty = `bambi_survey` next to the QGIS project. |
 
 Three things hold for every tool:
@@ -545,10 +546,14 @@ Three things hold for every tool:
   with *Import as label track* replaces the tracker track it came from. See
   [Results, Flights and Export](results-and-export.md#what-the-analytics-counted).
 
-The point-based tools (census, density heatmap, distance sampling) let you
-pick the **source**: *Detections* uses every geo-referenced box, *Tracks* one
-representative point per track, so an animal followed across many frames is
-counted once.
+**One setting decides what is counted.** Up to 9.0 the census, the density
+heatmap and distance sampling each had a selector of their own, with
+different defaults - the census counted animals, the other two boxes - so the
+same survey was three different things depending on the tool, and a density
+of boxes is not a density of animals. The **Count** setting of the survey box
+now applies to all of them, and is saved with the QGIS project. Results are
+still written per choice (`..._tracks` / `..._detections`), so switching does
+not overwrite the other set.
 
 ### Survey area and exclusion zones
 
@@ -587,9 +592,7 @@ species were counted, how many of them inside the survey area, how many per
 km², and how they split by sex and age - per flight and for the survey as a
 whole. No detection-function model is involved; these are minimum counts.
 
-| Setting | Description |
-|---------|-------------|
-| **Count** | *Tracks*: each tracked individual once (video surveys). *Detections*: every box - what a still-photo survey without tracking has; an animal on two photos counts twice. |
+What is counted - animals or boxes - is the survey's **Count** setting.
 
 Two densities are reported, because which is right depends on the survey:
 
@@ -618,22 +621,21 @@ Generates a **kernel-density estimate raster** of animal locations. Points are b
 
 | Setting | Description |
 |---------|-------------|
-| **Source** | Detections (every box) or Tracks (one point per track) |
 | **Cell (m)** | Output raster cell size in metres (default 5 m) |
 | **Bandwidth (m)** | Gaussian smoothing radius in metres (default 25 m) - larger values give smoother, broader hotspots |
 
 **Outputs:**
 ```
 analytics_t/    # or analytics_w/
-├── density_detections.tif    # or density_tracks.tif - float32 GeoTIFF (points/hectare)
-└── density_detections.json   # stats: peak/mean density, point count, parameters
+├── density_tracks.tif    # or density_detections.tif - float32 GeoTIFF (points/hectare)
+└── density_tracks.json   # stats: peak/mean density, point count, parameters
 ```
 
 Use **→ Add Density Heatmap to QGIS** to load the raster with a blue→red colour ramp scaled to the data. Empty (no-signal) cells are stored as nodata so the surround renders transparent.
 
 ### Distance sampling
 
-Estimates **density and abundance with 95% confidence intervals** using conventional line-transect distance sampling. It reuses the perpendicular distances already produced by **Calculate Perpendicular** (detections) or **Calculate Track Perpendicular** (tracks), so run one of those first.
+Estimates **density and abundance with 95% confidence intervals** using conventional line-transect distance sampling. It reuses the perpendicular distances of what the survey counts: those of **Calculate Track Perpendicular** when it counts animals - one observation per animal, which is what distance sampling assumes - and those of **Calculate Perpendicular** when it counts boxes. Run that step first.
 
 The tool fits both a **half-normal** and a **hazard-rate** detection function by maximum likelihood, selects the better fit by **AIC**, and computes the effective strip width (ESW), average detection probability, density (per km²) and abundance for the covered strip. Uncertainty combines the encounter-rate variance with the detection-function variance via the delta method, reported as a lognormal confidence interval.
 
@@ -649,7 +651,6 @@ Up to 9.0 the whole flight log counted - take-off, the transit to the first tran
 
 | Setting | Description |
 |---------|-------------|
-| **Source** | Detections or Tracks (tracks - one observation per animal - are usually preferred) |
 | **Truncation (m)** | Discard observations beyond this perpendicular distance. `0` = automatic (95th percentile) |
 
 On completion a results dialog summarises n, the length of surveyed line, truncation, the selected model, ESW, detection probability, density and abundance with CIs, plus the model-comparison (AIC) table.
@@ -657,7 +658,7 @@ On completion a results dialog summarises n, the length of surveyed line, trunca
 **Outputs:**
 ```
 analytics_t/    # or analytics_w/
-└── distance_sampling_detections.json   # or distance_sampling_tracks.json
+└── distance_sampling_tracks.json   # or distance_sampling_detections.json
 ```
 
 The JSON also stores the fitted detection-function curve and the distance histogram for external plotting. Abundance is reported for the covered strip area (2·w·L); multiply the density estimate by your study-area size for a study-area abundance.

@@ -207,3 +207,56 @@ def test_adding_the_survey_orthomosaic_needs_it_generated(dock, monkeypatch):
                         lambda *a, **k: warned.append(a[2]))
     dock.add_survey_orthomosaic_to_qgis()
     assert any("Generate Survey Orthomosaic" in text for text in warned)
+
+
+# ---------------------------------------------------------------------------
+# What the survey counts: one setting for every tool
+# ---------------------------------------------------------------------------
+
+def test_the_survey_counts_animals_by_default(dock, two_flights):
+    assert dock.survey_panel.source() == "tracks"
+    assert dock.survey_panel.source_combo.currentText() == "Animals (tracks)"
+    config = dock.get_config()
+    assert (config["census_source"], config["density_source"],
+            config["ds_source"]) == ("tracks", "tracks", "tracks")
+    assert dock._survey_config()["source"] == "tracks"
+
+
+def test_one_selector_decides_for_every_tool(dock, two_flights):
+    """The census used to count animals while the heat map and distance
+    sampling counted boxes, each with a selector of its own."""
+    panel = dock.survey_panel
+    panel.source_combo.setCurrentIndex(panel.source_combo.findData("detections"))
+
+    config = dock.get_config()
+    assert (config["census_source"], config["density_source"],
+            config["ds_source"]) == ("detections",) * 3
+    assert dock._survey_config()["source"] == "detections"
+
+
+def test_the_separate_selectors_are_gone(dock):
+    for name in ("census_source_combo", "density_source_combo",
+                 "ds_source_combo"):
+        assert not hasattr(dock, name), name
+
+
+def test_what_is_counted_is_saved_with_the_project(dock, two_flights):
+    panel = dock.survey_panel
+    panel.source_combo.setCurrentIndex(panel.source_combo.findData("detections"))
+    dock.save_config_to_project()
+
+    panel.reset()
+    assert panel.source() == "tracks"
+
+    panel.load(QgsProject.instance())
+    assert panel.source() == "detections"
+
+
+def test_a_project_saved_before_the_setting_counts_animals(dock, two_flights):
+    from bambi_wildlife_detection.bambi_survey_panel import ENTRY_SOURCE
+    from bambi_wildlife_detection.gui_utils import PLUGIN_SCOPE
+
+    dock.save_config_to_project()
+    QgsProject.instance().removeEntry(PLUGIN_SCOPE, ENTRY_SOURCE)
+    dock.survey_panel.load(QgsProject.instance())
+    assert dock.survey_panel.source() == "tracks"

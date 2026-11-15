@@ -26,6 +26,12 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 MODALITIES = ("t", "w")
 CAMERA_LABELS = {"t": "Thermal", "w": "RGB"}
 
+#: What the survey counts: each tracked animal once, or every box.
+TRACKS = "tracks"
+DETECTIONS = "detections"
+SOURCES = (TRACKS, DETECTIONS)
+SOURCE_LABELS = {TRACKS: "Animals (tracks)", DETECTIONS: "Boxes (detections)"}
+
 
 class SurveyError(RuntimeError):
     """The survey cannot be analysed as configured."""
@@ -59,6 +65,11 @@ class Survey:
     per_species: bool = False
     include_manual: bool = True
     area_enabled: bool = False
+    #: What every analytic of the survey counts - one choice for all of them
+    #: (see :func:`chosen_source`): ``"tracks"``, each tracked animal once,
+    #: or ``"detections"``, every box - what a still-photo survey without
+    #: tracking has.
+    source: str = TRACKS
 
     # -- (de)serialisation ------------------------------------------------- #
 
@@ -93,6 +104,10 @@ class Survey:
     def validate(self) -> "Survey":
         if self.modality not in MODALITIES:
             raise SurveyError(f"Unknown camera {self.modality!r}.")
+        if self.source not in SOURCES:
+            raise SurveyError(
+                f"Unknown survey source {self.source!r}; expected "
+                f"{' or '.join(SOURCES)}.")
         if not self.flights:
             raise SurveyError(
                 "No flight is selected. Tick at least one processed flight "
@@ -206,6 +221,24 @@ class Survey:
             else:
                 empty.append(name)
         return strata, empty
+
+
+def chosen_source(config: dict, key: str = "") -> str:
+    """What an analytic counts: ``"tracks"`` or ``"detections"``.
+
+    The survey's one setting (``config["survey"]["source"]``) - unless the
+    caller names a source for this run under *key* (``census_source``,
+    ``density_source``, ``ds_source``), as a script may. The tools used to
+    have a selector each, with different defaults: the census counted
+    animals, the heat map and distance sampling boxes, so the same survey
+    was three different things depending on the tool.
+    """
+    named = str((config or {}).get(key) or "").strip().lower() if key else ""
+    if named in SOURCES:
+        return named
+    survey = (config or {}).get("survey") or {}
+    source = str(survey.get("source") or "").strip().lower()
+    return source if source in SOURCES else TRACKS
 
 
 def route_suffix(target_folder: str, modality: str,

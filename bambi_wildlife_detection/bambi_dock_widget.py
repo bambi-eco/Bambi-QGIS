@@ -3841,18 +3841,6 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         census_desc.setStyleSheet("color: gray; font-size: 10px;")
         census_layout.addWidget(census_desc)
 
-        census_params_row = QHBoxLayout()
-        census_params_row.addWidget(QLabel("Count:"))
-        self.census_source_combo = QComboBox()
-        self.census_source_combo.addItems(["Tracks", "Detections"])
-        self.census_source_combo.setToolTip(
-            "Tracks: each tracked individual once (video surveys).\n"
-            "Detections: every box (still-photo surveys without tracking - "
-            "an animal on two photos counts twice).")
-        census_params_row.addWidget(self.census_source_combo)
-        census_params_row.addStretch()
-        census_layout.addLayout(census_params_row)
-
         census_run_row = QHBoxLayout()
         self.census_btn = QPushButton("→ Build Census Summary")
         self.census_btn.clicked.connect(self.run_census_summary)
@@ -3952,14 +3940,6 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         density_layout.addWidget(density_desc)
 
         density_params_row = QHBoxLayout()
-        density_params_row.addWidget(QLabel("Source:"))
-        self.density_source_combo = QComboBox()
-        self.density_source_combo.addItems(["Detections", "Tracks"])
-        self.density_source_combo.setToolTip(
-            "Detections: every geo-referenced box.\n"
-            "Tracks: one point per track (centroid), so each animal counts once."
-        )
-        density_params_row.addWidget(self.density_source_combo)
         density_params_row.addWidget(QLabel("Cell (m):"))
         self.density_cell_spin = QDoubleSpinBox()
         self.density_cell_spin.setRange(0.5, 500.0)
@@ -4111,14 +4091,6 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         ds_layout.addWidget(ds_desc)
 
         ds_params_row = QHBoxLayout()
-        ds_params_row.addWidget(QLabel("Source:"))
-        self.ds_source_combo = QComboBox()
-        self.ds_source_combo.addItems(["Detections", "Tracks"])
-        self.ds_source_combo.setToolTip(
-            "Which perpendicular distances to analyse. Tracks (one observation per\n"
-            "animal) are usually preferred for distance sampling."
-        )
-        ds_params_row.addWidget(self.ds_source_combo)
         ds_params_row.addWidget(QLabel("Truncation (m):"))
         self.ds_truncation_spin = QDoubleSpinBox()
         self.ds_truncation_spin.setRange(0.0, 100000.0)
@@ -4798,14 +4770,14 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             # Survey analytics: the flights, camera, folder, species and
             # survey area travel as config["survey"] (core.survey), added by
             # start_worker for the survey steps - see _survey_config().
-            "census_source": (
-                self.census_source_combo.currentText().lower()
-                if hasattr(self, 'census_source_combo') else "tracks"),
+            # What the survey's tools count - animals or boxes - is one
+            # choice for all of them, made in the Survey box. It is passed
+            # under each tool's own key as well, which is what the tools and
+            # the result files are named by.
+            "census_source": self._survey_source(),
 
             # Survey analytics: density heatmap
-            "density_source": (
-                self.density_source_combo.currentText().lower()
-                if hasattr(self, 'density_source_combo') else "detections"),
+            "density_source": self._survey_source(),
             "density_cell_size": (
                 self.density_cell_spin.value()
                 if hasattr(self, 'density_cell_spin') else 5.0),
@@ -4821,9 +4793,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
                 if hasattr(self, 'coverage_cell_spin') else 1.0),
 
             # Survey analytics: distance sampling
-            "ds_source": (
-                self.ds_source_combo.currentText().lower()
-                if hasattr(self, 'ds_source_combo') else "detections"),
+            "ds_source": self._survey_source(),
             "ds_truncation": (
                 self.ds_truncation_spin.value()
                 if hasattr(self, 'ds_truncation_spin') else 0.0),
@@ -6913,6 +6883,13 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
                 self._active_flight_index]))
         self.log(f"Renamed flight to '{updated[self._active_flight_index]['name']}'")
         return True
+
+    def _survey_source(self) -> str:
+        """What the survey's tools count: ``"tracks"`` (each animal once) or
+        ``"detections"`` (every box) - the Survey box's one setting."""
+        if hasattr(self, "survey_panel"):
+            return self.survey_panel.source()
+        return "tracks"
 
     def _on_tracker_mode_changed(self, mode: str) -> None:
         """Enable the threshold each built-in tracker mode actually uses."""
@@ -9395,7 +9372,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         survey = self._checked_survey()
         if survey is None:
             return
-        source = self.get_config().get("density_source", "detections")
+        source = self._survey_source()
         kind = (_store_kinds.TRACKS if source == "tracks"
                 else _store_kinds.GEOREFERENCED)
         msg = ("Tracks (run 'Track Animals' first)" if source == "tracks"
@@ -9412,7 +9389,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
     def add_density_heatmap_to_qgis(self):
         """Load the survey's density raster(s) with a graduated colour ramp."""
         survey = self.current_survey()
-        source = self.get_config().get("density_source", "detections")
+        source = self._survey_source()
         rasters = self.analytics_outputs(
             survey.analytics_folder, f"density_{source}", "tif")
         if not rasters:
@@ -9596,7 +9573,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         survey = self._checked_survey()
         if survey is None:
             return
-        source = self.get_config().get("census_source", "tracks")
+        source = self._survey_source()
         if source == "tracks":
             checks = self._tracks_check(survey)
         else:
@@ -9614,7 +9591,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         from .core import census
 
         survey = self.current_survey()
-        source = self.get_config().get("census_source", "tracks")
+        source = self._survey_source()
         path = os.path.join(survey.analytics_folder,
                             f"census_summary_{source}.json")
         if not os.path.isfile(path):
@@ -9883,7 +9860,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         survey = self._checked_survey()
         if survey is None:
             return
-        source = self.get_config().get("ds_source", "detections")
+        source = self._survey_source()
         m = survey.modality
         if source == "tracks":
             perp_name = f"perpendicular_tracks_{m}.json"
@@ -9907,7 +9884,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
     def _show_distance_sampling_results(self):
         """Read the distance-sampling JSON(s) and show a summary dialog."""
         survey = self.current_survey()
-        source = self.get_config().get("ds_source", "detections")
+        source = self._survey_source()
         results = self.analytics_outputs(
             survey.analytics_folder, f"distance_sampling_{source}", "json")
         if not results:
