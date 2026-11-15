@@ -425,3 +425,221 @@ class TestCompoundLabels:
         values = apply_results.label_values(
             {"class_labels": ["red_deer"]}, vocabulary, "sex")
         assert "red_deer" not in values
+
+
+# ---------------------------------------------------------------------------
+# Running a classifier again
+# ---------------------------------------------------------------------------
+
+def _species_call(root, calls):
+    classification_store.record_track_predictions(root, "t", "species", [
+        {"track_id": track_id, "label": label, "votes": 2, "n": 2,
+         "fraction": 1.0} for track_id, label in calls.items()])
+
+
+def _sex_call(root, calls):
+    classification_store.record_track_predictions(root, "t", "sex", [
+        {"track_id": track_id, "label": label, "votes": 2, "n": 2,
+         "fraction": 1.0} for track_id, label in calls.items()])
+
+
+def _set_detection_species(root, detection_id, species_id):
+    conn = store.open_store(
+        store.stage_path(root, store.DETECTIONS, "t"), store.DETECTIONS, "t")
+    with store.transaction(conn):
+        conn.execute(
+            "UPDATE detections SET species_id = ? WHERE detection_id = ?",
+            (species_id, detection_id))
+    conn.close()
+
+
+def _apply(root, **arguments):
+    return apply_results.apply_all(root, "t", _models(root), **arguments)
+
+
+class TestRunningAgain:
+    """The fields follow the results - also when a later run calls an animal
+    differently, or no longer calls it at all. The earlier species used to
+    stay on the detections (anything but the fallback was "someone else's"),
+    and an earlier sex or age on the track."""
+
+    def test_a_new_species_reaches_the_detections(self, flight):
+        red, roe = (_species_id(flight, name)
+                    for name in ("red deer", "roe deer"))
+        _species_call(flight, {1: "red deer"})
+        _apply(flight)
+        assert _detection_rows(flight)[1]["species_id"] == red
+
+        _species_call(flight, {1: "roe deer"})
+        _apply(flight)
+
+        assert _track_rows(flight)[1]["species_id"] == roe
+        rows = _detection_rows(flight)
+        assert rows[1]["species_id"] == rows[2]["species_id"] == roe
+        assert rows[3]["species_id"] == store.FALLBACK_SPECIES_ID
+
+    def test_a_species_that_is_no_longer_called_is_taken_back(self, flight):
+        _species_call(flight, {1: "red deer", 2: "roe deer"})
+        _apply(flight)
+
+        _species_call(flight, {2: "roe deer"})      # track 1: below the quorum
+        _apply(flight)
+
+        assert _track_rows(flight)[1]["species_id"] == \
+            store.FALLBACK_SPECIES_ID
+        rows = _detection_rows(flight)
+        assert rows[1]["species_id"] == rows[2]["species_id"] == \
+            store.FALLBACK_SPECIES_ID
+        assert rows[3]["species_id"] == _species_id(flight, "roe deer")
+
+    def test_a_sex_that_is_no_longer_called_is_taken_back(self, flight):
+        _sex_call(flight, {1: "male", 2: "female_juvenile"})
+        _apply(flight)
+        assert json.loads(_track_rows(flight)[1]["attributes"])["sex"] == \
+            _enum_id(flight, "sex", "male")
+
+        log = []
+        _sex_call(flight, {2: "female_juvenile"})
+        _apply(flight, log_fn=log.append)
+
+        assert "sex" not in json.loads(_track_rows(flight)[1]["attributes"])
+        assert json.loads(_track_rows(flight)[2]["attributes"])["sex"] == \
+            _enum_id(flight, "sex", "female")
+        assert any("Took sex back from 1 track" in line for line in log)
+
+    def test_no_calls_at_all_takes_everything_back(self, flight):
+        _species_call(flight, {1: "red deer"})
+        _sex_call(flight, {1: "male"})
+        _apply(flight)
+
+        _species_call(flight, {})
+        _sex_call(flight, {})
+        _apply(flight)
+
+        track = _track_rows(flight)[1]
+        assert track["species_id"] == store.FALLBACK_SPECIES_ID
+        assert "sex" not in json.loads(track["attributes"])
+        assert _detection_rows(flight)[1]["species_id"] == \
+            store.FALLBACK_SPECIES_ID
+
+    def test_taking_back_is_done_once(self, flight):
+        _sex_call(flight, {1: "male"})
+        _apply(flight)
+        _sex_call(flight, {})
+        assert _apply(flight)["sex"] == 1
+        assert _apply(flight)["sex"] == 0
+
+    def test_a_value_someone_changed_since_is_not_taken_back(self, flight):
+        """Set on the track after the call - by the label sync from the other
+        camera, say. It is not the classifier's to remove."""
+        _sex_call(flight, {1: "male"})
+        _apply(flight)
+        female = _enum_id(flight, "sex", "female")
+        track_store.set_track_attribute(flight, "t", 1, "sex", female)
+
+        _sex_call(flight, {})
+        _apply(flight)
+
+        assert json.loads(_track_rows(flight)[1]["attributes"])["sex"] == \
+            female
+
+    def test_a_detection_someone_changed_since_keeps_its_species(self, flight):
+        boar = _species_id(flight, "wild boar")
+        _species_call(flight, {1: "red deer"})
+        _apply(flight)
+        _set_detection_species(flight, 1, boar)
+
+        _species_call(flight, {1: "roe deer"})
+        _apply(flight)
+
+        rows = _detection_rows(flight)
+        assert rows[1]["species_id"] == boar
+        assert rows[2]["species_id"] == _species_id(flight, "roe deer")
+
+        _species_call(flight, {})
+        _apply(flight)
+        assert _detection_rows(flight)[1]["species_id"] == boar
+
+    def test_the_detectors_own_answer_stays_when_the_call_agreed_with_it(
+            self, flight):
+        """The detector said roe deer through its class mapping, and so did
+        the first call. A second call saying red deer changes the track, not
+        what the detector saw."""
+        from bambi_wildlife_detection.core import detection_store
+
+        roe, red = (_species_id(flight, name)
+                    for name in ("roe deer", "red deer"))
+        project = store.open_store(store.project_path(flight), store.PROJECT)
+        with store.transaction(project):
+            source = detection_store.ensure_source(project, "detector", "m.pt")
+            project.execute(
+                "INSERT INTO class_mapping (source_id, source_class, "
+                "species_id) VALUES (?, '0', ?)", (source, roe))
+        project.close()
+        assert source == 1                   # the fixture's detections
+        for detection_id in (1, 2, 3, 4):
+            _set_detection_species(flight, detection_id, roe)
+
+        _species_call(flight, {1: "roe deer"})
+        _apply(flight)
+        _species_call(flight, {1: "red deer"})
+        _apply(flight)
+
+        assert _track_rows(flight)[1]["species_id"] == red
+        assert _detection_rows(flight)[1]["species_id"] == roe
+
+        _apply(flight, overwrite_detections=True)
+        assert _detection_rows(flight)[1]["species_id"] == red
+
+    def test_a_withdrawn_call_gives_the_detector_its_say_back(self, flight):
+        """Overwritten on request; without the call the detector's class
+        mapping is the answer again."""
+        from bambi_wildlife_detection.core import detection_store
+
+        roe, red = (_species_id(flight, name)
+                    for name in ("roe deer", "red deer"))
+        project = store.open_store(store.project_path(flight), store.PROJECT)
+        with store.transaction(project):
+            source = detection_store.ensure_source(project, "detector", "m.pt")
+            project.execute(
+                "INSERT INTO class_mapping (source_id, source_class, "
+                "species_id) VALUES (?, '0', ?)", (source, roe))
+        project.close()
+        _set_detection_species(flight, 1, roe)
+
+        _species_call(flight, {1: "red deer"})
+        _apply(flight, overwrite_detections=True)
+        assert _detection_rows(flight)[1]["species_id"] == red
+
+        _species_call(flight, {})
+        _apply(flight)
+        assert _detection_rows(flight)[1]["species_id"] == roe
+
+    def test_values_from_before_there_was_a_record_are_left_alone(self, flight):
+        """A flight classified by an earlier version: nothing says what the
+        classifier wrote, so nothing is taken back on a guess."""
+        male = _enum_id(flight, "sex", "male")
+        track_store.set_track_attribute(flight, "t", 1, "sex", male)
+        _sex_call(flight, {})
+
+        _apply(flight)
+
+        assert json.loads(_track_rows(flight)[1]["attributes"])["sex"] == male
+
+    def test_the_record_follows_the_calls(self, flight):
+        _species_call(flight, {1: "red deer", 2: "roe deer"})
+        _sex_call(flight, {1: "male"})
+        _apply(flight)
+        assert classification_store.applied_values(flight, "t", "species") == {
+            1: _species_id(flight, "red deer"),
+            2: _species_id(flight, "roe deer")}
+        assert classification_store.applied_values(flight, "t", "sex") == {
+            1: _enum_id(flight, "sex", "male")}
+        assert classification_store.applied_values(flight, "w", "sex") == {}
+
+        _species_call(flight, {2: "roe deer"})
+        _apply(flight, tasks=["species"])
+        assert classification_store.applied_values(flight, "t", "species") == {
+            2: _species_id(flight, "roe deer")}
+        assert classification_store.applied_values(flight, "t", "sex") == {
+            1: _enum_id(flight, "sex", "male")}        # not asked for

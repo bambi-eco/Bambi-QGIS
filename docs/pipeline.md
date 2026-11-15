@@ -456,6 +456,8 @@ Voting is what makes a noisy per-frame call safe. An antler only resolves from s
 
 An animal the classifier cannot call is **left unknown, never discarded**: it keeps its place in the census with the attribute blank.
 
+**The animals follow the latest run.** Running a classifier again - with another model, or re-voting at another quorum - replaces what the earlier run wrote, on the track and on its boxes (which is where the exports and the analytics read the species), and takes a call back from an animal the new run no longer calls. Only what a classifier wrote is replaced or taken back: a species from the detector's class mapping, a value synced across from the other camera after the call, and hand labels stay.
+
 **Frames used** decides what may vote. *Visible frames only* uses the occlusion classifier when it ran, otherwise occlusion values you annotated by hand, and otherwise every frame - the run log always says which of the three it used.
 
 **Applying the classifications to tracks and detections** copies the answers onto the animals themselves, which is what makes them visible to the exports, the map layers, the survey analytics and the labelling tool. It runs automatically unless switched off, and is safe to repeat.

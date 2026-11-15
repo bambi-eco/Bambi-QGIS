@@ -296,6 +296,55 @@ def record_track_predictions(target_folder: str, modality: str, task: str,
     return len(predictions)
 
 
+# ---------------------------------------------------------------------------
+# What the projection wrote
+# ---------------------------------------------------------------------------
+
+def _applied_key(field: str) -> str:
+    return f"applied:{field}"
+
+
+def applied_values(target_folder: str, modality: str,
+                   field: str) -> Dict[int, int]:
+    """``{track_id: value id}`` - what the projection of the results
+    (:mod:`core.apply_results`) last wrote into *field* of each track.
+
+    The track fields carry no note of who wrote them. This record is what
+    lets a later run take back a call it no longer makes, and replace one it
+    now makes differently, without touching what a detector or a person put
+    there.
+    """
+    if not has_store(target_folder, modality):
+        return {}
+    conn = _conn(target_folder, modality)
+    try:
+        recorded = _load_json(store.get_meta(conn, _applied_key(field)))
+    finally:
+        conn.close()
+    values: Dict[int, int] = {}
+    for track_id, value in recorded.items():
+        try:
+            values[int(track_id)] = int(value)
+        except (TypeError, ValueError):
+            continue
+    return values
+
+
+def record_applied_values(target_folder: str, modality: str, field: str,
+                          values: Dict[int, int]) -> None:
+    """Replace the record of :func:`applied_values` for *field*."""
+    if not values and not has_store(target_folder, modality):
+        return
+    conn = _conn(target_folder, modality)
+    try:
+        with store.transaction(conn):
+            store.set_meta(conn, _applied_key(field), json.dumps(
+                {str(track_id): int(value)
+                 for track_id, value in sorted(values.items())}))
+    finally:
+        conn.close()
+
+
 def frame_predictions(target_folder: str, modality: str,
                       task: str) -> List[dict]:
     """Per-frame output for *task*, ordered by detection."""

@@ -21,16 +21,24 @@ on the *detection's* species (``core/exporters/common.py`` selects
 to the result. The track carries the individual-level answer; the detections
 carry it too so the existing queries find it.
 
-Three rules keep the write safe:
+Four rules keep the write safe:
 
-* **A detection that already has a species keeps it.** Only rows still on the
-  fallback ``animal`` are filled in, so a detector class mapping someone
+* **A detection that someone else identified keeps its species.** Rows still
+  on the fallback ``animal`` are filled in, and so are rows this projection
+  filled in before; a species from a detector class mapping someone
   configured is never silently overwritten - unless they ask for that.
 * **Manual tracks are never touched.** A hand annotation outranks a model.
 * **The projection is idempotent and re-runnable.** ``track_predictions``
   remains the source of truth, so if something else rewrites the detection
   species later - re-applying a detector class mapping does exactly that -
   the fix is to run this again, not to re-run the classifiers.
+* **The fields follow the results, also back.** What was written is on
+  record (``classification_store.applied_values``), so a call that a later
+  run makes differently is replaced where it was written - on the track and
+  on its detections - and a call a later run no longer makes (the vote fell
+  below the quorum) is taken back. Without the record the earlier species
+  stayed on the detections, which is where the exports and the analytics
+  read it, and an earlier sex or age stayed on the track.
 """
 
 import json
@@ -251,8 +259,11 @@ def apply_track_species(target_folder: str, modality: str,
 
     Both levels, because the exporters and the analytics filter on the
     detection's species while the track is where the individual's answer
-    belongs.
+    belongs. A track that had a vote applied and has none now gets its
+    species taken back, on both levels.
     """
+    from . import classification_store
+
     tracks_path = store.stage_path(target_folder, store.TRACKS, modality)
     det_path = store.stage_path(target_folder, store.DETECTIONS, modality)
     if not (os.path.isfile(tracks_path) and os.path.isfile(det_path)):
@@ -263,11 +274,14 @@ def apply_track_species(target_folder: str, modality: str,
         value = resolve(values, row["label"])
         if value is not None:
             wanted[int(row["track_id"])] = int(value)
-    if not wanted:
+    previous = classification_store.applied_values(
+        target_folder, modality, "species")
+    if not wanted and not previous:
         return {"tracks": 0, "detections": 0}
 
     manual_run = _manual_run_id(target_folder, modality)
     tracks_written = 0
+    applied: Dict[int, int] = {}
     members: Dict[int, List[int]] = {}
 
     conn = store.open_store(tracks_path, store.TRACKS, modality)
@@ -276,14 +290,26 @@ def apply_track_species(target_folder: str, modality: str,
             for row in conn.execute(
                     "SELECT track_id, run_id, species_id FROM tracks"):
                 track_id = int(row["track_id"])
-                if track_id not in wanted:
-                    continue
                 if manual_run is not None and row["run_id"] == manual_run:
                     continue      # a hand annotation outranks a model
-                if row["species_id"] != wanted[track_id]:
+                if track_id in wanted:
+                    target = wanted[track_id]
+                    applied[track_id] = target
+                elif track_id not in previous:
+                    continue
+                elif row["species_id"] == previous[track_id]:
+                    # The vote is gone, and the species is still the one it
+                    # put there: it goes too.
+                    target = FALLBACK
+                else:
+                    # ... changed by someone since: theirs, on the track. Its
+                    # detections may still carry what was written.
+                    members[track_id] = []
+                    continue
+                if row["species_id"] != target:
                     conn.execute(
                         "UPDATE tracks SET species_id = ? WHERE track_id = ?",
-                        (wanted[track_id], track_id))
+                        (target, track_id))
                     tracks_written += 1
                 members[track_id] = []
 
@@ -295,13 +321,11 @@ def apply_track_species(target_folder: str, modality: str,
     finally:
         conn.close()
 
-    species_of_detection = {
-        detection_id: wanted[track_id]
-        for track_id, detection_ids in members.items()
-        for detection_id in detection_ids}
-
     detections_written = _write_detection_species(
-        det_path, modality, species_of_detection, overwrite_detections)
+        target_folder, det_path, modality, members, applied, previous,
+        overwrite_detections)
+    classification_store.record_applied_values(
+        target_folder, modality, "species", applied)
 
     if log_fn:
         log_fn(f"Applied species to {tracks_written} track(s) and "
@@ -309,41 +333,88 @@ def apply_track_species(target_folder: str, modality: str,
     return {"tracks": tracks_written, "detections": detections_written}
 
 
-def _write_detection_species(path: str, modality: str,
-                             species_of_detection: Dict[int, int],
+def _write_detection_species(target_folder: str, path: str, modality: str,
+                             members: Dict[int, List[int]],
+                             wanted: Dict[int, int],
+                             previous: Dict[int, int],
                              overwrite: bool) -> int:
-    """Fill in detection species, leaving identified ones alone by default."""
-    if not species_of_detection:
+    """Bring the species of the member detections in line with their track.
+
+    *wanted* is the species each track has now, *previous* the one this
+    projection gave it last time; a track in *members* but not in *wanted*
+    has had its vote withdrawn.
+
+    A detection is written when it is still unidentified, or when its
+    species is the one this projection wrote before - and not also what its
+    detector's class mapping says, which is then the detector's answer and
+    stays unless *overwrite* is set. A hand-labelled box is never written.
+    """
+    if not any(members.values()):
         return 0
+
+    project = None
+    own: Dict[tuple, int] = {}
+
+    def detector_species(row) -> int:
+        """What the detection's producer made of it, by the class mapping."""
+        nonlocal project
+        key = (row["source_id"], row["source_class"])
+        if key not in own:
+            if project is None:
+                project = store.open_store(
+                    store.project_path(target_folder), store.PROJECT)
+            own[key] = store.resolve_species(project, *key)
+        return own[key]
 
     written = 0
     conn = store.open_store(path, store.DETECTIONS, modality)
     try:
         with store.transaction(conn):
-            current = {int(r["detection_id"]): int(r["species_id"])
-                       for r in conn.execute(
-                           "SELECT detection_id, species_id FROM detections")}
-            for detection_id, species_id in species_of_detection.items():
-                have = current.get(detection_id)
-                if have is None or have == species_id:
-                    continue
-                # A detector that identified the animal itself keeps its
-                # answer, so a configured class mapping is not undone.
-                if have != FALLBACK and not overwrite:
-                    continue
-                conn.execute(
-                    "UPDATE detections SET species_id = ? "
-                    "WHERE detection_id = ?", (species_id, detection_id))
-                written += 1
+            current = {int(r["detection_id"]): r for r in conn.execute(
+                "SELECT detection_id, species_id, source_id, source_class, "
+                "label_track_id FROM detections")}
+            for track_id, detection_ids in members.items():
+                target = wanted.get(track_id)
+                before = previous.get(track_id)
+                for detection_id in detection_ids:
+                    row = current.get(detection_id)
+                    if row is None or row["label_track_id"] is not None:
+                        continue
+                    have = int(row["species_id"])
+                    ours = False
+                    if before is not None and have == before:
+                        ours = detector_species(row) != have
+                    if target is None:
+                        if not ours:
+                            continue        # never ours, or changed since
+                        species_id = detector_species(row)
+                    elif have == target:
+                        continue
+                    elif have != FALLBACK and not ours and not overwrite:
+                        # A detector that identified the animal itself keeps
+                        # its answer, so a configured class mapping is not
+                        # undone.
+                        continue
+                    else:
+                        species_id = target
+                    conn.execute(
+                        "UPDATE detections SET species_id = ? "
+                        "WHERE detection_id = ?", (species_id, detection_id))
+                    written += 1
     finally:
         conn.close()
+        if project is not None:
+            project.close()
     return written
 
 
 def apply_track_attribute(target_folder: str, modality: str, field: str,
                           predictions: Iterable[dict],
                           values: Dict[str, int], log_fn=None) -> int:
-    """Write a per-track enum attribute (``sex``, ``age``)."""
+    """Write a per-track enum attribute (``sex``, ``age``), and take it back
+    from the tracks that had one applied and have no call now."""
+    from . import classification_store
+
     path = store.stage_path(target_folder, store.TRACKS, modality)
     if not os.path.isfile(path):
         return 0
@@ -353,35 +424,53 @@ def apply_track_attribute(target_folder: str, modality: str, field: str,
         value = resolve(values, row["label"])
         if value is not None:
             wanted[int(row["track_id"])] = int(value)
-    if not wanted:
+    previous = classification_store.applied_values(
+        target_folder, modality, field)
+    if not wanted and not previous:
         return 0
 
     manual_run = _manual_run_id(target_folder, modality)
-    written = 0
+    written = withdrawn = 0
+    applied: Dict[int, int] = {}
     conn = store.open_store(path, store.TRACKS, modality)
     try:
         with store.transaction(conn):
             for row in conn.execute(
                     "SELECT track_id, run_id, attributes FROM tracks"):
                 track_id = int(row["track_id"])
-                if track_id not in wanted:
-                    continue
                 if manual_run is not None and row["run_id"] == manual_run:
                     continue
                 attributes = _load_json(row["attributes"])
-                if attributes.get(field) == wanted[track_id]:
+                if track_id in wanted:
+                    applied[track_id] = wanted[track_id]
+                    if attributes.get(field) == wanted[track_id]:
+                        continue
+                    attributes[field] = wanted[track_id]
+                    written += 1
+                elif track_id not in previous:
                     continue
-                attributes[field] = wanted[track_id]
+                elif attributes.get(field) == previous[track_id]:
+                    # No call any more, and the value is still the one the
+                    # earlier call put there.
+                    del attributes[field]
+                    withdrawn += 1
+                else:
+                    continue
                 conn.execute(
                     "UPDATE tracks SET attributes = ? WHERE track_id = ?",
                     (json.dumps(attributes), track_id))
-                written += 1
     finally:
         conn.close()
 
+    classification_store.record_applied_values(
+        target_folder, modality, field, applied)
+
     if log_fn and written:
         log_fn(f"Applied {field} to {written} track(s)")
-    return written
+    if log_fn and withdrawn:
+        log_fn(f"Took {field} back from {withdrawn} track(s) that have no "
+               "call any more")
+    return written + withdrawn
 
 
 # ---------------------------------------------------------------------------
