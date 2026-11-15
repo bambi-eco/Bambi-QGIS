@@ -180,6 +180,9 @@ def build_inventory(target_folder: str, modality: str,
         by_track.setdefault(int(row["track_id"]), []).append(row)
 
     labels = track_store.track_labels(target_folder, modality)
+    # What species each animal is - one answer for the inventory and every
+    # survey tool (track_store.animal_species).
+    animal_species = track_store.animal_species(target_folder, modality)
     times = _frame_times(target_folder, modality)
     votes = {task: {int(p["track_id"]): p for p in
                     classification_store.track_predictions(
@@ -215,8 +218,13 @@ def build_inventory(target_folder: str, modality: str,
         attributes = common.resolve_attributes(
             json.dumps(known.get("attributes") or {}), enum_labels)
 
-        # Species: the track's own, then what the classifier voted.
-        species_id = known.get("species_id")
+        # Species: the track's own where the animal was identified, else
+        # what most of its boxes were called. It used to be the track's
+        # alone - "animal" for every track no classifier had named, whatever
+        # the detector's class mapping made of its boxes.
+        species_id = animal_species.get(track_id)
+        if species_id is None:
+            species_id = known.get("species_id")
         if species_id is None:
             species_id = members[0].get("species_id")
         if wanted_species is not None and species_id not in wanted_species:

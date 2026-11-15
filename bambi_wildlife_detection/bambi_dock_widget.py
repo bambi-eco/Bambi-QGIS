@@ -10022,8 +10022,19 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
                 "(Naive, Bootstrap or ZINB).")
             return
 
+        from .core import analytics_source
+
         m = survey.modality
         label = survey.camera_label
+        # What the survey counts decides which distances are needed.
+        if self._survey_source() == "tracks":
+            perp_name = f"perpendicular_tracks_{m}.json"
+            perp_missing = (f"{label} track perpendicular distances "
+                            "(run 'Calculate Track Perpendicular')")
+        else:
+            perp_name = f"perpendicular_{m}.json"
+            perp_missing = (f"{label} perpendicular distances of the "
+                            "detections (run 'Calculate Perpendicular')")
 
         def checks(flight):
             folder = flight.target_folder
@@ -10035,10 +10046,11 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
             if not self.has_stage(_store_kinds.FOV, m, folder):
                 missing.append(f"{label} FoV footprints "
                                "(run 'Calculate Field of View')")
-            if route_suffix(folder, m,
-                            f"perpendicular_tracks_{m}.json") is None:
-                missing.append(f"{label} track perpendicular distances "
-                               "(run 'Calculate Track Perpendicular')")
+            # A flight on which nothing was found has no distances and can
+            # have none; it counts with zero animals.
+            if route_suffix(folder, m, perp_name) is None \
+                    and not analytics_source.has_no_animals(folder, m):
+                missing.append(perp_missing)
             if not os.path.exists(os.path.join(folder, f"poses_{m}.json")):
                 missing.append(f"{label} camera poses (poses_{m}.json - run "
                                "frame extraction)")
@@ -10386,7 +10398,9 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
                         if not row.get("transect_id"):
                             continue
                         by_id[int(row["transect_id"])].append({
-                            "track_id": int(row["track_id"]),
+                            # empty for a box of a survey that counts boxes
+                            "track_id": (int(row["track_id"])
+                                         if row.get("track_id") else None),
                             "last_frame": int(row["last_frame"] or 0),
                             "x": float(row["x"]),
                             "y": float(row["y"]),

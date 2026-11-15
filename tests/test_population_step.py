@@ -584,3 +584,114 @@ class TestFlightsWithoutAnimals:
         result = _estimate(flight)
         assert result["total_count"] == 0
         assert result["estimates"]["naive"]["density_per_100ha"] == 0.0
+
+
+class TestWhatIsCounted:
+    """The estimate counts what the survey counts, as what it is now."""
+
+    @staticmethod
+    def _stores(folder):
+        """Five tracks of one box each, as the perpendicular file lists
+        them; the detector called track 3 chamois and the others roe deer.
+        The file's own ``class_id`` - 1 for track 3, 0 for the rest - is
+        from before the classes were mapped."""
+        from bambi_wildlife_detection.core import (
+            detection_store, label_store, track_store)
+
+        label_store.vocabulary(folder, create=True)
+        names = label_store.vocabulary(folder)["species_by_name"]
+        project = store.open_store(store.project_path(folder), store.PROJECT)
+        source_id = detection_store.ensure_source(
+            project, detection_store.DETECTOR)
+        project.executemany(
+            "INSERT INTO class_mapping (source_id, source_class, species_id) "
+            "VALUES (?, ?, ?)",
+            [(source_id, "roe", names["roe deer"]),
+             (source_id, "chamois", names["chamois"])])
+        project.commit()
+        project.close()
+        detection_store.record_detections(folder, "t", [
+            {"frame": n, "x1": 10.0 * n, "y1": 1.0, "x2": 10.0 * n + 4,
+             "y2": 5.0, "confidence": 0.9,
+             "source_class": "chamois" if n == 2 else "roe"}
+            for n in range(5)])
+        ids = [d["detection_id"] for d in sorted(
+            track_store.load_detections(folder, "t"),
+            key=lambda d: d["frame"])]
+        track_store.record_tracks(folder, "t", [
+            {"track_id": n + 1, "detection_id": i}
+            for n, i in enumerate(ids)])
+        return ids
+
+    def test_a_species_is_what_the_animal_is_now(self, processor, flight):
+        """The file calls track 3 species 1 and the others 0; the store
+        calls the others roe deer (1) and track 3 chamois."""
+        self._stores(flight["target_folder"])
+        flight["survey"]["species"] = ["roe deer"]
+
+        processor.run_population_estimation(flight)
+
+        result = _estimate(flight)
+        assert result["n_tracks"] == 4               # it was 1: track 3
+        assert result["total_count"] == 3            # 1, 2 and 4; 5 outside
+        tracks = _read_csv(os.path.join(
+            flight["target_folder"], "analytics_t", "population_tracks.csv"))
+        assert [row["track_id"] for row in tracks] == ["1", "2", "4", "5"]
+
+    def test_a_false_positive_marked_since_is_left_out(
+            self, processor, flight):
+        folder = flight["target_folder"]
+        self._stores(folder)
+        conn = store.open_store(
+            store.stage_path(folder, store.TRACKS, "t"), store.TRACKS, "t")
+        conn.execute("UPDATE tracks SET species_id = ? WHERE track_id = 1",
+                     (store.NOT_AN_ANIMAL_SPECIES_ID,))
+        conn.commit()
+        conn.close()
+        log = []
+
+        processor.run_population_estimation(flight, log_fn=log.append)
+
+        assert _estimate(flight)["n_tracks"] == 4
+        assert _estimate(flight)["total_count"] == 3
+        assert any("not-an-animal" in line for line in log)
+
+    def test_boxes_are_counted_when_the_survey_counts_boxes(self, processor,
+                                                            flight):
+        folder = flight["target_folder"]
+        origin = [500000.0, 5000000.0, 0.0]
+        boxes = [{"det_idx": n + 1, "frame": frame, "class_id": 0,
+                  "distance_m": abs(dy),
+                  "detection_center": [origin[0] + x, origin[1] + y + dy, 0.0]}
+                 for n, (frame, x, y, dy) in enumerate([
+                     (5, 50.0, 0.0, 5.0), (6, 60.0, 0.0, 4.0),
+                     (7, 70.0, 0.0, -3.0), (25, 60.0, 100.0, 4.0)])]
+        with open(os.path.join(folder, "flight_route_t",
+                               "perpendicular_t.json"), "w") as fh:
+            json.dump({"perpendiculas": boxes}, fh)
+        flight["survey"]["source"] = "detections"
+        log = []
+
+        processor.run_population_estimation(flight, log_fn=log.append)
+
+        result = _estimate(flight)
+        assert result["source"] == "detections"
+        assert result["n_tracks"] == 4 and result["total_count"] == 4
+        by_name = {t["name"]: t["count"] for t in result["transects"]}
+        assert by_name == {"North": 3, "Transect 2": 1}
+        tracks = _read_csv(os.path.join(
+            folder, "analytics_t", "population_tracks.csv"))
+        assert [(row["track_id"], row["detection_id"]) for row in tracks] == [
+            ("", "1"), ("", "2"), ("", "3"), ("", "4")]
+        assert any("4 box(es)" in line for line in log)
+
+    def test_counting_boxes_needs_the_distances_of_the_boxes(
+            self, processor, flight):
+        flight["survey"]["source"] = "detections"
+        with pytest.raises(FileNotFoundError,
+                           match="'Calculate Perpendicular'"):
+            processor.run_population_estimation(flight)
+
+    def test_animals_are_the_default(self, processor, flight):
+        processor.run_population_estimation(flight)
+        assert _estimate(flight)["source"] == "tracks"

@@ -179,6 +179,7 @@ def assign_tracks(tracks: List[dict],
 
         assignments.append({
             "track_id": track.get("track_id"),
+            "detection_id": track.get("detection_id"),
             "last_frame": track.get("last_frame"),
             "x": px, "y": py,
             "class_id": track.get("class_id"),

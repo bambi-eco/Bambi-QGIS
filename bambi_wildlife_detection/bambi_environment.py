@@ -253,11 +253,12 @@ class EnvironmentMixin:
 
     def run_habitat_summary(self, config: Dict[str, Any], progress_fn=None,
                             log_fn=None, cancel_check=None):
-        """Environment values at the tracked animals of the survey, against
-        the ground the flights monitored.
+        """Environment values at the animals of the survey - or at its
+        boxes, when the survey counts those - against the ground the flights
+        monitored.
 
         Writes into ``<survey>/analytics_{m}``: ``habitat_tracks.csv`` /
-        ``.json`` (one row per track), ``habitat_transects.csv`` (when a
+        ``.json`` (one row per animal or box), ``habitat_transects.csv`` (when a
         flight has transect areas from the population estimate) and
         ``habitat.json`` (the pooled distributions the charts are drawn
         from). See :mod:`core.habitat`.
@@ -267,14 +268,17 @@ class EnvironmentMixin:
         """
         from .core import analytics_source, environment, habitat
         from .core import store as _store
+        from .core.survey import chosen_source
 
         survey = self._survey(config)
+        source = chosen_source(config, "habitat_source")
         area = self._survey_area(survey, log_fn)
         radius = float(config.get("environment_radius_m",
                                   environment.DEFAULT_RADIUS_M))
         if log_fn:
+            what = "tracks" if source == "tracks" else "boxes"
             log_fn(f"Summarising the habitat of the {survey.camera_label} "
-                   f"tracks of {self._flights_note(survey)}...")
+                   f"{what} of {self._flights_note(survey)}...")
 
         without = [flight.name for flight in survey.flights
                    if not any(environment.status(
@@ -290,27 +294,33 @@ class EnvironmentMixin:
             if cancel_check and cancel_check():
                 raise _cancelled("Habitat summary was cancelled")
             ids = survey.species_ids(flight)
-            self._require_store(flight.target_folder, _store.TRACKS,
-                                survey.modality, "Track Animals")
+            if source == "tracks":
+                self._require_store(flight.target_folder, _store.TRACKS,
+                                    survey.modality, "Track Animals")
+            else:
+                self._require_store(
+                    flight.target_folder, _store.GEOREFERENCED,
+                    survey.modality, "Geo-Reference Detections")
             try:
                 result = habitat.summarise_flight(
                     flight.name, flight.target_folder, survey.modality,
                     radius, species_ids=ids,
                     include_manual=survey.include_manual, area=area,
-                    epsg=survey.epsg)
+                    epsg=survey.epsg, source=source)
             except analytics_source.AnalyticsError as exc:
                 raise RuntimeError(f"{flight.name}: {exc}") from exc
             results.append(result)
             if log_fn:
                 note = (f" (not run: {', '.join(result['missing'])})"
                         if result["missing"] else "")
-                log_fn(f"{flight.name}: {len(result['tracks'])} track(s), "
+                unit = "track(s)" if source == "tracks" else "box(es)"
+                log_fn(f"{flight.name}: {len(result['tracks'])} {unit}, "
                        f"{len(result['transects'])} transect(s){note}")
             if progress_fn:
                 progress_fn(int(85 * (index + 1) / len(survey.flights)))
 
         summary = habitat.build_summary(
-            results, radius, survey.modality, survey.species)
+            results, radius, survey.modality, survey.species, source)
         summary["survey_area"] = None if area is None else area.describe()
         paths = habitat.write_outputs(
             survey.ensure_analytics_folder(), summary, results)

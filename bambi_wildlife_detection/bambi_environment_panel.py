@@ -565,8 +565,9 @@ class EnvironmentDockMixin:
         self.habitat_btn = QPushButton("→ Summarise Habitat")
         self.habitat_btn.setToolTip(
             "Write analytics_{camera}/habitat_tracks.csv (one row per "
-            "track), habitat_transects.csv (when the population estimate "
-            "has run) and habitat.json.")
+            "animal - or per box, when the survey counts boxes), "
+            "habitat_transects.csv (when the population estimate has run) "
+            "and habitat.json.")
         self.habitat_btn.clicked.connect(self.run_habitat_summary)
         self.habitat_status = QLabel("⚪ Not started")
         run_row.addWidget(self.habitat_btn)
@@ -582,8 +583,8 @@ class EnvironmentDockMixin:
         add_row = QHBoxLayout()
         self.add_habitat_btn = QPushButton("   → Add Habitat Tracks to QGIS")
         self.add_habitat_btn.setToolTip(
-            "One point per track with its environment values as attributes, "
-            "to filter, style and export.")
+            "One point per counted animal (or box) with its environment "
+            "values as attributes, to filter, style and export.")
         self.add_habitat_btn.clicked.connect(self.add_habitat_to_qgis)
         self.add_habitat_status = QLabel("⚪")
         add_row.addWidget(self.add_habitat_btn)
@@ -596,12 +597,22 @@ class EnvironmentDockMixin:
         if survey is None:
             return
 
+        # What the survey counts - animals or boxes - is what is placed.
+        counting_animals = self._survey_source() == "tracks"
+
         def checks(flight):
             missing = []
-            if not self.has_stage(_store.TRACKS, survey.modality,
-                                  flight.target_folder):
+            if counting_animals and not self.has_stage(
+                    _store.TRACKS, survey.modality, flight.target_folder):
                 missing.append(f"{survey.camera_label} tracks "
-                               "(run 'Track Animals' first)")
+                               "(run 'Track Animals' first, or set the "
+                               "survey to count boxes)")
+            if not counting_animals and not self.has_stage(
+                    _store.GEOREFERENCED, survey.modality,
+                    flight.target_folder):
+                missing.append(f"Geo-referenced {survey.camera_label} "
+                               "detections (run 'Geo-Reference Detections' "
+                               "first)")
             if not any(environment.status(flight.target_folder).values()):
                 missing.append("Environment data (run the Environmental "
                                "Context steps on the Pre-Processing tab)")
@@ -654,11 +665,11 @@ class EnvironmentDockMixin:
                 "The habitat summary has not been built yet.\n"
                 "Run 'Summarise Habitat' first.")
             return
-        columns = list(habitat.TRACK_COLUMNS)
         name = f"BAMBI Habitat Tracks ({survey.camera_label})"
         try:
             self.update_status("add_habitat", "🟡 Loading...")
             rows = habitat.read_json(tracks_path)
+            columns = habitat.table_columns(rows)
             epsg = survey.epsg or self.get_config().get("target_epsg", 32633)
             layer = QgsVectorLayer(f"Point?crs=EPSG:{epsg}", name, "memory")
             provider = layer.dataProvider()
@@ -695,7 +706,7 @@ class EnvironmentDockMixin:
             self._add_layer_to_survey(layer)
             self.update_status("add_habitat", "🟢 Added")
             self.iface.mapCanvas().refresh()
-            self.log(f"Added habitat layer with {len(features)} track(s)")
+            self.log(f"Added habitat layer with {len(features)} point(s)")
         except Exception as exc:
             self.update_status("add_habitat", "🔴 Error")
             self.log(f"Error adding the habitat tracks: {exc}")

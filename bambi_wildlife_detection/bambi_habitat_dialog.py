@@ -269,7 +269,7 @@ class LandCoverChart(QWidget):
 
 FLIGHT_COLUMNS = [
     ("Flight", lambda f: f.get("flight", "")),
-    ("Tracks", lambda f: str(f.get("n_tracks", 0))),
+    ("Counted", lambda f: str(f.get("n_tracks", 0))),
     ("Scene (days from flight)", lambda f: _scene_text(f)),
     ("Clear", lambda f: _scene_value(f, "clear_fraction", 100, 0, "%")),
     ("Air °C", lambda f: _weather_text(f, "at_flight", "temperature_2m", 1)),
@@ -324,7 +324,8 @@ class BambiHabitatDialog(QDialog):
 
         layout = QVBoxLayout(self)
         header = QLabel(
-            f"<b>{summary.get('n_tracks', 0)} track(s)</b> over "
+            f"<b>{habitat.unit(summary, summary.get('n_tracks', 0))}</b> "
+            "over "
             f"{len(summary.get('flights') or [])} flight(s). Values at the "
             f"animals are averaged within {summary.get('radius_m', 0):g} m. "
             "Satellite cells are 10–20 m: they describe the patch an animal "
@@ -389,7 +390,7 @@ class BambiHabitatDialog(QDialog):
         """Redraw the animals' side for the chosen species."""
         species = self.species_combo.currentData() or ""
         rows = habitat.filter_tracks(self._tracks, species)
-        self.species_note.setText(f"{len(rows)} track(s)")
+        self.species_note.setText(habitat.unit(self._summary, len(rows)))
         for key, chart in self._charts.items():
             layer = self._summary["layers"][key]
             values = [row[key] for row in rows if row.get(key) is not None]

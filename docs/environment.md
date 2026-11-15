@@ -76,7 +76,7 @@ Open-Meteo's free service is rate-limited per network address and for non-commer
 
 **→ Summarise Habitat** works on the survey - the ticked flights, the camera, the species filter and the survey area, like every other analytic. Each flight needs tracks and at least one environment source; sources a flight lacks are named in the log and their columns stay empty.
 
-**Per animal** (`habitat_tracks.csv` / `.json`): one row per counted track - the same animals as the census - with its position, species, sex and age, the mean of every layer within the **radius** (30 m by default) of its position, the most common land-cover class there with its share, the scene's distance from the flight in days, and the flight's weather. Satellite cells are 10-20 m, so a value describes **the patch an animal was in, not the spot it stood on**; a radius of 0 takes the single cell under it. **→ Add Habitat Tracks to QGIS** loads the table as a point layer in the BAMBI Survey group, to filter, style and export.
+**Per animal** (`habitat_tracks.csv` / `.json`): one row per counted track - the same animals as the census; one row per box, with its `detection_id`, when the survey's **Count** setting is *Boxes* - with its position, species, sex and age, the mean of every layer within the **radius** (30 m by default) of its position, the most common land-cover class there with its share, the scene's distance from the flight in days, and the flight's weather. Satellite cells are 10-20 m, so a value describes **the patch an animal was in, not the spot it stood on**; a radius of 0 takes the single cell under it. **→ Add Habitat Tracks to QGIS** loads the table as a point layer in the BAMBI Survey group, to filter, style and export.
 
 **Animals against the ground** (`habitat.json`, **→ Show Habitat Charts**): a value on its own says little - greener, wetter or more wooded *than the area at large* is the signal. For every layer the charts show its distribution over the **monitored ground** (grey) and at the animals (colour), with both means; the monitored ground is what the cameras actually saw (the field-of-view footprints, inside the survey area when one is set), because an animal could only be found where somebody looked. For land cover each class shows its share of the ground, its share of the animals and their ratio (the *selection ratio*: above 1 a class is used more than its area would suggest) with its standard error. A species selector redraws the animals' side. A table lists each flight's scene and weather.
 
@@ -114,7 +114,7 @@ target_folder/environment/                   # per flight, camera-independent
 └── weather_hourly.csv
 
 survey_folder/analytics_{t|w}/
-├── habitat_tracks.csv / .json               # one row per track
+├── habitat_tracks.csv / .json               # one row per animal (or box)
 ├── habitat_transects.csv                    # one row per transect (if any)
 └── habitat.json                             # distributions behind the charts
 ```

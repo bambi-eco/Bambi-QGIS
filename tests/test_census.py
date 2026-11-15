@@ -211,13 +211,18 @@ class TestCensusStep:
         folder = str(tmp_path / "survey")
         BambiProcessor().run_census_summary(_config(folder, *flights))
         result = _read(folder)
-        # A track's species is the inventory's: its own label, then the
-        # classifier's vote - the fixture's tracks carry the generic label.
+        # No classifier named the fixture's tracks, so each animal is what
+        # the detector called its boxes: track 1 roe deer, track 2 chamois.
+        # (They used to be two of "animal" here - and roe deer and chamois
+        # when the same flight was counted by boxes.)
         by = {(r["flight"], r["species"]): r for r in result["rows"]}
-        assert by[("a", "animal")]["counted"] == 2
-        assert by[("a", "animal")]["sex"] == {"female": 1, "unknown": 1}
-        assert by[("a", "animal")]["approved"] == 1
-        assert by[("b", "animal")]["sex"] == {"unknown": 2}
+        assert ("a", "animal") not in by
+        assert by[("a", "roe deer")]["counted"] == 1
+        assert by[("a", "roe deer")]["sex"] == {"female": 1}
+        assert by[("a", "roe deer")]["approved"] == 1
+        assert by[("a", "chamois")]["sex"] == {"unknown": 1}
+        assert by[("a", census.ALL_SPECIES)]["counted"] == 2
+        assert by[("b", census.ALL_SPECIES)]["sex"] == {"unknown": 2}
         assert by[(census.ALL_FLIGHTS, census.ALL_SPECIES)]["counted"] == 4
         assert os.path.isfile(os.path.join(
             folder, "analytics_t", "census_summary_tracks.csv"))

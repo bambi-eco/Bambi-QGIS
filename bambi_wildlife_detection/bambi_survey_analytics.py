@@ -585,10 +585,9 @@ class SurveyAnalyticsMixin:
 
     def _census_records(self, survey, flight, source, area, log_fn=None):
         """``{species, sex, age, x, y, approved}`` per counted animal (tracks)
-        or per box (detections) of one flight."""
+        or per box (detections) of one flight - the survey's animals, as
+        every tool sees them (``core.analytics_source.load_animals``)."""
         from .core import analytics_source, store as _store
-        from .core import track_inventory
-        from .core.exporters import common
 
         ids = survey.species_ids(flight)
         if ids is not None and not ids:
@@ -598,52 +597,20 @@ class SurveyAnalyticsMixin:
                     flight.target_folder, _store.TRACKS, survey.modality)):
                 raise FileNotFoundError(
                     f"{flight.name}: no {survey.camera_label} tracks yet - "
-                    "run 'Track Animals' for this camera first, or count "
-                    "detections instead.")
-            inventory = track_inventory.build_inventory(
-                flight.target_folder, survey.modality, species_ids=ids)
-            centroids = {}
-            try:
-                # Every track's position, whatever its boxes were labelled:
-                # the species filter already chose the tracks (above).
-                rows, _provenance = analytics_source.load_rows(
-                    flight.target_folder, survey.modality,
-                    include_manual=survey.include_manual)
-                centroids, _untracked = analytics_source.track_centroids(rows)
-            except analytics_source.AnalyticsError:
-                pass  # nothing geo-referenced: every animal is unplaced
-            records = []
-            for row in inventory:
-                x, y = centroids.get(row["track_id"], (None, None))
-                records.append({
-                    "species": row.get("species") or "",
-                    "sex": row.get("sex"), "age": row.get("age"),
-                    "x": x, "y": y, "approved": bool(row.get("approved")),
-                })
-            return records
-
-        self._require_store(flight.target_folder, _store.DETECTIONS,
-                            survey.modality, "Detect Animals")
-        vocabulary = common.load_vocabulary(flight.target_folder)
-        names = vocabulary["species"]
-        enum_labels = vocabulary["enum_labels"]
-        wanted = None if ids is None else set(ids)
-        records = []
-        for row in common.load_detections(flight.target_folder,
-                                          survey.modality):
-            if wanted is not None and row["species_id"] not in wanted:
-                continue
-            attributes = common.resolve_attributes(
-                row.get("attributes"), enum_labels)
-            placed = row.get("gx1") is not None
-            records.append({
-                "species": names.get(row["species_id"], ""),
-                "sex": attributes.get("sex"), "age": attributes.get("age"),
-                "x": (row["gx1"] + row["gx2"]) / 2.0 if placed else None,
-                "y": (row["gy1"] + row["gy2"]) / 2.0 if placed else None,
-                "approved": bool(attributes.get("approved")),
-            })
-        return records
+                    "run 'Track Animals' for this camera first, or set the "
+                    "survey to count boxes instead.")
+        else:
+            self._require_store(flight.target_folder, _store.DETECTIONS,
+                                survey.modality, "Detect Animals")
+        animals, facts = analytics_source.load_animals(
+            flight.target_folder, survey.modality, source, ids,
+            survey.include_manual)
+        if log_fn and facts["excluded_not_an_animal"]:
+            log_fn(f"{flight.name}: {facts['excluded_not_an_animal']} "
+                   "labelled not-an-animal are not counted")
+        return [{"species": animal["species"], "sex": animal["sex"],
+                 "age": animal["age"], "x": animal["x"], "y": animal["y"],
+                 "approved": animal["approved"]} for animal in animals]
 
     def _covered_m2(self, survey, flight, area, log_fn=None):
         """Ground the flight's frames saw inside *area* (``None`` without FoV)."""
@@ -1350,12 +1317,20 @@ class SurveyAnalyticsMixin:
         with open(perp_file, 'r', encoding='utf-8') as f:
             perp_data = json.load(f)
         entries = [e for e in perp_data.get(list_key, []) if dist_key in e]
-        species_ids = survey.species_ids(flight, names)
-        if species_ids is not None:
-            # class_id is the resolved species for anything the store wrote;
-            # an entry without one predates that and cannot be attributed.
-            wanted = set(species_ids)
-            entries = [e for e in entries if e.get("class_id") in wanted]
+        # What each observation counts as is what its animal (or box) is
+        # now, not what the last box was called when the distances were
+        # written - so this agrees with the census, and a classification
+        # made since applies. False positives marked since are dropped.
+        from .core import analytics_source
+        entries, n_false = analytics_source.select_entries(
+            entries, "track_id" if source == "tracks" else "det_idx",
+            analytics_source.current_species(
+                target_folder, m, source, survey.include_manual),
+            survey.species_ids(flight, names))
+        if n_false and log_fn:
+            log_fn(f"  {flight.name}: {n_false} observation(s) labelled "
+                   "not-an-animal since the distances were calculated are "
+                   "not counted")
         self._last_ds_outside_area = 0
         if area is not None:
             def _inside(entry):
@@ -1645,7 +1620,7 @@ class SurveyAnalyticsMixin:
                                   cancel_check=None):
         """Estimate a population - once, or once per species (§8.2)."""
         self._per_stratum(
-            config, "tracks",
+            config, chosen_source(config, "pop_source"),
             lambda survey, label, names, progress:
                 self._run_population_estimation_once(
                     config, survey, label, names, progress, log_fn,
@@ -1830,6 +1805,9 @@ class SurveyAnalyticsMixin:
             "flights": [f.name for f in entries],
             "survey_area": None if area is None else area.describe(),
             "projects": projects_summary,
+            # What was counted on the transects: "tracks" (animals) or
+            # "detections" (boxes). The n_tracks_* keys keep their names.
+            "source": chosen_source(config, "pop_source"),
             "n_tracks": agg["n_tracks"],
             "n_tracks_assigned": agg["n_assigned"],
             "n_tracks_truncated": agg["n_truncated"],
@@ -1960,8 +1938,17 @@ class SurveyAnalyticsMixin:
         target_folder = flight.target_folder
         target_epsg = survey.epsg or config.get("target_epsg", 32633)
         suffix = survey.modality
-        fr_suffix = route_suffix(target_folder, suffix,
-                                 f"perpendicular_tracks_{suffix}.json") or suffix
+        # What is counted on the transects: animals, each at the position
+        # "Calculate Track Perpendicular" measured it from, or - for a
+        # survey that counts boxes - every box of "Calculate Perpendicular".
+        source = chosen_source(config, "pop_source")
+        if source == "tracks":
+            perp_name = f"perpendicular_tracks_{suffix}.json"
+            perp_step, unit = "Calculate Track Perpendicular", "track(s)"
+        else:
+            perp_name = f"perpendicular_{suffix}.json"
+            perp_step, unit = "Calculate Perpendicular", "box(es)"
+        fr_suffix = route_suffix(target_folder, suffix, perp_name) or suffix
         truncation = float(config.get("pop_truncation", 0.0) or 0.0)
 
         if log_fn:
@@ -2007,8 +1994,7 @@ class SurveyAnalyticsMixin:
 
         # ---- Track perpendicular distances -------------------------------- #
         perp_file = os.path.join(
-            target_folder, f"flight_route_{fr_suffix}",
-            f"perpendicular_tracks_{suffix}.json")
+            target_folder, f"flight_route_{fr_suffix}", perp_name)
         # A flight on which nothing was found has no tracks, so "Calculate
         # Track Perpendicular" cannot have run on it - but it was surveyed,
         # and its transects count with zero animals. It used to be refused,
@@ -2018,7 +2004,17 @@ class SurveyAnalyticsMixin:
             target_folder, suffix)
         if os.path.exists(perp_file) and not searched_and_empty:
             with open(perp_file, 'r', encoding='utf-8') as f:
-                tracks = json.load(f).get("tracks", [])
+                document = json.load(f)
+            if source == "tracks":
+                tracks = document.get("tracks", [])
+            else:
+                # A box, in the shape of a track entry.
+                tracks = [{"track_id": None,
+                           "detection_id": entry.get("det_idx"),
+                           "last_frame": entry.get("frame"),
+                           "class_id": entry.get("class_id"),
+                           "detection_center": entry.get("detection_center")}
+                          for entry in document.get("perpendiculas", [])]
         elif searched_and_empty:
             tracks = []
             if log_fn:
@@ -2027,17 +2023,24 @@ class SurveyAnalyticsMixin:
         else:
             raise FileNotFoundError(
                 f"{os.path.basename(perp_file)} not found in {target_folder}. "
-                "Please run 'Calculate Track Perpendicular' first."
+                f"Please run '{perp_step}' first."
             )
 
-        # class_id is the resolved species for anything the store wrote, so
-        # the filter is applied here rather than where the file was written -
-        # otherwise every species in a per-species run gets the same tracks
-        # and the same numbers under a different name.
+        # The species filter is applied here rather than where the file was
+        # written - otherwise every species in a per-species run gets the
+        # same tracks and the same numbers under a different name. And each
+        # entry counts as what its animal (or box) is now: the file's
+        # class_id is what the last box was called when it was written,
+        # which is not what the census calls the animal.
+        tracks, n_false = analytics_source.select_entries(
+            tracks, "track_id" if source == "tracks" else "detection_id",
+            analytics_source.current_species(
+                target_folder, suffix, source, survey.include_manual),
+            survey.species_ids(flight, names))
         species_ids = survey.species_ids(flight, names)
-        if species_ids is not None:
-            wanted = set(species_ids)
-            tracks = [t for t in tracks if t.get("class_id") in wanted]
+        if n_false and log_fn:
+            log_fn(f"{n_false} {unit} labelled not-an-animal since the "
+                   "distances were calculated are not counted")
 
         # The survey plot: animals outside it (or inside an exclusion zone)
         # are not part of the census, and neither is their ground.
@@ -2052,7 +2055,7 @@ class SurveyAnalyticsMixin:
             tracks = [t for t in tracks if _in_area(t)]
             n_outside_survey_area = before - len(tracks)
             if log_fn:
-                log_fn(f"{n_outside_survey_area} track(s) outside the survey "
+                log_fn(f"{n_outside_survey_area} {unit} outside the survey "
                        "area are not counted")
 
         # No track left is a result, not an error: the flight's transects
@@ -2062,12 +2065,12 @@ class SurveyAnalyticsMixin:
         # over the survey at all.
         if not tracks and not searched_and_empty and log_fn:
             if survey_area is not None and n_outside_survey_area:
-                why = ("every track lies outside the survey area (or inside "
-                       "an exclusion zone)")
+                why = ("everything counted lies outside the survey area (or "
+                       "inside an exclusion zone)")
             elif species_ids is not None:
-                why = "no track is of the selected species"
+                why = "nothing is of the selected species"
             else:
-                why = "there are no tracks with perpendicular distances"
+                why = f"there are no {unit} with perpendicular distances"
             log_fn(f"Flight {flight.name}: {why} - its transects count with "
                    "zero animals")
 
@@ -2155,7 +2158,7 @@ class SurveyAnalyticsMixin:
         n_truncated = sum(1 for a in assignments if a["truncated"])
         n_outside = sum(1 for a in assignments if a["outside_fov"])
         if log_fn:
-            log_fn(f"{len(transects)} transect(s), {len(assignments)} track(s): "
+            log_fn(f"{len(transects)} transect(s), {len(assignments)} {unit}: "
                    f"{n_assigned} assigned, {len(assignments) - n_assigned} "
                    f"not counted ({n_outside} outside every transect's field of "
                    f"view, {n_truncated} beyond the truncation distance)")
@@ -2199,7 +2202,10 @@ class SurveyAnalyticsMixin:
         tracks_csv = os.path.join(analytics_folder, "population_tracks.csv")
         with open(tracks_csv, 'w', encoding='utf-8', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(["track_id", "last_frame", "x", "y", "class_id",
+            # detection_id: the box the position is from - the animal's
+            # last one, or the box itself when the survey counts boxes.
+            writer.writerow(["track_id", "detection_id", "last_frame", "x",
+                             "y", "class_id",
                              "transect_id", "transect_name", "distance_m",
                              "nearest_distance_m", "in_frame_range",
                              "truncated", "outside_fov"])
@@ -2211,7 +2217,10 @@ class SurveyAnalyticsMixin:
                     in_range = int(rng[0] <= a["last_frame"] <= rng[1])
                 nearest = a["nearest_distance_m"]
                 writer.writerow([
-                    a["track_id"], a["last_frame"],
+                    "" if a["track_id"] is None else a["track_id"],
+                    "" if a.get("detection_id") is None
+                    else a["detection_id"],
+                    a["last_frame"],
                     round(a["x"], 3), round(a["y"], 3), a["class_id"],
                     "" if tid is None else tid,
                     "" if tid is None else names.get(tid, ""),

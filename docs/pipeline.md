@@ -531,7 +531,7 @@ The box at the top of the tab defines the survey every tool below works on:
 | **Count** | What every tool on the tab counts. **Animals (tracks)** - the default - counts each tracked animal once, at the centre of its boxes, with the species, sex and age of the track. **Boxes (detections)** counts every geo-referenced box: what a still-photo survey without tracking has - an animal on two photos counts twice. |
 | **Survey folder** | Where the survey results (`analytics_t/` / `analytics_w/`) and the survey area are stored. Empty = `bambi_survey` next to the QGIS project. |
 
-Three things hold for every tool:
+Four things hold for every tool:
 
 - **One CRS.** Pooled points, rasters and areas need the ticked flights to
   share their target CRS; this is checked, not assumed.
@@ -545,15 +545,32 @@ Three things hold for every tool:
   two would double-count), and manual tracks are *added* to it. A label created
   with *Import as label track* replaces the tracker track it came from. See
   [Results, Flights and Export](results-and-export.md#what-the-analytics-counted).
+- **An animal is one thing in every tool.** A tracked animal has one
+  species: the track's own where it was identified - by a classifier, by
+  hand, or synced across from the other camera - and otherwise what most of
+  its boxes were called by the detector's class mapping. It has one position,
+  the centre of all its boxes, and the sex and age of its track. A track that
+  is `not-an-animal` by that rule is not counted. Up to 9.0 the tools asked
+  different things - the census and the inventory the track (`animal` for
+  every track no classifier had named), the heatmap each box (an animal
+  called roe deer on two frames and chamois on a third counted once for
+  each), distance sampling and the population estimate the last box - and so
+  disagreed about the same animals. A box, when the survey counts boxes, is
+  what the box itself was called, with the sex and age of the animal it
+  belongs to.
 
 **One setting decides what is counted.** Up to 9.0 the census, the density
 heatmap and distance sampling each had a selector of their own, with
 different defaults - the census counted animals, the other two boxes - so the
 same survey was three different things depending on the tool, and a density
 of boxes is not a density of animals. The **Count** setting of the survey box
-now applies to all of them, and is saved with the QGIS project. Results are
-still written per choice (`..._tracks` / `..._detections`), so switching does
-not overwrite the other set.
+now applies to all of them, and is saved with the QGIS project. The
+population estimate and habitat use, which only knew tracks, follow it too,
+so a still-photo survey without tracking can use every tool. Census, heatmap
+and distance-sampling results are still written per choice (`..._tracks` /
+`..._detections`), so switching does not overwrite the other set; the
+population estimate and the habitat summary record what they counted
+(`source`).
 
 ### Survey area and exclusion zones
 
@@ -726,7 +743,10 @@ hectares (the ground it monitored).
 
 Requires, for every ticked flight: transects defined with the
 [Transect Splitting Tool](tools.md#transect-splitting-tool), *Calculate Field
-of View*, *Calculate Track Perpendicular* and the flight's DEM.
+of View*, *Calculate Track Perpendicular* (*Calculate Perpendicular* when the
+survey counts boxes) and the flight's DEM. That step supplies the positions;
+what species each animal counts as is read when the estimate runs, so
+classifying or relabelling afterwards needs no new distances.
 
 | Estimator | |
 |---|---|
@@ -750,13 +770,13 @@ Report** opens the estimates.
 ```
 analytics_t/    # or analytics_w/, in the survey folder
 ├── population_estimate.json    # estimates per method, the transect table
-├── population_tracks.csv       # which track was assigned to which transect
+├── population_tracks.csv       # which track (or box) was assigned to which transect
 └── transect_areas.geojson      # monitored area per transect
 ```
 
 ### Track inventory
 
-One row per tracked individual of the chosen camera, with everything the project knows about it side by side: species, sex and age with their votes, box and occlusion counts, confidences, first and last frame with their capture times, start and end position (project CRS and WGS84), path length, the matched track on the other camera, labelling-tool annotations and the distance to the flight line. **→ List Tracked Individuals** writes it as `analytics_t/track_inventory.csv` and `.json`; **→ Add to QGIS** loads it as a point layer at each animal's last position.
+One row per tracked individual of the chosen camera, with everything the project knows about it side by side: species (as every survey tool counts it), sex and age with their votes, box and occlusion counts, confidences, first and last frame with their capture times, start and end position (project CRS and WGS84), path length, the matched track on the other camera, labelling-tool annotations and the distance to the flight line. **→ List Tracked Individuals** writes it as `analytics_t/track_inventory.csv` and `.json`; **→ Add to QGIS** loads it as a point layer at each animal's last position.
 
 **→ Show Report** opens the inventory as a sortable, filterable table built from the store as it stands now. Its first column, **Approved**, is your own verdict - a checkmark written to the track, so it survives, exports and appears in every later inventory. A click on a track's start or end frame opens the animal in the inspector at that frame, where the same facts are shown under the image and a wrong detection or track can be [deleted from the project](tools.md#detection--track-selection); the report follows what is done there. **Columns…** chooses which columns the table shows (saved with the QGIS project); the written CSV and JSON keep every column regardless.
 

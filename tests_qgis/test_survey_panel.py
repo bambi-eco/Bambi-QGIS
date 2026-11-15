@@ -260,3 +260,57 @@ def test_a_project_saved_before_the_setting_counts_animals(dock, two_flights):
     QgsProject.instance().removeEntry(PLUGIN_SCOPE, ENTRY_SOURCE)
     dock.survey_panel.load(QgsProject.instance())
     assert dock.survey_panel.source() == "tracks"
+
+
+# ---------------------------------------------------------------------------
+# ... and what each tool therefore needs
+# ---------------------------------------------------------------------------
+
+def _count_boxes(dock):
+    panel = dock.survey_panel
+    panel.source_combo.setCurrentIndex(panel.source_combo.findData("detections"))
+
+
+def _warnings(quiet):
+    return " ".join(str(argument) for call in quiet["warn"]
+                    for argument in call)
+
+
+def test_the_population_estimate_asks_for_the_distances_it_reads(
+        dock, quiet, two_flights):
+    dock.run_population_estimation()
+    assert "Calculate Track Perpendicular" in _warnings(quiet)
+
+    quiet["warn"].clear()
+    _count_boxes(dock)
+    dock.run_population_estimation()
+    text = _warnings(quiet)
+    assert "'Calculate Perpendicular'" in text
+    assert "Track Perpendicular" not in text
+
+
+def test_a_flight_without_animals_needs_no_distances(
+        dock, quiet, two_flights):
+    """It has none and can have none - and counts with zero animals. The
+    step pools such a flight; the check before it used to refuse it."""
+    from bambi_wildlife_detection.core import detection_store
+
+    a, _b = two_flights
+    detection_store.record_detections(a, "t", [])
+    dock.run_population_estimation()
+    text = _warnings(quiet)
+    assert "transect definitions" in text          # still needed
+    assert "perpendicular" not in text.lower()
+
+
+def test_habitat_use_asks_for_what_the_survey_counts(dock, quiet,
+                                                     two_flights):
+    dock.run_habitat_summary()
+    assert "Track Animals" in _warnings(quiet)
+
+    quiet["warn"].clear()
+    _count_boxes(dock)
+    dock.run_habitat_summary()
+    text = _warnings(quiet)
+    assert "Geo-Reference Detections" in text
+    assert "Track Animals" not in text

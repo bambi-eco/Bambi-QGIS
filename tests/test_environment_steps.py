@@ -257,6 +257,33 @@ class TestHabitatSummary:
             processor.run_habitat_summary(config, None, None, None)
         assert "No environment data for: B" in str(error.value)
 
+    def test_a_survey_that_counts_boxes_places_its_boxes(self, processor,
+                                                         tmp_path):
+        """One setting decides what every survey tool counts."""
+        a = _flight(str(tmp_path / "a"), [WEST, WEST, EAST])
+        config = self._config(tmp_path, [("A", a)], source="detections")
+        log = []
+        summary = processor.run_habitat_summary(
+            config, None, log.append, lambda: False)
+        assert summary["source"] == "detections"
+        assert summary["n_tracks"] == 3
+        assert any("A: 3 box(es)" in line for line in log)
+        folder = os.path.join(str(tmp_path / "survey"), "analytics_t")
+        rows = habitat.read_json(os.path.join(folder, "habitat_tracks.json"))
+        assert all(row["detection_id"] is not None for row in rows)
+        with open(os.path.join(folder, "habitat_tracks.csv")) as fh:
+            header = fh.readline().strip().split(",")
+        assert header[1:3] == ["track_id", "detection_id"]
+
+    def test_counting_animals_is_the_default(self, processor, tmp_path):
+        a = _flight(str(tmp_path / "a"), [WEST])
+        summary = processor.run_habitat_summary(
+            self._config(tmp_path, [("A", a)]), None, None, None)
+        assert summary["source"] == "tracks"
+        rows = habitat.read_json(os.path.join(
+            str(tmp_path / "survey"), "analytics_t", "habitat_tracks.json"))
+        assert "detection_id" not in rows[0]
+
     def test_tracks_are_required(self, processor, tmp_path):
         root = str(tmp_path / "empty")
         os.makedirs(root)

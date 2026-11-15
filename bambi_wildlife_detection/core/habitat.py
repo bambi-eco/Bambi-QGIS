@@ -299,38 +299,33 @@ def _stats(values) -> dict:
 
 def flight_tracks(target_folder: str, modality: str,
                   species_ids: Optional[Sequence[int]] = None,
-                  include_manual: bool = True, area=None
-                  ) -> List[dict]:
-    """``[{track_id, species, sex, age, x, y}]`` - one per counted track.
+                  include_manual: bool = True, area=None,
+                  source: str = "tracks") -> List[dict]:
+    """``[{track_id, detection_id, species, sex, age, x, y}]`` - one per
+    counted animal, or per box when the survey counts boxes.
 
-    The same animals as the census: the track inventory decides which
-    tracks there are and what species, sex and age each is (so a species
-    vote of the classifier counts, not only the detector's class), and the
-    population filter of :mod:`core.analytics_source` - false positives
-    excluded, one tracker run plus the manual one - gives each its position,
-    the centroid of its box centres. A track that was never placed on the
-    ground has no environment and is left out.
+    The same animals as the census and every other survey tool
+    (:func:`core.analytics_source.load_animals`): false positives excluded,
+    one tracker run plus the manual one, each animal with the one species,
+    sex and age it has, at the centroid of its box centres. What was never
+    placed on the ground has no environment and is left out.
     """
-    from . import analytics_source, track_inventory
+    from . import analytics_source
 
-    inventory = track_inventory.build_inventory(
-        target_folder, modality, species_ids=species_ids)
-    rows, _provenance = analytics_source.load_rows(
-        target_folder, modality, include_manual=include_manual)
-    centroids, _untracked = analytics_source.track_centroids(rows)
-
+    animals, _facts = analytics_source.load_animals(
+        target_folder, modality, source, species_ids, include_manual)
     tracks = []
-    for entry in inventory:
-        position = centroids.get(entry["track_id"])
-        if position is None:
+    for animal in animals:
+        x, y = animal["x"], animal["y"]
+        if x is None or y is None:
             continue
-        x, y = position
         if area is not None and not area.contains(x, y):
             continue
         tracks.append({
-            "track_id": int(entry["track_id"]),
-            "species": entry.get("species") or "",
-            "sex": entry.get("sex"), "age": entry.get("age"),
+            "track_id": animal["track_id"],
+            "detection_id": animal["detection_id"],
+            "species": animal["species"] or "",
+            "sex": animal["sex"] or "", "age": animal["age"] or "",
             "x": float(x), "y": float(y),
         })
     return tracks
@@ -455,8 +450,12 @@ def summarise_flight(name: str, target_folder: str, modality: str,
                      radius: float,
                      species_ids: Optional[Sequence[int]] = None,
                      include_manual: bool = True, area=None,
-                     epsg: Optional[int] = None) -> dict:
+                     epsg: Optional[int] = None,
+                     source: str = "tracks") -> dict:
     """Everything the survey summary needs from one flight.
+
+    *source* is what the survey counts: ``"tracks"`` (one row per animal)
+    or ``"detections"`` (one per box, with its ``detection_id``).
 
     :return: ``{"flight", "tracks": [row], "transects": [row],
         "available": {layer: values of the monitored ground, each cell
@@ -468,7 +467,7 @@ def summarise_flight(name: str, target_folder: str, modality: str,
     layers = load_layers(target_folder)
     done = environment.status(target_folder)
     tracks = flight_tracks(target_folder, modality, species_ids,
-                           include_manual, area)
+                           include_manual, area, source)
     sampled = sample_points(layers, [(t["x"], t["y"]) for t in tracks],
                             radius)
     weather = weather_values(target_folder)
@@ -482,6 +481,8 @@ def summarise_flight(name: str, target_folder: str, modality: str,
                "sex": track["sex"], "age": track["age"],
                "x": round(track["x"], 2), "y": round(track["y"], 2),
                "crs": f"EPSG:{epsg}" if epsg else ""}
+        if track.get("detection_id") is not None:
+            row["detection_id"] = track["detection_id"]
         row.update(values)
         row["scene_offset_days"] = scene.get("offset_days")
         row.update(weather)
@@ -557,8 +558,13 @@ def selection_ratio_se(used_share: Optional[float],
 
 
 def build_summary(flights: Sequence[dict], radius: float, modality: str,
-                  species: Optional[Sequence[str]] = None) -> dict:
-    """Pool the per-flight results into the survey's habitat document."""
+                  species: Optional[Sequence[str]] = None,
+                  source: str = "tracks") -> dict:
+    """Pool the per-flight results into the survey's habitat document.
+
+    *source* - what a row is: an animal (``"tracks"``) or a box
+    (``"detections"``); it is recorded, and the keys stay ``n_tracks`` /
+    ``tracks`` either way."""
     import numpy as np
 
     tracks = [row for flight in flights for row in flight["tracks"]]
@@ -619,6 +625,7 @@ def build_summary(flights: Sequence[dict], radius: float, modality: str,
     return {
         "created": environment.utc_now(),
         "modality": modality,
+        "source": source,
         "radius_m": radius,
         "species": None if species is None else list(species),
         "n_tracks": len(tracks),
@@ -677,10 +684,29 @@ def read_json(path: str):
         return json.load(fh)
 
 
+#: One row per counted animal - or per box, when the survey counts boxes
+#: (the summary's ``source`` says which).
 TRACKS_CSV = "habitat_tracks.csv"
 TRACKS_JSON = "habitat_tracks.json"
 TRANSECTS_CSV = "habitat_transects.csv"
 SUMMARY_JSON = "habitat.json"
+
+
+def table_columns(rows: Sequence[dict]) -> List[str]:
+    """Columns of the habitat table: :data:`TRACK_COLUMNS`, with the box's
+    ``detection_id`` after the track when the rows are boxes."""
+    columns = list(TRACK_COLUMNS)
+    if any(row.get("detection_id") is not None for row in rows):
+        columns.insert(columns.index("track_id") + 1, "detection_id")
+    return columns
+
+
+def unit(summary: dict, n: Optional[int] = None) -> str:
+    """What a row of *summary* is - ``"track(s)"`` or ``"box(es)"`` - with
+    the number in front when *n* is given."""
+    word = ("box(es)" if (summary or {}).get("source") == "detections"
+            else "track(s)")
+    return word if n is None else f"{n} {word}"
 
 
 def write_outputs(analytics_folder: str, summary: dict,
@@ -692,7 +718,7 @@ def write_outputs(analytics_folder: str, summary: dict,
         "summary": write_json(
             summary, os.path.join(analytics_folder, SUMMARY_JSON)),
         "tracks_csv": write_table(
-            tracks, TRACK_COLUMNS,
+            tracks, table_columns(tracks),
             os.path.join(analytics_folder, TRACKS_CSV)),
         "tracks_json": write_json(
             tracks, os.path.join(analytics_folder, TRACKS_JSON)),
@@ -726,7 +752,7 @@ def used_histogram(tracks: Sequence[dict], key: str,
 
 def describe(summary: dict) -> List[str]:
     """A few log lines: where the animals stood out from the area."""
-    lines = [f"{summary['n_tracks']} track(s) over "
+    lines = [f"{unit(summary, summary['n_tracks'])} over "
              f"{len(summary['flights'])} flight(s), values averaged within "
              f"{summary['radius_m']:g} m"]
     for key, layer in summary["layers"].items():

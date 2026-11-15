@@ -22,7 +22,7 @@ Every detection ends up either geo-referenced or explicitly failed -
 import json
 import os
 from datetime import datetime, timezone
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from . import store
 
@@ -563,6 +563,100 @@ def track_species(target_folder: str, modality: str) -> Dict[int, int]:
         if species_id != store.FALLBACK_SPECIES_ID:
             identified[track_id] = species_id
     return identified
+
+
+def majority_species(boxes: Iterable[Tuple[Optional[int], Optional[float]]]
+                     ) -> int:
+    """The species most boxes of a track carry.
+
+    :param boxes: ``(species_id, confidence)`` per box
+    :return: the species of most boxes that have one - a box still on the
+        fallback (``animal``) says nothing and has no vote. Equal numbers go
+        to the higher summed confidence, then to a named species over
+        ``unknown`` / ``not-an-animal``, then to the lower id; no box with a
+        species leaves the fallback.
+    """
+    count: Dict[int, int] = {}
+    weight: Dict[int, float] = {}
+    for species_id, confidence in boxes:
+        if species_id is None:
+            continue
+        species_id = int(species_id)
+        if species_id == store.FALLBACK_SPECIES_ID:
+            continue
+        count[species_id] = count.get(species_id, 0) + 1
+        weight[species_id] = weight.get(species_id, 0.0) + float(
+            confidence or 0.0)
+    if not count:
+        return store.FALLBACK_SPECIES_ID
+    return max(count, key=lambda s: (count[s], weight[s], s > 0, -abs(s)))
+
+
+def animal_species(target_folder: str, modality: str,
+                   include_manual: bool = True) -> Dict[int, int]:
+    """``{track_id: species_id}`` - what species each tracked animal is.
+
+    One answer for every consumer that counts animals (the survey
+    analytics, the track inventory): **the track's own species where the
+    animal was identified** - by a classifier, by hand, or synced across
+    from the other camera - **and otherwise the species most of its boxes
+    carry**, which is what the detector's class mapping made of them.
+
+    The tools used to ask three different things: the census the track
+    (``animal`` for every track no classifier had named, whatever the
+    detector called its boxes), the density heatmap each box (an animal the
+    detector called roe deer on two frames and chamois on a third counted
+    once for each species, at two places), distance sampling and the
+    population estimate the last box.
+
+    Covers the tracks the analyses read - the active tracker run and the
+    labelling tool's, without the tracks a label replaced - that have at
+    least one box. ``not-an-animal`` is a species here like any other: the
+    caller decides that it does not count.
+    """
+    det_path = store.stage_path(target_folder, store.DETECTIONS, modality)
+    trk_path = store.stage_path(target_folder, store.TRACKS, modality)
+    if not (os.path.isfile(det_path) and os.path.isfile(trk_path)):
+        return {}
+    run_ids = analysis_runs(target_folder, modality,
+                            include_manual=include_manual)
+    if not run_ids:
+        return {}
+    superseded = superseded_track_ids(target_folder, modality)
+    placeholders = ", ".join("?" for _ in run_ids)
+
+    conn = store.open_store(det_path, store.DETECTIONS, modality)
+    try:
+        from . import gpkg
+        gpkg.attach(conn, trk_path, "trk")
+        rows = conn.execute(
+            "SELECT t.track_id, t.species_id AS own, d.species_id AS box, "
+            "d.confidence FROM trk.track_members m "
+            "JOIN trk.tracks t ON t.track_id = m.track_id "
+            "JOIN detections d ON d.detection_id = m.detection_id "
+            f"WHERE t.run_id IN ({placeholders})",  # nosec B608 - ints only
+            run_ids).fetchall()
+        gpkg.detach(conn, "trk")
+    finally:
+        conn.close()
+
+    own: Dict[int, Optional[int]] = {}
+    boxes: Dict[int, List[Tuple[Optional[int], Optional[float]]]] = {}
+    for row in rows:
+        track_id = int(row["track_id"])
+        if track_id in superseded:
+            continue
+        own[track_id] = row["own"]
+        boxes.setdefault(track_id, []).append((row["box"], row["confidence"]))
+
+    species: Dict[int, int] = {}
+    for track_id, members in boxes.items():
+        named = own[track_id]
+        if named is not None and int(named) != store.FALLBACK_SPECIES_ID:
+            species[track_id] = int(named)
+        else:
+            species[track_id] = majority_species(members)
+    return species
 
 
 def track_orphans(target_folder: str, modality: str) -> List[int]:

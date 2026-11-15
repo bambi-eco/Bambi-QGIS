@@ -451,8 +451,8 @@ once per species instead, writing one result each:
 
 | Analytic | Pooled | Per species |
 |---|---|---|
-| Density heatmap | `density_detections.tif` | `density_detections_roe-deer.tif`, … |
-| Distance sampling | `distance_sampling_detections.json` | `distance_sampling_detections_roe-deer.json`, … |
+| Density heatmap | `density_tracks.tif` | `density_tracks_roe-deer.tif`, … |
+| Distance sampling | `distance_sampling_tracks.json` | `distance_sampling_tracks_roe-deer.json`, … |
 | Population estimation | `population_estimate.json` | `population_estimate_roe-deer.json`, … |
 
 Each result records the species it counted, and the summary dialogs and layer
@@ -466,10 +466,13 @@ names carry it through. Two details:
   not an error about the others. If none can be fitted, the run fails and says
   so for each.
 
-The filter is applied where the distances are computed, so **changing it means
-re-running *Calculate Perpendicular*** before distance sampling reflects it. If
-the filter matches nothing the step stops and says so, rather than falling back
-to the legacy text files, which know nothing about species.
+The filter is applied when the analytic runs, and each observation counts as
+what its animal (or box) is **now**: the perpendicular distances are written
+once, but classifying, relabelling or marking a false positive afterwards
+changes what distance sampling and the population estimate count without
+calculating the distances again. If the filter matches nothing the step stops
+and says so, rather than falling back to the legacy text files, which know
+nothing about species.
 
 The selection is not saved with the project. Species belong to a flight's own
 `project.gpkg`, so an id carried into another flight would mean something else

@@ -20,8 +20,15 @@ every analytic:
 * **The filter travels with the result.** Every analytic records the runs,
   species and exclusions it used, so a number can be traced back to the rows
   that produced it.
+* **An animal is one thing in every tool.** What a survey counts is either
+  animals (tracks) or boxes (detections), and :func:`load_animals` says for
+  both what species, sex and age each one is and where it is. A tracked
+  animal has one species (:func:`core.track_store.animal_species`) and one
+  position, the centroid of its boxes - the tools used to ask the track, each
+  box or the last box, and so disagreed about the same animal.
 """
 
+import json
 import os
 from collections import defaultdict
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -136,6 +143,203 @@ def _centre(row: dict) -> Tuple[float, float]:
     return ((row["gx1"] + row["gx2"]) / 2.0, (row["gy1"] + row["gy2"]) / 2.0)
 
 
+def counts(species_id) -> bool:
+    """Whether something of this species is counted at all."""
+    return species_id not in EXCLUDED_SPECIES
+
+
+def load_animals(target_folder: str, modality: str, source: str = TRACKS,
+                 species_ids: Optional[Sequence[int]] = None,
+                 include_manual: bool = True) -> Tuple[List[dict], dict]:
+    """What a survey counts on one flight, and as what.
+
+    One record per tracked animal (``source='tracks'``) or per box
+    (``'detections'``)::
+
+        {"track_id", "detection_id", "species_id", "species", "sex", "age",
+         "approved", "x", "y", "first_frame", "last_frame", "n_boxes"}
+
+    * **tracks** - the species is the animal's
+      (:func:`core.track_store.animal_species`): the track's own where it
+      was identified, else what most of its boxes were called. Sex, age and
+      the approval are the track's. The position is the centroid of *all*
+      its geo-referenced boxes, so an animal is in one place and counts for
+      one species.
+    * **detections** - the species is the box's own. Sex, age and approval
+      are the box's, and where it has none those of the animal it belongs
+      to: a box of a known female is a box of a female.
+
+    ``x`` / ``y`` are ``None`` for what was never geo-referenced - it still
+    counts, it just cannot be placed. ``not-an-animal`` is left out, and
+    *species_ids* (``None`` = every species) selects.
+
+    :return: ``(records, facts)`` - *facts* is ``{"excluded_not_an_animal",
+        "untracked_detections", "unplaced"}``: how many records the false
+        positive rule removed, how many counting boxes belong to no track
+        (they are no animal under ``tracks``), how many records have no
+        position.
+    """
+    if source not in (TRACKS, DETECTIONS):
+        raise AnalyticsError(f"Unknown analytics source '{source}'.")
+    det_path = store.stage_path(target_folder, store.DETECTIONS, modality)
+    if not os.path.isfile(det_path):
+        raise AnalyticsError(
+            f"No detections stored for modality '{modality}'. Run the "
+            "pipeline, or migrate a 5.x project first.")
+
+    vocabulary = common.load_vocabulary(target_folder)
+    names = vocabulary["species"]
+    enum_labels = vocabulary["enum_labels"]
+    wanted = None if species_ids is None else {int(s) for s in species_ids}
+
+    rows = common.load_detections(target_folder, modality,
+                                  include_not_an_animal=True)
+    species = track_store.animal_species(target_folder, modality,
+                                         include_manual=include_manual)
+    known = track_store.track_labels(target_folder, modality)
+    resolved: Dict[int, dict] = {}
+
+    def of_track(track_id) -> dict:
+        """Sex, age, approval... of a track, with enum values as labels."""
+        if track_id not in resolved:
+            stored = (known.get(track_id) or {}).get("attributes")
+            resolved[track_id] = common.resolve_attributes(
+                json.dumps(stored or {}), enum_labels)
+        return resolved[track_id]
+
+    facts = {"excluded_not_an_animal": 0, "untracked_detections": 0,
+             "unplaced": 0}
+    records: List[dict] = []
+
+    if source == DETECTIONS:
+        for row in rows:
+            species_id = int(row["species_id"])
+            if not counts(species_id):
+                facts["excluded_not_an_animal"] += 1
+                continue
+            track_id = row.get("track_id")
+            if track_id not in species:
+                track_id = None
+                facts["untracked_detections"] += 1
+            if wanted is not None and species_id not in wanted:
+                continue
+            own = common.resolve_attributes(row.get("attributes"),
+                                            enum_labels)
+            animal = {} if track_id is None else of_track(track_id)
+            placed = row.get("gx1") is not None
+            x, y = _centre(row) if placed else (None, None)
+            if not placed:
+                facts["unplaced"] += 1
+            records.append({
+                "track_id": track_id,
+                "detection_id": int(row["detection_id"]),
+                "species_id": species_id,
+                "species": names.get(species_id, ""),
+                "sex": own.get("sex") or animal.get("sex"),
+                "age": own.get("age") or animal.get("age"),
+                "approved": bool(
+                    own.get("approved") or animal.get("approved")),
+                "x": x, "y": y,
+                "first_frame": row["frame"], "last_frame": row["frame"],
+                "n_boxes": 1,
+            })
+        return records, facts
+
+    members: Dict[int, List[dict]] = defaultdict(list)
+    for row in rows:
+        track_id = row.get("track_id")
+        if track_id is None or track_id not in species:
+            if counts(int(row["species_id"])):
+                facts["untracked_detections"] += 1
+            continue
+        members[int(track_id)].append(row)
+
+    for track_id in sorted(members):
+        species_id = species[track_id]
+        if not counts(species_id):
+            facts["excluded_not_an_animal"] += 1
+            continue
+        if wanted is not None and species_id not in wanted:
+            continue
+        boxes = members[track_id]
+        centres = [_centre(row) for row in boxes
+                   if row.get("gx1") is not None]
+        if centres:
+            x = sum(c[0] for c in centres) / len(centres)
+            y = sum(c[1] for c in centres) / len(centres)
+        else:
+            x = y = None
+            facts["unplaced"] += 1
+        animal = of_track(track_id)
+        frames = [row["frame"] for row in boxes]
+        records.append({
+            "track_id": track_id,
+            "detection_id": None,
+            "species_id": species_id,
+            "species": names.get(species_id, ""),
+            "sex": animal.get("sex"), "age": animal.get("age"),
+            "approved": bool(animal.get("approved")),
+            "x": x, "y": y,
+            "first_frame": min(frames), "last_frame": max(frames),
+            "n_boxes": len(boxes),
+        })
+    return records, facts
+
+
+def current_species(target_folder: str, modality: str, source: str = TRACKS,
+                    include_manual: bool = True) -> Dict[int, int]:
+    """``{id: species_id}`` as the store has it now - by track id for
+    ``tracks`` (:func:`core.track_store.animal_species`), by detection id
+    for ``detections``. Empty where the flight has no store."""
+    if source == TRACKS:
+        return track_store.animal_species(target_folder, modality,
+                                          include_manual=include_manual)
+    path = store.stage_path(target_folder, store.DETECTIONS, modality)
+    if not os.path.isfile(path):
+        return {}
+    conn = store.open_store(path, store.DETECTIONS, modality)
+    try:
+        return {int(row["detection_id"]): int(row["species_id"])
+                for row in conn.execute(
+                    "SELECT detection_id, species_id FROM detections")}
+    finally:
+        conn.close()
+
+
+def select_entries(entries: Sequence[dict], id_key: str,
+                   species_now: Dict[int, int],
+                   species_ids: Optional[Sequence[int]] = None
+                   ) -> Tuple[List[dict], int]:
+    """The entries of a perpendicular-distance file that count.
+
+    Such a file is written once and read by distance sampling and the
+    population estimate later; the ``class_id`` it carries is what the last
+    box was called when it was written. The species an entry counts as is
+    the one its animal (or box) has **now** - looked up in *species_now* by
+    the entry's *id_key* - so a classification made after the distances
+    were calculated applies, and both tools agree with the census. An entry
+    whose id the store does not know keeps its ``class_id``.
+
+    :return: ``(kept, false positives dropped)``; each kept entry is a copy
+        with ``class_id`` set to the species it counts as.
+    """
+    wanted = None if species_ids is None else {int(s) for s in species_ids}
+    kept, dropped = [], 0
+    for entry in entries:
+        species_id = entry.get("class_id")
+        try:
+            species_id = species_now.get(int(entry.get(id_key)), species_id)
+        except (TypeError, ValueError):
+            pass
+        if species_id is not None and not counts(species_id):
+            dropped += 1
+            continue
+        if wanted is not None and species_id not in wanted:
+            continue
+        kept.append(dict(entry, class_id=species_id))
+    return kept, dropped
+
+
 def _apply_area(points, provenance, area):
     """Keep the points inside *area* and record what the area removed."""
     if area is None:
@@ -159,7 +363,8 @@ def load_points(target_folder: str, modality: str, source: str = DETECTIONS,
 
     ``source='detections'`` gives one point per detection; ``source='tracks'``
     gives one per track - the centroid of its detections - so an animal
-    followed across two hundred frames counts once.
+    followed across two hundred frames counts once, and for the one species
+    it is (:func:`load_animals`).
 
     :param area: a :class:`core.survey_area.SurveyArea`; points outside it
         (outside the plot, or inside an exclusion zone) are dropped. For
@@ -177,13 +382,20 @@ def load_points(target_folder: str, modality: str, source: str = DETECTIONS,
     if source != TRACKS:
         raise AnalyticsError(f"Unknown analytics source '{source}'.")
 
-    centroids, untracked = track_centroids(rows)
-    points = list(centroids.values())
+    # The species filter chose boxes above; an animal is chosen by its own
+    # species and placed by all its boxes (load_animals).
+    animals, facts = load_animals(target_folder, modality, TRACKS,
+                                  species_ids, include_manual)
+    points = [(animal["x"], animal["y"]) for animal in animals
+              if animal["x"] is not None]
 
     provenance["source"] = TRACKS
     provenance["n_tracks"] = len(points)
     provenance["n_points"] = len(points)
-    provenance["untracked_detections"] = untracked
+    provenance["untracked_detections"] = facts["untracked_detections"]
+    provenance["unplaced_tracks"] = facts["unplaced"]
+    provenance["excluded_not_an_animal_tracks"] = (
+        facts["excluded_not_an_animal"])
     return _apply_area(points, provenance, area), provenance
 
 
