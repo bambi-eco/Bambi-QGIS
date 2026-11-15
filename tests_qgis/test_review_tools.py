@@ -179,6 +179,24 @@ class TestLayerSync:
         assert layer.featureCount() == 3
         assert sorted(f["confidence"] for f in layer.getFeatures()) == [0.6, 0.8, 0.9]
 
+    def test_a_box_classified_since_leaves_the_map_too(self, flight, mapped):
+        """The polygon says class 0; the store calls the box species 5 by
+        now. Going by class, its polygon stayed on the map."""
+        layer = mapped["detections"]
+        stored = track_store.load_detections(flight, "t")
+        ids = [d["detection_id"] for d in stored]
+        # As the dock builds the layer: det_id is the store's id.
+        id_of = {round(d["confidence"], 4): d["detection_id"] for d in stored}
+        column = layer.fields().indexOf("det_id")
+        layer.dataProvider().changeAttributeValues({
+            f.id(): {column: id_of[round(f["confidence"], 4)]}
+            for f in layer.getFeatures()})
+
+        removed = bambi_layer_sync.remove_detection(
+            flight, "t", ids[1], frame=1, confidence=0.7, class_id=5)
+        assert removed == 1
+        assert sorted(f["confidence"] for f in layer.getFeatures()) == [0.6, 0.8, 0.9]
+
     def test_other_cameras_and_folders_are_left_alone(self, flight, mapped):
         layer = mapped["detections"]
         assert bambi_layer_sync.remove_detection(
@@ -393,3 +411,65 @@ class TestInventoryDialogFollows:
         assert ticked["1"] == Qt.CheckState.Unchecked
         assert recorded == []
         assert "1 of 2 approved" in dialog.summary.text()
+
+
+# ---------------------------------------------------------------------------
+# Which box a click on the map means
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def look_alikes(tmp_path):
+    """Two animals side by side on one frame: the same class, the same
+    confidence - and a track each."""
+    root = str(tmp_path)
+    detection_store.record_detections(root, "t", [
+        {"frame": 3, "x1": 10.0, "y1": 20.0, "x2": 30.0, "y2": 40.0,
+         "confidence": 0.8712, "source_class": "0"},
+        {"frame": 3, "x1": 60.0, "y1": 20.0, "x2": 80.0, "y2": 40.0,
+         "confidence": 0.8712, "source_class": "0"},
+    ])
+    first, second = sorted(
+        d["detection_id"] for d in track_store.load_detections(root, "t"))
+    track_store.record_tracks(root, "t", [
+        {"track_id": 1, "detection_id": first},
+        {"track_id": 2, "detection_id": second},
+    ])
+    return root, first, second
+
+
+def _detection_feature(det_id, frame=3, confidence=0.8712, class_id=0):
+    layer = QgsVectorLayer("Polygon?crs=EPSG:32633", "Detections", "memory")
+    layer.dataProvider().addAttributes([
+        QgsField("det_id", QVariant.Int), QgsField("frame", QVariant.Int),
+        QgsField("confidence", QVariant.Double),
+        QgsField("class_id", QVariant.Int)])
+    layer.updateFields()
+    feature = QgsFeature(layer.fields())
+    feature.setAttributes([det_id, frame, confidence, class_id])
+    return feature
+
+
+def test_a_click_opens_the_box_that_was_clicked(iface, look_alikes,
+                                                monkeypatch):
+    """The inspector went by class and confidence, so both look-alikes
+    were "the clicked box" and the track shown - and offered for deletion -
+    was the first one's, whichever was clicked."""
+    from bambi_wildlife_detection import bambi_click_tool
+
+    root, _first, second = look_alikes
+    shown = {}
+
+    class Viewer:
+        def show_detection(self, title, green, blue, **details):
+            shown.update(details, green=green, blue=blue)
+
+    monkeypatch.setattr(bambi_click_tool.FeatureViewerDialog, "get_instance",
+                        classmethod(lambda cls, *a, **k: Viewer()))
+    tool = bambi_click_tool.BambiClickTool(iface)
+    tool._handle_detection_click(
+        _detection_feature(second), root, "t", "", "")
+
+    assert shown["detection_ids"] == [second]
+    assert shown["track_id"] == review.track_of_detection(root, "t", second)
+    assert len(shown["green"]) == 1 and len(shown["blue"]) == 1
+    assert shown["green"][0][0] == 60.0          # the second box

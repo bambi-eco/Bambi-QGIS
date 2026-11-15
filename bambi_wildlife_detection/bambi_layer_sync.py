@@ -163,16 +163,16 @@ def remove_detection(target_folder: str, modality: str, detection_id: int,
                      frame: int, confidence: float, class_id: int) -> int:
     """Take a deleted detection's polygon out of the detection layers.
 
-    Layers written before this release carry a running index in ``det_id``
-    rather than the store id, so the box is identified the way the
-    inspector identifies a clicked one: by frame, confidence and class.
-    When that still leaves several candidates (two boxes of one class with
-    the same rounded confidence on one frame), ``det_id`` decides.
+    The polygon is the one built from that detection: its ``det_id`` is the
+    store's id. Only a layer written before the ids carries a running index
+    there instead - then the id names no polygon of the frame, or one with
+    another confidence - and the box is found by frame, confidence and
+    class, as it used to be for every layer. (That left the polygon of a
+    box in place whose species had been classified since the layer was
+    added: its class no longer matched.)
     Returns the number of polygons removed.
     """
-    def _same_box(feature) -> bool:
-        if _attr(feature, "frame") != frame or _attr(feature, "class_id") != class_id:
-            return False
+    def _same_confidence(feature) -> bool:
         found = _attr(feature, "confidence")
         if found is None:
             return False
@@ -180,11 +180,12 @@ def remove_detection(target_folder: str, modality: str, detection_id: int,
 
     removed = 0
     for layer in _layers(target_folder, [DETECTION_TYPE], modality):
-        candidates = [f for f in layer.getFeatures() if _same_box(f)]
-        if len(candidates) > 1:
-            by_id = [f for f in candidates if _attr(f, "det_id") == detection_id]
-            if by_id:
-                candidates = by_id
+        on_frame = [f for f in layer.getFeatures()
+                    if _attr(f, "frame") == frame]
+        same = [f for f in on_frame if _same_confidence(f)]
+        candidates = [f for f in same if _attr(f, "det_id") == detection_id]
+        if not candidates:
+            candidates = [f for f in same if _attr(f, "class_id") == class_id]
         fids = [f.id() for f in candidates]
         if fids:
             layer.dataProvider().deleteFeatures(fids)

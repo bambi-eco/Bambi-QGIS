@@ -417,3 +417,53 @@ class TestTrackFrames:
         root = str(tmp_path)
         _detected(root, tracked=True)
         assert inspection.track_frames(root, "t", 999) == []
+
+
+class TestClickedDetection:
+    """Which box a click on the map means (core.inspection)."""
+
+    #: Two animals side by side: same species, same confidence to three
+    #: decimals - and a third box.
+    FRAME = [
+        {"detection_id": 41, "frame": 7, "x1": 10, "y1": 10, "x2": 30,
+         "y2": 30, "confidence": 0.8712, "class_id": 1},
+        {"detection_id": 42, "frame": 7, "x1": 60, "y1": 10, "x2": 80,
+         "y2": 30, "confidence": 0.8714, "class_id": 1},
+        {"detection_id": 43, "frame": 7, "x1": 90, "y1": 50, "x2": 99,
+         "y2": 70, "confidence": 0.4000, "class_id": 5},
+    ]
+
+    def test_the_box_is_found_by_its_id(self):
+        """By class and confidence both animals were "the clicked one", and
+        the track shown - and offered for deletion - was the first one's."""
+        found = inspection.clicked_detections(self.FRAME, 42, 0.8714, 1)
+        assert [d["detection_id"] for d in found] == [42]
+
+    def test_a_box_classified_since_the_layer_was_added_is_still_found(self):
+        """The layer says species 0; a classifier has made it 1 since."""
+        found = inspection.clicked_detections(self.FRAME, 41, 0.8712, 0)
+        assert [d["detection_id"] for d in found] == [41]
+
+    def test_a_layer_from_before_the_ids_falls_back(self):
+        """Its det_id is a running number - 42 there is another box, as its
+        confidence shows - so class and confidence are all there is."""
+        found = inspection.clicked_detections(self.FRAME, 42, 0.4000, 5)
+        assert [d["detection_id"] for d in found] == [43]
+        # ... which cannot tell twins apart, as before
+        found = inspection.clicked_detections(self.FRAME, None, 0.8713, 1)
+        assert [d["detection_id"] for d in found] == [41, 42]
+
+    @pytest.mark.parametrize("detection_id", [999, "x", None])
+    def test_an_id_that_names_nothing_falls_back(self, detection_id):
+        found = inspection.clicked_detections(
+            self.FRAME, detection_id, 0.4000, 5)
+        assert [d["detection_id"] for d in found] == [43]
+
+    def test_nothing_that_fits_is_nothing(self):
+        assert inspection.clicked_detections(self.FRAME, 999, 0.1, 1) == []
+        assert inspection.clicked_detections([], 41, 0.8712, 1) == []
+        assert inspection.clicked_detections(self.FRAME, 999) == []
+
+    def test_an_id_alone_is_enough(self):
+        found = inspection.clicked_detections(self.FRAME, 43)
+        assert [d["detection_id"] for d in found] == [43]

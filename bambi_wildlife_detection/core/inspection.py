@@ -50,6 +50,55 @@ def load_pixel_detections(target_folder: str, modality: str) -> List[dict]:
     } for row in track_store.load_detections(target_folder, modality)]
 
 
+#: How far a stored confidence may be from the one on a map feature and
+#: still be the same number (layers round to four decimals).
+_SAME_CONFIDENCE = 0.0015
+
+
+def clicked_detections(candidates: List[dict], detection_id=None,
+                       confidence: Optional[float] = None,
+                       class_id: Optional[int] = None) -> List[dict]:
+    """Which of a frame's detections a clicked map feature stands for.
+
+    **By its id** - the ``det_id`` the layer was built with is the store's
+    ``detection_id``. The inspector used to go by class and confidence
+    instead: two boxes of a frame with the same class and (to three
+    decimals) the same confidence were both "the clicked one", the track
+    shown - and offered for deletion - was that of whichever came first,
+    and a box whose species had been classified since the layer was added
+    matched nothing at all.
+
+    Class and confidence remain the fallback for a layer from before the
+    ids, whose ``det_id`` is a running number: there the id names no
+    detection of the frame, or one whose confidence is another's.
+
+    :param candidates: the detections of the clicked feature's frame
+        (:func:`load_pixel_detections` rows)
+    :return: the detection, as a list - empty when nothing fits, several
+        only on the fallback
+    """
+    def same_confidence(detection: dict) -> bool:
+        return confidence is None or abs(
+            float(detection["confidence"]) - float(confidence)
+        ) < _SAME_CONFIDENCE
+
+    if detection_id is not None:
+        try:
+            wanted = int(detection_id)
+        except (TypeError, ValueError):
+            wanted = None
+        by_id = [d for d in candidates if d["detection_id"] == wanted]
+        if by_id and same_confidence(by_id[0]):
+            return by_id[:1]
+
+    if confidence is None:
+        return []
+    alike = [d for d in candidates if same_confidence(d)]
+    if class_id is None:
+        return alike
+    return [d for d in alike if d["class_id"] == class_id]
+
+
 def load_pixel_tracks(target_folder: str,
                       modality: str) -> Dict[int, List[dict]]:
     """``track_id -> [box, …]`` in pixel space, from the store."""

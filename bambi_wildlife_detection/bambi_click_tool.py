@@ -51,6 +51,18 @@ DETECTION_TYPE = "detection"
 FOV_TYPE = "fov"
 
 
+def _feature_value(feature, name: str):
+    """Attribute *name* of a map feature, ``None`` where the layer has no
+    such field or the value is NULL."""
+    try:
+        value = feature[name]
+    except (KeyError, IndexError):
+        return None
+    if value is None or (hasattr(value, "isNull") and value.isNull()):
+        return None
+    return value
+
+
 def open_track_in_viewer(main_window, target_folder: str, modality: str,
                          track_id: int, dem_path: str = "",
                          correction_path: str = "",
@@ -244,12 +256,11 @@ class BambiClickTool(QgsMapToolIdentify):
 
         same_frame = [d for d in all_dets if d["frame"] == frame_idx]
 
-        # Identify the clicked detection by matching confidence + class.
-        # Confidence is stored with 4 decimal places in both files.
-        clicked = [
-            d for d in same_frame
-            if d["class_id"] == det_class and abs(d["confidence"] - det_conf) < 0.0015
-        ]
+        # The clicked box, by the id the layer was built with - not by class
+        # and confidence, which two boxes of a frame can share.
+        clicked = inspection.clicked_detections(
+            same_frame, _feature_value(feature, "det_id"), det_conf,
+            det_class)
         not_clicked = [d for d in same_frame if d not in clicked]
 
         green_boxes = [
