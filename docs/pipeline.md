@@ -430,6 +430,8 @@ Decides which thermal track and which RGB track are the same animal, by register
 
 Confirmation is what keeps a census honest. An animal both cameras saw is a real animal; a track only one camera saw is either an animal the other sensor cannot make out, or noise. In the paper's four test flights, of 34 tracks without a partner only *one* was a real animal - admitting them all would have added six individuals that did not exist.
 
+Each track is paired with at most one track of the other camera, and the pairing is chosen for all tracks together: the one with the smallest total distance, where a track that stays without a partner counts as half the gate. A pair is therefore taken exactly when it is closer than the gate, and a clearly right pair is not given up to squeeze in two that barely clear it. (Up to 9.0 the pairing matched as many tracks as it could before it looked at a distance, and in a herd could drop the right pair for two marginal ones.)
+
 The run log reports how many pairs were confirmed out of how many raw tracks. If nothing matches, it names which gate rejected everything and how far the closest candidate was, so you can tell "there were no animals" from "the gate is wrong for this resolution".
 
 **→ Add Matched Pairs to QGIS** draws a line between each pair's positions, attributed with the shared frame count and median distance - the quickest way to see whether the gate is set sensibly.

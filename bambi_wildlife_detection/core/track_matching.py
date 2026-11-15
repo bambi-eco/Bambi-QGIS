@@ -36,9 +36,10 @@ Pure NumPy/SciPy, no QGIS and no torch, so the whole thing is unit-testable.
 import math
 from typing import Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple
 
-#: Cost written into gated-out cells. ``linear_sum_assignment`` needs a finite
-#: matrix, so an impossible pair gets a number no real distance can reach and
-#: is dropped again after the assignment.
+#: Cost written into the cells of pairs that cannot be. ``linear_sum_
+#: assignment`` needs a finite matrix, so an impossible pair gets a number no
+#: real distance can reach - and :func:`assign` always offers each track the
+#: cheaper way out of staying unmatched, so such a cell is never taken.
 _BLOCKED = 1e9
 
 
@@ -462,6 +463,19 @@ def assign(candidates_in: Sequence[Candidate],
     Hungarian rather than the paper's greedy pass: the matrices are at most a
     few dozen square, so the global optimum is free, and greedy can spend a
     track on a near miss that a later, better pair then needs.
+
+    **Leaving a track unmatched has a price, not a prohibition.** A pair that
+    is not admissible used to be written into the cost matrix as a huge
+    number. Minimising the total then pairs *as many tracks as possible*
+    before it looks at a single distance: with an animal seen at 0.2 m by
+    both cameras, and its two tracks each 1.4 m from a neighbour's (gate
+    1.5 m), the two marginal pairs won - cost 2.8 against 0.2 plus one
+    "impossible" pair - and the one right pair was dropped.
+
+    Now every track may also stay unmatched, at half the gate. A pair is
+    then worth taking exactly when its distance is below the gate (two
+    halves), which is what the gate says; and two marginal pairs (2.8) lose
+    to one right pair with two tracks left over (0.2 + 0.75 + 0.75).
     """
     from scipy.optimize import linear_sum_assignment
     import numpy as np
@@ -474,8 +488,19 @@ def assign(candidates_in: Sequence[Candidate],
     tracks_w = sorted({c.track_id_w for c in admissible})
     index_t = {track: i for i, track in enumerate(tracks_t)}
     index_w = {track: i for i, track in enumerate(tracks_w)}
+    n, m = len(tracks_t), len(tracks_w)
+    alone = config.gate / 2.0
 
-    cost = np.full((len(tracks_t), len(tracks_w)), _BLOCKED, dtype=float)
+    # Rows: the thermal tracks, then one "nobody" per RGB track. Columns:
+    # the RGB tracks, then one "nobody" per thermal track. A real track
+    # meets its own nobody at the price of staying alone; the nobodies pair
+    # among themselves for free.
+    cost = np.full((n + m, m + n), _BLOCKED, dtype=float)
+    cost[n:, m:] = 0.0
+    for i in range(n):
+        cost[i, m + i] = alone
+    for j in range(m):
+        cost[n + j, j] = alone
     lookup: Dict[Tuple[int, int], Candidate] = {}
     for candidate in admissible:
         i, j = index_t[candidate.track_id_t], index_w[candidate.track_id_w]
@@ -483,10 +508,8 @@ def assign(candidates_in: Sequence[Candidate],
         lookup[(i, j)] = candidate
 
     rows, cols = linear_sum_assignment(cost)
-    # A rectangular problem forces every row (or column) to take something,
-    # including a blocked cell, so the gate is re-applied after the fact.
     matched = [lookup[(i, j)] for i, j in zip(rows, cols)
-               if cost[i, j] < _BLOCKED]
+               if i < n and j < m and (i, j) in lookup]
     return sorted(matched, key=lambda c: c.median_dist)
 
 

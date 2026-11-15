@@ -391,6 +391,52 @@ class TestAssign:
 
         assert {(c.track_id_t, c.track_id_w) for c in found} == {(1, 12), (2, 11)}
 
+    def test_one_right_pair_beats_two_marginal_ones(self):
+        """Tracks 1 and 11 are the same animal - 0.2 m apart. Each is also
+        1.4 m from a neighbour's track, just inside the 1.5 m gate, and the
+        two neighbours are no pair at all. An impossible pair used to cost
+        a huge number, so the assignment paired as many tracks as it could
+        before looking at any distance: it took the two marginal pairs and
+        dropped the right one."""
+        config = MatchConfig(space="world", gate_m=1.5)
+        found = tm.assign([
+            _candidate(track_id_t=1, track_id_w=11, median_dist=0.2),
+            _candidate(track_id_t=1, track_id_w=12, median_dist=1.4),
+            _candidate(track_id_t=2, track_id_w=11, median_dist=1.4),
+        ], config)
+        assert [(c.track_id_t, c.track_id_w) for c in found] == [(1, 11)]
+
+    def test_two_good_pairs_still_beat_one_better_one(self):
+        config = MatchConfig(space="world", gate_m=1.5)
+        found = tm.assign([
+            _candidate(track_id_t=1, track_id_w=11, median_dist=0.5),
+            _candidate(track_id_t=1, track_id_w=12, median_dist=0.6),
+            _candidate(track_id_t=2, track_id_w=11, median_dist=0.4),
+        ], config)
+        assert {(c.track_id_t, c.track_id_w) for c in found} == {
+            (1, 12), (2, 11)}
+
+    def test_a_pair_inside_the_gate_is_always_worth_taking(self):
+        """Staying unmatched costs half the gate each, so a lone pair is
+        taken exactly when the gate admits it."""
+        config = MatchConfig(space="world", gate_m=1.5)
+        assert len(tm.assign(
+            [_candidate(median_dist=1.499)], config)) == 1
+        assert tm.assign([_candidate(median_dist=1.5)], config) == []
+
+    def test_a_herd_is_paired_animal_by_animal(self):
+        """Five animals a body length apart, each seen by both cameras."""
+        config = MatchConfig(space="world", gate_m=1.5)
+        candidates = []
+        for t in range(5):
+            for w in range(5):
+                distance = 0.1 + abs(t - w) * 1.2
+                candidates.append(_candidate(
+                    track_id_t=t, track_id_w=100 + w, median_dist=distance))
+        found = tm.assign(candidates, config)
+        assert {(c.track_id_t, c.track_id_w) for c in found} == {
+            (t, 100 + t) for t in range(5)}
+
     def test_gated_pairs_are_never_assigned(self):
         """A rectangular problem forces every row to take something, so the
         gate has to be re-applied after the assignment."""
