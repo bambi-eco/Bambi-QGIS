@@ -11,11 +11,21 @@ and nothing else. MOT has a fixed column layout, so anything extra goes to a
 sidecar keyed by ``(frame, track_id)``.
 """
 
+import csv
 import json
 import os
 from typing import Dict, List, Optional, Tuple
 
 from . import common
+
+
+def _cell(value) -> str:
+    """A value as a CSV cell: nothing for "not known", lower-case booleans."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
 
 
 def export_coco(target_folder: str, modality: str, output_path: str,
@@ -33,8 +43,9 @@ def export_coco(target_folder: str, modality: str, output_path: str,
     ``images`` folder next to the JSON so that root is the export itself.
     """
     vocabulary = common.load_vocabulary(target_folder)
-    rows = common.load_detections(
-        target_folder, modality, include_not_an_animal, include_geo=False)
+    rows, _animals = common.load_export_rows(
+        target_folder, modality, vocabulary, include_not_an_animal,
+        include_geo=False)
     width, height = common.require_frame_size(
         target_folder, modality, image_size)
     frames = {f["frame"]: f for f in common.load_frames(target_folder, modality)}
@@ -67,10 +78,10 @@ def export_coco(target_folder: str, modality: str, output_path: str,
         }
         if row.get("track_id") is not None:
             annotation["track_id"] = row["track_id"]
-        attributes = common.resolve_attributes(
-            row["attributes"], vocabulary["enum_labels"])
-        if attributes:
-            annotation["attributes"] = attributes
+        # the box's own fields and what is known of the animal: sex, age,
+        # whether it was approved by hand
+        if row["properties"]:
+            annotation["attributes"] = row["properties"]
         annotations.append(annotation)
 
     document = {
@@ -119,8 +130,9 @@ def export_yolo(target_folder: str, modality: str, output_folder: str,
     duplicating what is usually the heaviest part of a project.
     """
     vocabulary = common.load_vocabulary(target_folder)
-    rows = common.load_detections(
-        target_folder, modality, include_not_an_animal, include_geo=False)
+    rows, _animals = common.load_export_rows(
+        target_folder, modality, vocabulary, include_not_an_animal,
+        include_geo=False)
     width, height = common.require_frame_size(
         target_folder, modality, image_size)
     frames = {f["frame"]: f for f in common.load_frames(target_folder, modality)}
@@ -200,8 +212,9 @@ def export_mot(target_folder: str, modality: str, output_folder: str,
     is what makes the export a sequence rather than a bare ground truth file.
     """
     vocabulary = common.load_vocabulary(target_folder)
-    rows = common.load_detections(
-        target_folder, modality, include_not_an_animal, include_geo=False)
+    rows, _animals = common.load_export_rows(
+        target_folder, modality, vocabulary, include_not_an_animal,
+        include_geo=False)
     tracked = [row for row in rows if row.get("track_id") is not None]
 
     mapping, names = common.class_map(
@@ -220,22 +233,16 @@ def export_mot(target_folder: str, modality: str, output_folder: str,
 
     # Everything MOT's fixed columns cannot carry, keyed back to (frame, id).
     sidecar_path = os.path.join(output_folder, "attributes.csv")
-    extra_names = sorted({
-        key
-        for row in tracked
-        for key in common.resolve_attributes(
-            row["attributes"], vocabulary["enum_labels"])
-    })
+    extra_names = sorted({key for row in tracked for key in row["properties"]})
     with open(sidecar_path, "w", encoding="utf-8", newline="") as fh:
-        fh.write("frame,id,species," + ",".join(extra_names) + "\n")
+        writer = csv.writer(fh, lineterminator="\n")
+        writer.writerow(["frame", "id", "species"] + extra_names)
         for row in sorted(tracked, key=lambda r: (r["frame"], r["track_id"])):
-            attributes = common.resolve_attributes(
-                row["attributes"], vocabulary["enum_labels"])
-            values = ",".join(
-                str(attributes.get(name, "")) for name in extra_names)
-            species = vocabulary["species"].get(row["species_id"], "")
-            fh.write(
-                f"{row['frame'] + 1},{row['track_id']},{species},{values}\n")
+            cells = [_cell(row["properties"].get(name))
+                     for name in extra_names]
+            writer.writerow(
+                [row["frame"] + 1, row["track_id"],
+                 vocabulary["species"].get(row["species_id"], ""), *cells])
 
     classes_path = os.path.join(output_folder, "classes.txt")
     with open(classes_path, "w", encoding="utf-8") as fh:

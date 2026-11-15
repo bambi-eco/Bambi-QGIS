@@ -13,6 +13,13 @@ the three decisions that would otherwise be made seven times live here:
 * **`not-an-animal`.** Species ``-2`` marks a labelled false positive.
   Training formats drop those rows by default; recording formats keep them.
   Either way it is an explicit option, never a silent filter.
+* **What is known about the animal.** Species, sex, age and the approval are
+  mostly known per *animal* - the classifiers vote over a whole track, the
+  labelling tool and the inventory edit the track - while the boxes keep
+  what the detector called them, usually just "animal". An export describes
+  a box as a box of that animal (:func:`load_export_rows`); reading the box
+  alone, every format said "animal" for a flight that had been classified
+  and checked by hand.
 """
 
 import json
@@ -178,6 +185,79 @@ def load_detections(target_folder: str, modality: str,
     if not include_not_an_animal:
         rows = [row for row in rows if row["species_id"] != NOT_AN_ANIMAL]
     return rows
+
+
+def animals_by_track(target_folder: str, modality: str,
+                     vocabulary: dict) -> Dict[int, dict]:
+    """What is known about each tracked animal.
+
+    ``{track_id: {"species_id", "species", "attributes"}}`` for the tracks
+    the analyses read. The species is the animal's
+    (:func:`core.track_store.animal_species`): the track's own where it was
+    identified, else what most of its boxes were called. The attributes are
+    the track's - ``sex``, ``age``, ``approved`` and any custom field of
+    scope *track* - with enum values as their labels.
+    """
+    species = track_store.animal_species(target_folder, modality)
+    labels = track_store.track_labels(target_folder, modality)
+    animals = {}
+    for track_id, species_id in species.items():
+        stored = (labels.get(track_id) or {}).get("attributes") or {}
+        animals[track_id] = {
+            "species_id": species_id,
+            "species": vocabulary["species"].get(species_id, ""),
+            "attributes": resolve_attributes(
+                stored, vocabulary["enum_labels"]),
+        }
+    return animals
+
+
+def box_species(own: int, animal: Optional[dict]) -> int:
+    """The species a box is exported as.
+
+    A box of a tracked animal is a box of that animal's species - one animal
+    is one species, whatever the detector called it frame by frame. Two
+    things stay the box's own: a box that belongs to no track, and a box
+    marked ``not-an-animal`` (one false box inside a track is still false).
+    """
+    if own == NOT_AN_ANIMAL or animal is None:
+        return own
+    return animal["species_id"]
+
+
+def load_export_rows(target_folder: str, modality: str, vocabulary: dict,
+                     include_not_an_animal: bool = False,
+                     include_geo: bool = True
+                     ) -> Tuple[List[dict], Dict[int, dict]]:
+    """Every box as an export describes it, and the animals they belong to.
+
+    The rows of :func:`load_detections` with three things settled:
+
+    * ``species_id`` is the species the box is exported as
+      (:func:`box_species`); what the box itself was called stays in
+      ``box_species_id``;
+    * ``properties`` are its attributes ready to write - enum values as
+      labels, the animal's (sex, age, approved, ...) included, the box's
+      own winning where both have the same field;
+    * ``not-an-animal`` is decided on the exported species, so the boxes of
+      a track marked as a false positive leave a training export with it.
+
+    :return: ``(rows, animals)`` - *animals* is :func:`animals_by_track`
+    """
+    rows = load_detections(target_folder, modality,
+                           include_not_an_animal=True, include_geo=include_geo)
+    animals = animals_by_track(target_folder, modality, vocabulary)
+    for row in rows:
+        animal = animals.get(row.get("track_id"))
+        row["box_species_id"] = row["species_id"]
+        row["species_id"] = box_species(row["species_id"], animal)
+        row["properties"] = dict(
+            (animal or {}).get("attributes") or {},
+            **resolve_attributes(row["attributes"],
+                                 vocabulary["enum_labels"]))
+    if not include_not_an_animal:
+        rows = [row for row in rows if row["species_id"] != NOT_AN_ANIMAL]
+    return rows, animals
 
 
 def load_frames(target_folder: str, modality: str) -> List[dict]:

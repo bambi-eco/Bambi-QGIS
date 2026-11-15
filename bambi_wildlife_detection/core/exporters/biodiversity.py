@@ -82,28 +82,59 @@ def _timestamp(frames: Dict[int, dict], frame: int) -> str:
     return moment.replace(microsecond=0).isoformat()
 
 
-def _track_summary(rows: List[dict], vocabulary: dict) -> List[dict]:
-    """One row per track: its first frame, centre position and attributes."""
+def _track_summary(rows: List[dict], animals: Dict[int, dict],
+                   vocabulary: dict) -> List[dict]:
+    """One row per tracked animal: where and when it was first seen, and
+    what is known about it.
+
+    The species and the attributes are the animal's
+    (:func:`common.animals_by_track`). They used to be those of its first
+    box - what the detector called it on one frame - so an animal the
+    classifier had named, or that had been identified by hand, was
+    published as "animal", or held back for having no species.
+    """
     summaries = []
     for track_id, points in sorted(common.tracks_of(rows).items()):
         located = [p for p in points if p.get("gx1") is not None]
-        if not located:
+        if not located or track_id not in animals:
             continue
         ordered = sorted(located, key=lambda r: r["frame"])
         first = ordered[0]
+        animal = animals[track_id]
         summaries.append({
             "track_id": track_id,
-            "species_id": first["species_id"],
-            "species": vocabulary["species"].get(first["species_id"], ""),
-            "taxonomy": vocabulary["taxonomy"].get(first["species_id"], {}),
+            "species_id": animal["species_id"],
+            "species": animal["species"],
+            "taxonomy": vocabulary["taxonomy"].get(animal["species_id"], {}),
             "frame": first["frame"],
+            "last_frame": ordered[-1]["frame"],
             "x": (first["gx1"] + first["gx2"]) / 2.0,
             "y": (first["gy1"] + first["gy2"]) / 2.0,
             "n_detections": len(ordered),
-            "attributes": common.resolve_attributes(
-                first["attributes"], vocabulary["enum_labels"]),
+            "attributes": dict(animal["attributes"]),
         })
     return summaries
+
+
+#: Darwin Core's ``sex`` and ``lifeStage`` take the plugin's own words; what
+#: is not known is left empty rather than published as "unknown".
+_KNOWN_SEX = ("female", "male")
+_KNOWN_LIFE_STAGE = ("adult", "subadult", "juvenile")
+
+
+def _sex(attributes: dict) -> str:
+    value = str(attributes.get("sex") or "").strip().lower()
+    return value if value in _KNOWN_SEX else ""
+
+
+def _life_stage(attributes: dict) -> str:
+    value = str(attributes.get("age") or "").strip().lower()
+    return value if value in _KNOWN_LIFE_STAGE else ""
+
+
+def _approved(attributes: dict) -> bool:
+    """Whether a person has confirmed what is said about the animal."""
+    return attributes.get("approved") in (True, 1, "true", "True", "yes")
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +159,8 @@ def export_camtrap_dp(target_folder: str, modality: str, output_folder: str,
     """
     vocabulary = common.load_vocabulary(target_folder)
     taxonomy = vocabulary["taxonomy"]
-    rows = common.load_detections(target_folder, modality, include_not_an_animal)
+    rows, _animals = common.load_export_rows(
+        target_folder, modality, vocabulary, include_not_an_animal)
     frames = {f["frame"]: f for f in common.load_frames(target_folder, modality)}
     rows = common.without_duplicated(rows, frames)
     common.ensure_folder(output_folder)
@@ -186,10 +218,7 @@ def export_camtrap_dp(target_folder: str, modality: str, output_folder: str,
                 f"{deployment_id}-{frame}", deployment_id,
                 _timestamp(frames, frame), path, name, "timeLapse"])
 
-    extra_names = sorted({
-        key for row in rows
-        for key in common.resolve_attributes(
-            row["attributes"], vocabulary["enum_labels"])})
+    extra_names = sorted({key for row in rows for key in row["properties"]})
 
     observations = os.path.join(output_folder, "observations.csv")
     with open(observations, "w", encoding="utf-8", newline="") as fh:
@@ -203,8 +232,7 @@ def export_camtrap_dp(target_folder: str, modality: str, output_folder: str,
         for row in rows:
             lon, lat = positions.get(row["detection_id"], (None, None))
             is_blank = row["species_id"] == common.NOT_AN_ANIMAL
-            attributes = common.resolve_attributes(
-                row["attributes"], vocabulary["enum_labels"])
+            attributes = row["properties"]
             writer.writerow([
                 f"{deployment_id}-obs-{row['detection_id']}",
                 deployment_id,
@@ -263,7 +291,7 @@ DWC_TERMS = [
     "taxonRank", "taxonID", "individualCount", "eventDate",
     "decimalLatitude", "decimalLongitude", "geodeticDatum",
     "coordinateUncertaintyInMeters", "samplingProtocol", "occurrenceRemarks",
-    "identificationVerificationStatus",
+    "identificationVerificationStatus", "sex", "lifeStage",
 ]
 
 #: A GBIF taxon key resolves against the backbone exactly, instead of leaving
@@ -291,10 +319,10 @@ def export_darwin_core(target_folder: str, modality: str, output_folder: str,
     technicality.
     """
     vocabulary = common.load_vocabulary(target_folder)
-    rows = common.load_detections(
-        target_folder, modality, include_not_an_animal=False)
+    rows, animals = common.load_export_rows(
+        target_folder, modality, vocabulary, include_not_an_animal=False)
     frames = {f["frame"]: f for f in common.load_frames(target_folder, modality)}
-    summaries = _track_summary(rows, vocabulary)
+    summaries = _track_summary(rows, animals, vocabulary)
 
     # A base class is not a taxon, and neither is a species whose scientific
     # name has not been filled in - `name` is the working label ("roe deer"),
@@ -325,9 +353,11 @@ def export_darwin_core(target_folder: str, modality: str, output_folder: str,
         writer = csv.writer(fh, delimiter="\t", lineterminator="\n")
         writer.writerow(DWC_TERMS)
         for summary, (lon, lat) in zip(named, lonlat):
+            attributes = summary["attributes"]
+            # sex, age and the approval have terms of their own
             remarks = ", ".join(
-                f"{key}={value}" for key, value in
-                sorted(summary["attributes"].items()))
+                f"{key}={value}" for key, value in sorted(attributes.items())
+                if key not in ("sex", "age", "approved"))
             taxonomy = summary["taxonomy"]
             gbif_key = taxonomy.get("gbif_taxon_key")
             writer.writerow([
@@ -343,7 +373,10 @@ def export_darwin_core(target_folder: str, modality: str, output_folder: str,
                 coordinate_uncertainty,
                 "aerial drone survey (BAMBI)",
                 remarks,
-                "unverified",
+                # approved by hand in the inventory or the labelling tool
+                "verified" if _approved(attributes) else "unverified",
+                _sex(attributes),
+                _life_stage(attributes),
             ])
 
     meta_path = os.path.join(output_folder, "meta.xml")

@@ -31,11 +31,14 @@ def export_geojson(target_folder: str, modality: str, output_path: str,
 
     Detections become point features at the centre of their world box; tracks
     become LineStrings through their detections in frame order. Custom fields
-    land in ``properties`` with enum values resolved to labels.
+    land in ``properties`` with enum values resolved to labels - and with
+    them what is known of the animal: its species, sex, age and whether it
+    was approved by hand. A track is described by its animal, not by its
+    first box.
     """
     vocabulary = common.load_vocabulary(target_folder)
-    all_rows = common.load_detections(
-        target_folder, modality, include_not_an_animal)
+    all_rows, animals = common.load_export_rows(
+        target_folder, modality, vocabulary, include_not_an_animal)
     rows = [row for row in all_rows if row.get("gx1") is not None]
 
     # Project every centre once, up front; the CRS check fires even for an
@@ -54,19 +57,18 @@ def export_geojson(target_folder: str, modality: str, output_path: str,
             coordinates = [centre[p["detection_id"]] for p in ordered]
             if len(coordinates) < 2:
                 continue
-            first = ordered[0]
+            animal = animals[track_id]
             features.append({
                 "type": "Feature",
                 "geometry": {"type": "LineString", "coordinates": coordinates},
                 "properties": {
                     "track_id": track_id,
-                    "species": vocabulary["species"].get(first["species_id"], ""),
-                    "species_id": first["species_id"],
+                    "species": animal["species"],
+                    "species_id": animal["species_id"],
                     "n_detections": len(ordered),
                     "first_frame": ordered[0]["frame"],
                     "last_frame": ordered[-1]["frame"],
-                    **common.resolve_attributes(
-                        first["attributes"], vocabulary["enum_labels"]),
+                    **animal["attributes"],
                 },
             })
     else:
@@ -84,8 +86,7 @@ def export_geojson(target_folder: str, modality: str, output_path: str,
                     "species": vocabulary["species"].get(row["species_id"], ""),
                     "species_id": row["species_id"],
                     "confidence": row["confidence"],
-                    **common.resolve_attributes(
-                        row["attributes"], vocabulary["enum_labels"]),
+                    **row["properties"],
                 },
             })
 

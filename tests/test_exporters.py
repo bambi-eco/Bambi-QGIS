@@ -1117,3 +1117,344 @@ def test_a_rerun_of_tracking_drops_the_previous_runs_track_ids(survey):
     assert {t for t in rows.values() if t is not None} == active
     assert len(active) == 1
     assert rows[ids[3]] is None            # only in the old run
+
+
+# ---------------------------------------------------------------------------
+# What is known about the animal travels with its boxes
+# ---------------------------------------------------------------------------
+#
+# The thermal detector calls every box "animal". Species, sex and age are
+# found later and per animal - the classifiers vote over a track, the
+# labelling tool and the inventory edit the track - so they are on the
+# track. The exporters read the boxes alone: a flight that had been
+# classified and checked by hand left as "animal" in every format, and
+# Darwin Core refused it for having no species.
+
+def _species_id(root, name):
+    project = store.open_store(store.project_path(root), store.PROJECT)
+    try:
+        return project.execute(
+            "SELECT species_id FROM species WHERE name = ?",
+            (name,)).fetchone()["species_id"]
+    finally:
+        project.close()
+
+
+def _name_track(root, track_id, species_id, **attributes):
+    conn = store.open_store(store.stage_path(root, store.TRACKS, "t"),
+                            store.TRACKS, "t")
+    conn.execute("UPDATE tracks SET species_id = ? WHERE track_id = ?",
+                 (species_id, track_id))
+    conn.commit()
+    conn.close()
+    for field, value in attributes.items():
+        track_store.set_track_attribute(root, "t", track_id, field, value)
+
+
+def _track_ids(root):
+    conn = store.open_store(store.stage_path(root, store.TRACKS, "t"),
+                            store.TRACKS, "t")
+    try:
+        return [row["track_id"] for row in conn.execute(
+            "SELECT track_id FROM tracks ORDER BY track_id")]
+    finally:
+        conn.close()
+
+
+@pytest.fixture
+def classified(tmp_path):
+    """Two animals the detector only called "animal", on three frames each,
+    and a box that belongs to no track. The first animal has since been
+    named: a female adult roe deer, approved by hand."""
+    root = str(tmp_path / "classified")
+    os.makedirs(root)
+    detection_store.record_detections(root, "t", [
+        {"frame": frame, "x1": 10.0 + 100 * animal, "y1": 20.0,
+         "x2": 30.0 + 100 * animal, "y2": 40.0, "confidence": 0.9,
+         "source_class": "0",
+         "attributes": json.dumps({"occlusion": 1}) if frame == 0 else None}
+        for animal in range(2) for frame in range(3)]
+        + [{"frame": 1, "x1": 400.0, "y1": 300.0, "x2": 420.0, "y2": 320.0,
+            "confidence": 0.4, "source_class": "0"}])
+    ids = [d["detection_id"] for d in track_store.load_detections(root, "t")]
+    track_store.record_georeference(root, "t", [
+        {"detection_id": i, "gx1": 500000.0 + n, "gy1": 5300000.0 + n,
+         "gz1": 400.0, "gx2": 500002.0 + n, "gy2": 5300002.0 + n,
+         "gz2": 400.0} for n, i in enumerate(ids)])
+    track_store.record_tracks(root, "t", [
+        {"track_id": 1 + n // 3, "detection_id": i}
+        for n, i in enumerate(ids[:6])])
+    first, _second = _track_ids(root)
+    # the seeded enums: sex 1 = female, age 1 = adult
+    _name_track(root, first, _species_id(root, "roe deer"),
+                sex=1, age=1, approved=True)
+    with open(os.path.join(root, "poses_t.json"), "w", encoding="utf-8") as fh:
+        json.dump({"images": [
+            {"imagefile": f"frame_{frame:06d}.jpg",
+             "timestamp": f"2024-05-29T16:26:4{frame}+02:00"}
+            for frame in range(3)]}, fh)
+    return root
+
+
+def _coco(root, tmp_path, **options):
+    path = str(tmp_path / "out" / "coco.json")
+    exporters.export_coco(root, "t", path, image_size=SIZE,
+                          include_images=False, **options)
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def test_a_box_is_a_box_of_its_animal():
+    roe = {"species_id": 4, "species": "roe deer", "attributes": {}}
+    assert common.box_species(0, roe) == 4               # "animal" says nothing
+    assert common.box_species(7, roe) == 4               # one animal, one species
+    assert common.box_species(common.NOT_AN_ANIMAL, roe) == \
+        common.NOT_AN_ANIMAL                             # a false box stays one
+    assert common.box_species(7, None) == 7              # no track: its own
+    false_track = {"species_id": common.NOT_AN_ANIMAL, "species": "",
+                   "attributes": {}}
+    assert common.box_species(0, false_track) == common.NOT_AN_ANIMAL
+
+
+def test_coco_names_the_species_of_the_animal(classified, tmp_path):
+    document = _coco(classified, tmp_path)
+
+    names = {c["id"]: c["name"] for c in document["categories"]}
+    by_track = {}
+    for annotation in document["annotations"]:
+        by_track.setdefault(annotation.get("track_id"), set()).add(
+            names[annotation["category_id"]])
+    first, second = _track_ids(classified)
+    assert by_track[first] == {"roe deer"}
+    assert by_track[second] == {"animal"}      # nobody has named it
+    assert by_track[None] == {"animal"}        # the box without a track
+
+
+def test_coco_carries_sex_age_and_the_approval(classified, tmp_path):
+    document = _coco(classified, tmp_path)
+    first, second = _track_ids(classified)
+    of_first = [a for a in document["annotations"]
+                if a.get("track_id") == first]
+
+    assert all(a["attributes"]["sex"] == "female" and
+               a["attributes"]["age"] == "adult" and
+               a["attributes"]["approved"] is True for a in of_first)
+    # ... beside the box's own fields
+    assert of_first[0]["attributes"]["occlusion"] == "occluded"
+    assert "occlusion" not in of_first[1]["attributes"]
+    assert all("attributes" not in a or "sex" not in a["attributes"]
+               for a in document["annotations"]
+               if a.get("track_id") == second and a["image_id"] != 0)
+
+
+def test_the_boxs_own_field_wins_over_the_animals(classified, tmp_path):
+    first, _second = _track_ids(classified)
+    track_store.set_track_attribute(classified, "t", first, "occlusion", 0)
+
+    document = _coco(classified, tmp_path)
+
+    of_first = sorted((a for a in document["annotations"]
+                       if a.get("track_id") == first),
+                      key=lambda a: a["image_id"])
+    assert of_first[0]["attributes"]["occlusion"] == "occluded"   # its own
+    assert of_first[1]["attributes"]["occlusion"] == "clear"      # the animal's
+
+
+def test_yolo_classes_are_the_animals_species(classified, tmp_path):
+    folder = str(tmp_path / "yolo")
+    exporters.export_yolo(classified, "t", folder, image_size=SIZE,
+                          include_images=False)
+    with open(os.path.join(folder, "data.yaml"), encoding="utf-8") as fh:
+        yaml_text = fh.read()
+    assert "animal" in yaml_text and "roe deer" in yaml_text
+    with open(os.path.join(folder, "labels", "frame_000002.txt"),
+              encoding="utf-8") as fh:
+        classes = sorted(line.split()[0] for line in fh)
+    assert classes == ["0", "1"]            # one box of each animal
+
+
+def test_the_mot_sidecar_says_who_the_animal_is(classified, tmp_path):
+    folder = str(tmp_path / "mot")
+    exporters.export_mot(classified, "t", folder, include_images=False)
+    with open(os.path.join(folder, "attributes.csv"), encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    first, second = (str(i) for i in _track_ids(classified))
+
+    of_first = [row for row in rows if row["id"] == first]
+    assert {row["species"] for row in of_first} == {"roe deer"}
+    assert {(row["sex"], row["age"], row["approved"]) for row in of_first} \
+        == {("female", "adult", "true")}
+    of_second = [row for row in rows if row["id"] == second]
+    assert {(row["species"], row["sex"], row["approved"])
+            for row in of_second} == {("animal", "", "")}
+
+
+def test_the_mot_sidecar_survives_a_comma_in_a_name(classified, tmp_path):
+    """The cells were joined by hand: a comma in a species name or a field
+    shifted every column after it."""
+    project = store.open_store(store.project_path(classified), store.PROJECT)
+    project.execute("UPDATE species SET name = 'deer, roe' "
+                    "WHERE name = 'roe deer'")
+    project.commit()
+    project.close()
+
+    folder = str(tmp_path / "mot")
+    exporters.export_mot(classified, "t", folder, include_images=False)
+    with open(os.path.join(folder, "attributes.csv"), encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    assert rows[0]["species"] == "deer, roe"
+    assert rows[0]["sex"] == "female"
+
+
+def test_geojson_points_and_tracks_describe_the_animal(classified, tmp_path):
+    points = str(tmp_path / "points.geojson")
+    lines = str(tmp_path / "tracks.geojson")
+    exporters.export_geojson(classified, "t", points, epsg=32633)
+    exporters.export_geojson(classified, "t", lines, epsg=32633,
+                             tracks_only=True)
+    first, second = _track_ids(classified)
+
+    with open(points, encoding="utf-8") as fh:
+        features = json.load(fh)["features"]
+    of_first = [f["properties"] for f in features
+                if f["properties"]["track_id"] == first]
+    assert {p["species"] for p in of_first} == {"roe deer"}
+    assert {p["sex"] for p in of_first} == {"female"}
+
+    with open(lines, encoding="utf-8") as fh:
+        tracks = {f["properties"]["track_id"]: f["properties"]
+                  for f in json.load(fh)["features"]}
+    assert tracks[first]["species"] == "roe deer"
+    assert (tracks[first]["sex"], tracks[first]["age"],
+            tracks[first]["approved"]) == ("female", "adult", True)
+    assert tracks[second]["species"] == "animal"
+    # a box's own field (the first one happened to be occluded) is not the
+    # track's
+    assert "occlusion" not in tracks[first]
+
+
+def test_camtrap_observations_name_the_animals_species(classified, tmp_path):
+    folder = str(tmp_path / "camtrap")
+    exporters.export_camtrap_dp(classified, "t", folder, epsg=32633,
+                                include_images=False)
+    with open(os.path.join(folder, "observations.csv"),
+              encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    first = _track_ids(classified)[0]
+    of_first = [row for row in rows
+                if row["eventID"].endswith(f"-track-{first}")]
+
+    assert len(of_first) == 3
+    assert {row["scientificName"] for row in of_first} == \
+        {"Capreolus capreolus"}
+
+
+def test_darwin_core_publishes_a_classified_animal(classified, tmp_path):
+    """It was held back "for having no species assigned": its boxes were
+    never anything but "animal"."""
+    folder = str(tmp_path / "dwca")
+    messages = []
+    exporters.export_darwin_core(classified, "t", folder, epsg=32633,
+                                 log_fn=messages.append)
+    with open(os.path.join(folder, "occurrence.txt"), encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh, delimiter="\t"))
+
+    assert len(rows) == 1
+    assert rows[0]["scientificName"] == "Capreolus capreolus"
+    assert rows[0]["sex"] == "female"
+    assert rows[0]["lifeStage"] == "adult"
+    assert rows[0]["identificationVerificationStatus"] == "verified"
+    assert rows[0]["occurrenceRemarks"] == ""       # nothing said twice
+    assert any("1 track(s) omitted for having no species" in m
+               for m in messages)
+
+
+def test_darwin_core_declares_the_new_terms(classified, tmp_path):
+    folder = str(tmp_path / "dwca")
+    exporters.export_darwin_core(classified, "t", folder, epsg=32633)
+    with open(os.path.join(folder, "meta.xml"), encoding="utf-8") as fh:
+        meta = fh.read()
+    assert 'term="http://rs.tdwg.org/dwc/terms/sex"' in meta
+    assert 'term="http://rs.tdwg.org/dwc/terms/lifeStage"' in meta
+
+
+def test_darwin_core_says_unverified_and_nothing_for_unknown(classified,
+                                                             tmp_path):
+    first, second = _track_ids(classified)
+    track_store.set_track_attribute(classified, "t", first, "approved", None)
+    _name_track(classified, second, _species_id(classified, "roe deer"),
+                sex=0, age=0)                    # both "unknown"
+
+    folder = str(tmp_path / "dwca")
+    exporters.export_darwin_core(classified, "t", folder, epsg=32633)
+    with open(os.path.join(folder, "occurrence.txt"), encoding="utf-8") as fh:
+        rows = {row["occurrenceID"].rsplit("-", 1)[1]: row
+                for row in csv.DictReader(fh, delimiter="\t")}
+
+    assert rows[str(first)]["identificationVerificationStatus"] == \
+        "unverified"
+    assert (rows[str(second)]["sex"], rows[str(second)]["lifeStage"]) == \
+        ("", "")
+
+
+def test_a_custom_track_field_goes_to_the_remarks(classified, tmp_path):
+    first = _track_ids(classified)[0]
+    track_store.set_track_attribute(classified, "t", first, "collar", "R-114")
+
+    folder = str(tmp_path / "dwca")
+    exporters.export_darwin_core(classified, "t", folder, epsg=32633)
+    with open(os.path.join(folder, "occurrence.txt"), encoding="utf-8") as fh:
+        row = next(csv.DictReader(fh, delimiter="\t"))
+    assert row["occurrenceRemarks"] == "collar=R-114"
+
+
+def test_a_track_marked_as_no_animal_leaves_the_training_exports(
+        classified, tmp_path):
+    """Its boxes still say "animal": they were exported as animals to train
+    on."""
+    _first, second = _track_ids(classified)
+    _name_track(classified, second, common.NOT_AN_ANIMAL)
+
+    document = _coco(classified, tmp_path)
+    assert {a.get("track_id") for a in document["annotations"]} == \
+        {_first, None}
+    assert "not-an-animal" not in {
+        c["name"] for c in document["categories"]}
+
+    kept = _coco(classified, tmp_path, include_not_an_animal=True)
+    names = {c["id"]: c["name"] for c in kept["categories"]}
+    assert {names[a["category_id"]] for a in kept["annotations"]
+            if a.get("track_id") == second} == {"not-an-animal"}
+
+
+def test_one_false_box_in_a_track_stays_false(classified, tmp_path):
+    first = _track_ids(classified)[0]
+    conn = store.open_store(store.stage_path(classified, store.DETECTIONS, "t"),
+                            store.DETECTIONS, "t")
+    conn.execute("UPDATE detections SET species_id = ? WHERE frame = 1 "
+                 "AND x1 = 10.0", (common.NOT_AN_ANIMAL,))
+    conn.commit()
+    conn.close()
+
+    document = _coco(classified, tmp_path)
+    of_first = [a for a in document["annotations"]
+                if a.get("track_id") == first]
+    assert sorted(a["image_id"] for a in of_first) == [0, 2]
+
+
+def test_without_a_name_the_boxes_decide_together(classified, tmp_path):
+    """Nobody named the second animal, but the detector called two of its
+    three boxes chamois: it is a chamois on all three."""
+    _first, second = _track_ids(classified)
+    chamois = _species_id(classified, "chamois")
+    conn = store.open_store(store.stage_path(classified, store.DETECTIONS, "t"),
+                            store.DETECTIONS, "t")
+    conn.execute("UPDATE detections SET species_id = ? WHERE x1 = 110.0 "
+                 "AND frame IN (0, 1)", (chamois,))
+    conn.commit()
+    conn.close()
+
+    document = _coco(classified, tmp_path)
+    names = {c["id"]: c["name"] for c in document["categories"]}
+    assert [names[a["category_id"]] for a in document["annotations"]
+            if a.get("track_id") == second] == ["chamois"] * 3

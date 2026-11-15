@@ -415,8 +415,24 @@ receives an internal id, and custom fields travel where the format has room.
 | **Camtrap DP** | survey package: deployment, media, observations | kept as `blank` |
 | **Darwin Core Archive** | GBIF publishing | never included |
 
-Two things worth knowing:
+Things worth knowing:
 
+- **A box is exported as a box of its animal.** Species, sex and age are
+  mostly known per animal - the classifiers vote over a whole track, the
+  labelling tool and the inventory edit the track - while the boxes keep
+  what the detector called them, often just `animal`. Every format
+  therefore writes a tracked box with **the animal's species**: the track's
+  own where the animal was identified, otherwise what most of its boxes were
+  called. The animal's **sex, age and approval** travel with it: as
+  attributes of a COCO annotation, as properties in GeoJSON, as columns of
+  the MOT sidecar, and as `sex`, `lifeStage` and
+  `identificationVerificationStatus` (`verified` once approved) in Darwin
+  Core. A box that belongs to no track keeps its own species, and a box
+  marked `not-an-animal` stays one even inside a track. A whole track marked
+  `not-an-animal` takes its boxes out of the training formats with it.
+  (Before 9.1 the exports read the boxes alone: a classified and checked
+  flight left as `animal` everywhere, and Darwin Core held every such animal
+  back for having no species.)
 - **Darwin Core writes one occurrence per track**, not per detection - a track
   is one animal seen once, and publishing every detection would report the same
   roe deer hundreds of times. Tracks whose species has no scientific name are
