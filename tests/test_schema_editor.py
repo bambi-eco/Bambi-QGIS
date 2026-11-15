@@ -850,3 +850,135 @@ def test_observed_classes_sort_numerically(editor):
 
 def test_observed_classes_of_a_project_without_detections(editor):
     assert editor.observed_source_classes(1) == []
+
+
+# ---------------------------------------------------------------------------
+# A field's name is found in the stored text however JSON writes it
+# ---------------------------------------------------------------------------
+
+def _track_with(root, **attributes):
+    """One track carrying *attributes*, written the way the plugin writes
+    them (``json.dumps``: everything but plain ASCII as an escape)."""
+    conn = store.open_store(
+        store.stage_path(root, store.TRACKS, "t"), store.TRACKS, "t")
+    conn.execute("INSERT INTO track_runs (kind, created_at) "
+                 "VALUES ('builtin', '')")
+    conn.execute("INSERT INTO tracks (run_id, attributes) VALUES (1, ?)",
+                 (json.dumps(attributes),))
+    conn.commit()
+    conn.close()
+
+
+def _track_attributes(root):
+    conn = store.open_store(
+        store.stage_path(root, store.TRACKS, "t"), store.TRACKS, "t")
+    try:
+        return json.loads(conn.execute(
+            "SELECT attributes FROM tracks").fetchone()["attributes"])
+    finally:
+        conn.close()
+
+
+AWKWARD = ["Größe", 'note "x"', "back\\slash", "100%_sure", "größe ♂"]
+
+
+@pytest.mark.parametrize("name", AWKWARD)
+def test_a_field_with_an_awkward_name_is_counted(tmp_path, name):
+    """``Größe`` is stored as ``"Gr\\u00f6\\u00dfe"``; searched for as typed
+    it was found nowhere, and the field passed for unused."""
+    root = str(tmp_path)
+    with SchemaEditor(root) as editor:
+        editor.add_field(name, "string", "track")
+        editor.commit()
+    _track_with(root, **{name: "value", "other": 1})
+
+    with SchemaEditor(root) as editor:
+        assert sum(editor.field_usage(name, "track").values()) == 1
+
+
+@pytest.mark.parametrize("name", AWKWARD)
+def test_renaming_it_takes_the_values_along(tmp_path, name):
+    """The field was renamed and its values stayed behind, under a name no
+    field has any more."""
+    root = str(tmp_path)
+    with SchemaEditor(root) as editor:
+        editor.add_field(name, "string", "track")
+        editor.commit()
+    _track_with(root, **{name: "value", "other": 1})
+
+    with SchemaEditor(root) as editor:
+        editor.rename_field(name, "track", "plain")
+        editor.commit()
+
+    assert _track_attributes(root) == {"plain": "value", "other": 1}
+
+
+@pytest.mark.parametrize("name", AWKWARD)
+def test_deleting_it_takes_the_values_away(tmp_path, name):
+    root = str(tmp_path)
+    with SchemaEditor(root) as editor:
+        editor.add_field(name, "string", "track")
+        editor.commit()
+    _track_with(root, **{name: "value", "other": 1})
+
+    with SchemaEditor(root) as editor:
+        with pytest.raises(SchemaError):
+            editor.delete_field(name, "track")          # in use: say so
+        editor.delete_field(name, "track", force=True)
+        editor.commit()
+
+    assert _track_attributes(root) == {"other": 1}
+
+
+def test_a_name_written_unescaped_is_found_as_well(tmp_path):
+    """Not every writer escapes: a file edited by hand, another tool."""
+    root = str(tmp_path)
+    with SchemaEditor(root) as editor:
+        editor.add_field("Größe", "string", "track")
+        editor.commit()
+    conn = store.open_store(
+        store.stage_path(root, store.TRACKS, "t"), store.TRACKS, "t")
+    conn.execute("INSERT INTO track_runs (kind, created_at) "
+                 "VALUES ('builtin', '')")
+    conn.execute("INSERT INTO tracks (run_id, attributes) VALUES (1, ?)",
+                 (json.dumps({"Größe": "gross"}, ensure_ascii=False),))
+    conn.commit()
+    conn.close()
+
+    with SchemaEditor(root) as editor:
+        assert sum(editor.field_usage("Größe", "track").values()) == 1
+        editor.rename_field("Größe", "track", "Länge")
+        editor.commit()
+    assert _track_attributes(root) == {"Länge": "gross"}
+
+
+def test_renaming_to_an_awkward_name_and_back(tmp_path):
+    root = str(tmp_path)
+    with SchemaEditor(root) as editor:
+        editor.add_field("size", "string", "track")
+        editor.commit()
+    _track_with(root, size="gross")
+
+    with SchemaEditor(root) as editor:
+        editor.rename_field("size", "track", "Größe")
+        editor.commit()
+    assert _track_attributes(root) == {"Größe": "gross"}
+    with SchemaEditor(root) as editor:
+        editor.rename_field("Größe", "track", "size")
+        editor.commit()
+    assert _track_attributes(root) == {"size": "gross"}
+
+
+def test_a_value_that_looks_like_the_name_is_not_a_key(tmp_path):
+    root = str(tmp_path)
+    with SchemaEditor(root) as editor:
+        editor.add_field("Größe", "string", "track")
+        editor.add_field("note", "string", "track")
+        editor.commit()
+    _track_with(root, note="Größe")
+
+    with SchemaEditor(root) as editor:
+        assert sum(editor.field_usage("Größe", "track").values()) == 0
+        editor.rename_field("Größe", "track", "size")
+        editor.commit()
+    assert _track_attributes(root) == {"note": "Größe"}

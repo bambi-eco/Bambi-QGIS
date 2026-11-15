@@ -718,8 +718,20 @@ class SchemaEditor:
 
     @staticmethod
     def _candidate_rows(conn, table: str, names: List[str]):
-        clause = " OR ".join("attributes LIKE ?" for _ in names)
-        patterns = [f'%"{name}"%' for name in names]
+        r"""Rows of *table* whose attributes may carry one of *names* as a
+        key - a cheap search of the stored text, confirmed by the caller.
+
+        The text is JSON, and a key is in it the way JSON writes it:
+        ``Größe`` as ``"Gr\u00f6\u00dfe"``, a quote as ``\"``. Searching for
+        the name as typed found none of those rows, so a field with an
+        umlaut in its name counted as unused, and renaming or deleting it
+        left every value behind under the old name.
+        """
+        patterns = sorted({
+            f"%{form}%" for name in names
+            for form in (json.dumps(name),
+                         json.dumps(name, ensure_ascii=False))})
+        clause = " OR ".join("attributes LIKE ?" for _ in patterns)
         return conn.execute(
             f"SELECT rowid AS _rid, attributes FROM {table} "  # nosec B608
             f"WHERE attributes IS NOT NULL AND ({clause})", patterns).fetchall()

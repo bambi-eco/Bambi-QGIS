@@ -280,7 +280,10 @@ file, and such a step failed with "database is locked"). If the vocabulary
 was changed elsewhere in the meantime, or a step is writing just now, OK says
 so and the dialog stays open. A custom field is its name *and* its scope:
 renaming or deleting a track field leaves a detection field of the same name,
-and its values, alone.
+and its values, alone. A field's name may be anything - umlauts, quotes - and
+its values follow a rename or go with a deletion whatever it is called (before
+9.1 a field whose name was not plain ASCII counted as unused, and its values
+stayed behind under the old name).
 
 ### Species
 
