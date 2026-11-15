@@ -180,10 +180,13 @@ def summarise(rows: List[dict], flight_start: datetime,
         if name in HOURLY_TOTALS:
             continue
         at_flight[name] = _round(_interpolate(rows, middle, name))
-    # The hour the flight's middle falls in carries the totals for it.
-    current = _window(rows, middle - timedelta(hours=1), middle)
+    # A total is for the hour *ending* at its timestamp, so the hour the
+    # flight's middle falls in is the first row at or after it - not the
+    # one before, which would report rain that fell during the flight as
+    # none.
+    current = [row for row in rows if row["time"] >= middle][:1]
     if not current:
-        current = [row for row in rows if row["time"] >= middle][:1]
+        current = rows[-1:]
     for name in HOURLY_TOTALS:
         values = _values(current, name)
         at_flight[name] = _round(sum(values)) if values else None

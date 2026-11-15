@@ -130,6 +130,19 @@ class TestCompute:
             terrain.compute(far, "dem.glb", self.ORIGIN,
                             load_vertices=lambda path: _vertices())
 
+    def test_an_extent_too_large_to_route_is_refused_up_front(self):
+        """Before the mesh is even loaded: the routing is per cell in Python,
+        and a 60 km grid would run for many minutes and gigabytes."""
+        huge = env.make_grid((400000.0, 5300000.0, 440000.0, 5340000.0),
+                             32633, 0.0)
+
+        def must_not_load(path):
+            raise AssertionError("the mesh was loaded")
+
+        with pytest.raises(env.EnvironmentFailure, match="too large"):
+            terrain.compute(huge, "dem.glb", self.ORIGIN,
+                            load_vertices=must_not_load)
+
     def test_no_mesh_or_no_origin_says_so(self):
         with pytest.raises(env.EnvironmentFailure, match="No DEM mesh"):
             terrain.compute(self.GRID, "", self.ORIGIN)

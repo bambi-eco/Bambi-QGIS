@@ -39,6 +39,12 @@ MIN_SLOPE = 0.001
 #: (the aquatic-survey mesh), on which a wetness index means nothing.
 MIN_RELIEF_M = 0.5
 
+#: Largest grid, margin included, the index is computed for (about
+#: 30 x 30 km at 10 m). The flow routing visits every cell in Python and
+#: keeps eight weights per cell: a few million cells take seconds to a
+#: minute, tens of millions would take many minutes and gigabytes.
+MAX_CELLS = 9_000_000
+
 #: (row offset, column offset, distance in cells) of the eight neighbours.
 NEIGHBOURS = (
     (-1, -1, math.sqrt(2.0)), (-1, 0, 1.0), (-1, 1, math.sqrt(2.0)),
@@ -254,6 +260,13 @@ def compute(grid: Grid, mesh_path: str, origin,
             "placed in the project CRS.")
     margin = int(round(MARGIN_M / grid.resolution))
     work = grid.expanded(margin)
+    if work.width * work.height > MAX_CELLS:
+        raise EnvironmentFailure(
+            f"The extent is {work.width * work.resolution / 1000:.0f} x "
+            f"{work.height * work.resolution / 1000:.0f} km, too large for "
+            "the wetness index (about 30 x 30 km at most). Reduce the "
+            "buffer, or untick 'Extend to the survey area' on the "
+            "Environment tab.")
     if log:
         log(f"Sampling the DEM onto a {work.width} x {work.height} grid "
             f"({grid.resolution:g} m cells, {MARGIN_M:g} m margin)")

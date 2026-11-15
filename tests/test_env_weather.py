@@ -64,6 +64,24 @@ class TestSummary:
         assert summary["at_flight"]["dew_point_spread"] == pytest.approx(5.5)
         assert summary["at_flight"]["relative_humidity_2m"] == 80.0
 
+    def test_rain_during_the_flight_is_reported_at_flight_time(self):
+        """A total belongs to the hour ending at its timestamp: rain between
+        03:00 and 04:00 is the 04:00 row, and a flight from 03:10 to 03:50
+        was flown in it."""
+        during = datetime(2026, 6, 10, 4, tzinfo=timezone.utc)
+        rows = weather.parse_hourly(_document(rain_at=(during,)))
+        summary = weather.summarise(rows, START, END)
+        assert summary["at_flight"]["precipitation"] == pytest.approx(2.0)
+        # it fell after the first frame, so it is not "the day before"
+        assert summary["previous_24h"]["precipitation_sum"] == 0.0
+
+        before = datetime(2026, 6, 10, 3, tzinfo=timezone.utc)
+        rows = weather.parse_hourly(_document(rain_at=(before,)))
+        summary = weather.summarise(rows, START, END)
+        assert summary["at_flight"]["precipitation"] == 0.0
+        assert summary["previous_24h"]["precipitation_sum"] == \
+            pytest.approx(2.0)
+
     def test_wind_direction_goes_the_short_way_round_north(self):
         rows = weather.parse_hourly(_document())
         direction = weather.summarise(rows, START, END)["at_flight"][
