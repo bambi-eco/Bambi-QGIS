@@ -2980,10 +2980,11 @@ class LabellingToolDialog(QDialog):
         elif not checked:
             self._autosave_timer.stop()
 
-    def _autosave_now(self):
-        """Debounced autosave - silent except for the status line."""
+    def _autosave_now(self) -> bool:
+        """Debounced autosave - silent except for the status line. False
+        (and said) when the labels could not be saved."""
         if not self._dirty or self._store is None:
-            return
+            return True
         try:
             self._store.save()
         except Exception as exc:
@@ -2992,26 +2993,29 @@ class LabellingToolDialog(QDialog):
             QMessageBox.warning(
                 self, "BAMBI Labelling Tool",
                 f"Autosave failed - autosave has been disabled:\n{exc}")
-            return
+            return False
         self._dirty = False
         self._update_status()
         self.status_label.setText(
             self.status_label.text() + "   |   autosaved")
+        return True
 
-    def _on_save(self):
+    def _on_save(self) -> bool:
+        """Save the labels; False (with the reason shown) when that failed."""
         if self._store is None:
-            return
+            return True
         self._autosave_timer.stop()  # manual save supersedes a pending one
         try:
             self._store.save()
         except Exception as exc:
             QMessageBox.warning(
                 self, "BAMBI Labelling Tool", f"Could not save labels:\n{exc}")
-            return
+            return False
         self._dirty = False
         self._update_status()
         self.status_label.setText(
             f"Saved {len(self._store.tracks)} track(s) to {self._store.json_path}")
+        return True
 
     def _on_add_detections_to_project(self):
         """Merge the label boxes into the pipeline's detections.txt."""
@@ -3100,12 +3104,21 @@ class LabellingToolDialog(QDialog):
             "plugin panel to rebuild the QGIS layers from the labels.")
 
     def _maybe_save_dirty(self) -> bool:
-        """Ask the user about unsaved changes. Returns False on cancel."""
+        """Settle unsaved changes before something that would lose them -
+        closing, loading another folder, switching the camera.
+
+        Returns False when the user cancels, **and when the labels could
+        not be saved**: the reason has just been shown, and the tool stays
+        as it is so they can be saved once the cause is gone (or discarded
+        on purpose). A failed save used to count as settled: the message
+        "Could not save labels" was followed by the window closing on them.
+        """
         if self._dirty and self._store is not None \
                 and self.autosave_check.isChecked():
             # Autosave mode: flush pending changes without prompting.
             self._autosave_timer.stop()
-            self._autosave_now()
+            if not self._autosave_now():
+                return False
         if not self._dirty or self._store is None:
             return True
         reply = QMessageBox.question(
@@ -3116,7 +3129,8 @@ class LabellingToolDialog(QDialog):
         if reply == QMessageBox.StandardButton.Cancel:
             return False
         if reply == QMessageBox.StandardButton.Save:
-            self._on_save()
+            if not self._on_save():
+                return False
         else:
             # Discard: restore the on-disk state so the in-memory store does
             # not silently keep (and later save) the discarded changes.

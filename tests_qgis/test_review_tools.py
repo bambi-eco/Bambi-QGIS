@@ -538,3 +538,128 @@ def test_merging_tracks_that_follow_each_other_asks_nothing(monkeypatch):
         lambda *a: pytest.fail("there is nothing to warn about"))
     tool = _merge_tool(_label_track(1, [0, 10]), _label_track(2, [30, 40]))
     assert tool._confirm_overlapping_merge([1, 2]) is True
+
+
+# ---------------------------------------------------------------------------
+# Labels that could not be saved are not closed away
+# ---------------------------------------------------------------------------
+
+class _UnwritableStore:
+    """A label store whose file cannot be written just now."""
+
+    def __init__(self):
+        self.tracks = {1: object()}
+        self.json_path = "labels.json"
+        self.saves = 0
+        self.broken = True
+
+    def save(self):
+        self.saves += 1
+        if self.broken:
+            raise OSError("database is locked")
+
+
+@pytest.fixture
+def unsaved(iface, dock, monkeypatch):
+    """The labelling tool with changes it cannot save; what it shows and
+    asks is collected, and "Save" is the answer to its question."""
+    from qgis.PyQt.QtWidgets import QMessageBox
+
+    from bambi_wildlife_detection.bambi_labelling_tool import (
+        LabellingToolDialog)
+
+    said = {"warned": [], "asked": 0, "answer": QMessageBox.StandardButton.Save}
+    monkeypatch.setattr(QMessageBox, "warning",
+                        lambda *args, **kwargs: said["warned"].append(args[2]))
+
+    def question(*_args, **_kwargs):
+        said["asked"] += 1
+        return said["answer"]
+
+    monkeypatch.setattr(QMessageBox, "question", question)
+    tool = LabellingToolDialog(iface, dock)
+    tool.autosave_check.setChecked(False)
+    tool._store = _UnwritableStore()
+    tool._dirty = True
+    yield tool, said
+    tool._dirty = False
+    tool._store = None
+    tool.close()
+    tool.deleteLater()
+
+
+def test_a_failed_save_does_not_count_as_saved(unsaved):
+    """"Could not save labels" - and the window closed on them."""
+    tool, said = unsaved
+
+    assert tool._maybe_save_dirty() is False
+    assert tool._dirty is True
+    assert any("Could not save labels" in text for text in said["warned"])
+
+
+def test_the_tool_stays_open_when_the_labels_cannot_be_saved(unsaved):
+    from qgis.PyQt.QtGui import QCloseEvent
+
+    tool, _said = unsaved
+    event = QCloseEvent()
+    tool.closeEvent(event)
+
+    assert not event.isAccepted()
+    assert tool._dirty is True
+
+
+def test_it_closes_once_they_are_saved(unsaved):
+    from qgis.PyQt.QtGui import QCloseEvent
+
+    tool, _said = unsaved
+    tool._store.broken = False
+    event = QCloseEvent()
+    tool.closeEvent(event)
+
+    assert event.isAccepted()
+    assert tool._dirty is False
+
+
+def test_another_camera_is_not_loaded_over_unsaved_labels(unsaved,
+                                                          monkeypatch):
+    tool, _said = unsaved
+    loaded = []
+    monkeypatch.setattr(type(tool), "_load_modality",
+                        lambda self: loaded.append(True))
+    tool._target_folder = "/some/flight"
+    tool._updating_ui = False
+
+    tool._on_modality_changed()
+
+    assert loaded == []
+
+
+def test_a_failed_autosave_keeps_it_open_without_asking(unsaved):
+    """Autosave is the silent mode: its failure is said once, and nothing
+    is asked - "Save" could only fail the same way."""
+    tool, said = unsaved
+    tool.autosave_check.blockSignals(True)
+    tool.autosave_check.setChecked(True)
+    tool.autosave_check.blockSignals(False)
+
+    assert tool._maybe_save_dirty() is False
+    assert said["asked"] == 0
+    assert len(said["warned"]) == 1 and "Autosave failed" in said["warned"][0]
+    assert not tool.autosave_check.isChecked()      # switched itself off
+
+
+def test_discarding_is_still_possible(unsaved, monkeypatch):
+    """The way out when the labels really cannot be saved."""
+    from qgis.PyQt.QtWidgets import QMessageBox
+
+    tool, said = unsaved
+    said["answer"] = QMessageBox.StandardButton.Discard
+    tool._store.load = lambda: None
+    tool._store.schema_defined = True
+    for name in ("_rebuild_custom_field_widgets", "_refresh_track_list",
+                 "_render_frame"):
+        monkeypatch.setattr(type(tool), name, lambda self: None)
+
+    assert tool._maybe_save_dirty() is True
+    assert tool._dirty is False
+    assert tool._store.saves == 0

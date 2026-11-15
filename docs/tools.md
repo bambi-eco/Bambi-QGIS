@@ -182,6 +182,8 @@ exports.
 
 ### Saving & pipeline export
 
+If the labels **cannot be saved** - the project is in use by a running step, the drive is gone - the tool says why and stays as it is: closing it, loading another folder or switching the camera is held back until they are saved, or until you choose *Discard* yourself. (Before 9.1 the message was followed by the window closing on the unsaved labels.) A failed autosave switches Autosave off, so the next attempt asks.
+
 **Save Labels** (or the **Autosave** checkbox, which saves automatically shortly after every change) writes per modality:
 
 | File                       | Contents                                                                                            |
