@@ -618,39 +618,128 @@ def test_mapping_to_a_missing_species_is_rejected(editor):
         editor.set_class_mapping(1, "7", 4242)
 
 
+def _species_of_the_detection(root):
+    conn = store.open_store(
+        store.stage_path(root, store.DETECTIONS, "t"), store.DETECTIONS, "t")
+    try:
+        return conn.execute(
+            "SELECT species_id FROM detections").fetchone()["species_id"]
+    finally:
+        conn.close()
+
+
+def _set_the_detection(root, species_id):
+    conn = store.open_store(
+        store.stage_path(root, store.DETECTIONS, "t"), store.DETECTIONS, "t")
+    conn.execute("UPDATE detections SET species_id = ?", (species_id,))
+    conn.commit()
+    conn.close()
+
+
 def test_reapply_mapping_updates_existing_detections(editor_with_data, tmp_path):
     """A corrected mapping is applied to stored rows, not re-detected (§3.1)."""
     # The detector is on record before its classes are mapped, as it is
-    # once a detection has run.
-    _detection_source(str(tmp_path))
-    with SchemaEditor(str(tmp_path)) as editor:
+    # once a detection has run - and its box says what an unmapped class
+    # says: "animal".
+    root = str(tmp_path)
+    _detection_source(root)
+    _set_the_detection(root, 0)
+    with SchemaEditor(root) as editor:
+        before = editor.resolved_classes(1)
         lynx = editor.add_species("lynx")
         editor.set_class_mapping(1, "7", lynx)
         editor.commit()
-        assert editor.reapply_class_mapping(1) == 1
+        assert before == {"7": 0}
+        assert editor.reapply_class_mapping(1, before) == 1
 
-    conn = store.open_store(
-        store.stage_path(str(tmp_path), store.DETECTIONS, "t"),
-        store.DETECTIONS, "t")
-    assert conn.execute(
-        "SELECT species_id FROM detections").fetchone()["species_id"] == lynx
-    conn.close()
+    assert _species_of_the_detection(root) == lynx
 
 
-def test_reapply_mapping_falls_back_to_animal_when_unmapped(
+def test_reapply_mapping_follows_a_corrected_mapping(editor_with_data,
+                                                     tmp_path):
+    """The boxes the old mapping named are the detector's answers: they
+    follow the new one."""
+    root = str(tmp_path)
+    _detection_source(root)
+    with SchemaEditor(root) as editor:
+        wolf = editor.conn.execute(
+            "SELECT species_id FROM species WHERE name = 'wolf'"
+        ).fetchone()["species_id"]
+        editor.set_class_mapping(1, "7", wolf)
+        editor.commit()
+    with SchemaEditor(root) as editor:
+        before = editor.resolved_classes(1)
+        lynx = editor.add_species("lynx")
+        editor.set_class_mapping(1, "7", lynx)
+        editor.commit()
+        assert editor.reapply_class_mapping(1, before) == 1
+
+    assert _species_of_the_detection(root) == lynx
+
+
+def test_reapply_mapping_leaves_what_was_identified_otherwise(
         editor_with_data, tmp_path):
-    editor_with_data.conn.execute(
-        "INSERT INTO detection_sources (source_id, kind, created_at) "
-        "VALUES (1, 'agnostic', '')")
-    editor_with_data.commit()
+    """The box says "wolf" although its class is not mapped to anything: a
+    classifier's answer, or the other camera's label. Every box was
+    re-resolved from its raw class, and this one fell back to "animal"."""
+    root = str(tmp_path)
+    _detection_source(root)
+    with SchemaEditor(root) as editor:
+        before = editor.resolved_classes(1)
+        wolf = _species_of_the_detection(root)
+        assert before == {"7": 0} and wolf != 0
 
-    assert editor_with_data.reapply_class_mapping(1) == 1
+        assert editor.reapply_class_mapping(1, before) == 0
+        assert editor.reapply_class_mapping(1) == 0
+    assert _species_of_the_detection(root) == wolf
+
+    with SchemaEditor(root) as editor:
+        before = editor.resolved_classes(1)
+        lynx = editor.add_species("lynx")
+        editor.set_class_mapping(1, "7", lynx)
+        editor.commit()
+        assert editor.reapply_class_mapping(1, before) == 0
+    assert _species_of_the_detection(root) == wolf
+
+
+def test_reapply_mapping_takes_a_removed_mapping_back(editor_with_data,
+                                                      tmp_path):
+    """Mapped to wolf, then mapped back to "animal": the boxes the mapping
+    had named are the detector's again."""
+    root = str(tmp_path)
+    _detection_source(root)
+    with SchemaEditor(root) as editor:
+        wolf = _species_of_the_detection(root)
+        editor.set_class_mapping(1, "7", wolf)
+        editor.commit()
+    with SchemaEditor(root) as editor:
+        before = editor.resolved_classes(1)
+        editor.set_class_mapping(1, "7", 0)
+        editor.commit()
+        assert editor.reapply_class_mapping(1, before) == 1
+    assert _species_of_the_detection(root) == 0
+
+
+def test_reapply_mapping_never_touches_a_hand_label(editor_with_data,
+                                                    tmp_path):
+    """A box of the labelling tool has no raw class - its species is the
+    label - and resolved to "animal" like any unmapped class."""
+    root = str(tmp_path)
+    _detection_source(root)
     conn = store.open_store(
-        store.stage_path(str(tmp_path), store.DETECTIONS, "t"),
-        store.DETECTIONS, "t")
-    assert conn.execute(
-        "SELECT species_id FROM detections").fetchone()["species_id"] == 0
+        store.stage_path(root, store.DETECTIONS, "t"), store.DETECTIONS, "t")
+    wolf = conn.execute(
+        "SELECT species_id FROM detections").fetchone()["species_id"]
+    conn.execute("UPDATE detections SET source_class = NULL, "
+                 "label_track_id = 1")
+    conn.commit()
     conn.close()
+
+    with SchemaEditor(root) as editor:
+        assert editor.resolved_classes(1) == {}
+        assert editor.reapply_class_mapping(1, {}) == 0
+        assert editor.reapply_class_mapping(1) == 0
+    assert _species_of_the_detection(root) == wolf
 
 
 def test_editor_works_on_a_project_without_stage_files(tmp_path):

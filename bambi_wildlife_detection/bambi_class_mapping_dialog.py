@@ -15,7 +15,9 @@ Anything unmapped resolves to `animal`, so a species-agnostic detector needs no
 mapping at all and nothing has to be configured before a first run.
 
 Applying a change **re-resolves the detections already stored** from the raw
-class they kept, rather than requiring the detector to run again.
+class they kept, rather than requiring the detector to run again - those that
+still say what the detector's mapping made of them. A box a classifier has
+named since, or that was labelled by hand, keeps its species.
 """
 
 from qgis.PyQt.QtCore import Qt
@@ -25,6 +27,7 @@ from qgis.PyQt.QtWidgets import (
     QVBoxLayout,
 )
 
+from .core.label_store import MANUAL_KIND
 from .core.schema_editor import SchemaEditor, SchemaError
 
 
@@ -37,6 +40,13 @@ class BambiClassMappingDialog(QDialog):
         self.setMinimumSize(520, 380)
         self.editor = SchemaEditor(target_folder)
         self._species = [s for s in self.editor.species()]
+        #: ``{source_id: {raw class: species}}`` as the mappings stood when
+        #: the dialog opened - what tells a detector's answer from a later
+        #: one when the change is applied.
+        self._before = {}
+        #: The source whose mapping the table shows.
+        self._shown = None
+        self._changed = 0
 
         layout = QVBoxLayout(self)
         info = QLabel(
@@ -82,21 +92,14 @@ class BambiClassMappingDialog(QDialog):
     # -- lifecycle -------------------------------------------------------
 
     def accept(self):
-        """Write the mappings, then re-resolve the stored detections."""
-        source_id = self._current_source_id()
-        if source_id is None:
-            self.editor.close()
-            super().accept()
-            return
-
+        """Write the mappings, then carry them over to the detections
+        stored - of every detector whose mapping was looked at."""
         try:
-            for row in range(self.table.rowCount()):
-                combo = self.table.cellWidget(row, 2)
-                raw = self.table.item(row, 0).text()
-                self.editor.set_class_mapping(
-                    source_id, raw, combo.currentData())
+            self._keep_table()
             self.editor.commit()
-            changed = self.editor.reapply_class_mapping(source_id)
+            changed = sum(
+                self.editor.reapply_class_mapping(source_id, before)
+                for source_id, before in self._before.items())
         except SchemaError as exc:
             # Also when the project is in use or was changed elsewhere: the
             # dialog stays open, nothing is lost.
@@ -107,6 +110,18 @@ class BambiClassMappingDialog(QDialog):
         self._changed = changed
         super().accept()
 
+    def _keep_table(self):
+        """Put what the table shows into the editor (its private copy - the
+        project is written on OK). Switching to another detector used to
+        rebuild the table and drop the choices made for this one."""
+        if self._shown is None:
+            return
+        for row in range(self.table.rowCount()):
+            combo = self.table.cellWidget(row, 2)
+            raw = self.table.item(row, 0).text()
+            self.editor.set_class_mapping(
+                self._shown, raw, combo.currentData())
+
     def reject(self):
         self.editor.close()
         super().reject()
@@ -114,7 +129,7 @@ class BambiClassMappingDialog(QDialog):
     @property
     def rows_changed(self) -> int:
         """Detections whose species changed when the mapping was applied."""
-        return getattr(self, "_changed", 0)
+        return self._changed
 
     # -- contents --------------------------------------------------------
 
@@ -122,6 +137,11 @@ class BambiClassMappingDialog(QDialog):
         self.source_combo.blockSignals(True)
         self.source_combo.clear()
         for source in self.editor.sources():
+            if source["kind"] == MANUAL_KIND:
+                # The labelling tool's boxes have no class to map: their
+                # species is the label. Listed, "OK" re-resolved them all
+                # to 'animal'.
+                continue
             label = source["kind"]
             if source["model"]:
                 label += f" - {source['model']}"
@@ -134,8 +154,15 @@ class BambiClassMappingDialog(QDialog):
         return None if index < 0 else self.source_combo.itemData(index)
 
     def _reload(self):
+        try:
+            self._keep_table()
+        except SchemaError as exc:
+            QMessageBox.warning(self, "Class Mapping", str(exc))
         self.table.setRowCount(0)
         source_id = self._current_source_id()
+        self._shown = source_id
+        if source_id is not None and source_id not in self._before:
+            self._before[source_id] = self.editor.resolved_classes(source_id)
         if source_id is None:
             self.status.setText(
                 "No detector has run in this project yet, so there are no "

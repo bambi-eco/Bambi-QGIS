@@ -327,6 +327,20 @@ keeps the raw class it was reported with, so correcting a mapping never means
 running the detector again. The boxes do not move, so geo-referencing and
 tracking stay valid; only the species-dependent analytics need re-running.
 
+**Only the detector's own answers are replaced.** A box follows the new
+mapping when it still says what the mapping made of its class before - or
+nothing at all (`animal`). A box that has been identified since - by a
+classifier, by a label synced across from the other camera - keeps that
+species, and pressing **OK** without changing anything changes nothing. The
+labelling tool's boxes are not listed as a detector: their species is the
+label, and they have no class to map. The choices made for one detector are
+kept while you look at another; **OK** applies them all.
+
+Before 9.1 every box of the selected source was re-resolved from its raw
+class: **OK** took the species off every box a classifier had named, and with
+the labelling tool's own source selected - it was offered like a detector -
+turned every hand label into `animal`.
+
 ### Classification results, and how they reach everything else
 
 The [classifiers](pipeline.md#classification) record their answers in
@@ -358,10 +372,9 @@ Three things this never does:
   configured is not quietly undone. There is an option to let the classifier
   win everywhere if you want that.
 - **It never becomes the only copy.** `classification.gpkg` remains the record,
-  so applying the results again is always safe. That matters after re-applying
-  a detector class mapping, which resets the species on the detections: one
-  click of **→ Apply Results** puts the classifications back, rather than
-  re-running anything.
+  so applying the results again is always safe: one click of **→ Apply
+  Results** puts the classifications back, rather than re-running anything.
+  (A changed detector class mapping leaves them alone since 9.1 - see above.)
 
 ### Enums and custom fields
 

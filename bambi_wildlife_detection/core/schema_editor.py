@@ -830,31 +830,66 @@ class SchemaEditor:
             "(source_id, source_class, species_id) VALUES (?, ?, ?)",
             (source_id, str(source_class), species_id))
 
-    def reapply_class_mapping(self, source_id: int) -> int:
-        """Re-resolve stored detections of *source_id* from their raw class.
+    def resolved_classes(self, source_id: int) -> Dict[str, int]:
+        """``{raw class: species_id}`` - what the mapping makes of every
+        class this producer has emitted or that is mapped, as it stands in
+        this editor. Taken before a change, it is what
+        :meth:`reapply_class_mapping` needs to tell the detector's answers
+        from everybody else's."""
+        return {entry["source_class"]: entry["species_id"]
+                for entry in self.observed_source_classes(source_id)}
+
+    def reapply_class_mapping(self, source_id: int,
+                              before: Optional[Dict[str, int]] = None) -> int:
+        """Carry a changed class mapping over to the detections stored.
 
         This is what makes keeping ``source_class`` worthwhile: a corrected
-        mapping is applied to existing rows instead of re-running the detector.
-        Returns the number of detections whose species changed.
+        mapping is applied to existing rows instead of re-running the
+        detector.
+
+        **Only the detector's own answers are replaced.** A detection is
+        re-resolved when its species is still what the mapping made of its
+        class *before* the change, or nothing at all (``animal``). One that
+        has been identified since - by a classifier, by the other camera's
+        label, by hand - keeps that. A hand-labelled box has no raw class
+        and is never touched.
+
+        Every detection of the source used to be re-resolved: pressing OK
+        in the Class Mapping dialog, even with nothing changed, took the
+        species off every box a classifier had named - and, with the
+        labelling tool's own source selected, turned every hand label into
+        ``animal``.
+
+        :param before: :meth:`resolved_classes` as taken before the change;
+            without it only detections still on ``animal`` are resolved
+        :return: the number of detections whose species changed
         """
+        fallback = store.FALLBACK_SPECIES_ID
+        before = before or {}
         changed = 0
         for path in self._stage_files(store.DETECTIONS):
             conn = store.open_store(path, store.DETECTIONS)
             try:
                 with store.transaction(conn):
-                    rows = conn.execute(
-                        "SELECT detection_id, source_class, species_id "
-                        "FROM detections WHERE source_id = ?",
-                        (source_id,)).fetchall()
-                    for row in rows:
-                        resolved = store.resolve_species(
-                            self.conn, source_id, row["source_class"])
-                        if resolved != row["species_id"]:
-                            conn.execute(
+                    classes = [row["source_class"] for row in conn.execute(
+                        "SELECT DISTINCT source_class FROM detections "
+                        "WHERE source_id = ? AND source_class IS NOT NULL",
+                        (source_id,))]
+                    for source_class in classes:
+                        now = store.resolve_species(
+                            self.conn, source_id, source_class)
+                        replaced = {fallback,
+                                    before.get(str(source_class), fallback)}
+                        replaced.discard(now)
+                        for old in sorted(replaced):
+                            cur = conn.execute(
                                 "UPDATE detections SET species_id = ? "
-                                "WHERE detection_id = ?",
-                                (resolved, row["detection_id"]))
-                            changed += 1
+                                "WHERE source_id = ? AND source_class = ? "
+                                "AND species_id = ? "
+                                "AND label_track_id IS NULL",
+                                (now, source_id, source_class, old))
+                            if cur.rowcount and cur.rowcount > 0:
+                                changed += cur.rowcount
             finally:
                 conn.close()
         return changed

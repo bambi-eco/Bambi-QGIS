@@ -178,6 +178,128 @@ def test_mapping_back_to_animal_is_allowed(project_folder):
 
 
 # ---------------------------------------------------------------------------
+# Only the detector's own answers are replaced
+# ---------------------------------------------------------------------------
+
+def _set_species(folder, detection_index, species_id):
+    """What a classifier or the other camera's label does to a box."""
+    conn = store.open_store(
+        store.stage_path(folder, store.DETECTIONS, "t"), store.DETECTIONS, "t")
+    ids = [row["detection_id"] for row in conn.execute(
+        "SELECT detection_id FROM detections ORDER BY detection_id")]
+    conn.execute("UPDATE detections SET species_id = ? WHERE detection_id = ?",
+                 (species_id, ids[detection_index]))
+    conn.commit()
+    conn.close()
+
+
+def _hand_label(folder, species_id=1):
+    """A box drawn in the labelling tool: the tool's own source, no raw
+    class - its species is the label."""
+    from bambi_wildlife_detection.core import label_store
+
+    project = store.open_store(store.project_path(folder), store.PROJECT)
+    with store.transaction(project):
+        source_id = detection_store.ensure_source(
+            project, label_store.MANUAL_KIND)
+    project.close()
+    conn = store.open_store(
+        store.stage_path(folder, store.DETECTIONS, "t"), store.DETECTIONS, "t")
+    conn.execute(
+        "INSERT INTO detections (frame, x1, y1, x2, y2, confidence, "
+        "species_id, source_id, source_class, label_track_id) "
+        "VALUES (7, 1, 1, 2, 2, 1.0, ?, ?, NULL, 1)", (species_id, source_id))
+    conn.commit()
+    conn.close()
+
+
+def test_ok_without_a_change_changes_nothing(project_folder):
+    """Every box of the detector was re-resolved from its raw class: a box
+    a classifier had named since went back to "animal"."""
+    _set_species(project_folder, 0, 1)          # a classifier: roe deer
+
+    dialog = BambiClassMappingDialog(project_folder)
+    dialog.accept()
+
+    assert _species_of(project_folder) == [1, 0, 0]
+    assert dialog.rows_changed == 0
+
+
+def test_a_box_named_since_keeps_its_species_when_the_mapping_changes(
+        project_folder):
+    _set_species(project_folder, 0, 1)          # roe deer, by a classifier
+
+    dialog = BambiClassMappingDialog(project_folder)
+    _set_row(dialog, "0", "chamois")
+    dialog.accept()
+
+    # the detector's own answer follows the mapping; the classifier's stays
+    assert _species_of(project_folder) == [1, 5, 0]
+    assert dialog.rows_changed == 1
+
+
+def test_correcting_a_mapping_moves_the_boxes_it_had_named(project_folder):
+    dialog = BambiClassMappingDialog(project_folder)
+    _set_row(dialog, "0", "roe deer")
+    dialog.accept()
+    assert _species_of(project_folder) == [1, 1, 0]
+
+    dialog = BambiClassMappingDialog(project_folder)
+    _set_row(dialog, "0", "red deer")
+    dialog.accept()
+
+    assert _species_of(project_folder) == [2, 2, 0]
+
+
+def test_hand_labels_are_not_a_detector(project_folder):
+    """The labelling tool's source was listed like a detector's; with it
+    selected - it is the only one in a flight labelled by hand - "OK"
+    turned every hand label into "animal"."""
+    _hand_label(project_folder, species_id=1)
+
+    dialog = BambiClassMappingDialog(project_folder)
+    labels = [dialog.source_combo.itemText(i)
+              for i in range(dialog.source_combo.count())]
+    dialog.accept()
+
+    assert labels == ["detector"]
+    assert _species_of(project_folder) == [0, 0, 0, 1]
+
+
+def test_a_flight_labelled_only_by_hand_has_nothing_to_map(tmp_path):
+    root = str(tmp_path / "labelled")
+    os.makedirs(root)
+    store.open_store(store.project_path(root), store.PROJECT).close()
+    _hand_label(root, species_id=1)
+
+    dialog = BambiClassMappingDialog(root)
+    assert dialog.source_combo.count() == 0
+    dialog.accept()
+
+    assert _species_of(root) == [1]
+
+
+def test_the_choices_for_one_detector_survive_a_look_at_another(
+        project_folder):
+    """Switching the detector rebuilt the table - and dropped the choices
+    made for the one shown before."""
+    detection_store.record_detections(project_folder, "t", [
+        {"frame": 5, "x1": 1.0, "y1": 1.0, "x2": 2.0, "y2": 2.0,
+         "confidence": 0.7, "source_class": "4"}],
+        kind=detection_store.TREX)
+
+    dialog = BambiClassMappingDialog(project_folder)
+    assert dialog.source_combo.count() == 2
+    _set_row(dialog, "0", "roe deer")
+    dialog.source_combo.setCurrentIndex(1)
+    _set_row(dialog, "4", "fox")
+    dialog.accept()
+
+    assert _species_of(project_folder) == [1, 1, 0, 6]
+    assert dialog.rows_changed == 3
+
+
+# ---------------------------------------------------------------------------
 # Reached from the Detection tab
 # ---------------------------------------------------------------------------
 
