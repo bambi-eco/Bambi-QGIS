@@ -278,6 +278,20 @@ def record_tracks(target_folder: str, modality: str,
             "members": len(members), "generation": generation}
 
 
+_SUPERSEDED_BY_ORIGIN_SQL = (
+    "SELECT l.origin_track_id AS track_id FROM label_tracks l "
+    "JOIN trk.tracks mine ON mine.track_id = l.track_id "
+    "WHERE l.origin_track_id IS NOT NULL")
+_SUPERSEDED_BY_DETECTION_SQL = (
+    "SELECT DISTINCT m.track_id AS track_id FROM label_keyframes k "
+    "JOIN label_tracks l ON l.label_track_id = k.label_track_id "
+    "JOIN trk.tracks mine ON mine.track_id = l.track_id "
+    "JOIN trk.track_members m ON m.detection_id = k.origin_detection_id "
+    "JOIN trk.tracks t ON t.track_id = m.track_id "
+    "JOIN trk.track_runs r ON r.run_id = t.run_id "
+    "WHERE k.origin_detection_id IS NOT NULL AND r.kind != 'manual'")
+
+
 def superseded_track_ids(target_folder: str, modality: str) -> set:
     """Tracker tracks that a label track was imported from, and now replaces.
 
@@ -285,17 +299,39 @@ def superseded_track_ids(target_folder: str, modality: str) -> set:
     track; once that label track is materialised, both describe the same
     animal. Counting them together would double it, so the original is
     superseded - but *only* that one. A label track drawn from scratch has no
-    ``origin_track_id`` and supersedes nothing (§8.2).
+    origin and supersedes nothing (§8.2).
+
+    Which track is "the original" is told two ways:
+
+    * by its id (``origin_track_id``) - exact, for as long as the tracker run
+      the label was imported from exists;
+    * by the detections the label's key frames were copied from
+      (``origin_detection_id``): a tracker track that holds one of them is
+      the same animal. This is what still holds after the tracker has run
+      again and given the animal a new track - and what covers the second
+      track of two that were merged into one label.
+
+    A label track replaces something only while its own track exists: one
+    that was never exported, or whose track is gone with a reset, hides
+    nothing - or the animal would not count at all.
     """
-    path = store.stage_path(target_folder, store.LABELS, modality)
-    if not os.path.isfile(path):
+    labels = store.stage_path(target_folder, store.LABELS, modality)
+    tracks = store.stage_path(target_folder, store.TRACKS, modality)
+    if not (os.path.isfile(labels) and os.path.isfile(tracks)):
         return set()
 
-    conn = store.open_store(path, store.LABELS, modality)
+    from . import gpkg
+
+    conn = store.open_store(labels, store.LABELS, modality)
     try:
-        return {int(row["origin_track_id"]) for row in conn.execute(
-            "SELECT origin_track_id FROM label_tracks "
-            "WHERE origin_track_id IS NOT NULL AND track_id IS NOT NULL")}
+        gpkg.attach(conn, tracks, "trk")
+        try:
+            return {int(row["track_id"])
+                    for statement in (_SUPERSEDED_BY_ORIGIN_SQL,
+                                      _SUPERSEDED_BY_DETECTION_SQL)
+                    for row in conn.execute(statement)}
+        finally:
+            gpkg.detach(conn, "trk")
     finally:
         conn.close()
 

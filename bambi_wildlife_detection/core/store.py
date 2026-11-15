@@ -544,6 +544,102 @@ def get_meta(conn: sqlite3.Connection, key: str,
     return default if value is None else value
 
 
+#: What refers to a detection id or a track id from outside the table that
+#: hands the ids out, as statements giving the highest id still referred to:
+#: ``{numbered kind: {referring store kind: statements}}``. A test holds the
+#: schema against this, so a new column that refers to one of the two ids
+#: cannot be forgotten here.
+_REFERENCES: Dict[str, Dict[str, tuple]] = {
+    DETECTIONS: {
+        GEOREFERENCED: ("SELECT MAX(detection_id) FROM detections_geo",
+                        "SELECT MAX(detection_id) FROM georef_failures"),
+        TRACKS: ("SELECT MAX(detection_id) FROM track_members",),
+        LABELS: ("SELECT MAX(origin_detection_id) FROM label_keyframes",),
+        SEGMENTATION: ("SELECT MAX(detection_id) FROM segments",),
+        CLASSIFICATION: ("SELECT MAX(detection_id) FROM embeddings",
+                         "SELECT MAX(detection_id) FROM frame_predictions"),
+    },
+    TRACKS: {
+        LABELS: ("SELECT MAX(origin_track_id) FROM label_tracks",
+                 "SELECT MAX(track_id) FROM label_tracks"),
+        CLASSIFICATION: ("SELECT MAX(track_id) FROM track_predictions",),
+    },
+}
+
+#: The same for the match store, which has one column per camera.
+_MATCH_REFERENCES: Dict[str, Dict[str, str]] = {
+    DETECTIONS: {
+        "t": "SELECT MAX(detection_id_t) FROM detection_matches",
+        "w": "SELECT MAX(detection_id_w) FROM detection_matches",
+    },
+    TRACKS: {
+        "t": "SELECT MAX(track_id_t) FROM track_matches",
+        "w": "SELECT MAX(track_id_w) FROM track_matches",
+    },
+}
+
+#: The table whose ids each numbered kind hands out.
+_NUMBERED_TABLE = {DETECTIONS: "detections", TRACKS: "tracks"}
+
+
+def _highest(path: str, statements) -> int:
+    """The highest id *statements* find in the store at *path* (0 when the
+    file, a table or a value is missing)."""
+    if not os.path.isfile(path):
+        return 0
+    highest = 0
+    try:
+        other = sqlite3.connect(path)
+    except sqlite3.Error:
+        return 0
+    try:
+        for statement in statements:
+            try:
+                row = other.execute(statement).fetchone()
+            except sqlite3.Error:
+                continue                    # an older file without that table
+            if row is not None and row[0] is not None:
+                highest = max(highest, int(row[0]))
+    finally:
+        other.close()
+    return highest
+
+
+def highest_reference(path: str, kind: str, modality: str) -> int:
+    """The highest detection (or track) id that the other stores of the
+    flight still refer to, for the store of *kind* at *path*."""
+    folder = os.path.dirname(os.path.abspath(path))
+    highest = 0
+    for other_kind, statements in _REFERENCES.get(kind, {}).items():
+        highest = max(highest, _highest(
+            os.path.join(folder, f"{other_kind}.gpkg"), statements))
+    statement = _MATCH_REFERENCES.get(kind, {}).get(modality)
+    if statement:
+        highest = max(highest, _highest(
+            os.path.join(os.path.dirname(folder), "matches.gpkg"),
+            (statement,)))
+    return highest
+
+
+def _continue_numbering(conn: sqlite3.Connection, path: str, kind: str,
+                        modality: str) -> None:
+    """Let a new detections or tracks store number on from every id the
+    flight's other stores still refer to.
+
+    The ids come from ``AUTOINCREMENT``, which never reuses one - within a
+    file. A store that is created again (after "Reset Step", or after the
+    file was deleted by hand) started at 1 again, and the results that were
+    kept - marked out of date, but still read - then belonged to the new
+    rows with the old numbers: new boxes at the old positions, in the old
+    tracks, with the old species.
+    """
+    highest = highest_reference(path, kind, modality)
+    if highest > 0:
+        conn.execute(
+            "INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)",
+            (_NUMBERED_TABLE[kind], highest))
+
+
 def open_store(path: str, kind: str, modality: str = "",
                create: bool = True) -> sqlite3.Connection:
     """Open (or create) the store of *kind* at *path*.
@@ -568,6 +664,8 @@ def open_store(path: str, kind: str, modality: str = "",
         gpkg.register_tables(conn, _payload_tables(conn))
         if kind == PROJECT:
             seed_vocabulary(conn)
+        if kind in _NUMBERED_TABLE:
+            _continue_numbering(conn, path, kind, modality)
         conn.commit()
         return conn
 

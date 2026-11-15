@@ -6404,7 +6404,8 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         :param target_folder: Path to the target folder
         """
         from .core.output_inventory import (
-            FOLDER_STATUS_STEPS, PERPENDICULAR_STEPS, check_existing_outputs)
+            FOLDER_STATUS_STEPS, PERPENDICULAR_STEPS, check_existing_outputs,
+            stale_steps)
 
         if not target_folder or not os.path.isdir(target_folder):
             # A flight without a (valid) target folder has processed
@@ -6451,6 +6452,9 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         completed = check_existing_outputs(target_folder, cameras)
         for step in completed:
             self.update_status(step, "🟢 Completed")
+        # ... unless something it was computed from has run again since.
+        for step in stale_steps(target_folder, cameras, completed):
+            self.update_status(step, "🟠 Out of date")
 
         # Classification steps: store-backed, per modality, and aware of
         # being out of date - read from the stage states, as configured.

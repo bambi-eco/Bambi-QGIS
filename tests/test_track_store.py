@@ -408,6 +408,108 @@ def test_superseded_ids_need_a_materialised_label_track(project):
     assert track_store.superseded_track_ids(project, "t") == set()
 
 
+def _builtin_track_of(project, detection_id):
+    """The active tracker run's track that holds *detection_id*."""
+    conn = store.open_store(
+        store.stage_path(project, store.TRACKS, "t"), store.TRACKS, "t")
+    try:
+        return conn.execute(
+            "SELECT t.track_id FROM tracks t "
+            "JOIN track_runs r ON r.run_id = t.run_id "
+            "JOIN track_members m ON m.track_id = t.track_id "
+            "WHERE r.is_active = 1 AND r.kind != 'manual' "
+            "AND m.detection_id = ?", (detection_id,)).fetchone()["track_id"]
+    finally:
+        conn.close()
+
+
+def _imported_label(project, origin_track_id, origin_detection_ids):
+    """A label track imported from a tracker track, then exported: its key
+    frames remember the boxes they were copied from."""
+    from bambi_wildlife_detection.core import label_store
+
+    label_store.save_tracks(project, "t", [{
+        "label_track_id": 1, "species_id": 0,
+        "origin_track_id": origin_track_id,
+        "keyframes": [
+            {"frame": 1 + n, "x1": 1.0, "y1": 1.0, "x2": 2.0, "y2": 2.0,
+             "origin_detection_id": detection_id}
+            for n, detection_id in enumerate(origin_detection_ids)],
+    }])
+    label_store.materialise(project, "t")
+
+
+def test_a_label_still_replaces_its_animal_after_tracking_again(project):
+    """Running the tracker again gives the animal a new track id, so the
+    label's note of the track it came from points at a track that is no
+    longer read - and the new one counted beside the label. The boxes the
+    label was copied from are still the same boxes."""
+    ids = _ids(project)
+    track_store.record_tracks(
+        project, "t", [{"track_id": 1, "detection_id": ids[0]}], kind="builtin")
+    first = _builtin_track_of(project, ids[0])
+    _imported_label(project, first, [ids[0]])
+    assert track_store.superseded_track_ids(project, "t") == {first}
+
+    track_store.record_tracks(
+        project, "t", [{"track_id": 1, "detection_id": ids[0]}], kind="builtin")
+    second = _builtin_track_of(project, ids[0])
+    assert second != first
+
+    assert second in track_store.superseded_track_ids(project, "t")
+    rows = track_store.load_pixel_tracks(project, "t")
+    assert len({row["track_id"] for row in rows}) == 1      # the label's
+
+
+def test_a_label_merged_from_two_tracks_replaces_both(project):
+    """Merging keeps one of the two origins by id; the second track of the
+    same animal went on counting."""
+    ids = _ids(project)
+    track_store.record_tracks(project, "t", [
+        {"track_id": 1, "detection_id": ids[0]},
+        {"track_id": 2, "detection_id": ids[1]}], kind="builtin")
+    first = _builtin_track_of(project, ids[0])
+    second = _builtin_track_of(project, ids[1])
+
+    _imported_label(project, first, [ids[0], ids[1]])
+
+    assert track_store.superseded_track_ids(project, "t") == {first, second}
+
+
+def test_a_label_whose_own_track_is_gone_hides_nothing(project):
+    """After the tracks were reset the label is not a track any more until
+    it is exported again; hiding the tracker's track meanwhile would leave
+    the animal uncounted."""
+    from bambi_wildlife_detection.core import stages
+
+    ids = _ids(project)
+    track_store.record_tracks(
+        project, "t", [{"track_id": 1, "detection_id": ids[0]}], kind="builtin")
+    _imported_label(project, _builtin_track_of(project, ids[0]), [ids[0]])
+    assert track_store.superseded_track_ids(project, "t")
+
+    stages.reset(project, "tracking", "t")
+    assert track_store.superseded_track_ids(project, "t") == set()
+
+    track_store.record_tracks(
+        project, "t", [{"track_id": 1, "detection_id": ids[0]}], kind="builtin")
+    assert track_store.superseded_track_ids(project, "t") == set()
+    assert len({row["track_id"] for row in
+                track_store.load_pixel_tracks(project, "t")}) == 1
+
+
+def test_a_label_copied_from_no_box_replaces_by_its_origin_only(project):
+    ids = _ids(project)
+    track_store.record_tracks(project, "t", [
+        {"track_id": 1, "detection_id": ids[0]},
+        {"track_id": 2, "detection_id": ids[1]}], kind="builtin")
+    first = _builtin_track_of(project, ids[0])
+
+    _manual_run(project, ids, origin_track_id=first)
+
+    assert track_store.superseded_track_ids(project, "t") == {first}
+
+
 def test_analysis_runs_pairs_the_active_tracker_with_manual(project):
     ids = _ids(project)
     builtin = track_store.record_tracks(

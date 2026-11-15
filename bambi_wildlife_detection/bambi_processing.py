@@ -269,6 +269,7 @@ class ProcessingWorker(QObject):
                 self.log.emit(f"{self.step} was cancelled")
                 self.finished.emit(self.step, False)
             else:
+                _record_step_done(self.step, self.config, self.log.emit)
                 self.finished.emit(self.step, True)
 
         except CancelledException:
@@ -279,6 +280,35 @@ class ProcessingWorker(QObject):
             tb = traceback.format_exc()
             self.error.emit(self.step, f"{str(e)}\n\n{tb}")
             self.finished.emit(self.step, False)
+
+
+#: Steps that do not record their completion themselves, with the setting
+#: that names their camera. A step that is never recorded can never be marked
+#: out of date: these stayed "Completed" whatever ran again before them.
+_STEPS_RECORDED_BY_WORKER = {
+    "flight_route": "flight_route_camera",
+    "alfs": "alfs_camera",
+    "export_geotiffs": "geotiff_camera",
+    "orthomosaic": "ortho_camera",
+    "sam3_segmentation": "sam3_camera",
+    "sam3_georeference": "sam3_camera",
+    "perpendicular": "detection_camera",
+    "track_perpendicular": "tracking_camera",
+}
+
+
+def _record_step_done(step: str, config: Dict[str, Any], log_fn=None) -> None:
+    """Record that *step* finished, where the worker sees it succeed - so
+    every way out of the step is covered. Never fails the step."""
+    camera_key = _STEPS_RECORDED_BY_WORKER.get(step)
+    if camera_key is None:
+        return
+    modality = "t" if config.get(camera_key, "T") == "T" else "w"
+    try:
+        _record_stage(config, step, modality, log_fn=log_fn)
+    except Exception as exc:  # noqa: BLE001 - bookkeeping only
+        if log_fn:
+            log_fn(f"Warning: could not record '{step}' as completed: {exc}")
 
 
 class _DiscardedWriter:
@@ -6437,6 +6467,12 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
             log_fn("Geo-referencing tracks...")
 
         self.run_georeference_tracks(config, progress_fn, log_fn, start_progress=75)
+
+        # Without this the step was never on record, so what depends on the
+        # tracks was not marked out of date when this tracker ran again -
+        # and the tracks themselves never when detection did.
+        _record_stage(config, "tracking", camera_suffix,
+                      row_count=len(unique_tracks), log_fn=log_fn)
 
         if progress_fn:
             progress_fn(100)

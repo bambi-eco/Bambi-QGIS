@@ -334,10 +334,19 @@ reach the exports - in 5.x they stayed in `labels.json`.
 
 Steps know what they depend on. Re-running detection marks geo-referencing,
 tracking, the perpendicular distances and the population estimate as **out of
-date** - their files are kept, they are simply flagged.
+date** - their files are kept, they are simply flagged. The panel shows the
+flag on every step it applies to (🟠 *Out of date*), for the camera selected
+for that step, until the step has run again.
 
 **Reset Step…** (next to Refresh Status) deletes one step's outputs so it runs
 from scratch. It names what depended on the step before doing anything.
+
+Results that are kept can never be mistaken for the new ones: a box and a
+track are numbered once and for all. When a step is reset - or its file is
+deleted by hand - and run again, the new boxes and tracks number on from every
+number that anything in the flight's folder still refers to, so what was
+computed for the old ones (map positions, track membership, matches,
+classifications) does not attach to the new.
 
 ---
 

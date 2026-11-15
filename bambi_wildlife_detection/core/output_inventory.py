@@ -133,6 +133,45 @@ _FOLDER_STATUS_MAPPING = [
 ]
 
 
+#: The camera selection (a key of the *cameras* argument) under which each
+#: step that can go out of date is recorded.
+_CAMERA_OF_STEP = {status_key: camera_key for _base, status_key, _file,
+                   camera_key in _FOLDER_STATUS_MAPPING}
+_CAMERA_OF_STEP.update({
+    "perpendicular": "detection",
+    "track_perpendicular": "tracking",
+    "track_inventory": "inventory",
+})
+
+
+def stale_steps(target_folder: str, cameras: Dict[str, str],
+                completed: Sequence[str]) -> List[str]:
+    """Those of the *completed* steps whose result is recorded as out of
+    date, for the camera selected for each.
+
+    The folder scan behind :func:`check_existing_outputs` can only say that
+    a result exists. Whether a step it was computed from has run again since
+    is in the stage states - which the panel used to read for classification
+    and track matching only, so everything else stayed "Completed" on top of
+    inputs that had changed.
+    """
+    from . import stages
+
+    if not target_folder or not os.path.isdir(target_folder):
+        return []
+    recorded = {m: stages.states(target_folder, m) for m in ("t", "w")}
+    stale = []
+    for status_key in completed:
+        camera_key = _CAMERA_OF_STEP.get(status_key)
+        if camera_key is None:
+            continue
+        modality = cameras.get(camera_key, "_t").lstrip("_")
+        row = recorded.get(modality, {}).get(status_key)
+        if row is not None and row.get("state") == stages.STALE:
+            stale.append(status_key)
+    return stale
+
+
 def _store_path(target_folder: str, status_key: str,
                 modality: str) -> str:
     """Path of the 6.0 store file backing *status_key*, or ``""``."""
