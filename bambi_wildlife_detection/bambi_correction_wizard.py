@@ -1056,17 +1056,9 @@ class _LightFieldRenderWorker(QThread):
             self.error.emit(f"{exc}\n\n{traceback.format_exc()}")
 
     def _render(self):
-        from pyrr import Quaternion
-        from alfspy.render.render import (
-            read_gltf, process_render_data,
-            make_camera, make_shot_loader, release_all,
-        )
+        from alfspy.render.render import read_gltf, process_render_data
         from .core.render_context import make_render_context
-        from alfspy.render.data import BaseSettings, CameraPositioningMode
-        from alfspy.core.rendering.renderer import Renderer
-        from alfspy.core.rendering import CtxShot, Resolution, TextureData
         from alfspy.core.util.geo import get_aabb
-        from .core.camera_pose import shot_pose
 
         p = self._p
         corr = p['correction']
@@ -1093,7 +1085,35 @@ class _LightFieldRenderWorker(QThread):
 
         self.progress.emit(25)
 
+        # The context of this one preview, and what is made on it, is given
+        # back however the render ends. A render that failed - no frame
+        # found, a driver error - used to leave all of it behind, once per
+        # try, for as long as QGIS ran.
+        from .core.render_resources import (
+            release_context, release_renderer, release_shot)
+
         ctx = make_render_context()
+        shots = []
+        made = {}
+        try:
+            return self._render_on(ctx, shots, made, mesh_data, texture_data,
+                                   mesh_aabb, cor_t, cor_r)
+        finally:
+            release_renderer(made.get("renderer"))
+            for shot in shots:
+                release_shot(shot)
+            release_context(ctx)
+
+    def _render_on(self, ctx, shots, made, mesh_data, texture_data,
+                   mesh_aabb, cor_t, cor_r):
+        from pyrr import Quaternion
+        from alfspy.render.render import make_camera, make_shot_loader
+        from alfspy.render.data import BaseSettings, CameraPositioningMode
+        from alfspy.core.rendering.renderer import Renderer
+        from alfspy.core.rendering import CtxShot, Resolution, TextureData
+        from .core.camera_pose import shot_pose
+
+        p = self._p
 
         # Load undistortion mask if available
         mask = None
@@ -1103,7 +1123,6 @@ class _LightFieldRenderWorker(QThread):
             if mask_img is not None:
                 mask = TextureData(CtxShot._cvt_img(mask_img))
 
-        shots = []
         default_fov = 50.0
 
         for fi in p['frames']:
@@ -1167,6 +1186,7 @@ class _LightFieldRenderWorker(QThread):
         cam_cy = float(camera.transform.position.y)
 
         renderer = Renderer(settings.resolution, ctx, camera, mesh_data, texture_data)
+        made["renderer"] = renderer
         shot_loader = make_shot_loader(shots)
         result = renderer.render_integral(
             shot_loader,
@@ -1177,9 +1197,6 @@ class _LightFieldRenderWorker(QThread):
             alpha_threshold=0.5,
         )
 
-        self.progress.emit(95)
-        renderer.release()
-        release_all(ctx, shots)
         self.progress.emit(100)
         return {
             'image': result,

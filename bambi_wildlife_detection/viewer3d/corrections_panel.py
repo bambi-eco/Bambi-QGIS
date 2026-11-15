@@ -44,13 +44,27 @@ class RefineWorker(QtCore.QThread):
             self.failed.emit(f"{exc}\n{traceback.format_exc(limit=4)}")
 
     def _search(self):
+        from ..core.render_context import make_render_context
+        from ..core.render_resources import release_context, release_renderer
+
+        # Every search has a context of its own, and its renderers: both
+        # are given back when it ends, however it ends. They used to stay
+        # for as long as QGIS ran - one set per search.
+        ctx = make_render_context()
+        renderers = []
+        try:
+            return self._search_on(ctx, renderers)
+        finally:
+            for renderer in renderers:
+                release_renderer(renderer)
+            release_context(ctx)
+
+    def _search_on(self, ctx, renderers):
         import cv2
         from alfspy.core.rendering import CtxShot, MeshData, Renderer, Resolution
         from alfspy.core.util.image import to_rgba_f4
-        from ..core.render_context import make_render_context
 
         job = self.job
-        ctx = make_render_context()
         images, aspect = job["images"], job["aspect"]
         base, entry = job["correction"], job["entry"]
 
@@ -66,7 +80,6 @@ class RefineWorker(QtCore.QThread):
         mesh = MeshData(np.asarray(job["dem"].vertices, np.float32),
                         np.asarray(job["dem"].faces, np.uint32))
 
-        renderers = []
         for frames, (lo, hi) in zip(job["windows"], job["extents"]):
             size = np.asarray(hi) - np.asarray(lo)
             res = geo.scaled_size(int(size[0] * 1000), int(size[1] * 1000),

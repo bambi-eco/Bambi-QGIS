@@ -6936,8 +6936,23 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
             global_camera, global_bounds, global_res,
             tx, ty, tw, th, Vector3, Camera)
 
-    def _run_alfs_sampling(
-            self, config, all_images, dem_path, mask_path,
+    def _run_alfs_sampling(self, *args, **kwargs):
+        """Sampling-mode alfs, on a render context that is given back
+        however the step ends - finished, cancelled or failed. It used to be
+        released on the way out of a run that got to its end only, so every
+        run that did not left its context, and all that was on it, behind
+        for as long as QGIS ran."""
+        from .core.render_context import make_render_context
+        from .core.render_resources import release_context
+
+        ctx = make_render_context()
+        try:
+            return self._run_alfs_sampling_on(ctx, *args, **kwargs)
+        finally:
+            release_context(ctx)
+
+    def _run_alfs_sampling_on(
+            self, ctx, config, all_images, dem_path, mask_path,
             alfs_folder, ground_resolution,
             coord_offset_x, coord_offset_y, target_epsg,
             crop_to_content, create_overviews, max_tile_size,
@@ -6963,7 +6978,7 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
             read_gltf, process_render_data
         )
         from .core.camera_pose import shot_pose
-        from .core.render_context import make_render_context
+        from .core.render_resources import release_renderer
         from .core import render_size
 
         if log_fn:
@@ -6972,8 +6987,6 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
         mesh_data, texture_data = read_gltf(dem_path)
         mesh_data, texture_data = process_render_data(mesh_data, texture_data)
         mesh_aabb = get_aabb(mesh_data.vertices)
-
-        ctx = make_render_context()
 
         mask = None
         if mask_path and os.path.exists(mask_path):
@@ -7145,7 +7158,9 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
                         auto_contrast=True, alpha_threshold=0.5
                     )
                 finally:
-                    renderer.release()
+                    # all of it: the renderer's own release leaves the
+                    # framebuffer's textures, one set per sample
+                    release_renderer(renderer, log_fn)
 
                 if crop_to_content:
                     tile_img, tile_geo_bounds = self._crop_to_content(tile_img, tile_geo_bounds)
@@ -7192,11 +7207,6 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
             if progress_fn:
                 progress_fn(10 + int(((sample_i + 1) / total) * 85))
 
-        try:
-            ctx.release()
-        except Exception:  # nosec B110
-            pass
-
     def _filter_shots_for_tile(self, shots, tile_geo_bounds, log_fn=None, fov_default=50.0):
         """Cull shots to those overlapping a tile (core.ortho_tiling)."""
         from .core.ortho_tiling import filter_shots_for_tile
@@ -7226,6 +7236,7 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
         )
         from .core.camera_pose import shot_pose
         from .core.render_context import make_render_context
+        from .core.render_resources import release_renderer
 
         if log_fn:
             log_fn("Loading DEM mesh...")
@@ -7448,7 +7459,9 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
                         auto_contrast=True, alpha_threshold=0.5
                     )
                 finally:
-                    renderer.release()
+                    # all of it: the renderer's own release leaves the
+                    # framebuffer's textures - 24 bytes a pixel, per tile
+                    release_renderer(renderer, log_fn)
 
                 if crop_to_content:
                     tile_img, tile_geo_bounds = self._crop_to_content(tile_img, tile_geo_bounds)
@@ -8119,6 +8132,7 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
             from alfspy.core.util.geo import get_aabb
             from alfspy.render.render import read_gltf, process_render_data, release_all
             from .core.render_context import make_render_context
+            from .core.render_resources import release_renderer, release_shot
             from trimesh import Trimesh
         except ImportError as exc:
             raise ImportError(
@@ -8365,11 +8379,18 @@ class BambiProcessor(SurveyAnalyticsMixin, EnvironmentMixin):
                     from alfspy.core.rendering import RenderResultMode
                     tile_res = Resolution(out_w, out_h)
                     renderer = Renderer(tile_res, ctx, orthographic_camera, mesh_data, texture_data)
-                    proj_results = list(renderer.project_shots_iter(
-                        shot, RenderResultMode.ShotOnly,
-                        release_shots=True, mask=mask_texture
-                    ))
-                    renderer.release()
+                    try:
+                        proj_results = list(renderer.project_shots_iter(
+                            shot, RenderResultMode.ShotOnly,
+                            release_shots=True, mask=mask_texture
+                        ))
+                    finally:
+                        # One renderer per frame: released in full, and
+                        # also when the frame fails. Its own release leaves
+                        # the framebuffer's textures, which added up to the
+                        # whole card over a flight.
+                        release_renderer(renderer)
+                        release_shot(shot)
 
                     if proj_results:
                         rendered = np.array(proj_results[0])  # copy: GPU buffer is read-only

@@ -14,7 +14,9 @@ to. Two modes:
 
 The focal surface is the DEM raised by the *focus* offset. Shots are cached
 per frame, so moving the window by one frame creates and releases about two
-shots instead of the whole window.
+shots instead of the whole window. Renderers are kept by image size - a few,
+the rest released (``core.render_resources``): the integral over the DEM has
+another size for nearly every frame.
 """
 
 import os
@@ -26,10 +28,15 @@ import numpy as np
 
 from ..core import flight_viewer as fv
 from ..core import flight_viewer_geometry as geo
+from ..core.render_resources import RendererPool, release_context
 from .qt import QtCore, QtWidgets, Signal
 
 MODE_VIEW = "view"
 MODE_ORTHO = "ortho"
+#: Renderers held at a time: the one in use and the one before it, so that
+#: going back and forth between two sizes (the two modes, a window resized
+#: and restored) does not upload the DEM again each time.
+RENDERERS_KEPT = 2
 
 
 class AlfsWorker(QtCore.QThread):
@@ -41,8 +48,10 @@ class AlfsWorker(QtCore.QThread):
         super().__init__(parent)
         self._queue: "queue.Queue" = queue.Queue()
         self._stop = False
+        self.ctx = None
         self._shots: Dict[tuple, object] = {}
-        self._renderers: Dict[tuple, object] = {}
+        self._renderers = RendererPool(self._new_renderer, RENDERERS_KEPT)
+        self._making = None         # (camera, mesh) of the renderer to make
         self._mesh = None
         self._mesh_key = None
         self._mask_path = None
@@ -65,25 +74,30 @@ class AlfsWorker(QtCore.QThread):
         except Exception as exc:  # noqa: BLE001 - reported in the panel
             self.failed.emit(str(exc))
             return
-        while not self._stop:
-            req = self._queue.get()
-            # Skip to the newest request.
-            while True:
-                try:
-                    newer = self._queue.get_nowait()
-                except queue.Empty:
+        try:
+            while not self._stop:
+                req = self._queue.get()
+                # Skip to the newest request.
+                while True:
+                    try:
+                        newer = self._queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    req = newer
+                if req is None or self._stop:
                     break
-                req = newer
-            if req is None or self._stop:
-                break
-            try:
-                self.rendered.emit(self._render(req))
-            except Exception as exc:  # noqa: BLE001
-                import traceback
-                self.failed.emit(f"{exc}\n{traceback.format_exc(limit=3)}")
-        self._release_all()
+                try:
+                    self.rendered.emit(self._render(req))
+                except Exception as exc:  # noqa: BLE001
+                    import traceback
+                    self.failed.emit(f"{exc}\n{traceback.format_exc(limit=3)}")
+        finally:
+            self._release_all()
 
     def _release_all(self):
+        """Give back everything held on the graphics card: the shots, the
+        renderers and the context itself. Runs on this thread, where the
+        context lives."""
         for shot in self._shots.values():
             try:
                 shot.release()
@@ -91,6 +105,8 @@ class AlfsWorker(QtCore.QThread):
                 pass
         self._shots.clear()
         self._renderers.clear()
+        release_context(self.ctx)
+        self.ctx = None
 
     def _mesh_data(self, dem, focus):
         from alfspy.core.rendering import MeshData
@@ -100,17 +116,19 @@ class AlfsWorker(QtCore.QThread):
             verts[:, 2] += float(focus)
             self._mesh = MeshData(verts, np.asarray(dem.faces, dtype=np.uint32))
             self._mesh_key = key
+            # made for the other mesh: released, not just forgotten - every
+            # move of the focus used to leave a set of renderers behind
             self._renderers.clear()
         return self._mesh
 
-    def _renderer(self, resolution, camera, dem, focus):
+    def _new_renderer(self, size):
         from alfspy.core.rendering import Renderer, Resolution
-        mesh = self._mesh_data(dem, focus)
-        key = (int(resolution[0]), int(resolution[1]))
-        r = self._renderers.get(key)
-        if r is None:
-            r = Renderer(Resolution(*key), self.ctx, camera, mesh)
-            self._renderers[key] = r
+        camera, mesh = self._making
+        return Renderer(Resolution(*size), self.ctx, camera, mesh)
+
+    def _renderer(self, resolution, camera, dem, focus):
+        self._making = (camera, self._mesh_data(dem, focus))
+        r = self._renderers.get(resolution)
         r.camera = camera
         return r
 

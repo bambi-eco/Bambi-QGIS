@@ -65,3 +65,4 @@ Up to 9.0 the offset was the difference between the mean *times of day* of the t
 
 - Reduce the number of frames processed at each step; back up intermediate results and rerun with different settings
 - For ALFS and GeoTIFFs: reduce resolution or decrease the max tile size parameter
+- **Graphics memory filling up during ALFS, GeoTIFF export or in the 3D Flight Viewer** (up to 9.0): every tile, sample or frame left its framebuffer on the graphics card - 24 bytes per pixel, about 400 MB for a 4096 px tile - until the step ended, and a step that failed or the viewer's ALFS tab never gave it back at all, so memory grew until QGIS was restarted. Fixed: each render gives back what it took as soon as it is done. If you worked around it with a smaller tile size or by restarting QGIS between runs, that is no longer needed
