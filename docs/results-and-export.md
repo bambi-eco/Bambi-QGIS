@@ -166,9 +166,9 @@ Two scales, two questions.
 - the **sex** is the mark in the middle of the pin - `♀`, `♂`, or the first letter of a sex your project defined - and `?` when it is not known;
 - the **age** is a small badge on the pin's lower right, ringed in the pin's colour, with the first letter of the age class - `J` juvenile, `A` adult, `S` for a subadult class you added; no badge when it is not known.
 
-The mark is white on a dark species colour and dark on a light one.
+The mark is white or near-black, whichever contrasts more with the pin's colour.
 
-Every species has a default colour - the seeded ones a fixed one, any species you add a colour derived from its name, the same in every flight - and each can be changed in **Configuration → Project → Edit Project Schema… → Species → Colour…** (*Default Colour* goes back). The colours are stored with the flight and follow a species when it is renamed. A detection that belongs to a track takes its track's species, sex and age - the classifier's vote and the labelling tool's annotations included - so the map agrees with the track inventory.
+Every species has a default colour from the colour-blind-safe [Okabe-Ito palette](https://jfly.uni-koeln.de/color/): red deer orange, roe deer blue, wild boar green, and an animal whose species is not determined black. Any species you add gets one of the palette's colours by its name, the same in every flight. Each can be changed in **Configuration → Project → Edit Project Schema… → Species → Colour…** (*Default Colour* goes back). The colours are stored with the flight and follow a species when it is renamed. A detection that belongs to a track takes its track's species, sex and age - the classifier's vote and the labelling tool's annotations included - so the map agrees with the track inventory.
 
 | Setting (Configuration → Project → Map Symbols) | Default | Meaning |
 |---|---|---|

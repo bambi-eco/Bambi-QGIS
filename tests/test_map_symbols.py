@@ -10,6 +10,26 @@ from bambi_wildlife_detection.core.schema_editor import (
 
 
 class TestColours:
+    def test_the_defaults_are_the_okabe_ito_palette(self):
+        """Colour-blind safe, with the three the project asked for by name:
+        red deer orange, roe deer blue, wild boar green - and an animal of
+        undetermined species black."""
+        palette = map_symbols.OKABE_ITO
+        assert len(palette) == 8
+        assert map_symbols.default_colour("red deer") == palette["orange"]
+        assert map_symbols.default_colour("roe deer") == palette["blue"]
+        assert map_symbols.default_colour("wild boar") == \
+            palette["bluish green"]
+        assert map_symbols.default_colour("animal") == palette["black"]
+        assert map_symbols.FALLBACK_COLOUR == "#000000"
+        assert map_symbols.default_colour("") == "#000000"
+        # black is the undetermined animal's alone
+        concrete = [name for _id, name in store.SEEDED_SPECIES]
+        assert "#000000" not in {
+            map_symbols.default_colour(name) for name in concrete}
+        assert "#000000" not in map_symbols.PALETTE
+        assert set(palette.values()) - {"#000000"} <= set(map_symbols.PALETTE)
+
     def test_seeded_species_have_fixed_distinct_colours(self):
         names = [name for _id, name in store.BASE_SPECIES + store.SEEDED_SPECIES]
         colours = [map_symbols.default_colour(name) for name in names]
@@ -132,10 +152,20 @@ class TestMarks:
         assert map_symbols.age_mark(age) == expected
 
     @pytest.mark.parametrize("colour,expected", [
-        ("#a50f15", "#ffffff"), ("#54278f", "#ffffff"), ("#e6550d", "#ffffff"),
-        ("#ffd92f", "#202020"), ("#b2df8a", "#202020"), ("#ffffff", "#202020")])
+        ("#000000", "#ffffff"), ("#0072b2", "#ffffff"), ("#a50f15", "#ffffff"),
+        ("#e69f00", "#202020"), ("#f0e442", "#202020"), ("#ffffff", "#202020")])
     def test_a_mark_reads_on_its_pin(self, colour, expected):
         assert map_symbols.reads_on(colour) == expected
+
+    def test_every_default_colour_carries_a_readable_mark(self):
+        for colour in set(map_symbols.SEEDED_COLOURS.values()) | set(
+                map_symbols.PALETTE):
+            mark = map_symbols.reads_on(colour)
+            assert map_symbols.contrast(colour, mark) >= 4.0, colour
+
+    def test_contrast(self):
+        assert map_symbols.contrast("#000000", "#ffffff") == pytest.approx(21)
+        assert map_symbols.contrast("#777777", "#777777") == pytest.approx(1)
 
     def test_an_individual_keeps_its_colour(self):
         first = map_symbols.individual_colour(7)

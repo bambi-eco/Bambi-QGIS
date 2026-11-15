@@ -8,9 +8,10 @@ and two roe deer side by side can be told apart. **Zoomed out**, where the
 boxes have become pins, it is *what is where* - so a pin is drawn in the
 colour of its species.
 
-Every species has a default colour: the seeded ones a fixed one, any other
-a colour derived from its name, so "roe deer" looks the same in every flight
-without anyone having set it. A project can override any of them in the
+Every species has a default colour from the colour-blind-safe Okabe-Ito
+palette: the seeded ones a fixed one (an undetermined animal is black), any
+other a colour derived from its name, so "roe deer" looks the same in every
+flight without anyone having set it. A project can override any of them in the
 Project Schema dialog; the overrides are kept in the flight's
 ``project.gpkg`` (``bambi_meta``), keyed by species id so that renaming a
 species keeps its colour.
@@ -38,29 +39,46 @@ META_KEY = "species_colours"
 #: stops being a shape.
 DEFAULT_SWITCH_SCALE = 500
 
-#: Fixed colours of the base classes and the seeded species. Chosen to be
-#: told apart on an orthophoto and on a thermal mosaic alike, and by people
-#: who cannot tell red from green: no two neighbours differ in that alone.
-SEEDED_COLOURS = {
-    "animal": "#ffd92f",           # undetermined animal: plain yellow
-    "unknown": "#bdbdbd",
-    "not-an-animal": "#636363",
-    "roe deer": "#e6550d",
-    "red deer": "#a50f15",
-    "fallow deer": "#f781bf",
-    "wild boar": "#54278f",
-    "chamois": "#1f78b4",
-    "fox": "#ff7f00",
-    "hare": "#b2df8a",
-    "bird": "#17becf",
-    "other": "#8c6d31",
+#: The Okabe-Ito palette: eight colours that stay distinguishable with the
+#: common forms of colour blindness (Okabe & Ito 2008, "Color Universal
+#: Design").
+OKABE_ITO = {
+    "orange": "#e69f00",
+    "sky blue": "#56b4e9",
+    "bluish green": "#009e73",
+    "yellow": "#f0e442",
+    "blue": "#0072b2",
+    "vermillion": "#d55e00",
+    "reddish purple": "#cc79a7",
+    "black": "#000000",
 }
 
-#: Colours for species the user added, picked by name.
-PALETTE = (
-    "#1b9e77", "#d95f02", "#7570b3", "#e7298a", "#66a61e", "#e6ab02",
-    "#a6761d", "#377eb8", "#984ea3", "#4daf4a", "#f768a1", "#00bfc4",
-)
+#: Fixed colours of the base classes and the seeded species, from the
+#: Okabe-Ito palette. An animal whose species is not determined is black;
+#: the two other base classes are greys, so that nothing that is not a
+#: species competes with the species for a colour. The palette has seven
+#: colours besides black and the seeded species are nine, so the last two
+#: take colours from Paul Tol's colour-blind-safe "muted" scheme.
+SEEDED_COLOURS = {
+    "animal": OKABE_ITO["black"],
+    "unknown": "#4d4d4d",
+    "not-an-animal": "#bdbdbd",
+    "red deer": OKABE_ITO["orange"],
+    "roe deer": OKABE_ITO["blue"],
+    "wild boar": OKABE_ITO["bluish green"],
+    "fallow deer": OKABE_ITO["vermillion"],
+    "chamois": OKABE_ITO["sky blue"],
+    "fox": OKABE_ITO["reddish purple"],
+    "hare": OKABE_ITO["yellow"],
+    "bird": "#882255",
+    "other": "#999933",
+}
+
+#: Colours for species the user added, picked by name: the Okabe-Ito
+#: colours (black stays the colour of the undetermined), then Tol's.
+PALETTE = tuple(colour for name, colour in OKABE_ITO.items()
+                if name != "black") + (
+    "#882255", "#999933", "#332288", "#44aa99", "#aa4499")
 
 #: Colour of anything without a species.
 FALLBACK_COLOUR = SEEDED_COLOURS["animal"]
@@ -207,14 +225,35 @@ def age_mark(label) -> str:
     return text[:1].upper() if text else ""
 
 
-def reads_on(colour: str) -> str:
-    """The colour a mark is drawn in on top of *colour*: white on a dark
-    species colour, near-black on a light one (the yellow of an
-    undetermined animal, the pale green of a hare)."""
+MARK_LIGHT = "#ffffff"
+MARK_DARK = "#202020"
+
+
+def _luminance(colour: str) -> float:
+    """Relative luminance of a colour, 0 (black) to 1 (white), as WCAG
+    defines it."""
     value = normalise_colour(colour)
-    red, green, blue = (int(value[i:i + 2], 16) for i in (1, 3, 5))
-    brightness = (299 * red + 587 * green + 114 * blue) / 1000.0
-    return "#ffffff" if brightness < 170 else "#202020"
+
+    def channel(start: int) -> float:
+        share = int(value[start:start + 2], 16) / 255.0
+        return (share / 12.92 if share <= 0.03928
+                else ((share + 0.055) / 1.055) ** 2.4)
+
+    return 0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5)
+
+
+def contrast(first: str, second: str) -> float:
+    """WCAG contrast ratio of two colours, 1 (none) to 21."""
+    high, low = sorted((_luminance(first), _luminance(second)), reverse=True)
+    return (high + 0.05) / (low + 0.05)
+
+
+def reads_on(colour: str) -> str:
+    """The colour a mark is drawn in on top of *colour*: white or
+    near-black, whichever contrasts more - white on the blue of a roe deer,
+    dark on the orange of a red deer."""
+    light = contrast(colour, MARK_LIGHT)
+    return MARK_LIGHT if light >= contrast(colour, MARK_DARK) else MARK_DARK
 
 
 def individual_colour(track_id) -> str:
