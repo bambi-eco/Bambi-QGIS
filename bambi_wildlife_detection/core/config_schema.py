@@ -27,9 +27,9 @@ Storage kinds (matching the pre-refactor QgsProject entry usage):
 ``bool``
     ``writeEntryBool`` / ``readBoolEntry`` with a typed default.
 
-``Correction/AdditionalCorrections`` (a JSON list) is intentionally not in
-the table - it is bound to a list widget, not a value widget. Credentials
-(the Hugging Face token, the Roboflow key) are never saved here.
+Structured settings - the frame-range corrections, the thermal curve, the
+classifier mapping - are in the table too, through the ``json`` role.
+Credentials (the Hugging Face token, the Roboflow key) are never saved here.
 """
 
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple
@@ -58,11 +58,11 @@ KINDS = frozenset({"str", "bool01", "int_str", "double", "int_double", "bool"})
 #                      load = findData, the first item when not found
 #   json               a plain dock attribute holding a dict/list, serialised
 #                      to a ``str`` entry. For structured settings bound to a
-#                      table or dialog rather than to one value widget - the
-#                      classifier mapping is the first of these. Earlier cases
-#                      (``Correction/AdditionalCorrections``,
-#                      ``Input/ThermalVisCurve``) predate the role and are
-#                      still saved by hand; this exists so the next one is not.
+#                      table or dialog rather than to one value widget:
+#                      the classifier mapping, the frame-range corrections,
+#                      the thermal curve. The attribute may be a property, so
+#                      a setting that is not a dict or list in memory (the
+#                      curve) converts itself on the way in and out.
 ROLES = frozenset({
     "line", "crs", "text", "check", "spin",
     "combo_text", "combo_text_editable", "combo_index", "combo_data", "json",
@@ -259,6 +259,13 @@ CONFIG_ENTRIES: List[ConfigEntry] = [
     # ===== Map symbols of detections and tracks (core.map_symbols) =====
     ConfigEntry("Display/PinsEnabled", "bool", True),
     ConfigEntry("Display/PinScale", "int_double", 500),
+    # ===== Structured settings that used to be saved by hand =====
+    # Last, as when they were loaded by hand: the list of corrections is drawn
+    # in the rotation unit, which has to be loaded first. They were written
+    # to the QGIS project but read from the flight's store, so a load always
+    # came back empty - which is what being in this table prevents.
+    ConfigEntry("Correction/AdditionalCorrections", "str"),
+    ConfigEntry("Input/ThermalVisCurve", "str"),
 ]
 
 CONFIG_KEYS = [entry.key for entry in CONFIG_ENTRIES]
@@ -415,6 +422,9 @@ WIDGET_BINDINGS: Dict[str, Tuple[str, str]] = {
     "Environment/SamplingRadius": ("habitat_radius_spin", "spin"),
     "Display/PinsEnabled": ("map_pins_check", "check"),
     "Display/PinScale": ("map_pin_scale_spin", "spin"),
+    "Correction/AdditionalCorrections": (
+        "_stored_additional_corrections", "json"),
+    "Input/ThermalVisCurve": ("_stored_thermal_vis_curve", "json"),
 }
 
 

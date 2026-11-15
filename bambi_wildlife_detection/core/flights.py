@@ -368,8 +368,18 @@ NOT_RECORDING_INPUTS = frozenset({
 })
 
 
+#: Settings outside the Input scope that belong to one recording all the same:
+#: a frame-range correction names frames of *this* flight, and applied to the
+#: next one it would shift whatever happens to carry those frame numbers.
+RECORDING_BOUND = frozenset({
+    "Correction/AdditionalCorrections",
+})
+
+
 def is_recording_input(key: str) -> bool:
     """True when *key* describes the recorded data rather than a setting."""
+    if key in RECORDING_BOUND:
+        return True
     return key.startswith(INPUT_SCOPE) and key not in NOT_RECORDING_INPUTS
 
 

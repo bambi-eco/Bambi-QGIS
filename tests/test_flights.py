@@ -351,6 +351,31 @@ def test_non_input_keys_are_never_recordings():
     assert not flights.is_recording_input("ALFS/TileSize")
 
 
+@pytest.mark.parametrize("copy_configuration", [True, False])
+def test_frame_range_corrections_stay_with_their_flight(copy_configuration):
+    """They name frames of one recording; on the next flight they would shift
+    whatever happens to carry those frame numbers. The thermal curve was
+    fitted to one flight's photos and is an input like them."""
+    current = _current()
+    current["Correction/AdditionalCorrections"] = '[{"start": 0, "end": 99}]'
+    current["Input/ThermalVisCurve"] = '{"domain_lo": 2.0, "domain_hi": 30.0}'
+    assert flights.is_recording_input("Correction/AdditionalCorrections")
+    assert flights.is_recording_input("Input/ThermalVisCurve")
+
+    values = flights.new_flight_values(current, copy_configuration)
+
+    assert values["Correction/AdditionalCorrections"] == ""
+    assert values["Input/ThermalVisCurve"] == ""
+
+
+def test_the_camera_mount_correction_follows_the_configuration_choice():
+    """Unlike the frame ranges, the constant offsets describe the drone."""
+    key = [e.key for e in config_schema.CONFIG_ENTRIES
+           if e.key.startswith("Correction/")
+           and e.key != "Correction/AdditionalCorrections"]
+    assert key and not any(flights.is_recording_input(k) for k in key)
+
+
 def test_every_schema_key_gets_a_value():
     """The form is fully written, so nothing keeps the old flight's value."""
     values = flights.new_flight_values({}, copy_configuration=False)

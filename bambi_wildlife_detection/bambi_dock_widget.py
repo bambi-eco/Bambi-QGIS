@@ -13273,6 +13273,43 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
 
         self.log("Configuration reset to defaults")
 
+    # -- structured settings, as the schema's ``json`` role reads and writes
+    # them. Both used to be saved by hand - into the QGIS project, while a
+    # load read the flight's store - so they were gone after every load.
+
+    @property
+    def _stored_additional_corrections(self) -> list:
+        """The frame-range corrections, as stored with the flight."""
+        return list(self._additional_corrections)
+
+    @_stored_additional_corrections.setter
+    def _stored_additional_corrections(self, value) -> None:
+        # Anything but a list of corrections loads as "none": a missing
+        # entry, or the row numbers that versions before 9.1 wrote instead of
+        # the corrections themselves.
+        entries = value if isinstance(value, list) else []
+        self._additional_corrections = [
+            dict(entry) for entry in entries if isinstance(entry, dict)]
+        self._update_corrections_list_ui()
+
+    @property
+    def _stored_thermal_vis_curve(self) -> dict:
+        """The thermal curve as a plain dict (empty: no curve)."""
+        curve = self._thermal_vis_curve
+        return curve.to_dict() if curve is not None else {}
+
+    @_stored_thermal_vis_curve.setter
+    def _stored_thermal_vis_curve(self, value) -> None:
+        curve = None
+        if isinstance(value, dict) and value:
+            from .core.thermal_curve import ThermalCurve
+            try:
+                curve = ThermalCurve.from_dict(value)
+            except (TypeError, ValueError):
+                self.log("Warning: ignoring an unreadable thermal curve")
+        self._thermal_vis_curve = curve
+        self._update_thermal_vis_curve_label()
+
     def _config_widget_value(self, attr: str, role: str):
         """Read a config value from the bound widget (core.config_schema role)."""
         if role == "json":
@@ -13384,24 +13421,7 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         project.writeEntry(PLUGIN_SCOPE, "Flights/Active",
                            str(getattr(self, "_active_flight_index", 0)))
 
-        # Additional corrections are bound to a list widget, not a value
-        # widget, so they are saved separately. Credentials are never
-        # saved here.
-        corrections_data = []
-        for i in range(self.additional_corrections_list.count()):
-            item = self.additional_corrections_list.item(i)
-            data = item.data(Qt.ItemDataRole.UserRole)
-            if data:
-                corrections_data.append(data)
-        project.writeEntry(PLUGIN_SCOPE, "Correction/AdditionalCorrections",
-                           json.dumps(corrections_data))
-
-        # Thermal curve mapping is bound to a dialog, not a value widget,
-        # so it is likewise saved separately (empty string = no curve).
-        project.writeEntry(
-            PLUGIN_SCOPE, "Input/ThermalVisCurve",
-            json.dumps(self._thermal_vis_curve.to_dict())
-            if self._thermal_vis_curve is not None else "")
+        # Credentials are never saved here.
 
         # Mark project as modified so user is prompted to save
         project.setDirty(True)
@@ -13483,30 +13503,6 @@ class BambiDockWidget(EnvironmentDockMixin, QDockWidget):
         if migrated_from_project:
             self.save_config_to_project()
             self.log("Configuration moved into the flight's project.gpkg")
-
-        # Additional corrections (bound to a list widget, loaded separately)
-        corrections_json = read_str("Correction/AdditionalCorrections", "[]")
-        try:
-            corrections_data = json.loads(corrections_json)
-            self._additional_corrections = []
-            self._update_corrections_list_ui()
-            for corr in corrections_data:
-                self._add_correction_to_list(corr)
-        except json.JSONDecodeError:
-            pass
-
-        # Thermal curve mapping (bound to a dialog, loaded separately)
-        curve_json = read_str("Input/ThermalVisCurve", "")
-        if curve_json:
-            from .core.thermal_curve import ThermalCurve
-            try:
-                self._thermal_vis_curve = ThermalCurve.from_dict(
-                    json.loads(curve_json))
-            except (json.JSONDecodeError, TypeError, ValueError):
-                self._thermal_vis_curve = None
-        else:
-            self._thermal_vis_curve = None
-        self._update_thermal_vis_curve_label()
 
         # The classifier mapping is bound through the schema's ``json`` role,
         # so the attribute is already loaded - the table it is edited in has to
