@@ -110,7 +110,8 @@ def prepared_flight(folder, number, route=True, correction=True,
         "videos": flight_archive.is_complete(
             flight_archive.flight_files(flight)),
         "processed_video": os.path.join(
-            flight, f"{number}_matched_processed.mp4") if processed else ""}
+            flight, f"{number}_matched_processed.mp4") if processed else "",
+        "frames": 265 if processed else 0}
 
 
 class Worker:
@@ -579,9 +580,8 @@ def test_without_the_videos_the_flight_is_there_for_an_overview(dock, asked):
     assert dock.trans_z_spin.value() == pytest.approx(46.65)
     assert asked["routes"] == [_target(asked, 306)]
     done = asked["said"][-1][2]
-    assert ("1 flight(s) are there without their raw recordings: for the "
-            "steps from 'Extract Frames' on, ask for them again with "
-            "'Download video data' ticked and the version 'Raw'.") in done
+    assert ("1 flight(s) are there without frames: ask for them again "
+            "with 'Download video data' ticked.") in done
     assert "Go on with Pre-Processing" not in done
     assert "(without the videos)" in dock.log_text.toPlainText()
 
@@ -594,9 +594,11 @@ def test_the_processed_video_is_fetched_and_said(dock, asked):
     assert Worker.made[0].version == "processed"
     assert dock.thermal_video_paths_edit.text() == ""
     done = asked["said"][-1][2]
-    assert "The processed video of 1 flight(s) is in the flight's folder." \
-        in done
-    assert "without their raw recordings" in done
+    assert ("The frames of 1 flight(s) were extracted from the processed "
+            "video (265 thermal and as many RGB), as 'Extract Frames' "
+            "would: go on with the steps of the Processing tab.") in done
+    assert "Pre-Processing > Extract Frames" not in done
+    assert "without frames" not in done
     assert "(processed video)" in dock.log_text.toPlainText()
 
 

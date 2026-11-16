@@ -1350,6 +1350,9 @@ def import_route(target_folder: str, flight_id: int, dem_metadata_path: str,
     # north goes with every pose
     grid_north.record(result["poses"], epsg)
     state = read_state(target_folder)
+    if state.get("frames") == PROCESSED and modality == "t":
+        # the RGB frames of the processed video have the same poses
+        grid_north.record(write_poses(target_folder, poses, "w"), epsg)
     write_state(target_folder, flight=int(flight_id), route=dict(
         state.get("route") or {}, frames=result["frames"]))
     if log:
@@ -1504,6 +1507,104 @@ def _epsg_of(metadata_path: str) -> Optional[int]:
     return int(found.group(1)) if found else None
 
 
+#: The masks of the labelled flight, and what an extraction calls them.
+MASKS = (("{id}_mask_t.png", "mask_T.png"), ("{id}_mask_w.png", "mask_W.png"))
+
+
+def extract_processed_frames(video: str, target_folder: str,
+                             progress: Optional[Callable[[int], None]] = None,
+                             cancelled: Optional[Callable[[], bool]] = None,
+                             log: Optional[Callable[[str], None]] = None
+                             ) -> int:
+    """What 'Extract Frames' does, for a processed video: its frames are
+    undistorted and matched already, thermal on the left and RGB on the
+    right, and frame *k* is pose *k* of the published poses. Every frame
+    is cut in two and written as ``frames_t/<imagefile>`` and
+    ``frames_w/<imagefile>``; the published poses, which have to be the
+    flight's own already (:func:`import_route`), become those of the RGB
+    frames as well.
+
+    Frames that are there are not written again.
+
+    :return: the number of frames the flight has now
+    :raises DatasetError: the flight has no published poses of its own,
+        the video cannot be read, or it has fewer frames than poses
+    :raises core.checked_download.Cancelled: stopped by the user
+    """
+    poses = _own_poses(target_folder, "t")
+    if poses is None or not are_published(poses):
+        raise DatasetError(
+            "The published poses are not the flight's own: the frames of "
+            "the processed video cannot be told apart without them.")
+    names = [str(image.get("imagefile") or "") for image in poses["images"]]
+    folders = {camera: os.path.join(target_folder, f"frames_{camera}")
+               for camera in ("t", "w")}
+    for folder in folders.values():
+        os.makedirs(folder, exist_ok=True)
+    missing = [index for index, name in enumerate(names)
+               if not all(os.path.isfile(os.path.join(folder, name))
+                          for folder in folders.values())]
+    if missing:
+        try:
+            import cv2
+        except ImportError as exc:
+            raise DatasetError(
+                "OpenCV is needed to cut the processed video into frames "
+                f"({exc}). Install it with the Dependency Manager.") from exc
+        capture = cv2.VideoCapture(video)
+        try:
+            if not capture.isOpened():
+                raise DatasetError(
+                    f"{os.path.basename(video)} cannot be read as a video.")
+            wanted, last = set(missing), max(missing)
+            for index in range(last + 1):
+                if cancelled and cancelled():
+                    raise checked_download.Cancelled("cancelled")
+                if index in wanted:
+                    ok, frame = capture.read()
+                else:
+                    ok, frame = capture.grab(), None
+                if not ok:
+                    raise DatasetError(
+                        f"{os.path.basename(video)} ends at frame {index}, "
+                        f"and the poses name {len(names)} frames.")
+                if frame is not None:
+                    half = frame.shape[1] // 2
+                    for camera, picture in (("t", frame[:, :half]),
+                                            ("w", frame[:, half:])):
+                        cv2.imwrite(
+                            os.path.join(folders[camera], names[index]),
+                            picture)
+                if progress and index % 20 == 0:
+                    progress(int(100.0 * index / (last + 1)))
+        finally:
+            capture.release()
+    # the same camera took both halves: the poses are those of both
+    from . import grid_north
+
+    rgb = write_poses(target_folder, poses, "w")
+    epsg = (grid_north.recorded(poses) or {}).get("epsg")
+    if epsg:
+        grid_north.record(rgb, int(epsg))
+    # the masks, under the names an extraction gives them
+    import shutil
+
+    flight_folder = os.path.dirname(video)
+    number = os.path.basename(video).split("_")[0]
+    for published, own in MASKS:
+        source = os.path.join(flight_folder, published.format(id=number))
+        if os.path.isfile(source):
+            shutil.copyfile(source, os.path.join(target_folder, own))
+    write_state(target_folder, frames=PROCESSED)
+    if progress:
+        progress(100)
+    if log:
+        written = f"{len(missing)} written" if missing else "all there"
+        log(f"Frames from the processed video: {len(names)} thermal and "
+            f"{len(names)} RGB ({written}), in frames_t/ and frames_w/")
+    return len(names)
+
+
 def poses_bounds(poses: dict) -> Optional[Tuple[float, float, float, float]]:
     """``(west, south, east, north)`` of where published poses were
     taken; ``None`` where none says."""
@@ -1535,8 +1636,9 @@ def prepare_flight(entry: Flight, folder: str, session,
     route, labels and camera correction.
 
     *version* says which video: the labelled dataset's processed one
-    (the default; the annotations come with its archive) or the raw
-    recordings, which are what 'Extract Frames' works on.
+    (the default; the annotations come with its archive, and its frames
+    are extracted at once - :func:`extract_processed_frames`) or the raw
+    recordings, which 'Extract Frames' works on.
 
     Without *videos* only the annotations are fetched - poses, labels,
     correction, a megabyte or two: enough for the route and the labelled
@@ -1553,7 +1655,8 @@ def prepare_flight(entry: Flight, folder: str, session,
     :return: ``{"flight", "name", "folder", "target_folder", "files",
         "epsg", "dem", "dem_metadata", "route", "correction", "labels",
         "labels_wanted", "videos" (the raw recordings are there),
-        "processed_video" (its path, or ""), "notes"}`` - *route*, *correction* and
+        "processed_video" (its path, or ""), "frames" (extracted from
+        it), "notes"}`` - *route*, *correction* and
         *labels* are what :func:`import_route`, :func:`import_correction`
         and :func:`place_labels` returned, ``None`` where nothing was
         done; *notes* is what did not work, in sentences
@@ -1601,10 +1704,10 @@ def prepare_flight(entry: Flight, folder: str, session,
                 "processed_video": video or (
                     processed_video(folder, entry.id) if os.path.isfile(
                         processed_video(folder, entry.id)) else ""),
-                "notes": notes}
+                "frames": 0, "notes": notes}
 
     # -- what the labelled dataset has of the flight -------------------------
-    wanted = route or labels or correction or not videos
+    wanted = route or labels or correction or not videos or bool(video)
     there: Dict[str, str] = {}
     if wanted and entry.labelled is None:
         notes.append("The flight is not in the labelled dataset: neither "
@@ -1673,13 +1776,19 @@ def prepare_flight(entry: Flight, folder: str, session,
     if progress:
         progress(94)
 
+    # frames of the processed video are the published frames: their poses
+    # are part of them, asked for or not - as an extraction writes both
+    with_frames = bool(video)
+    route = route or with_frames
     if there and (route or labels or correction):
         middle = None
         if bounds is not None:
             middle = ((bounds[1] + bounds[3]) / 2.0,
                       (bounds[0] + bounds[2]) / 2.0)
         _into_flight(entry, prepared, there, route, labels, correction,
-                     middle, make_route, log)
+                     middle, make_route, log,
+                     video=video, cancelled=cancelled,
+                     progress=part(94, 100))
     if progress:
         progress(100)
     for note in notes:
@@ -1689,7 +1798,8 @@ def prepare_flight(entry: Flight, folder: str, session,
 
 def _into_flight(entry: Flight, prepared: dict, there: Dict[str, str],
                  route: bool, labels: bool, correction: bool, position,
-                 make_route, log) -> None:
+                 make_route, log, video: str = "", cancelled=None,
+                 progress=None) -> None:
     """The last part of :func:`prepare_flight`: poses, correction and
     labels into the flight. What fails is noted - what was fetched is
     there all the same."""
@@ -1718,6 +1828,13 @@ def _into_flight(entry: Flight, prepared: dict, there: Dict[str, str],
             prepared["route"] = import_route(
                 target, entry.id, prepared["dem_metadata"], prepared["epsg"],
                 log=log)
+        if video and (prepared["route"] or {}).get("poses"):
+            prepared["frames"] = extract_processed_frames(
+                video, target, progress, cancelled, log)
+        elif video:
+            notes.append("The frames of the processed video were not "
+                         "extracted: the published poses are not the "
+                         "flight's own.")
         if labels and LABELS not in there:
             notes.append("No labels were published for the flight.")
         elif labels:
@@ -1725,6 +1842,8 @@ def _into_flight(entry: Flight, prepared: dict, there: Dict[str, str],
             if prepared["labels"] is None and log:
                 log("The labels are put on the frames once they are "
                     "extracted ('Extract Frames')")
+    except checked_download.Cancelled:
+        raise
     except DatasetError as exc:
         notes.append(str(exc))
     except Exception as exc:  # noqa: BLE001 - said; what was fetched stays

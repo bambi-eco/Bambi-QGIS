@@ -228,20 +228,22 @@ class ExampleFlightsMixin:
             parts.append(
                 f"The labels of {waiting} flight(s) are put on the frames "
                 "when they are extracted.")
-        bare = sum(1 for flight in prepared if not flight.get("videos", True))
-        processed = sum(1 for flight in prepared
-                        if flight.get("processed_video"))
-        if processed:
+        framed = sum(1 for flight in prepared if flight.get("frames"))
+        if framed:
+            frames = sum(flight["frames"] for flight in prepared
+                         if flight.get("frames"))
             parts.append(
-                f"The processed video of {processed} flight(s) is in the "
-                "flight's folder.")
+                f"The frames of {framed} flight(s) were extracted from the "
+                f"processed video ({frames} thermal and as many RGB), as "
+                "'Extract Frames' would: go on with the steps of the "
+                "Processing tab.")
+        raw = sum(1 for flight in prepared if flight.get("videos", True))
+        bare = len(prepared) - raw - framed
         if bare:
             parts.append(
-                f"{bare} flight(s) are there without their raw recordings: "
-                "for the steps from 'Extract Frames' on, ask for them "
-                "again with 'Download video data' ticked and the version "
-                "'Raw'.")
-        if bare < len(prepared):
+                f"{bare} flight(s) are there without frames: ask for them "
+                "again with 'Download video data' ticked.")
+        if raw:
             parts.append(
                 "Go on with Pre-Processing > Extract Frames, then the steps "
                 "of the Processing tab from top to bottom.")

@@ -135,18 +135,19 @@ class DatasetFlightsDialog(QDialog):
         self.version_combo.addItem(
             "Processed (undistorted, synchronised)", bambi_dataset.PROCESSED)
         self.version_combo.addItem(
-            "Raw (as recorded; for 'Extract Frames')",
+            "Raw (as recorded)",
             bambi_dataset.RECORDINGS)
         self.version_combo.setCurrentIndex(
             max(0, self.version_combo.findData(version)))
         self.version_combo.setToolTip(
             "Which video of a flight to fetch. Processed: the labelled "
             "dataset's video - undistorted, thermal and RGB synchronised "
-            "side by side, the one the poses and labels belong to - with "
-            "its masks; to look at, the plugin's 'Extract Frames' does "
-            "not read it. Raw: the recordings as they came off the drone, "
-            "with SRT files, flight log and calibrations - what the "
-            "plugin's steps from 'Extract Frames' on work with.")
+            "side by side, the one the poses and labels belong to. Its "
+            "frames are extracted at once, with the published poses, as "
+            "'Extract Frames' would: the flight is ready for the "
+            "Processing tab. Raw: the recordings as they came off the "
+            "drone, with SRT files, flight log and calibrations, filled "
+            "into the Input tab for the plugin's own 'Extract Frames'.")
         self.version_combo.setEnabled(bool(videos))
         self.videos_check.toggled.connect(self.version_combo.setEnabled)
         self.version_combo.currentIndexChanged.connect(self._refresh_summary)

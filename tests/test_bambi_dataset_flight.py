@@ -932,11 +932,20 @@ class TestPrepareFlight:
         assert prepared["labels"]["boxes"] == BOXES and prepared["notes"] == []
 
 
+@pytest.fixture
+def filmed(tmp_path):
+    """A flight whose processed video is one: twelve frames, as many as
+    its poses."""
+    pytest.importorskip("cv2")
+    return Made(tmp_path, video=samples.processed_video(str(tmp_path)))
+
+
 class TestTheProcessedVideo:
     """The version asked for unless another is: the labelled dataset's
     video, with everything its archive holds."""
 
-    def test_it_is_what_is_fetched_unless_told_otherwise(self, made):
+    def test_it_is_what_is_fetched_unless_told_otherwise(self, filmed):
+        made = filmed
         prepared = bd.prepare_flight(
             made.flight, made.folder, made.session,
             elevation=made.elevation, sleep=lambda seconds: None)
@@ -948,18 +957,21 @@ class TestTheProcessedVideo:
         assert prepared["videos"] is False          # no raw recordings
         assert prepared["notes"] == []
 
-    def test_the_flight_is_there_as_the_datasets_script_leaves_it(self, made):
+    def test_the_flight_is_there_as_the_datasets_script_leaves_it(
+            self, filmed):
+        made = filmed
         made.prepare(version=bd.PROCESSED)
 
         assert sorted(name for name in os.listdir(made.folder)
                       if name.startswith("7_")) == [
-            "7_correction.json", "7_gt.txt", "7_matched_poses.json",
-            "7_matched_processed.mp4", "7_metadata.json",
-            "7_track_mapping.json"]
+            "7_correction.json", "7_gt.txt", "7_mask_t.png", "7_mask_w.png",
+            "7_matched_poses.json", "7_matched_processed.mp4",
+            "7_metadata.json", "7_track_mapping.json"]
         assert not [name for name in os.listdir(made.folder)
                     if name.endswith(".zip")]
 
-    def test_its_annotations_come_with_it(self, made):
+    def test_its_annotations_come_with_it(self, filmed):
+        made = filmed
         prepared = made.prepare(version=bd.PROCESSED)
 
         # nothing was read out of the archive on Zenodo besides
@@ -970,7 +982,8 @@ class TestTheProcessedVideo:
             46.65
         assert bd.read_state(made.target)["elevation"] == "poses"
 
-    def test_a_video_that_is_there_is_not_fetched_again(self, made):
+    def test_a_video_that_is_there_is_not_fetched_again(self, filmed):
+        made = filmed
         made.prepare(version=bd.PROCESSED)
 
         made.prepare(version=bd.PROCESSED)
@@ -979,7 +992,8 @@ class TestTheProcessedVideo:
         assert f"The processed video of flight 7 is already in " \
             f"{made.folder}" in made.log
 
-    def test_the_recordings_can_be_fetched_beside_it(self, made):
+    def test_the_recordings_can_be_fetched_beside_it(self, filmed):
+        made = filmed
         made.prepare(version=bd.PROCESSED)
 
         prepared = made.prepare(version=bd.RECORDINGS)
@@ -988,6 +1002,151 @@ class TestTheProcessedVideo:
         assert prepared["processed_video"].endswith("7_matched_processed.mp4")
         assert made.session.streamed == [made.flight.labelled.url,
                                          made.flight.raw.url]
+
+    # -- its frames: as 'Extract Frames' would leave them -----------------
+
+    def test_its_frames_are_extracted(self, filmed):
+        prepared = filmed.prepare(version=bd.PROCESSED)
+
+        assert prepared["frames"] == 12 and prepared["notes"] == []
+        names = [f"{k}-{k}-{k}.jpg" for k in range(12)]
+        for camera in ("t", "w"):
+            assert sorted(os.listdir(os.path.join(
+                filmed.target, f"frames_{camera}"))) == sorted(names)
+        assert ("Frames from the processed video: 12 thermal and 12 RGB (12 "
+                "written), in frames_t/ and frames_w/") in filmed.log
+
+    def test_the_left_half_is_thermal_and_the_right_half_rgb(self, filmed):
+        import cv2
+
+        filmed.prepare(version=bd.PROCESSED)
+
+        def mean(camera, frame):
+            return cv2.imread(os.path.join(
+                filmed.target, f"frames_{camera}",
+                f"{frame}-{frame}-{frame}.jpg")).mean()
+
+        assert cv2.imread(os.path.join(
+            filmed.target, "frames_t", "0-0-0.jpg")).shape == (32, 32, 3)
+        # frame k of the video is pose k: the thermal half grows brighter
+        assert mean("t", 0) == pytest.approx(10, abs=4)
+        assert mean("t", 11) == pytest.approx(98, abs=4)
+        assert mean("w", 0) == pytest.approx(220, abs=4)
+
+    def test_both_cameras_have_the_published_poses(self, filmed):
+        filmed.prepare(version=bd.PROCESSED)
+
+        poses = {}
+        for camera in ("t", "w"):
+            with open(os.path.join(filmed.target,
+                                   f"poses_{camera}.json")) as handle:
+                poses[camera] = json.load(handle)
+        assert poses["t"]["images"] == poses["w"]["images"]
+        assert len(poses["w"]["images"]) == 12
+        assert poses["w"]["headings"]["north"] == "map"
+        assert bd.are_published(poses["w"])
+
+    def test_the_masks_are_named_as_an_extraction_names_them(self, filmed):
+        filmed.prepare(version=bd.PROCESSED)
+
+        with open(os.path.join(filmed.target, "mask_T.png"), "rb") as handle:
+            assert handle.read() == b"thermal mask"
+        with open(os.path.join(filmed.target, "mask_W.png"), "rb") as handle:
+            assert handle.read() == b"rgb mask"
+
+    def test_the_step_counts_as_run(self, filmed):
+        filmed.prepare(version=bd.PROCESSED)
+
+        # what the plugin takes for "frames extracted": the images and
+        # the poses of a camera, for both
+        assert bd.read_state(filmed.target)["frames"] == "processed"
+        for camera in ("t", "w"):
+            assert os.listdir(os.path.join(filmed.target,
+                                           f"frames_{camera}"))
+            assert os.path.isfile(os.path.join(filmed.target,
+                                               f"poses_{camera}.json"))
+
+    def test_the_poses_come_with_the_frames_asked_for_or_not(self, filmed):
+        prepared = filmed.prepare(version=bd.PROCESSED, route=False,
+                                  labels=False, correction=False)
+
+        assert prepared["frames"] == 12
+        assert prepared["route"]["frames"] == 12
+        assert prepared["labels"] is None and prepared["correction"] is None
+
+    def test_the_labels_are_on_these_frames(self, filmed):
+        prepared = filmed.prepare(version=bd.PROCESSED)
+
+        assert prepared["labels"]["on"] == "published"
+        assert sorted(by_dataset_track(filmed.target)[4668].keyframes) == [
+            0, 4, 10]
+
+    def test_frames_that_are_there_are_not_written_again(self, filmed):
+        filmed.prepare(version=bd.PROCESSED)
+        first = os.path.join(filmed.target, "frames_t", "0-0-0.jpg")
+        with open(first, "wb") as handle:
+            handle.write(b"mine now")
+        os.remove(os.path.join(filmed.target, "frames_w", "5-5-5.jpg"))
+
+        prepared = filmed.prepare(version=bd.PROCESSED)
+
+        assert prepared["frames"] == 12
+        with open(first, "rb") as handle:
+            assert handle.read() == b"mine now"
+        assert os.path.isfile(os.path.join(filmed.target, "frames_w",
+                                           "5-5-5.jpg"))
+        assert any("(1 written)" in line for line in filmed.log)
+
+    def test_a_video_shorter_than_its_poses(self, tmp_path):
+        pytest.importorskip("cv2")
+        made = Made(tmp_path, video=samples.processed_video(str(tmp_path),
+                                                            frames=5))
+
+        prepared = made.prepare(version=bd.PROCESSED)
+
+        assert prepared["frames"] == 0
+        assert prepared["notes"] == [
+            "7_matched_processed.mp4 ends at frame 5, and the poses name "
+            "12 frames."]
+
+    def test_a_file_that_is_no_video(self, made):
+        pytest.importorskip("cv2")
+
+        prepared = made.prepare(version=bd.PROCESSED)
+
+        assert prepared["notes"] == [
+            "7_matched_processed.mp4 cannot be read as a video."]
+        assert prepared["route"]["frames"] == 12       # the rest is there
+
+    def test_without_an_elevation_model_there_are_no_poses_to_go_with(
+            self, filmed):
+        filmed.dem_fails = environment.EnvironmentFailure("no connection")
+
+        prepared = filmed.prepare(version=bd.PROCESSED)
+
+        assert prepared["frames"] == 0
+        assert prepared["notes"][-1] == (
+            "The frames of the processed video were not extracted: the "
+            "published poses are not the flight's own.")
+
+    def test_it_can_be_stopped_while_the_frames_are_cut(self, filmed):
+        there = os.path.join(filmed.target, "poses_t.json")
+
+        with pytest.raises(checked_download.Cancelled):
+            filmed.prepare(version=bd.PROCESSED,
+                           cancelled=lambda: os.path.isfile(there))
+
+    def test_new_poses_reach_the_rgb_frames_too(self, filmed):
+        """The elevation model is made anew when the recordings arrive:
+        the poses are placed on it again - both cameras'."""
+        filmed.prepare(version=bd.PROCESSED)
+        with open(os.path.join(filmed.target, "poses_w.json"), "w") as handle:
+            json.dump({"images": []}, handle)
+
+        filmed.prepare(version=bd.RECORDINGS)
+
+        with open(os.path.join(filmed.target, "poses_w.json")) as handle:
+            assert len(json.load(handle)["images"]) == 12
 
     def test_a_flight_that_was_not_labelled_has_none(self, tmp_path):
         made = Made(tmp_path, labelled=False)

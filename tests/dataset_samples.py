@@ -105,12 +105,15 @@ def own_poses(published: dict, before: int = 1, after: int = 2,
 
 def labelled_archive(flight: int = FLIGHT, gt: str = GT,
                      correction=CORRECTION, poses=None,
-                     video: int = 300_000, leave_out=()) -> bytes:
+                     video=300_000, leave_out=()) -> bytes:
     """The labelled flight as Zenodo holds it: the small files, and a
     video that is most of the archive."""
     poses = published_poses() if poses is None else poses
     members = {
-        f"{flight}_matched_processed.mp4": os.urandom(video),
+        f"{flight}_matched_processed.mp4": (
+            video if isinstance(video, bytes) else os.urandom(video)),
+        f"{flight}_mask_t.png": b"thermal mask",
+        f"{flight}_mask_w.png": b"rgb mask",
         f"{flight}_matched_poses.json": json.dumps(poses).encode(),
         f"{flight}_gt.txt": gt.encode(),
         f"{flight}_correction.json": json.dumps(correction).encode(),
@@ -227,3 +230,24 @@ def put_extraction(target: str, poses: dict, size=(640, 512)) -> None:
         json.dump(poses, handle)
     Image.new("L", size).save(os.path.join(
         target, "frames_t", poses["images"][0]["imagefile"]))
+
+
+def processed_video(folder: str, frames: int = 12, size: int = 32) -> bytes:
+    """A processed video as the dataset has them, small: thermal on the
+    left (dark, brighter with every frame), RGB on the right (light)."""
+    import cv2
+    import numpy as np
+
+    path = os.path.join(folder, "made.mp4")
+    writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"), 30.0,
+                             (2 * size, size))
+    for frame in range(frames):
+        picture = np.zeros((size, 2 * size, 3), np.uint8)
+        picture[:, :size] = 10 + 8 * frame
+        picture[:, size:] = 220
+        writer.write(picture)
+    writer.release()
+    with open(path, "rb") as handle:
+        data = handle.read()
+    os.remove(path)
+    return data
