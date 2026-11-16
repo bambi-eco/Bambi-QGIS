@@ -56,8 +56,10 @@ class Worker:
     made = []
     outcome = (True, "")
 
-    def __init__(self, bounds, output_folder, output_crs, padding):
+    def __init__(self, bounds, output_folder, output_crs, padding,
+                 source=None):
         self.asked = (tuple(bounds), output_folder, output_crs, padding)
+        self.source = source
         self.finished, self.progress, self.log = Signal(), Signal(), Signal()
         Worker.made.append(self)
 
@@ -165,16 +167,66 @@ def test_before_it_starts_it_says_what_it_is(dock, flight):
 
     confirm = [entry for entry in flight["asked"]
                if entry[1] == "Download DEM"][0]
-    assert "Fetch the Copernicus DEM (30 m) under the flight?" in confirm[2]
+    assert "Fetch the elevation under the flight?" in confirm[2]
+    assert ("From: the terrain model GEM-15 (15 m) where it has the flight, "
+            "else the Copernicus DEM (30 m)") in confirm[2]
     assert "Padding: 150 m" in confirm[2]           # never less
     assert "Output CRS: EPSG:32737" in confirm[2]
-    assert "It is a surface model" in confirm[2]
+    assert "GEM-15 is the bare ground" in confirm[2]
+    assert "Where there is a national terrain model of the area" in confirm[2]
+
+
+def test_the_terrain_model_is_asked_for_unless_told_otherwise(dock, flight):
+    from bambi_wildlife_detection.copernicus_dem_downloader import (
+        AUTO, COPERNICUS, GEM15)
+
+    combo = dock.world_dem_source_combo
+    assert [combo.itemData(i) for i in range(combo.count())] == [
+        AUTO, GEM15, COPERNICUS]
+    assert combo.currentData() == AUTO
+    assert "Best available" in combo.currentText()
+
+    dock.copernicus_dem_btn.click()
+
+    assert Worker.made[0].source == AUTO
+
+
+def test_the_surface_model_can_be_asked_for(dock, flight):
+    from bambi_wildlife_detection.copernicus_dem_downloader import COPERNICUS
+
+    combo = dock.world_dem_source_combo
+    combo.setCurrentIndex(combo.findData(COPERNICUS))
+
+    dock.copernicus_dem_btn.click()
+
+    confirm = [entry for entry in flight["asked"]
+               if entry[1] == "Download DEM"][0]
+    assert "From: the Copernicus DEM (30 m)" in confirm[2]
+    assert "The Copernicus DEM is a surface model" in confirm[2]
+    assert "GEM-15 is the bare ground" not in confirm[2]
+    assert Worker.made[0].source == COPERNICUS
+
+
+def test_only_the_terrain_model_can_be_asked_for(dock, flight):
+    from bambi_wildlife_detection.copernicus_dem_downloader import GEM15
+
+    combo = dock.world_dem_source_combo
+    combo.setCurrentIndex(combo.findData(GEM15))
+
+    dock.copernicus_dem_btn.click()
+
+    confirm = [entry for entry in flight["asked"]
+               if entry[1] == "Download DEM"][0]
+    assert "From: the terrain model GEM-15 (15 m)\n" in confirm[2]
+    assert Worker.made[0].source == GEM15
 
 
 def test_when_it_is_done_the_model_is_the_flights_dem(dock, flight):
     flight["mesh"].write_bytes(b"glTF")
     flight["mesh"].with_suffix(".json").write_text(
-        '{"crs": "EPSG:32737", "origin": [257000.0, 9857000.0, 1600.0]}')
+        '{"crs": "EPSG:32737", "origin": [257000.0, 9857000.0, 1600.0], '
+        '"source": {"product": "Copernicus DEM GLO-30", '
+        '"surface_model": true, "resolution_m": 30.0}}')
 
     dock.copernicus_dem_btn.click()
 
@@ -183,7 +235,10 @@ def test_when_it_is_done_the_model_is_the_flights_dem(dock, flight):
         flight["mesh"].with_suffix(".json"))
     done = flight["asked"][-1]
     assert (done[0], done[1]) == ("information", "DEM Download Complete")
-    assert "Position Uncertainty" in done[2]
+    assert done[2].startswith("The elevation model is there.\n\nMesh: ")
+    assert ("It was made from the Copernicus DEM GLO-30: a surface model at "
+            "30 m. Over forest it lies in the canopy - allow for that under "
+            "'Position Uncertainty' (Terrain model).") in done[2]
     assert dock.copernicus_dem_btn.isEnabled()
     assert dock.copernicus_dem_btn.text() == "Download DEM (worldwide)"
     assert "Reading Copernicus DEM tile ..." in dock.log_text.toPlainText()

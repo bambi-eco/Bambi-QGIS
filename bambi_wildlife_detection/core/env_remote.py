@@ -85,6 +85,37 @@ def fetch_json(url: str, params: Optional[dict] = None,
             f"{what} did not answer with JSON.") from exc
 
 
+def exists(url: str, what: str = "the service") -> bool:
+    """Whether a file of a public bucket is there.
+
+    A bucket answers a key it does not have with "not found" or with
+    "forbidden" - both mean there is no such file. Anything else that goes
+    wrong is the connection's, and raised.
+
+    :param what: what is being asked, for the message
+    :raises SourceUnavailable: no answer, or one that is neither "here it
+        is" nor "there is none"
+    """
+    import requests
+
+    _require_https(url)
+    try:
+        response = requests.head(
+            url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT_S,
+            allow_redirects=True)
+    except requests.RequestException as exc:
+        raise SourceUnavailable(
+            f"{what[:1].upper()}{what[1:]} could not be reached ({exc}). "
+            "Check the internet connection and try again.") from exc
+    if response.status_code == 200:
+        return True
+    if response.status_code in (403, 404):
+        return False
+    raise SourceUnavailable(
+        f"{what[:1].upper()}{what[1:]} answered {response.status_code} for "
+        f"{url}. Try again later.")
+
+
 def read_to_grid(href: str, grid: Grid, resampling: str = "bilinear",
                  fill=None):
     """The part of the raster at *href* under *grid*, on *grid*.

@@ -6,7 +6,7 @@ The processing pipeline needs a Digital Elevation Model as a GLB/GLTF mesh with 
 |---------------------|-------------|
 | Austria | **Download DEM (Austria)** - the national 1 m terrain model |
 | Anywhere a terrain model can be had as a file (national LiDAR, a survey of your own) | **Convert a GeoTIFF DEM** |
-| Anywhere else on land | **Download DEM (worldwide)** - the Copernicus DEM at 30 m |
+| Anywhere else on land | **Download DEM (worldwide)** - the bare ground at 15 m from Google's GEM-15 where it has the flight, else the Copernicus surface model at 30 m |
 | Over water | **Flat surface** |
 
 ## 1. Automatic download (Austria only)
@@ -17,24 +17,55 @@ Use the **Download DEM (Austria)** option to download and tile Austrian elevatio
 
 ## 2. Automatic download (worldwide)
 
-**Download DEM (worldwide)**, on the same tab, makes the elevation model from the **Copernicus DEM** - a model of the whole land surface of the earth, published as open data that needs no account. It asks nothing but where the flight was, which it reads from the AirData CSV or, without one, from the SRT files.
+**Download DEM (worldwide)**, on the same tab, makes the elevation model from an open model of the whole earth that needs no account. It asks nothing but where the flight was, which it reads from the AirData CSV or, without one, from the SRT files.
 
-- Only the part under the flight is transferred - a few hundred kilobytes, in a second or two - together with **at least 150 m of ground around it** (more with a larger *Padding*), so that what the camera sees beyond the route still meets the model.
+- Only the part under the flight is transferred - a few hundred kilobytes, in a few seconds - together with **at least 150 m of ground around it** (more with a larger *Padding*), so that what the camera sees beyond the route still meets the model.
 - The mesh is made in the **UTM zone the flight lies in**. Where the *Target CRS* is another one - a new project still has the default - you are asked whether to set it.
-- The result is written next to the AirData CSV (into the target folder where there is none) as `copernicus_dem.glb`, `.json` and `.tif`, and set as the flight's DEM. The `.json` says where the heights came from (`source`).
+- The result is written next to the AirData CSV (into the target folder where there is none) as `gem15_dem.glb`, `.json` and `.tif` - `copernicus_dem.*` where the heights are the Copernicus DEM's - and set as the flight's DEM. The `.json` says where the heights came from (`source`): the product, whether it is a surface model, by how much it was levelled and how much of it was filled in.
 
-**What you get, and what you do not.**
+**Two models, and which is used.** The list beside the button chooses:
 
-| | Copernicus DEM | A LiDAR terrain model |
+| | **Terrain model**: Google GEM-15 | **Surface model**: Copernicus DEM |
 |---|---|---|
-| Cell size | 30 m (*GLO-30*); 90 m (*GLO-90*) for the few countries the 30 m release leaves out - used automatically, and said in the log | 1 m or better |
-| What it is a model of | the **surface**: over forest somewhere in the canopy, over a village the roofs | the ground |
-| How good its heights are | a few metres | decimetres |
-| Heights are above | the EGM2008 geoid - sea level, as a drone's log gives its own | the national height system |
+| What it is a model of | the **ground**, predicted from sub-metre stereo satellite images | the **surface**, measured by radar: over forest somewhere in the canopy, over a village the roofs |
+| Cell size | 15 m | 30 m (*GLO-30*); 90 m (*GLO-90*) for the few countries the 30 m release leaves out |
+| Where | 60° S to 84° N, without Russia, China, Mongolia, Greenland and Antarctica; no values on water, snow and ice | everywhere on land |
+| State | experimental (2026) | established |
+| Heights are above | the EGM96 geoid as published; EGM2008 once levelled (below) | the EGM2008 geoid - sea level, as a drone's log gives its own |
+| Licence | CC BY 4.0, "This dataset is produced by Google" | free of charge, attribution to DLR / Airbus / Copernicus |
 
-For open ground - meadows, fields, steppe, mountains above the trees - that is enough for the animals to be where they were to within the accuracy of the drone's own position. **In forest it is not a terrain model**: an animal on the forest floor is placed on a surface up to a tree's height above it, and what the camera sees at an angle is shifted sideways by that height times the tangent of the angle - 10 m for 20 m of trees at 27 degrees off straight down. Straight below the drone the place is right all the same. Fly with the camera pointing down, set the *Terrain model* accuracy under [Position uncertainty](pipeline.md#position-uncertainty) to what the cover is (4 m in the open, the height of the trees in forest), and where a terrain model of the area exists, convert that instead.
+*Best available* - the default - takes the terrain model where it has the flight and the surface model where it has not, and says in the log which it was. The other two entries take one of them and nothing else.
+
+**What is done to GEM-15 before it is used.**
+
+- **It is levelled.** GEM-15 lies a few metres off, region by region - its publishers give -4.8 to +1.9 m and advise to "debias against local control". The control here is the Copernicus DEM, which is level with the ground wherever nothing stands on it: on *open ground* - cells where GEM-15's own surface and terrain models agree to within a metre - the median difference between the Copernicus DEM and GEM-15 is taken for the offset and added. The log says by how much, and from how many cells. Under a flight with too little open ground to tell (fewer than 50 cells) nothing is added, and the log says that the heights may lie a few metres low or high.
+- **Its gaps are filled.** Water with a margin of 9 m, snow, ice and other surfaces without texture carry no value in GEM-15. They are taken from the Copernicus DEM, and the log says how much of the model that is.
+
+**How good it is.** Checked in November 2026 against Austria's laser-scanned 1 m terrain model on eight areas of 2 km by 2 km. Each cell gives the median difference to the laser scan and the root-mean-square difference, in metres:
+
+| Area | GEM-15 as published | GEM-15 levelled | Copernicus | under trees: GEM-15 levelled | under trees: Copernicus |
+|------|------|------|------|------|------|
+| Village, fields and wood (Hagenberg) | -3.0 / 4.9 | +0.1 / 4.5 | +1.1 / 7.7 | 6.9 | 13.4 |
+| Forested hills (Styria; the demo flight) | -5.3 / 7.5 | +0.7 / 5.4 | +9.6 / 14.4 | 6.4 | 18.5 |
+| Fields and wood (Carinthia) | -3.0 / 4.8 | +0.7 / 4.9 | +0.6 / 7.7 | 7.5 | 14.0 |
+| Mountain forest (St. Pankraz) | -2.2 / 8.0 | +0.2 / 7.4 | +3.5 / 9.0 | 9.2 | 11.0 |
+| Flat fields (Marchfeld) | -2.7 / 3.0 | -0.4 / 1.3 | -0.3 / 1.6 | - | - |
+| Alpine slope (Schladming) | -4.1 / 7.0 | 0.0 / 6.2 | +1.6 / 10.1 | 7.9 | 15.1 |
+| Fields and wood (Lembach) | -2.4 / 4.7 | +0.9 / 3.9 | +0.7 / 5.4 | 5.7 | 11.7 |
+| Closed deciduous forest (Vienna Woods) | -1.4 / 9.0 | +3.7 / 11.1 | +12.2 / 16.7 | 9.8 | 19.3 |
+| **Mean of the root mean squares** | **6.1** | **5.6** | **9.1** | **7.6** | **14.7** |
+
+"Under trees" are the cells where GEM-15's surface model stands more than 5 m above its terrain model. Three things to take from it:
+
+- **In the open the two are as good as each other** once GEM-15 is levelled - a metre or two.
+- **Under trees GEM-15 is about twice as close to the ground** as the Copernicus DEM, which lies 8 to 18 m above it there. That is the difference that matters to a survey of forest animals: an animal on the forest floor is placed on the surface the model has, and what the camera sees at an angle is shifted sideways by the model's error times the tangent of the angle - 10 m for 20 m of error at 27 degrees off straight down. Straight below the drone the place is right either way.
+- **It is still no laser scan.** 4 to 11 m of error remain, most of it under trees, where the terrain is a prediction. In one of the eight areas - a closed forest with hardly a clearing - levelling made the model worse, because GEM-15's terrain there still has canopy in it. Where a terrain model of the area exists (Austria: the button above; elsewhere a national LiDAR model through *GeoTIFF Input*), use that.
+
+Set the *Terrain model* accuracy under [Position uncertainty](pipeline.md#position-uncertainty) to what the table says for ground like yours: 2 m in the open, 6 to 10 m under trees with GEM-15; with the Copernicus DEM 2 m in the open and the height of the trees in forest.
 
 Where the flight reaches the sea, the sea is ground at height nought; where there is nothing but sea, there is nothing to build - use the flat surface.
+
+GEM-15: Batchu, V. V., Neumann, M., Li, T., Allen, B., Zhang, J., & Van Arsdale, C. (2026): *GEM-15: Global surface and terrain elevation models (15 meters) from sub-meter optical stereo imagery.* EarthArXiv, <https://doi.org/10.31223/X55N75>. Copernicus DEM: © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018, provided under COPERNICUS by the European Union and ESA.
 
 ## 3. Convert a GeoTIFF DEM
 

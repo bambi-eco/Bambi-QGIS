@@ -30,6 +30,14 @@ def slope(grid):
                    (grid.height, 1))
 
 
+def build(*args, **more):
+    """The model made from the Copernicus DEM, which this file is about.
+    What decides between it and the terrain model is in
+    tests/test_world_dem_sources.py."""
+    more.setdefault("source", cdd.COPERNICUS)
+    return cdd.build_dem(*args, **more)
+
+
 def heights_of(make=slope, source=None, seen=None):
     def fetch(grid, log=None, cancelled=None, progress=None):
         if seen is not None:
@@ -43,7 +51,7 @@ def heights_of(make=slope, source=None, seen=None):
 def test_the_three_files_are_written(tmp_path):
     grids, log = [], []
 
-    built = cdd.build_dem(FLIGHT, str(tmp_path / "out"), "EPSG:32633",
+    built = build(FLIGHT, str(tmp_path / "out"), "EPSG:32633",
                           log=log.append, fetch=heights_of(seen=grids))
 
     assert sorted(os.listdir(tmp_path / "out")) == [
@@ -52,14 +60,16 @@ def test_the_three_files_are_written(tmp_path):
     assert built["metadata"].endswith("copernicus_dem.json")
     assert built["grid"] == grids[0]
     assert log[0].startswith("Elevation for 1.")
-    assert log[0].endswith("km around the flight, in EPSG:32633")
+    assert log[0].endswith(
+        "km around the flight, in cells of 30 m, EPSG:32633")
+    assert built["kind"] == cdd.COPERNICUS
 
 
 def test_the_grid_is_the_flight_and_the_ground_around_it(tmp_path):
     from pyproj import Transformer
 
     grids = []
-    cdd.build_dem(FLIGHT, str(tmp_path), "EPSG:32633",
+    build(FLIGHT, str(tmp_path), "EPSG:32633",
                   fetch=heights_of(seen=grids))
 
     grid = grids[0]
@@ -76,7 +86,7 @@ def test_the_grid_is_the_flight_and_the_ground_around_it(tmp_path):
 def test_more_ground_can_be_asked_for(tmp_path):
     grids = []
     for padding in (150.0, 600.0):
-        cdd.build_dem(FLIGHT, str(tmp_path), "EPSG:32633",
+        build(FLIGHT, str(tmp_path), "EPSG:32633",
                       padding_m=padding, fetch=heights_of(seen=grids))
 
     assert grids[1].width == grids[0].width + 30      # 450 m either side
@@ -85,7 +95,7 @@ def test_more_ground_can_be_asked_for(tmp_path):
 def test_the_geotiff_holds_the_heights(tmp_path):
     import rasterio
 
-    built = cdd.build_dem(FLIGHT, str(tmp_path), "EPSG:32633",
+    built = build(FLIGHT, str(tmp_path), "EPSG:32633",
                           fetch=heights_of())
 
     grid = built["grid"]
@@ -97,7 +107,7 @@ def test_the_geotiff_holds_the_heights(tmp_path):
 
 
 def test_the_metadata_says_where_the_heights_came_from(tmp_path):
-    built = cdd.build_dem(FLIGHT, str(tmp_path), "EPSG:32633",
+    built = build(FLIGHT, str(tmp_path), "EPSG:32633",
                           fetch=heights_of())
 
     with open(built["metadata"], encoding="utf-8") as handle:
@@ -118,7 +128,7 @@ def test_the_metadata_says_where_the_heights_came_from(tmp_path):
 def test_the_mesh_has_the_heights_where_they_are(tmp_path):
     trimesh = pytest.importorskip("trimesh")
 
-    built = cdd.build_dem(FLIGHT, str(tmp_path), "EPSG:32633",
+    built = build(FLIGHT, str(tmp_path), "EPSG:32633",
                           fetch=heights_of())
 
     grid = built["grid"]
@@ -143,7 +153,7 @@ def test_the_sea_is_ground_not_a_hole(tmp_path):
         heights[:, :10] = 0.0
         return heights
 
-    built = cdd.build_dem(FLIGHT, str(tmp_path), "EPSG:32633",
+    built = build(FLIGHT, str(tmp_path), "EPSG:32633",
                           fetch=heights_of(shore))
 
     grid = built["grid"]
@@ -157,7 +167,7 @@ def test_the_sea_is_ground_not_a_hole(tmp_path):
 def test_the_southern_hemisphere(tmp_path):
     grids = []
 
-    built = cdd.build_dem((18.47, -34.36, 18.48, -34.35), str(tmp_path),
+    built = build((18.47, -34.36, 18.48, -34.35), str(tmp_path),
                           "EPSG:32734", fetch=heights_of(seen=grids))
 
     assert grids[0].epsg == 32734
@@ -173,7 +183,7 @@ def test_the_southern_hemisphere(tmp_path):
 @pytest.mark.parametrize("crs", ["EPSG:4326", "EPSG:31287", "", "somewhere"])
 def test_the_mesh_needs_a_utm_crs(tmp_path, crs):
     with pytest.raises(environment.EnvironmentFailure, match="not a UTM CRS"):
-        cdd.build_dem(FLIGHT, str(tmp_path), crs, fetch=heights_of())
+        build(FLIGHT, str(tmp_path), crs, fetch=heights_of())
 
     assert os.listdir(tmp_path) == []
 
@@ -183,7 +193,7 @@ def test_no_heights_no_files(tmp_path):
         raise copernicus_dem.NoElevation("open sea")
 
     with pytest.raises(copernicus_dem.NoElevation):
-        cdd.build_dem(FLIGHT, str(tmp_path / "out"), "EPSG:32633",
+        build(FLIGHT, str(tmp_path / "out"), "EPSG:32633",
                       fetch=fetch)
 
     assert not os.path.exists(tmp_path / "out")
@@ -197,7 +207,7 @@ def test_cancelled_after_the_heights_nothing_is_written(tmp_path):
         return slope(grid), dict(SOURCE)
 
     with pytest.raises(environment.Cancelled):
-        cdd.build_dem(FLIGHT, str(tmp_path / "out"), "EPSG:32633",
+        build(FLIGHT, str(tmp_path / "out"), "EPSG:32633",
                       fetch=fetch, cancelled=lambda: state["stop"])
 
     assert not os.path.exists(tmp_path / "out")
@@ -206,7 +216,7 @@ def test_cancelled_after_the_heights_nothing_is_written(tmp_path):
 def test_progress_runs_to_the_end(tmp_path):
     seen = []
 
-    cdd.build_dem(FLIGHT, str(tmp_path), "EPSG:32633", fetch=heights_of(),
+    build(FLIGHT, str(tmp_path), "EPSG:32633", fetch=heights_of(),
                   progress=seen.append)
 
     assert seen == sorted(seen)
@@ -221,7 +231,7 @@ def test_a_mesh_that_cannot_be_made_says_so(tmp_path, monkeypatch):
 
     with pytest.raises(environment.EnvironmentFailure,
                        match="mesh could not be made"):
-        cdd.build_dem(FLIGHT, str(tmp_path), "EPSG:32633",
+        build(FLIGHT, str(tmp_path), "EPSG:32633",
                       fetch=heights_of())
 
 
@@ -243,19 +253,35 @@ class TestWorker:
         asked = []
 
         def build(bounds, folder, crs, padding, log=None, progress=None,
-                  cancelled=None):
-            asked.append((bounds, folder, crs, padding, cancelled()))
+                  cancelled=None, source=None):
+            asked.append((bounds, folder, crs, padding, cancelled(), source))
             return {"mesh": "/out/copernicus_dem.glb",
                     "source": {"product": "Copernicus DEM GLO-30"}}
 
         _worker, ended, log = self._run(monkeypatch, build)
 
-        assert asked == [(FLIGHT, "/out", "EPSG:32633", 200.0, False)]
+        # the terrain model where there is one, unless told otherwise
+        assert asked == [(FLIGHT, "/out", "EPSG:32633", 200.0, False,
+                          cdd.AUTO)]
         assert ended == [(True, "/out/copernicus_dem.glb")]
         assert log == [
-            "Fetching elevation from the Copernicus DEM...",
+            "Fetching the elevation under the flight...",
             "Elevation model written: /out/copernicus_dem.glb (Copernicus "
             "DEM GLO-30)"]
+
+    def test_it_asks_for_the_source_it_was_given(self, monkeypatch):
+        asked = []
+
+        def build(*args, source=None, **more):
+            asked.append(source)
+            return {"mesh": "/out/copernicus_dem.glb", "source": {}}
+
+        monkeypatch.setattr(cdd, "build_dem", build)
+        worker = cdd.CopernicusDEMWorker(FLIGHT, "/out", "EPSG:32633", 200.0,
+                                         source=cdd.COPERNICUS)
+        worker.run()
+
+        assert asked == [cdd.COPERNICUS]
 
     def test_no_heights_is_told_as_it_is(self, monkeypatch):
         def build(*args, **more):

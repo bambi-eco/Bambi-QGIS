@@ -624,29 +624,48 @@ class InputTabMixin:
         download_info_label.setWordWrap(True)
         auto_download_layout.addRow("", download_info_label)
 
-        # Anywhere else: the Copernicus DEM (copernicus_dem_downloader.py)
+        # Anywhere else: GEM-15 or the Copernicus DEM
+        # (copernicus_dem_downloader.py)
+        from ..copernicus_dem_downloader import SOURCES as _WORLD_SOURCES
+
         worldwide_row = QHBoxLayout()
         self.copernicus_dem_btn = QPushButton("Download DEM (worldwide)")
         self.copernicus_dem_btn.setToolTip(
-            "Fetch the Copernicus DEM (30 m) under the flight - anywhere on "
-            "earth, no account needed - and make the mesh and its metadata "
-            "from it. Only the part under the flight is transferred. The "
-            "flight's position is read from the AirData CSV or the SRT "
-            "files.\n"
-            "It is a surface model at 30 m: over forest it lies in the "
-            "canopy, and its heights are good to a few metres. Where there "
-            "is a terrain model, use that.")
+            "Fetch the elevation under the flight from an open worldwide "
+            "model - no account needed - and make the mesh and its "
+            "metadata from it. Only the part under the flight is "
+            "transferred. The flight's position is read from the AirData "
+            "CSV or the SRT files.\n"
+            "Where it has the flight, Google's GEM-15 is used: the bare "
+            "ground at 15 m, levelled to the Copernicus DEM and with its "
+            "gaps filled from it. Elsewhere the Copernicus DEM: a surface "
+            "model at 30 m, which over forest lies in the canopy. Heights "
+            "are good to a few metres; where there is a national terrain "
+            "model, use that.")
         self.copernicus_dem_btn.clicked.connect(self.download_copernicus_dem)
         worldwide_row.addWidget(self.copernicus_dem_btn)
-        worldwide_row.addStretch()
+        self.world_dem_source_combo = QComboBox()
+        for key, title in _WORLD_SOURCES:
+            self.world_dem_source_combo.addItem(title, key)
+        self.world_dem_source_combo.setToolTip(
+            "What the worldwide download reads.\n"
+            "Best available: the terrain model where it has the flight, "
+            "the surface model where it has not.\n"
+            "Terrain model: Google's GEM-15, the bare ground at 15 m - "
+            "60 deg S to 84 deg N, without Russia, China, Mongolia and "
+            "Greenland; experimental.\n"
+            "Surface model: the Copernicus DEM at 30 m, with the canopy of "
+            "a forest and the roofs of a village in it - everywhere.")
+        worldwide_row.addWidget(self.world_dem_source_combo, 1)
         auto_download_layout.addRow("", worldwide_row)
 
         worldwide_info_label = QLabel(
-            "Outside Austria: the Copernicus DEM, a model of the earth's "
-            "land surface at 30 m. A few megabytes at most; written next to "
-            "the AirData CSV (or into the target folder) as "
-            "copernicus_dem.glb / .json / .tif. At least 150 m of ground is "
-            "kept around the flight.")
+            "Outside Austria: Google's GEM-15, the bare ground at 15 m - "
+            "and where it has nothing, the Copernicus DEM, the earth's "
+            "surface at 30 m. A few megabytes at most; written next to the "
+            "AirData CSV (or into the target folder) as gem15_dem.glb / "
+            ".json / .tif (copernicus_dem.* for the Copernicus DEM). At "
+            "least 150 m of ground is kept around the flight.")
         worldwide_info_label.setWordWrap(True)
         auto_download_layout.addRow("", worldwide_info_label)
 
@@ -1259,11 +1278,12 @@ class InputTabMixin:
             )
 
     # =========================================================================
-    # Worldwide elevation: the Copernicus DEM
+    # Worldwide elevation: GEM-15 and the Copernicus DEM
     # =========================================================================
     def download_copernicus_dem(self):
-        """Build the flight's elevation model from the Copernicus DEM
+        """Build the flight's elevation model from an open worldwide model
         (copernicus_dem_downloader.py)."""
+        from ..copernicus_dem_downloader import AUTO, COPERNICUS, GEM15
         from ..core.crs_utils import utm_epsg_for_position
 
         config = self.get_config()
@@ -1316,17 +1336,31 @@ class InputTabMixin:
                 return
 
         padding = float(self.dem_padding_spin.value())
+        source = self.world_dem_source_combo.currentData() or AUTO
+        what = {
+            AUTO: ("the terrain model GEM-15 (15 m) where it has the "
+                   "flight, else the Copernicus DEM (30 m)"),
+            GEM15: "the terrain model GEM-15 (15 m)",
+            COPERNICUS: "the Copernicus DEM (30 m)",
+        }[source]
+        about = (
+            "The Copernicus DEM is a surface model: over forest it lies in "
+            "the canopy, and its heights are good to a few metres."
+            if source == COPERNICUS else
+            "GEM-15 is the bare ground, good to a few metres and under "
+            "trees less so. It is levelled to the Copernicus DEM, which is "
+            "a surface model and lies in the canopy over forest.")
         reply = QMessageBox.question(
             self, "Download DEM",
-            "Fetch the Copernicus DEM (30 m) under the flight?\n\n"
+            "Fetch the elevation under the flight?\n\n"
+            f"From: {what}\n"
             f"Flight: {bounds[1]:.5f}, {bounds[0]:.5f} to "
             f"{bounds[3]:.5f}, {bounds[2]:.5f}\n"
             f"Padding: {max(padding, 150.0):.0f} m\n"
             f"Output CRS: {output_crs}\n"
             f"Output folder: {output_folder}\n\n"
-            "It is a surface model: over forest it lies in the canopy, and "
-            "its heights are good to a few metres. Where there is a "
-            "terrain model of the area, use that.",
+            f"{about} Where there is a national terrain model of the area, "
+            "use that.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes)
         if reply != QMessageBox.StandardButton.Yes:
@@ -1338,7 +1372,7 @@ class InputTabMixin:
         self.copernicus_dem_btn.setText("Downloading...")
         self.copernicus_dem_thread = QThread()
         self.copernicus_dem_worker = CopernicusDEMWorker(
-            bounds, output_folder, output_crs, padding)
+            bounds, output_folder, output_crs, padding, source=source)
         self.copernicus_dem_worker.moveToThread(self.copernicus_dem_thread)
         self.copernicus_dem_thread.started.connect(
             self.copernicus_dem_worker.run)
@@ -1354,7 +1388,7 @@ class InputTabMixin:
         self.copernicus_dem_thread.finished.connect(
             self.copernicus_dem_thread.deleteLater)
         self.copernicus_dem_thread.start()
-        self.log("Starting the Copernicus DEM download...")
+        self.log("Starting the elevation download...")
 
     def _on_copernicus_dem_progress(self, percent: int):
         self.copernicus_dem_btn.setText(f"Downloading... {percent}%")
@@ -1375,13 +1409,15 @@ class InputTabMixin:
             self.dem_metadata_path_edit.setText(json_path)
             self.log(f"Auto-detected DEM metadata: {json_path}")
             self._try_auto_detect_crs_silent()
+        from ..copernicus_dem_downloader import describe
+
+        about = describe(json_path)
+        note = f"\n\n{about}" if about else ""
         QMessageBox.information(
             self, "DEM Download Complete",
-            "The elevation model was made from the Copernicus DEM.\n\n"
+            "The elevation model is there.\n\n"
             f"Mesh: {mesh_path}\n"
-            f"Metadata: {json_path}\n\n"
-            "It is a surface model at 30 m: allow for that under "
-            "'Position Uncertainty' (Terrain model), above all in forest.")
+            f"Metadata: {json_path}{note}")
 
     # =========================================================================
     # GeoTIFF to Mesh Conversion Methods

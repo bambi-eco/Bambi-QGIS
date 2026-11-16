@@ -4,7 +4,8 @@
 
 :class:`DemoFlightWorker` fetches the published example flight into a
 folder, unpacks it, and - so that nothing is left to do before the first
-step - builds its elevation model from the Copernicus DEM
+step - builds its elevation model from the open worldwide models: the
+terrain model GEM-15 where it has the flight, else the Copernicus DEM
 (:mod:`copernicus_dem_downloader`).
 """
 
@@ -74,11 +75,12 @@ class DemoFlightWorker(QObject):
         """The flight's elevation model, unless the folder has one. A
         model that cannot be fetched does not cost the flight: it is said,
         and can be fetched from the Input tab later."""
-        from .copernicus_dem_downloader import STEM, build_dem
+        from .copernicus_dem_downloader import STEMS, build_dem
         from .core import demo_data, environment
         from .core.crs_utils import utm_epsg_for_position
 
-        if os.path.isfile(os.path.join(self.folder, f"{STEM}.glb")):
+        if any(os.path.isfile(os.path.join(self.folder, f"{stem}.glb"))
+               for stem in STEMS.values()):
             return
         bounds = demo_data.recording_bounds(files["airdata"])
         if bounds is None:

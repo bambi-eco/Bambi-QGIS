@@ -65,7 +65,8 @@ class DemoMixin:
             self, "Demo Flight",
             f"{demo.description}\n\n"
             f"Download: {demo.size / 1e6:.0f} MB from Zenodo, and its "
-            "elevation model (Copernicus DEM, a few hundred kilobytes).\n"
+            "elevation model (the bare ground at 15 m from Google's GEM-15, "
+            "a megabyte or two).\n"
             f"Into: {folder}\n\n"
             f"Licence: {demo.licence}. If you publish anything made with "
             f"it, cite:\n{demo.citation}\n\n"

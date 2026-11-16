@@ -106,25 +106,7 @@ def exists(url: str) -> bool:
     :raises core.env_remote.SourceUnavailable: no answer, or one that is
         neither "here it is" nor "there is none"
     """
-    import requests
-
-    env_remote._require_https(url)
-    try:
-        response = requests.head(
-            url, headers={"User-Agent": env_remote.USER_AGENT},
-            timeout=env_remote.TIMEOUT_S, allow_redirects=True)
-    except requests.RequestException as exc:
-        raise env_remote.SourceUnavailable(
-            f"The Copernicus DEM could not be reached ({exc}). Check the "
-            "internet connection and try again.") from exc
-    if response.status_code == 200:
-        return True
-    if response.status_code in (403, 404):
-        # a public bucket answers a key that is not there with either
-        return False
-    raise env_remote.SourceUnavailable(
-        f"The Copernicus DEM answered {response.status_code} for {url}. "
-        "Try again later.")
+    return env_remote.exists(url, "the Copernicus DEM")
 
 
 def fetch(grid: Grid, read: Callable = env_remote.read_to_grid,
