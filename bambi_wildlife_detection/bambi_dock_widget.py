@@ -26,6 +26,7 @@ from .gui_utils import FitTabWidget
 from . import gui_utils as gui_utils_hf
 
 from .dock.input_tab import InputTabMixin
+from .dock.demo import DemoMixin
 from .dock.flights import FlightsMixin
 from .dock.configuration_tab import ConfigurationTabMixin
 from .dock.correction_settings import CorrectionSettingsMixin
@@ -64,6 +65,7 @@ _HF_TOKEN_SETTING = gui_utils_hf.HF_TOKEN_SETTING  # one key with the Segmentati
 
 class BambiDockWidget(
         InputTabMixin,
+        DemoMixin,
         FlightsMixin,
         ConfigurationTabMixin,
         CorrectionSettingsMixin,

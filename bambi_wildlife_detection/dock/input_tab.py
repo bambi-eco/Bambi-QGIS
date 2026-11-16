@@ -43,6 +43,9 @@ class InputTabMixin:
         input_layout = QVBoxLayout(input_tab)
         main_tabs.addTab(input_tab, "Input")
 
+        # --- A flight to try everything with (dock/demo.py) ---
+        input_layout.addLayout(self._build_demo_row())
+
         # --- Flights ---
         # A QGIS project can hold several flights; exactly one is active, so
         # everything downstream still reads a single configuration.

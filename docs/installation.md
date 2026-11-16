@@ -217,6 +217,21 @@ The **Dependency Manager** provides a one-click download button that extracts th
 C:\Users\<YourUserName>\AppData\Roaming\QGIS\QGIS3\profiles\default\bambi_deps\<dji_thermal_sdk_v*>
 ```
 
+## The demo flight
+
+To try the plugin without data of your own, press **Download Demo Flight…** at the top of the **Input** tab and choose where to put it. What happens then:
+
+1. **The flight is fetched** - `flight_306.zip`, 122 MB, from the [BAMBI raw dataset on Zenodo](https://doi.org/10.5281/zenodo.19047570): a nadir flight of a DJI M30T over forest and meadow in Styria, Austria, on 19 November 2024, as it came off the drone - the thermal and the RGB video with their SRT files, the AirData flight log and both camera calibrations. It is put into a folder of its own, `BAMBI_demo_flight`, inside the one you chose.
+2. **It is checked** - the archive is taken for the flight only when it is exactly the published file (its size and SHA-256 are part of the plugin). A download that broke off is continued when you press the button again.
+3. **Its elevation model is made** from the [Copernicus DEM](dem.md#2-automatic-download-worldwide) - a few hundred kilobytes more - so that nothing is left to prepare. (The flight lies in Austria: for work that is to be kept, the 1 m terrain model of *Download DEM (Austria)* is the better one, and several gigabytes larger.)
+4. **The Input tab is filled in** - videos, SRT files, flight log, calibrations, elevation model, target CRS and the target folder (`BAMBI_demo_flight/qgis`) - and the flight is added to the project as *BAMBI demo flight 306*.
+
+From there: **Pre-Processing → P1. Extract Frames**, then the Processing tab from top to bottom. The detection model is downloaded the first time *Detect Animals* runs.
+
+In a project that already has flights the Input tab is left as it is - it shows one of them. The demo flight is fetched all the same; to work with it beside your own, type a name under *Name*, press **+**, and choose the thermal videos in the demo folder: the other files are found by themselves.
+
+The recordings are published under **CC BY 4.0**. If you publish anything made with them, cite: Praschl, C., Schedl, D. C., et al. (2026): *The BAMBI Raw Dataset: Unprocessed Nadir UAV-Recordings of Forest Wildlife (Part 27).* Zenodo. https://doi.org/10.5281/zenodo.19047570
+
 ## Installation problems
 
 **Git not found**: When installing the git-based dependencies from the shell, Git must be installed and available in the OSGeo4W Shell's PATH. On Windows, edit `OSGeo4W.bat` to add:
