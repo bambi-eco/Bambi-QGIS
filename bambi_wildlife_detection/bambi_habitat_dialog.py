@@ -46,10 +46,13 @@ def _fmt(value, digits: int = 2, unit: str = "") -> str:
 class HistogramChart(QWidget):
     """One layer: its distribution over the ground and at the animals."""
 
-    MARGIN_LEFT = 44
+    MARGIN_LEFT = 62
     MARGIN_RIGHT = 12
     MARGIN_TOP = 40
-    MARGIN_BOTTOM = 30
+    MARGIN_BOTTOM = 46
+    #: Short: it stands upright beside a plot a hundred pixels high. The
+    #: line under the title says whose shares the bars are.
+    Y_LABEL = "Share"
 
     def __init__(self, layer: dict, parent=None):
         super().__init__(parent)
@@ -57,10 +60,17 @@ class HistogramChart(QWidget):
         self._used_counts = list(layer.get("used_counts") or [])
         self._used_mean = (layer.get("used") or {}).get("mean")
         self._used_n = (layer.get("used") or {}).get("n", 0)
-        self.setMinimumHeight(190)
+        self.setMinimumHeight(206)
         self.setSizePolicy(QSizePolicy.Policy.Expanding,
                            QSizePolicy.Policy.Fixed)
         self.setToolTip(layer.get("description", ""))
+
+    def axis_labels(self):
+        """``(x, y)``: what the two axes are of - the layer's quantity
+        with its unit, and the share of the bars."""
+        unit = str(self._layer.get("unit") or "").strip()
+        title = str(self._layer.get("title") or "Value")
+        return (f"{title} ({unit})" if unit else title), self.Y_LABEL
 
     def set_used(self, counts: Sequence[int], mean: Optional[float],
                  n: int) -> None:
@@ -170,9 +180,22 @@ class HistogramChart(QWidget):
         for step in (0, 2, 4):
             share = top * step / 4.0
             text = f"{share * 100:.0f}%"
-            painter.drawText(QRectF(0, y_of(share) - 7,
-                                    self.MARGIN_LEFT - 5, 14),
+            painter.drawText(QRectF(18, y_of(share) - 7,
+                                    self.MARGIN_LEFT - 23, 14),
                              ALIGN_RIGHT_MIDDLE, text)
+
+        # what the axes are of
+        x_label, y_label = self.axis_labels()
+        painter.drawText(QRectF(rect.left(), rect.bottom() + 22,
+                                rect.width(), 16),
+                         Qt.AlignmentFlag.AlignHCenter, x_label)
+        painter.save()
+        painter.translate(12, rect.center().y())
+        painter.rotate(-90)
+        painter.drawText(QRectF(-rect.height() / 2.0 - 20, -8,
+                                rect.height() + 40, 16),
+                         Qt.AlignmentFlag.AlignHCenter, y_label)
+        painter.restore()
 
 
 class LandCoverChart(QWidget):
@@ -181,13 +204,18 @@ class LandCoverChart(QWidget):
     ROW_HEIGHT = 30
     LABEL_WIDTH = 170
     NOTE_WIDTH = 210
+    HEAD = 58                 # title, legend, the classes' heading
+    FOOT = 38                 # the scale of the bars, and what it is of
+    X_LABEL = "Share of ground / of animals (%)"
+    Y_LABEL = "Land-cover class"
 
     def __init__(self, classes: List[dict], parent=None):
         super().__init__(parent)
         self._classes = classes
         self._used = {c["name"]: (c.get("used_share"), c.get("n_tracks", 0))
                       for c in classes}
-        self.setMinimumHeight(44 + self.ROW_HEIGHT * max(1, len(classes)))
+        self.setMinimumHeight(
+            self.HEAD + self.FOOT + self.ROW_HEIGHT * max(1, len(classes)))
         self.setSizePolicy(QSizePolicy.Policy.Expanding,
                            QSizePolicy.Policy.Fixed)
         self.setToolTip(
@@ -202,6 +230,10 @@ class LandCoverChart(QWidget):
             "independent. Animals in a group are not, so read it as the "
             "least the uncertainty can be: a ratio within about two standard "
             "errors of 1 says nothing.")
+
+    def axis_labels(self):
+        """``(x, y)``: what the bars' length and the rows are of."""
+        return self.X_LABEL, self.Y_LABEL
 
     def set_used(self, used: dict) -> None:
         """``class name -> (share of the animals, number of animals)``."""
@@ -235,8 +267,30 @@ class LandCoverChart(QWidget):
         top = max(shares + [0.01])
         animals = sum(count for _share, count in self._used.values())
 
+        # the rows are classes; the bars' length is a share, on the scale
+        # drawn below them
+        x_label, y_label = self.axis_labels()
+        painter.setPen(TEXT_COLOR)
+        painter.drawText(QRectF(8, 38, self.LABEL_WIDTH - 12, 16),
+                         Qt.AlignmentFlag.AlignLeft, y_label)
+        rows = max(1, len(self._classes))
+        axis_y = self.HEAD + rows * self.ROW_HEIGHT
+        painter.setPen(QPen(TEXT_COLOR, 1))
+        painter.drawLine(QPointF(bar_left, axis_y),
+                         QPointF(bar_left + bar_width, axis_y))
+        metrics = QFontMetrics(font)
+        for step in range(5):
+            x = bar_left + bar_width * step / 4.0
+            painter.drawLine(QPointF(x, axis_y), QPointF(x, axis_y + 3))
+            text = f"{top * 100 * step / 4.0:.0f}"
+            painter.drawText(
+                QPointF(x - metrics.horizontalAdvance(text) / 2.0,
+                        axis_y + 15), text)
+        painter.drawText(QRectF(bar_left, axis_y + 19, bar_width, 16),
+                         Qt.AlignmentFlag.AlignHCenter, x_label)
+
         for index, entry in enumerate(self._classes):
-            y = 42 + index * self.ROW_HEIGHT
+            y = self.HEAD + index * self.ROW_HEIGHT
             name = entry["name"]
             painter.setPen(TEXT_COLOR)
             painter.drawText(QRectF(8, y, self.LABEL_WIDTH - 12,
