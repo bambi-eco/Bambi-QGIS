@@ -13,11 +13,12 @@ went wrong with that:
   releasing them. A light-field over the terrain has a different size for
   nearly every frame, so stepping through a flight made a new renderer per
   frame and kept them all;
-* ``Renderer.release()`` of alfspy (up to 3.1 at least) frees the
-  framebuffer and leaves what was attached to it: both textures and the
-  depth buffer, the bulk of the memory - 24 bytes per pixel, 400 MB for a
-  4096 px tile. The processing steps make a renderer per tile or per frame
-  and released each of them, and still filled the card over a run.
+* ``Renderer.release()`` of alfspy up to 3.1.0 frees the framebuffer and
+  leaves what was attached to it: both textures and the depth buffer, the
+  bulk of the memory - 24 bytes per pixel, 400 MB for a 4096 px tile. The
+  processing steps make a renderer per tile or per frame and released each
+  of them, and still filled the card over a run. (alfspy 3.1.1 releases
+  them itself; the plugin runs on either.)
 
 :func:`release_renderer` frees all of it, :class:`RendererPool` keeps a few
 renderers and releases the rest, :func:`release_shot` and
@@ -25,8 +26,8 @@ renderers and releases the rest, :func:`release_shot` and
 
 Free of QGIS and Qt, and of alfspy: what is released is found by name on
 the object, so an engine that holds nothing of the kind (PyTorch, Vulkan)
-is simply left alone, and a later alfspy that frees these itself costs a
-second, harmless ``release()``.
+is simply left alone, and an alfspy that frees these itself (3.1.1 on)
+costs a second, harmless ``release()``.
 """
 
 from collections import OrderedDict

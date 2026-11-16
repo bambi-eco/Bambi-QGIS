@@ -200,10 +200,23 @@ def _ground():
         np.array([[0, 1, 2], [0, 2, 3]], np.uint32))
 
 
+def _alfspy_version():
+    import alfspy
+
+    numbers = []
+    for part in str(alfspy.__version__).split(".")[:3]:
+        digits = "".join(ch for ch in part if ch.isdigit())
+        numbers.append(int(digits) if digits else 0)
+    return tuple(numbers)
+
+
 class TestOnOpenGL:
-    def test_the_renderers_own_release_leaves_its_framebuffer_behind(self, gl):
-        """Why :func:`release_renderer` exists. When this fails, alfspy has
-        learned to do it itself - and the helper costs nothing."""
+    def test_what_the_renderers_own_release_leaves_behind(self, gl):
+        """Why :func:`release_renderer` exists: up to alfspy 3.1.0 the
+        renderer's own ``release()`` left its framebuffer's two textures
+        and the depth buffer. From 3.1.1 it gives them back itself, and
+        the helper costs a second, harmless ``release()``. Either way
+        nothing is alive once the helper has run."""
         from alfspy.core.rendering import Camera, Renderer, Resolution
 
         ctx, alive = gl
@@ -211,8 +224,11 @@ class TestOnOpenGL:
         renderer.release()
 
         left = alive()
-        assert left["textures"] == 2 and left["renderbuffers"] == 1
-        rr.release_renderer(renderer)                 # tidy up after the test
+        if _alfspy_version() <= (3, 1, 0):
+            assert left["textures"] == 2 and left["renderbuffers"] == 1
+        else:
+            assert left == alive.none()
+        rr.release_renderer(renderer)
         assert alive() == alive.none()
 
     def test_release_renderer_leaves_nothing(self, gl):
