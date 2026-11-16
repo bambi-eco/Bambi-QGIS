@@ -179,6 +179,13 @@ def test_the_altitude_profile_says_what_is_under_the_mouse(shown):
 # Every window: built, shown, and poked
 # ---------------------------------------------------------------------------
 
+def _dataset_flights():
+    """The list of flights that ships with the plugin."""
+    from bambi_wildlife_detection.core import bambi_dataset
+
+    return bambi_dataset.flights()
+
+
 WINDOWS = [
     ("bambi_thermal_viewer", "ThermalViewerDialog", lambda c: c()),
     ("bambi_camera_calibration", "CameraCalibrationWizard", lambda c: c()),
@@ -192,6 +199,8 @@ WINDOWS = [
     ("bambi_segmentation_tool", "SegmentationToolDialog",
      lambda c: c(Anything(), None)),
     ("bambi_agl_tool", "AglToolDialog", lambda c: c(Anything(), None)),
+    ("bambi_dataset_dialog", "DatasetFlightsDialog",
+     lambda c: c(_dataset_flights(), folder="/data/flights")),
     ("bambi_dock_widget", "BambiDockWidget", lambda c: c(Anything())),
 ]
 

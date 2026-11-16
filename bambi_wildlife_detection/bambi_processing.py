@@ -391,6 +391,27 @@ def _frames_reextracted(config: Dict[str, Any], modality: str,
         log_fn("Now out of date after re-extracting the frames: " + ", ".join(stale))
 
 
+def _dataset_labels_onto_frames(config: Dict[str, Any], log_fn=None) -> None:
+    """For a flight of the BAMBI dataset whose labels were asked for: put
+    them on the frames that were just extracted.
+
+    The labels name frames of the published video; an extraction numbers
+    its own (:func:`core.bambi_dataset.after_extraction`). Never fails an
+    extraction.
+    """
+    from .core import bambi_dataset
+
+    target_folder = config.get("target_folder", "")
+    if not target_folder:
+        return
+    try:
+        bambi_dataset.after_extraction(target_folder, "t", log_fn)
+    except Exception as exc:  # noqa: BLE001 - the frames are there all the same
+        if log_fn:
+            log_fn("Warning: the labels of the BAMBI dataset could not be "
+                   f"put on the extracted frames ({exc})")
+
+
 def _only_labelled_boxes(target_folder: str, modality: str,
                          log_fn=None) -> bool:
     """True when a tracker found nothing to associate because every box of
@@ -1244,6 +1265,7 @@ class BambiProcessor(SurveyAnalyticsMixin, SurveyGridMixin,
             _remove_earlier_frames(config, frames_folder_t,
                                    poses_t.get("images"), log_fn)
             _frames_reextracted(config, "t", log_fn)
+            _dataset_labels_onto_frames(config, log_fn)
             if log_fn:
                 log_fn(f"Thermal extraction complete: {thermal_frames} frames")
                 _heading_msg = heading_check_message(poses_t, "Thermal")

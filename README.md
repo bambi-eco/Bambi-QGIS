@@ -45,7 +45,7 @@ Optional capabilities (GPU inference, BoxMOT trackers, camera calibration via Sf
 
 ## Quick start
 
-**No data of your own yet?** Open the dock widget and press **Download Demo Flight…** at the top of the **Input** tab: a public example flight (122 MB; thermal and RGB video of a DJI M30T over forest and meadow, with flight log and calibrations) is fetched together with its elevation model, and the Input tab is filled in - go straight to step 4. See [the demo flight](docs/installation.md#the-demo-flight).
+**No data of your own yet?** Open the dock widget and press **Download Example Flights…** at the top of the **Input** tab: tick flights of the public BAMBI dataset by their number - a short one is ticked to begin with (122 MB; thermal and RGB video of a DJI M30T over forest and meadow, with flight log and calibrations) - and each is fetched together with its elevation model and added to the project with the Input tab filled in: go straight to step 4. A flight's published route, its hand-labelled animals and its camera correction can come along. See [example flights](docs/installation.md#example-flights).
 
 1. Click the **BAMBI** icon in the toolbar to open the dock widget
 2. In the **Input** tab, choose **Video** or **Photo** mode and select your recordings, camera calibration, AirData flight log, DEM, target CRS, and output folder

@@ -9,8 +9,8 @@ exception is the step runner, which is an object the dock has.
 
 The tabs
     ``input_tab``                the Input tab
-    ``demo``                     Input > Download Demo Flight: a public
-                                 example flight at a click
+    ``example_flights``          Input > Download Example Flights: flights
+                                 of the BAMBI dataset, by their number
     ``configuration_tab``        the Configuration tab and most of its sub-tabs
     ``correction_settings``      Configuration > Correction
     ``tracking_settings``        Configuration > Tracking

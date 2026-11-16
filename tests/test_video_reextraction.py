@@ -266,3 +266,46 @@ def test_an_interrupted_first_extraction_has_nothing_to_warn_about(
 
     assert not any("did not finish" in line for line in log)
     assert marked == []
+
+
+# ---------------------------------------------------------------------------
+# A flight of the BAMBI dataset: its labels follow the frames
+# ---------------------------------------------------------------------------
+
+def test_a_dataset_flights_labels_are_put_on_the_new_frames(extraction,
+                                                            monkeypatch):
+    """The published labels name frames of the published video; an
+    extraction numbers its own (core/bambi_dataset.py)."""
+    from bambi_wildlife_detection.core import bambi_dataset
+
+    run, _engine, folder, modality, _log = extraction
+    asked = []
+    monkeypatch.setattr(
+        bambi_dataset, "after_extraction",
+        lambda target, camera, log=None: asked.append((target, camera)))
+
+    run()
+
+    # the thermal frames carry them; the RGB extraction has none to place
+    assert asked == ([(os.path.dirname(folder), "t")] if modality == "t"
+                     else [])
+
+
+def test_labels_that_cannot_be_placed_do_not_cost_the_extraction(
+        extraction, monkeypatch):
+    from bambi_wildlife_detection.core import bambi_dataset
+
+    run, engine, folder, modality, log = extraction
+
+    def broken(*args, **more):
+        raise RuntimeError("the store is locked")
+
+    monkeypatch.setattr(bambi_dataset, "after_extraction", broken)
+
+    run()
+
+    assert sorted(_pixels(folder)) == engine.frames
+    said = [line for line in log if "BAMBI dataset" in line]
+    assert said == ([
+        "Warning: the labels of the BAMBI dataset could not be put on the "
+        "extracted frames (the store is locked)"] if modality == "t" else [])

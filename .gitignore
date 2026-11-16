@@ -7,6 +7,9 @@ DECOUPLING_PLAN.md
 reports/
 .secrets.baseline.new
 
+# What update_bambi_catalogue.py keeps between two runs
+.bambi_catalogue_cache/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

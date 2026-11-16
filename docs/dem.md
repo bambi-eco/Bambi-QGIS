@@ -46,7 +46,7 @@ Use the **Download DEM (Austria)** option to download and tile Austrian elevatio
 | Area | GEM-15 as published | GEM-15 levelled | Copernicus | under trees: GEM-15 levelled | under trees: Copernicus |
 |------|------|------|------|------|------|
 | Village, fields and wood (Hagenberg) | -3.0 / 4.9 | +0.1 / 4.5 | +1.1 / 7.7 | 6.9 | 13.4 |
-| Forested hills (Styria; the demo flight) | -5.3 / 7.5 | +0.7 / 5.4 | +9.6 / 14.4 | 6.4 | 18.5 |
+| Forested hills (Styria; example flight 306) | -5.3 / 7.5 | +0.7 / 5.4 | +9.6 / 14.4 | 6.4 | 18.5 |
 | Fields and wood (Carinthia) | -3.0 / 4.8 | +0.7 / 4.9 | +0.6 / 7.7 | 7.5 | 14.0 |
 | Mountain forest (St. Pankraz) | -2.2 / 8.0 | +0.2 / 7.4 | +3.5 / 9.0 | 9.2 | 11.0 |
 | Flat fields (Marchfeld) | -2.7 / 3.0 | -0.4 / 1.3 | -0.3 / 1.6 | - | - |

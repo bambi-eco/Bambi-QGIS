@@ -207,6 +207,8 @@ mask_W.png         # Undistortion mask (RGB)
 
 **Extracting again** replaces the frames: every image is written anew, so a changed calibration or "preserve aspect ratio" shows in the pictures and not only in the poses and the mask, and video frames of the earlier extraction that the new one does not have (another sampling rate or range) are removed from the folder. Other files in the folder are left alone. Everything computed from the previous frames is marked out of date. An extraction that is aborted half-way leaves some new images under the previous frame list - the log says so; run it again before using the frames.
 
+**Flights of the BAMBI dataset.** For an [example flight](installation.md#example-flights) whose labels were imported, the labels are put on the extracted frames when the step ends - a label names a frame of the published video, and an extraction numbers its own. Published poses that were imported as the flight's route are replaced by those of the extraction.
+
 ### P2. Generate Flight Route
 
 Builds two complementary vector layers from the mission data:
