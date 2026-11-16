@@ -16,7 +16,7 @@ from typing import Iterable, List, Optional, Sequence
 
 from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtWidgets import (
-    QAbstractItemView, QCheckBox, QDialog, QDialogButtonBox, QFileDialog,
+    QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
     QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPushButton,
     QTableWidget, QTableWidgetItem, QVBoxLayout,
 )
@@ -56,7 +56,8 @@ class DatasetFlightsDialog(QDialog):
                  ticked: Iterable[int] = (bambi_dataset.EXAMPLE,),
                  route: bool = True, labels: bool = False,
                  correction: bool = True, videos: bool = True,
-                 records: Optional[dict] = None):
+                 records: Optional[dict] = None,
+                 version: str = bambi_dataset.PROCESSED):
         super().__init__(parent)
         self.setWindowTitle("Download Example Flights")
         self.resize(600, 720)
@@ -120,15 +121,37 @@ class DatasetFlightsDialog(QDialog):
         self.videos_check = QCheckBox("Download video data")
         self.videos_check.setChecked(bool(videos))
         self.videos_check.setToolTip(
-            "Fetch a flight's recordings - thermal and RGB video, SRT "
-            "files, flight log, calibrations; hundreds of megabytes to "
-            "many gigabytes - which every step from 'Extract Frames' on "
-            "needs. Unticked, only the poses and labels of a flight are "
+            "Fetch a flight's video - hundreds of megabytes to many "
+            "gigabytes - in the version chosen beside this box. "
+            "Unticked, only the poses and labels of a flight are "
             "fetched, a megabyte or two: its route and its labelled "
             "animals for a fast overview in QGIS. The videos can be "
             "fetched later by asking for the flight again.")
         self.videos_check.toggled.connect(self._refresh_summary)
-        layout.addWidget(self.videos_check)
+        which = QHBoxLayout()
+        which.addWidget(self.videos_check)
+        which.addWidget(QLabel("Version:"))
+        self.version_combo = QComboBox()
+        self.version_combo.addItem(
+            "Processed (undistorted, synchronised)", bambi_dataset.PROCESSED)
+        self.version_combo.addItem(
+            "Raw (as recorded; for 'Extract Frames')",
+            bambi_dataset.RECORDINGS)
+        self.version_combo.setCurrentIndex(
+            max(0, self.version_combo.findData(version)))
+        self.version_combo.setToolTip(
+            "Which video of a flight to fetch. Processed: the labelled "
+            "dataset's video - undistorted, thermal and RGB synchronised "
+            "side by side, the one the poses and labels belong to - with "
+            "its masks; to look at, the plugin's 'Extract Frames' does "
+            "not read it. Raw: the recordings as they came off the drone, "
+            "with SRT files, flight log and calibrations - what the "
+            "plugin's steps from 'Extract Frames' on work with.")
+        self.version_combo.setEnabled(bool(videos))
+        self.videos_check.toggled.connect(self.version_combo.setEnabled)
+        self.version_combo.currentIndexChanged.connect(self._refresh_summary)
+        which.addWidget(self.version_combo, 1)
+        layout.addLayout(which)
 
         extras = QGroupBox("From the labelled dataset")
         extras_layout = QVBoxLayout(extras)
@@ -305,6 +328,10 @@ class DatasetFlightsDialog(QDialog):
     def download_videos(self) -> bool:
         return self.videos_check.isChecked()
 
+    def version(self) -> str:
+        """``"processed"`` or ``"raw"``: which video is fetched."""
+        return self.version_combo.currentData()
+
     def _refresh_summary(self, *_args) -> None:
         if self._filling:
             return
@@ -315,9 +342,14 @@ class DatasetFlightsDialog(QDialog):
         if shown != self.table.rowCount():
             text += f" - {shown} shown"
         # what the dataset does not have of a ticked flight
-        if self.download_videos():
+        raw = self.version() == bambi_dataset.RECORDINGS
+        if self.download_videos() and raw:
             lacking = [flight.id for flight in ticked if flight.raw is None]
             what = "recordings"
+        elif self.download_videos():
+            lacking = [flight.id for flight in ticked
+                       if flight.labelled is None]
+            what = "processed video"
         else:
             lacking = [flight.id for flight in ticked
                        if flight.labelled is None]

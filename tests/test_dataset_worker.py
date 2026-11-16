@@ -23,12 +23,14 @@ def made(tmp_path, monkeypatch):
     calls, fate = [], {}
 
     def prepare_flight(entry, into, session, route=True, labels=True,
-                       correction=True, videos=True, elevation=None,
+                       correction=True, videos=True, version=None,
+                       elevation=None,
                        make_route=None, progress=None, cancelled=None,
                        log=None, listings=None):
         calls.append({"flight": entry.id, "into": into, "route": route,
                       "labels": labels, "correction": correction,
                       "videos": videos, "listings": listings,
+                      "version": version,
                       "elevation": elevation, "make_route": make_route,
                       "agent": session.headers["User-Agent"],
                       "cancelled": cancelled()})
@@ -89,6 +91,7 @@ def test_zenodo_is_asked_once_per_record_for_all_the_flights(made):
     make((306, 7)).run()
 
     assert calls[0]["listings"] == {}
+    assert calls[0]["version"] == "processed"      # unless told otherwise
     assert calls[0]["listings"] is calls[1]["listings"]
 
 
@@ -237,3 +240,11 @@ def test_the_routes_files_are_what_the_step_writes(made, monkeypatch):
         "alfs_dem_metadata_path": "/there/gem15_dem.json",
         "dem_path": "/there/gem15_dem.glb", "filter_gps_origin": True}]
     assert ("Flight route generation complete",) in worker.log.calls
+
+
+def test_the_version_asked_for_is_the_one_fetched(made):
+    make, calls, _fate, _folder = made
+
+    make(version="raw").run()
+
+    assert calls[0]["version"] == "raw"

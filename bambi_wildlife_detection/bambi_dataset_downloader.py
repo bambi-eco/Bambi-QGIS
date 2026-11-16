@@ -34,12 +34,14 @@ class DatasetFlightsWorker(QObject):
     def __init__(self, flights: Sequence, folder: str,
                  route: bool = True, labels: bool = True,
                  correction: bool = True, videos: bool = True,
-                 with_dem: bool = True):
+                 with_dem: bool = True, version: str = "processed"):
         super().__init__()
         #: The flights to fetch (``core.bambi_dataset.Flight``), as the
         #: dataset's repository lists them.
         self.flights = list(flights)
         self.videos = bool(videos)
+        #: Which video: the labelled dataset's processed one, or "raw".
+        self.version = version
         self.folder = folder
         self.route = bool(route)
         self.labels = bool(labels)
@@ -90,7 +92,7 @@ class DatasetFlightsWorker(QObject):
                         entry, os.path.join(self.folder, entry.folder),
                         session, route=self.route, labels=self.labels,
                         correction=self.correction, videos=self.videos,
-                        listings=listings,
+                        version=self.version, listings=listings,
                         elevation=self._elevation if self.with_dem else None,
                         make_route=self._route_files,
                         progress=self._progress_of(index, count),

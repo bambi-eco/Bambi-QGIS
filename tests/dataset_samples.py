@@ -158,6 +158,7 @@ class Zenodo:
                  labelled: bytes = b""):
         self.flight = flight
         self.raw = raw
+        self.labelled = labelled
         self.ranges = RangeSession(
             {flight.labelled.url: labelled} if flight.labelled else {})
         self.streamed = []
@@ -171,9 +172,12 @@ class Zenodo:
         self.streamed.append(url)
         if self.raw_fails is not None:
             raise self.raw_fails
-        size = max(1, len(self.raw) // 3)
-        chunks = [self.raw[i:i + size] for i in range(0, len(self.raw), size)]
-        return FakeResponse(chunks=chunks, content_length=len(self.raw),
+        whole = self.raw
+        if self.flight.labelled and url == self.flight.labelled.url:
+            whole = self.labelled
+        size = max(1, len(whole) // 3)
+        chunks = [whole[i:i + size] for i in range(0, len(whole), size)]
+        return FakeResponse(chunks=chunks, content_length=len(whole),
                             headers={"etag": '"v1"'})
 
 

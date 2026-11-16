@@ -167,6 +167,26 @@ def test_the_videos_are_fetched_unless_unticked(dialog):
     assert dialog.download_videos() is False
 
 
+def test_the_processed_video_unless_the_raw_one_is_picked(dialog):
+    assert dialog.version() == "processed"
+    assert [dialog.version_combo.itemData(index)
+            for index in range(dialog.version_combo.count())] == [
+        "processed", "raw"]
+    assert "Extract Frames" in dialog.version_combo.toolTip()
+
+    dialog.version_combo.setCurrentIndex(1)
+
+    assert dialog.version() == "raw"
+
+
+def test_the_version_matters_only_with_the_videos(dialog):
+    assert dialog.version_combo.isEnabled()
+
+    dialog.videos_check.setChecked(False)
+
+    assert not dialog.version_combo.isEnabled()
+
+
 def test_what_is_done_with_the_annotations(dialog):
     # the route and the correction unless unticked; labels when asked for
     assert dialog.route_check.text() == "Import flight route"
@@ -187,7 +207,8 @@ def test_what_is_done_with_the_annotations(dialog):
 def test_how_it_opens_can_be_said():
     made = module.DatasetFlightsDialog(
         FLIGHTS, ticked=(9, 10), route=False, labels=True, correction=False,
-        videos=False)
+        videos=False, version="raw")
+    assert made.version() == "raw"
 
     assert made.selected_ids() == [9, 10]
     assert (made.import_route(), made.import_labels(), made.use_correction(),
@@ -196,6 +217,7 @@ def test_how_it_opens_can_be_said():
 
 
 def test_a_ticked_flight_the_dataset_has_no_recordings_of_is_said(dialog):
+    dialog.version_combo.setCurrentIndex(1)                 # raw
     tick(dialog, 500)
 
     assert dialog.summary_label.text() == (
@@ -212,6 +234,9 @@ def test_a_ticked_flight_the_dataset_has_no_recordings_of_is_said(dialog):
 
 def test_without_the_videos_an_unlabelled_flight_has_nothing(dialog):
     tick(dialog, 23)
+    assert dialog.summary_label.text() == (
+        "2 of 5 flight(s) ticked; 1 without processed video")
+    dialog.version_combo.setCurrentIndex(1)                 # raw: it has
     assert dialog.summary_label.text() == "2 of 5 flight(s) ticked"
 
     dialog.videos_check.setChecked(False)

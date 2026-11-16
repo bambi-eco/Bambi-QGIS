@@ -81,7 +81,7 @@ def put_flight(folder, with_dem=True, recordings=True):
 
 
 def prepared_flight(folder, number, route=True, correction=True,
-                    labels=None, notes=(), videos=True):
+                    labels=None, notes=(), videos=True, processed=False):
     """What ``core.bambi_dataset.prepare_flight`` returns for a flight."""
     from bambi_wildlife_detection.core import flight_archive
 
@@ -108,7 +108,9 @@ def prepared_flight(folder, number, route=True, correction=True,
         "correction": imported, "labels": labels,
         "labels_wanted": labels is not None, "notes": list(notes),
         "videos": flight_archive.is_complete(
-            flight_archive.flight_files(flight))}
+            flight_archive.flight_files(flight)),
+        "processed_video": os.path.join(
+            flight, f"{number}_matched_processed.mp4") if processed else ""}
 
 
 class Worker:
@@ -122,9 +124,9 @@ class Worker:
     labels = None                # what was placed, for every flight
 
     def __init__(self, flights, folder, route=True, labels=True,
-                 correction=True, videos=True):
+                 correction=True, videos=True, version="processed"):
         self.flight_ids = [flight.id for flight in flights]
-        self.folder, self.videos = folder, videos
+        self.folder, self.videos, self.version = folder, videos, version
         self.route, self.labels, self.correction = route, labels, correction
         self.finished, self.progress, self.log = Signal(), Signal(), Signal()
         self.flight_started = Signal()
@@ -153,7 +155,9 @@ class Worker:
                 self.failures.append((number, Worker.fails[number]))
                 continue
             self.prepared.append(prepared_flight(
-                self.folder, number, route=self.route, videos=self.videos,
+                self.folder, number, route=self.route,
+                videos=self.videos and self.version == "raw",
+                processed=self.videos and self.version == "processed",
                 correction=self.correction,
                 labels=Worker.labels if self.labels else None,
                 notes=Worker.notes.get(number, ())))
@@ -187,7 +191,7 @@ def asked(dock, tmp_path, monkeypatch):
     said, shown, routes = [], [], []
     answers = {"flights": [306], "folder": str(tmp_path / "flights"),
                "route": True, "labels": False, "correction": True,
-               "videos": True, "accept": True}
+               "videos": True, "version": "raw", "accept": True}
     listed = bambi_dataset.catalogue_from(
         [{"part": 1, "title": "The BAMBI Dataset (Part 1)",
           "deposition_id": 222, "doi": "10.5281/zenodo.222",
@@ -213,6 +217,9 @@ def asked(dock, tmp_path, monkeypatch):
 
         def download_videos(self):
             return answers["videos"]
+
+        def version(self):
+            return answers["version"]
 
         def folder(self):
             return answers["folder"]
@@ -283,9 +290,10 @@ def test_what_was_ticked_is_what_is_fetched(dock, asked):
     assert worker.flight_ids == [7, 306]
     assert worker.folder == asked["folder"]
     assert (worker.route, worker.labels, worker.correction,
-            worker.videos) == (True, True, False, True)
+            worker.videos, worker.version) == (True, True, False, True,
+                                               "raw")
     assert (f"Fetching 2 flight(s) of the BAMBI dataset with their route, "
-            f"labels into {asked['folder']}...") in \
+            f"labels (raw video) into {asked['folder']}...") in \
         dock.log_text.toPlainText()
 
 
@@ -571,11 +579,25 @@ def test_without_the_videos_the_flight_is_there_for_an_overview(dock, asked):
     assert dock.trans_z_spin.value() == pytest.approx(46.65)
     assert asked["routes"] == [_target(asked, 306)]
     done = asked["said"][-1][2]
-    assert ("1 flight(s) are there without their videos: for the steps "
-            "from 'Extract Frames' on, ask for them again with 'Download "
-            "video data' ticked.") in done
+    assert ("1 flight(s) are there without their raw recordings: for the "
+            "steps from 'Extract Frames' on, ask for them again with "
+            "'Download video data' ticked and the version 'Raw'.") in done
     assert "Go on with Pre-Processing" not in done
     assert "(without the videos)" in dock.log_text.toPlainText()
+
+
+def test_the_processed_video_is_fetched_and_said(dock, asked):
+    asked["answers"]["version"] = "processed"
+
+    dock.examples_btn.click()
+
+    assert Worker.made[0].version == "processed"
+    assert dock.thermal_video_paths_edit.text() == ""
+    done = asked["said"][-1][2]
+    assert "The processed video of 1 flight(s) is in the flight's folder." \
+        in done
+    assert "without their raw recordings" in done
+    assert "(processed video)" in dock.log_text.toPlainText()
 
 
 def test_videos_fetched_later_are_filled_in(dock, asked):

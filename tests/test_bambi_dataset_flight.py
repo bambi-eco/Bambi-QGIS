@@ -714,6 +714,8 @@ class Made:
 
     def prepare(self, **more):
         more.setdefault("elevation", self.elevation)
+        # the recordings, unless a test is about the processed video
+        more.setdefault("version", bd.RECORDINGS)
         return bd.prepare_flight(
             self.flight, self.folder, self.session,
             make_route=self.routes.append, progress=self.seen.append,
@@ -878,7 +880,7 @@ class TestPrepareFlight:
             raise RuntimeError("no flight log")
 
         prepared = bd.prepare_flight(
-            made.flight, made.folder, made.session,
+            made.flight, made.folder, made.session, version=bd.RECORDINGS,
             elevation=made.elevation, make_route=broken,
             sleep=lambda seconds: None)
 
@@ -928,6 +930,81 @@ class TestPrepareFlight:
         assert len(made.session.ranges.asked) == asked
         assert len(made.dems) == 1
         assert prepared["labels"]["boxes"] == BOXES and prepared["notes"] == []
+
+
+class TestTheProcessedVideo:
+    """The version asked for unless another is: the labelled dataset's
+    video, with everything its archive holds."""
+
+    def test_it_is_what_is_fetched_unless_told_otherwise(self, made):
+        prepared = bd.prepare_flight(
+            made.flight, made.folder, made.session,
+            elevation=made.elevation, sleep=lambda seconds: None)
+
+        assert made.session.streamed == [made.flight.labelled.url]
+        assert prepared["processed_video"] == os.path.join(
+            made.folder, "7_matched_processed.mp4")
+        assert os.path.isfile(prepared["processed_video"])
+        assert prepared["videos"] is False          # no raw recordings
+        assert prepared["notes"] == []
+
+    def test_the_flight_is_there_as_the_datasets_script_leaves_it(self, made):
+        made.prepare(version=bd.PROCESSED)
+
+        assert sorted(name for name in os.listdir(made.folder)
+                      if name.startswith("7_")) == [
+            "7_correction.json", "7_gt.txt", "7_matched_poses.json",
+            "7_matched_processed.mp4", "7_metadata.json",
+            "7_track_mapping.json"]
+        assert not [name for name in os.listdir(made.folder)
+                    if name.endswith(".zip")]
+
+    def test_its_annotations_come_with_it(self, made):
+        prepared = made.prepare(version=bd.PROCESSED)
+
+        # nothing was read out of the archive on Zenodo besides
+        assert made.session.ranges.asked == []
+        assert prepared["route"]["frames"] == 12
+        assert prepared["labels"]["boxes"] == BOXES
+        assert prepared["correction"]["correction"]["translation"]["z"] == \
+            46.65
+        assert bd.read_state(made.target)["elevation"] == "poses"
+
+    def test_a_video_that_is_there_is_not_fetched_again(self, made):
+        made.prepare(version=bd.PROCESSED)
+
+        made.prepare(version=bd.PROCESSED)
+
+        assert len(made.session.streamed) == 1
+        assert f"The processed video of flight 7 is already in " \
+            f"{made.folder}" in made.log
+
+    def test_the_recordings_can_be_fetched_beside_it(self, made):
+        made.prepare(version=bd.PROCESSED)
+
+        prepared = made.prepare(version=bd.RECORDINGS)
+
+        assert prepared["videos"] is True
+        assert prepared["processed_video"].endswith("7_matched_processed.mp4")
+        assert made.session.streamed == [made.flight.labelled.url,
+                                         made.flight.raw.url]
+
+    def test_a_flight_that_was_not_labelled_has_none(self, tmp_path):
+        made = Made(tmp_path, labelled=False)
+
+        with pytest.raises(bd.DatasetError, match="no processed video"):
+            made.prepare(version=bd.PROCESSED)
+
+    def test_an_archive_without_the_video(self, tmp_path):
+        made = Made(tmp_path, leave_out=("_matched_processed.mp4",))
+
+        with pytest.raises(bd.DatasetError, match="holds no "
+                                                  "7_matched_processed.mp4"):
+            made.prepare(version=bd.PROCESSED)
+
+    def test_a_version_the_dataset_does_not_have(self, made):
+        with pytest.raises(bd.DatasetError, match="no version 'matched'"):
+            made.prepare(version="matched")
 
 
 class TestWithoutTheVideos:

@@ -91,7 +91,8 @@ class ExampleFlightsMixin:
         QSettings().setValue(FOLDER_SETTING, folder)
         self._start_example_flights(
             chosen, folder, dialog.import_route(), dialog.import_labels(),
-            dialog.use_correction(), dialog.download_videos())
+            dialog.use_correction(), dialog.download_videos(),
+            dialog.version())
 
     @staticmethod
     def _dataset_flights() -> dict:
@@ -105,7 +106,8 @@ class ExampleFlightsMixin:
 
     def _start_example_flights(self, chosen: list, folder: str,
                                route: bool, labels: bool,
-                               correction: bool, videos: bool = True) -> None:
+                               correction: bool, videos: bool = True,
+                               version: str = "processed") -> None:
         from ..bambi_dataset_downloader import DatasetFlightsWorker
 
         self._examples_busy = True
@@ -118,7 +120,7 @@ class ExampleFlightsMixin:
         self.examples_thread = QThread()
         self.examples_worker = DatasetFlightsWorker(
             chosen, folder, route=route, labels=labels, correction=correction,
-            videos=videos)
+            videos=videos, version=version)
         self.examples_worker.moveToThread(self.examples_thread)
         self.examples_thread.started.connect(self.examples_worker.run)
         self.examples_worker.finished.connect(self._on_examples_finished)
@@ -133,7 +135,7 @@ class ExampleFlightsMixin:
             ("route", route), ("labels", labels), ("correction", correction))
             if wanted]
         with_what = f" with their {', '.join(what)}" if what else ""
-        without = "" if videos else " (without the videos)"
+        without = f" ({version} video)" if videos else " (without the videos)"
         self.log(f"Fetching {len(chosen)} flight(s) of the BAMBI dataset"
                  f"{with_what}{without} into {folder}...")
         self.examples_thread.start()
@@ -227,11 +229,18 @@ class ExampleFlightsMixin:
                 f"The labels of {waiting} flight(s) are put on the frames "
                 "when they are extracted.")
         bare = sum(1 for flight in prepared if not flight.get("videos", True))
+        processed = sum(1 for flight in prepared
+                        if flight.get("processed_video"))
+        if processed:
+            parts.append(
+                f"The processed video of {processed} flight(s) is in the "
+                "flight's folder.")
         if bare:
             parts.append(
-                f"{bare} flight(s) are there without their videos: for the "
-                "steps from 'Extract Frames' on, ask for them again with "
-                "'Download video data' ticked.")
+                f"{bare} flight(s) are there without their raw recordings: "
+                "for the steps from 'Extract Frames' on, ask for them "
+                "again with 'Download video data' ticked and the version "
+                "'Raw'.")
         if bare < len(prepared):
             parts.append(
                 "Go on with Pre-Processing > Extract Frames, then the steps "

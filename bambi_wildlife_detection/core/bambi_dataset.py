@@ -415,13 +415,31 @@ def fetch_recordings(entry: Flight, folder: str, session,
         raise DatasetError(
             f"The BAMBI raw dataset has no recordings of flight {entry.id}.")
     archive = resolve(entry.raw, session, listings)
+    _archive_into(entry, archive, folder, session, archive.filename,
+                  progress, cancelled, log, keep_archive, **fetching)
+    files = flight_archive.flight_files(folder)
+    if not flight_archive.is_complete(files):
+        raise DatasetError(
+            f"{archive.filename} was unpacked into {folder}, and what is "
+            "there is not a flight: a thermal video with its SRT file and "
+            "the flight log are needed.")
+    if progress:
+        progress(100)
+    return files
+
+
+def _archive_into(entry: Flight, archive: Archive, folder: str, session,
+                  saved_as: str, progress, cancelled, log, keep_archive,
+                  **fetching) -> None:
+    """Fetch an archive into *folder*, check it and unpack it there."""
+    say = log or (lambda message: None)
 
     def scaled(value: int) -> None:
         if progress:
             progress(int(value * 0.9))
 
     os.makedirs(folder, exist_ok=True)
-    path = os.path.join(folder, archive.filename)
+    path = os.path.join(folder, saved_as)
     have = False
     if os.path.isfile(path):
         problem = archive_problem(path, archive, cancelled)
@@ -469,15 +487,71 @@ def fetch_recordings(entry: Flight, folder: str, session,
         except OSError:
             quiet.detail(f"{path} could not be removed: it is left where "
                          "it is, in the way of nothing")
-    files = flight_archive.flight_files(folder)
-    if not flight_archive.is_complete(files):
-        raise DatasetError(
-            f"{archive.filename} was unpacked into {folder}, and what is "
-            "there is not a flight: a thermal video with its SRT file and "
-            "the flight log are needed.")
+
+
+#: The dataset's two versions of a flight's video: the labelled dataset's -
+#: undistorted, synchronised, thermal and RGB side by side - and the raw
+#: dataset's, as it came off the drone (``download_from_zenodo.py
+#: --version base`` and ``raw``).
+PROCESSED, RECORDINGS = "processed", "raw"
+VERSIONS = (PROCESSED, RECORDINGS)
+PROCESSED_VIDEO = "{id}_matched_processed.mp4"
+
+
+def processed_video(folder: str, flight_id: int) -> str:
+    """Where a flight's processed video is, once fetched."""
+    return os.path.join(folder, PROCESSED_VIDEO.format(id=int(flight_id)))
+
+
+def fetch_processed(entry: Flight, folder: str, target_folder: str, session,
+                    progress: Optional[Callable[[int], None]] = None,
+                    cancelled: Optional[Callable[[], bool]] = None,
+                    log: Optional[Callable[[str], None]] = None,
+                    keep_archive: bool = False,
+                    listings: Optional[Dict[int, dict]] = None, **fetching
+                    ) -> str:
+    """Have the labelled flight whole in *folder* - its processed video,
+    its masks, its annotations - as ``download_from_zenodo.py --unzip``
+    leaves it, and its annotations where :func:`fetch_published` would
+    have put them. Returns the video's path.
+
+    A folder that holds the video already is taken as it is.
+
+    :raises DatasetError: the dataset has no labelled version of the
+        flight, or its archive could not be fetched
+    :raises core.checked_download.Cancelled: stopped by the user
+    """
+    video = processed_video(folder, entry.id)
+    if os.path.isfile(video):
+        if log:
+            log(f"The processed video of flight {entry.id} is already in "
+                f"{folder}")
+    else:
+        if entry.labelled is None:
+            raise DatasetError(
+                f"The labelled BAMBI dataset has no flight {entry.id}: "
+                "there is no processed video of it.")
+        archive = resolve(entry.labelled, session, listings)
+        # the recordings' archive has the same name
+        _archive_into(entry, archive, folder, session,
+                      f"processed_{archive.filename}", progress, cancelled,
+                      log, keep_archive, **fetching)
+        if not os.path.isfile(video):
+            raise DatasetError(
+                f"{archive.filename} was unpacked into {folder}, and holds "
+                f"no {os.path.basename(video)}.")
+    # the annotations, where the rest of this module looks for them
+    import shutil
+
+    os.makedirs(published_folder(target_folder), exist_ok=True)
+    for kind, name in PUBLISHED_FILES.items():
+        source = os.path.join(folder, name.format(id=entry.id))
+        there = published_path(target_folder, entry.id, kind)
+        if os.path.isfile(source) and not os.path.isfile(there):
+            shutil.copyfile(source, there)
     if progress:
         progress(100)
-    return files
+    return video
 
 
 def _megabytes(size: int) -> str:
@@ -1448,6 +1522,7 @@ def poses_bounds(poses: dict) -> Optional[Tuple[float, float, float, float]]:
 def prepare_flight(entry: Flight, folder: str, session,
                    route: bool = True, labels: bool = True,
                    correction: bool = True, videos: bool = True,
+                   version: str = PROCESSED,
                    elevation: Optional[Callable[..., dict]] = None,
                    make_route: Optional[Callable[[dict], None]] = None,
                    progress: Optional[Callable[[int], None]] = None,
@@ -1458,6 +1533,10 @@ def prepare_flight(entry: Flight, folder: str, session,
     """Make one flight of the dataset ready in *folder*: its recordings
     (with *videos*), its elevation model, and - as asked - its published
     route, labels and camera correction.
+
+    *version* says which video: the labelled dataset's processed one
+    (the default; the annotations come with its archive) or the raw
+    recordings, which are what 'Extract Frames' works on.
 
     Without *videos* only the annotations are fetched - poses, labels,
     correction, a megabyte or two: enough for the route and the labelled
@@ -1473,7 +1552,8 @@ def prepare_flight(entry: Flight, folder: str, session,
     :param listings: ``{record: its files}`` kept between flights
     :return: ``{"flight", "name", "folder", "target_folder", "files",
         "epsg", "dem", "dem_metadata", "route", "correction", "labels",
-        "labels_wanted", "videos", "notes"}`` - *route*, *correction* and
+        "labels_wanted", "videos" (the raw recordings are there),
+        "processed_video" (its path, or ""), "notes"}`` - *route*, *correction* and
         *labels* are what :func:`import_route`, :func:`import_correction`
         and :func:`place_labels` returned, ``None`` where nothing was
         done; *notes* is what did not work, in sentences
@@ -1492,24 +1572,36 @@ def prepare_flight(entry: Flight, folder: str, session,
             return None
         return lambda value: progress(int(low + (high - low) * value / 100.0))
 
-    if videos:
+    if version not in VERSIONS:
+        raise DatasetError(f"The dataset has no version '{version}'.")
+    target = os.path.join(folder, TARGET_SUBFOLDER)
+    video = ""
+    if videos and version == RECORDINGS:
         files = fetch_recordings(
             entry, folder, session, progress=part(0, 80),
             cancelled=cancelled, log=log, listings=listings, **fetching)
+    elif videos:
+        video = fetch_processed(
+            entry, folder, target, session, progress=part(0, 80),
+            cancelled=cancelled, log=log, listings=listings, **fetching)
+        files = flight_archive.flight_files(folder)
     else:
         if entry.labelled is None:
             raise DatasetError(
                 f"Flight {entry.id} is not in the labelled dataset: without "
                 "its videos there is nothing of it to fetch.")
         files = flight_archive.flight_files(folder)
-    target = os.path.join(folder, TARGET_SUBFOLDER)
     os.makedirs(target, exist_ok=True)
     notes: List[str] = []
     prepared = {"flight": entry.id, "name": entry.name, "folder": folder,
                 "target_folder": target, "files": files, "epsg": None,
                 "dem": "", "dem_metadata": "", "route": None,
                 "correction": None, "labels": None, "labels_wanted": False,
-                "videos": flight_archive.is_complete(files), "notes": notes}
+                "videos": flight_archive.is_complete(files),
+                "processed_video": video or (
+                    processed_video(folder, entry.id) if os.path.isfile(
+                        processed_video(folder, entry.id)) else ""),
+                "notes": notes}
 
     # -- what the labelled dataset has of the flight -------------------------
     wanted = route or labels or correction or not videos
@@ -1523,7 +1615,7 @@ def prepare_flight(entry: Flight, folder: str, session,
             there = fetch_published(entry, target, session, cancelled, log,
                                     listings)
         except DatasetError as exc:
-            if not videos:
+            if not videos or version == PROCESSED:
                 raise
             notes.append(str(exc))
     if there:
