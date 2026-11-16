@@ -13,7 +13,7 @@ load the queue and write the reviewer's word.
 """
 
 from qgis.PyQt.QtCore import Qt
-from qgis.PyQt.QtGui import QKeySequence
+from qgis.PyQt.QtGui import QBrush, QColor, QFont, QKeySequence
 from qgis.PyQt.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QDoubleSpinBox, QHBoxLayout, QLabel, QPushButton, QSpinBox,
@@ -46,6 +46,9 @@ class ReviewQueueDialog(QDialog):
     :param set_attribute: ``set_attribute(row, "sex" | "age", id or None)``
     :param several: whether the survey has more than one flight
     """
+
+    #: The column that is a link: its cell opens the track in the inspector.
+    LINK_COLUMN = "Track"
 
     def __init__(self, load, vocabulary, open_track, approve, set_species,
                  set_attribute, camera_label: str = "", several: bool = False,
@@ -126,6 +129,10 @@ class ReviewQueueDialog(QDialog):
             QAbstractItemView.SelectionMode.SingleSelection)
         self.table.horizontalHeader().setStretchLastSection(False)
         self.table.itemSelectionChanged.connect(self._on_row_changed)
+        self.table.cellClicked.connect(self._on_cell_clicked)
+        #: The row the inspector was opened for by selecting it: the click
+        #: that selected it does not open it a second time.
+        self._just_shown = None
         layout.addWidget(self.table)
 
         act = QHBoxLayout()
@@ -231,11 +238,29 @@ class ReviewQueueDialog(QDialog):
     def _fill_row(self, r: int, row: dict) -> None:
         numbers = {self._columns.index(name)
                    for name in ("Track", "Confidence", "Boxes")}
+        link = self._columns.index(self.LINK_COLUMN)
         for c, value in enumerate(self._cells(row)):
             item = QTableWidgetItem("" if value is None else str(value))
             if c in numbers:
                 item.setTextAlignment(_RIGHT)
+            if c == link and value is not None:
+                # as the frames of the track inventory: it can be clicked
+                font = QFont()
+                font.setUnderline(True)
+                item.setFont(font)
+                item.setForeground(QBrush(QColor(30, 100, 200)))
+                item.setToolTip(f"Open track {value} in the inspector")
             self.table.setItem(r, c, item)
+
+    def _on_cell_clicked(self, r: int, c: int) -> None:
+        """A click on a track's number shows the track in the inspector -
+        whether or not every selected track is shown there."""
+        if self._columns[c] != self.LINK_COLUMN or not (
+                0 <= r < len(self._queue)):
+            return
+        shown, self._just_shown = self._just_shown, None
+        if shown != r:
+            self._open_track(self._queue[r])
 
     def _show_progress(self) -> None:
         left = len(self._queue)
@@ -266,8 +291,10 @@ class ReviewQueueDialog(QDialog):
         if row is None:
             return
         self._fill_choices(row)
+        self._just_shown = None
         if self.inspector_check.isChecked():
             self._open_track(row)
+            self._just_shown = self.table.currentRow()
 
     def _fill_choices(self, row: dict) -> None:
         """Offer what this track's flight knows, on what the track is."""

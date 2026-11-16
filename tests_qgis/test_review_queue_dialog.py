@@ -127,6 +127,52 @@ def test_the_inspector_can_be_left_alone(review):
     assert review.opened == [3]
 
 
+def _track_item(dialog, row):
+    index = [dialog.table.horizontalHeaderItem(c).text()
+             for c in range(dialog.table.columnCount())].index("Track")
+    return index, dialog.table.item(row, index)
+
+
+def test_a_tracks_number_looks_like_the_link_it_is(review):
+    """As the frames of the track inventory: underlined and blue."""
+    dialog = review.dialog()
+
+    _index, item = _track_item(dialog, 1)
+
+    assert item.font().underline()
+    assert item.foreground().color().name() == "#1e64c8"
+    assert item.toolTip() == "Open track 2 in the inspector"
+    # ... and nothing else in the row does
+    why = dialog.table.item(1, _index + 4)
+    assert not why.font().underline()
+
+
+def test_clicking_the_number_opens_the_track(review):
+    dialog = review.dialog()
+    dialog.inspector_check.setChecked(False)     # selecting shows nothing
+    index, _item = _track_item(dialog, 2)
+
+    dialog.table.cellClicked.emit(2, index)
+
+    assert review.opened == [3, 4]
+    # another cell of the row is no link
+    dialog.table.cellClicked.emit(1, index + 1)
+    assert review.opened == [3, 4]
+
+
+def test_the_click_that_selects_a_track_opens_it_once(review):
+    dialog = review.dialog()                     # shows every selected track
+    index, _item = _track_item(dialog, 1)
+
+    dialog.table.selectRow(1)                    # the press: track 2 opens
+    dialog.table.cellClicked.emit(1, index)      # the release, on its number
+
+    assert review.opened == [3, 2]
+    # clicking the number of the track that is selected opens it again
+    dialog.table.cellClicked.emit(1, index)
+    assert review.opened == [3, 2, 2]
+
+
 def test_a_survey_of_several_flights_says_which_flight(review):
     for row in review.all:
         row["flight"] = "Meadow"
