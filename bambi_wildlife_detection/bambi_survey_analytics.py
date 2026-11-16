@@ -1150,7 +1150,10 @@ class SurveyAnalyticsMixin:
 
         :param config: Configuration dictionary. Relevant keys:
             ``ds_source`` ("detections"|"tracks"), ``ds_truncation`` (m or 0/None
-            for automatic 95th-percentile truncation).
+            for automatic 95th-percentile truncation), ``ds_covariates``
+            (let canopy cover and flight height explain detectability:
+            ``core.detection_function``) with ``environment_radius_m``, the
+            radius around an animal its canopy cover is taken over.
 
         The perpendicular distances of every flight of the survey are pooled
         and their flight-route lengths summed into the total effort L,
@@ -1173,7 +1176,14 @@ class SurveyAnalyticsMixin:
         # Every flight brings its surveyed lines - its transect legs, or its
         # recorded route - and the animals seen from them (core.
         # distance_effort). The lines of all flights are one sample.
-        from .core import distance_effort
+        from .core import detection_function, distance_effort
+
+        with_covariates = bool(config.get("ds_covariates"))
+        covariate_radius = float(config.get("environment_radius_m", 30.0)) \
+            if with_covariates else None
+        covariate_values = {name: []
+                            for name in detection_function.COVARIATES}
+        covariate_hints = {}
 
         distance_arrays = []
         line_arrays = []
@@ -1185,7 +1195,14 @@ class SurveyAnalyticsMixin:
         area = self._survey_area(survey, log_fn)
         for i, flight in enumerate(project_folders):
             loaded = self._load_distance_sampling_project(
-                flight, survey, source, names, log_fn, area=area)
+                flight, survey, source, names, log_fn, area=area,
+                covariate_radius=covariate_radius)
+            unknown = [None] * int(loaded["distances"].size)
+            for name in covariate_values:
+                covariate_values[name].extend(
+                    loaded["covariates"].get(name) or unknown)
+            for name, hint in loaded["covariate_hints"].items():
+                covariate_hints.setdefault(name, []).append(hint)
             distance_arrays.append(loaded["distances"])
             size_arrays.append(loaded["sizes"])
             line_arrays.append(loaded["line"] + len(lines))
@@ -1278,30 +1295,107 @@ class SurveyAnalyticsMixin:
         if not models:
             raise RuntimeError("Detection-function fitting failed for all models.")
 
+        # ---- ... and those that know the conditions ---------------------- #
+        # Canopy cover and flight height may explain how far away an animal
+        # is seen (core.detection_function). Every key with every subset of
+        # the covariates the survey can offer is a candidate beside the two
+        # plain models; the lowest AIC decides.
+        covariates = None
+        usable = {}
+        if with_covariates:
+            kept_index = np.flatnonzero(kept)
+            usable, refused = detection_function.usable(
+                {name: [values[i] for i in kept_index]
+                 for name, values in covariate_values.items()}, n)
+            for name, reason in refused.items():
+                hints = covariate_hints.get(name)
+                if hints and "known for" in reason:
+                    refused[name] = reason + ": " + "; ".join(hints)
+                if log_fn:
+                    log_fn(f"  {detection_function.label(name)} is not "
+                           f"used: {refused[name]}")
+            for key in detection_function.KEYS:
+                for subset in detection_function.subsets(list(usable)):
+                    fitted = detection_function.fit(
+                        x, w, key, {name: usable[name] for name in subset})
+                    if fitted is None:
+                        continue
+                    params = {"sigma_at_mean": math.exp(
+                        float(fitted.theta[0]))}
+                    if fitted.shape is not None:
+                        params["b"] = fitted.shape
+                    for row in fitted.coefficients():
+                        params[f"per_{row['name']}"] = row["coefficient"]
+                    models.append({
+                        "name": fitted.name, "params": params,
+                        "log_likelihood": fitted.log_likelihood,
+                        "aic": fitted.aic,
+                        "esw": float(n / np.sum(1.0 / fitted.mu)),
+                        "cv_esw": None, "g": fitted.mean_curve,
+                        "fit": fitted, "covariates": list(subset),
+                    })
+                    if log_fn:
+                        log_fn(f"  {fitted.name}: AIC={fitted.aic:.2f}")
+            covariates = {
+                "considered": {
+                    name: {"label": detection_function.label(name),
+                           "unit": detection_function.unit(name),
+                           "mean": float(np.mean(values)),
+                           "min": float(np.min(values)),
+                           "max": float(np.max(values))}
+                    for name, values in usable.items()},
+                "not_used": refused,
+                "radius_m": covariate_radius,
+                "in_best_model": [],
+                "effects": [],
+            }
+
         best = min(models, key=lambda m: m["aic"])
         if progress_fn:
             progress_fn(70)
 
         # ---- Density / abundance ----------------------------------------- #
-        esw = best["esw"]          # effective strip half-width (m)
-        p = esw / w                # average detection probability
-        group_density_m2 = n / (2.0 * esw * transect_length)
-        density_m2 = group_density_m2 * size["mean"]
-        density_km2 = density_m2 * 1e6
         covered_area_m2 = 2.0 * w * transect_length
-        abundance_covered = density_m2 * covered_area_m2  # == n / p
+        if best.get("fit") is not None:
+            # each observation stands for the animals its own strip width
+            # says it does; the variation between the lines carries that of
+            # the group sizes with it
+            chosen = {name: usable[name] for name in best["covariates"]}
+            estimated = detection_function.estimate(
+                best["fit"], group_sizes, line_index[kept],
+                [line["length_m"] for line in lines], chosen)
+            esw = estimated["esw_m"]
+            p = estimated["detection_probability"]
+            group_density_m2 = estimated["group_density_m2"]
+            density_m2 = estimated["density_m2"]
+            cv_n = estimated["cv_encounter"]
+            variance_method = estimated["encounter_variance"]
+            cv_esw = estimated["cv_detection"]
+            cv_density = estimated["cv_density"]
+            covariates["in_best_model"] = list(best["covariates"])
+            covariates["effects"] = detection_function.effects(
+                best["fit"], chosen)
+        else:
+            esw = best["esw"]          # effective strip half-width (m)
+            p = esw / w                # average detection probability
+            group_density_m2 = n / (2.0 * esw * transect_length)
+            density_m2 = group_density_m2 * size["mean"]
 
-        # Combine the encounter-rate and detection-function CVs. The
-        # encounter rate varies between lines by more than chance alone, so
-        # its variance is measured between them wherever there are two.
-        cv_n, variance_method = distance_effort.encounter_rate_cv(
-            line_counts, [line["length_m"] for line in lines])
-        if cv_n is None:
-            cv_n, variance_method = 1.0 / math.sqrt(n), distance_effort.POISSON
-        cv_esw = best["cv_esw"]
-        cv_size = size["cv"] or 0.0
-        cv_density = math.sqrt(
-            cv_n * cv_n + cv_esw * cv_esw + cv_size * cv_size)
+            # Combine the encounter-rate and detection-function CVs. The
+            # encounter rate varies between lines by more than chance
+            # alone, so its variance is measured between them wherever
+            # there are two.
+            cv_n, variance_method = distance_effort.encounter_rate_cv(
+                line_counts, [line["length_m"] for line in lines])
+            if cv_n is None:
+                cv_n, variance_method = (1.0 / math.sqrt(n),
+                                         distance_effort.POISSON)
+            cv_esw = best["cv_esw"]
+            cv_size = size["cv"] or 0.0
+            cv_density = math.sqrt(
+                cv_n * cv_n + cv_esw * cv_esw + cv_size * cv_size)
+        density_km2 = density_m2 * 1e6
+        abundance_covered = density_m2 * covered_area_m2  # == n / p
         ci_d = self._lognormal_ci(density_km2, cv_density)
         ci_n = self._lognormal_ci(abundance_covered, cv_density)
 
@@ -1348,6 +1442,34 @@ class SurveyAnalyticsMixin:
                     "near the limit of the strip a large group is noticed "
                     "more easily than a small one, so the mean group size - "
                     "and with it the density - may be too high. ")
+        if covariates is not None:
+            if covariates["in_best_model"]:
+                named = " and ".join(
+                    detection_function.label(name)
+                    for name in covariates["in_best_model"])
+                notes += (
+                    f"The detection function depends on {named}: how fast "
+                    "detectability falls off with distance is fitted "
+                    "together with what the conditions do to it (Marques "
+                    "and Buckland 2003), and the model was chosen by AIC "
+                    "from the plain models and every combination of the "
+                    "covariates. Each observation stands for the animals "
+                    "its own strip width says it does - the effective strip "
+                    "width and the detection probability given are the "
+                    "averages over the observations - and the uncertainty "
+                    "of the density is measured between the lines "
+                    "(group sizes included) plus what not knowing the "
+                    "coefficients adds. ")
+            elif covariates["considered"]:
+                notes += (
+                    "Canopy cover and flight height were offered to the "
+                    "detection function, and a model without them describes "
+                    "the distances as well (lower AIC): they are not used. ")
+            else:
+                notes += (
+                    "Canopy cover and flight height were asked for but could "
+                    "not be offered to the detection function (see why "
+                    "above). ")
         notes += (
             "Abundance is reported for the covered strip area 2*w*L. Multiply "
             "density by your study-area size for a study-area abundance "
@@ -1391,6 +1513,8 @@ class SurveyAnalyticsMixin:
             "n_off_effort": n_off_effort,
             "encounter_rate_cv": cv_n,
             "encounter_rate_variance": variance_method,
+            "detection_cv": cv_esw,
+            "covariates": covariates,
             "truncation_m": w,
             "best_model": best["name"],
             "effective_strip_width_m": esw,
@@ -1417,6 +1541,7 @@ class SurveyAnalyticsMixin:
                     "log_likelihood": m["log_likelihood"],
                     "aic": m["aic"],
                     "esw_m": m["esw"],
+                    "covariates": m.get("covariates", []),
                 }
                 for m in models
             ],
@@ -1443,6 +1568,8 @@ class SurveyAnalyticsMixin:
                        f"{int(distances.size)} observations, "
                        f"total L={transect_length:.1f} m")
             log_fn(f"Best model: {best['name']} (AIC={best['aic']:.2f})")
+            for row in (covariates or {}).get("effects", []):
+                log_fn("  " + detection_function.effect_sentence(row))
             log_fn(f"ESW={esw:.2f} m, detection probability p={p:.3f}")
             log_fn(f"Density={density_km2:.3f} /km^2 "
                    f"(95% CI {ci_d[0]:.3f}-{ci_d[1]:.3f})")
@@ -1458,12 +1585,14 @@ class SurveyAnalyticsMixin:
             progress_fn(100)
 
     def _load_distance_sampling_project(self, flight, survey, source,
-                                        names=None, log_fn=None, area=None):
+                                        names=None, log_fn=None, area=None,
+                                        covariate_radius=None):
         """One flight's surveyed lines and the perpendicular distances of the
         animals seen from them.
 
         Returns ``{"distances", "line", "sizes", "lines", "length",
-        "effort", "off_effort"}``. An observation is a group of animals that
+        "effort", "off_effort", "covariates", "covariate_hints"}``. An
+        observation is a group of animals that
         were together (``core.groups``; an animal alone is a group of one):
         the distance of each group's middle from the line and, aligned with
         it, the index of the line the group was seen from and the number of
@@ -1471,6 +1600,12 @@ class SurveyAnalyticsMixin:
         with their summed length; how the lines were found; and how many
         animals lay on no line.
         Errors name the flight so a pooled run can say which one is at fault.
+
+        With a *covariate_radius* (metres) each observation also comes with
+        the conditions it was seen in (``core.detection_function``):
+        ``covariates`` is ``name -> value per observation`` (``None`` where
+        not known) and ``covariate_hints`` says, per covariate, why this
+        flight could not tell.
 
         With a survey *area*, observations whose position lies outside it are
         dropped and a line is as long as the part of it inside - effort and
@@ -1543,6 +1678,7 @@ class SurveyAnalyticsMixin:
             return (point[0], point[1]) if len(point) >= 2 else None
 
         seen = []
+        kept_entries = []
         for entry in entries:
             distance = float(entry[dist_key])
             if not (np.isfinite(distance) and distance >= 0):
@@ -1556,12 +1692,25 @@ class SurveyAnalyticsMixin:
                          "line": index,
                          "centre": place(entry, "detection_center"),
                          "foot": place(entry, "foot_point")})
+            kept_entries.append(entry)
+        covariate_hints = {}
+        if covariate_radius is not None:
+            conditions, covariate_hints = self._distance_sampling_conditions(
+                flight, survey, kept_entries, frame_key, covariate_radius)
+            for animal, of_animal in zip(seen, conditions):
+                animal["covariates"] = of_animal
         found = self._flight_groups(survey, flight, source, log_fn)
         observations, off_effort = distance_effort.group_observations(
             seen, None if found is None else found.of)
         distances = [o["distance_m"] for o in observations]
         line_index = [o["line"] for o in observations]
         sizes = [o["size"] for o in observations]
+        from .core import detection_function
+        covariates = {
+            name: [(o.get("covariates") or {}).get(name)
+                   for o in observations]
+            for name in detection_function.COVARIATES
+        } if covariate_radius is not None else {}
 
         length = float(sum(line["length_m"] for line in lines))
         if log_fn:
@@ -1585,7 +1734,92 @@ class SurveyAnalyticsMixin:
             "length": length,
             "effort": effort,
             "off_effort": off_effort,
+            "covariates": covariates,
+            "covariate_hints": covariate_hints,
         }
+
+    def _distance_sampling_conditions(self, flight, survey, entries,
+                                      frame_key, radius):
+        """The conditions each animal of a flight was seen in, for the
+        detection function to be explained by
+        (``core.detection_function``).
+
+        * **canopy cover** - the tree cover (percent) within *radius*
+          metres of the animal, from the flight's land-cover step;
+        * **flight height** - how high the camera was above the animal on
+          the frame its distance was measured on: the frame's altitude
+          (the poses, shifted by the DEM's origin) less the ground the
+          animal stood on.
+
+        :return: ``(conditions, hints)`` - per entry ``{name: value or
+            None}``, and per covariate this flight knows nothing of the
+            reason, in words
+        """
+        import math
+
+        from .core import (
+            agl_profile, detection_function, environment, habitat)
+
+        canopy_key, height_key = (detection_function.CANOPY,
+                                  detection_function.HEIGHT)
+        conditions = [{canopy_key: None, height_key: None} for _ in entries]
+        hints = {}
+        centres = [entry.get("detection_center") or [] for entry in entries]
+
+        # ---- canopy cover -------------------------------------------------- #
+        path = environment.layer_path(flight.target_folder, "tree_cover")
+        if not os.path.isfile(path):
+            hints[canopy_key] = (
+                f"{flight.name} has no tree-cover layer - run 'Land Cover' "
+                "of the Environmental Context")
+        else:
+            try:
+                array, grid = environment.read_raster(path)
+                placed = [index for index, centre in enumerate(centres)
+                          if len(centre) >= 2]
+                values = habitat.sample_mean(
+                    array, grid,
+                    [(float(centres[index][0]), float(centres[index][1]))
+                     for index in placed], float(radius))
+                for index, value in zip(placed, values):
+                    conditions[index][canopy_key] = value
+            except Exception as exc:  # noqa: BLE001 - a covariate is extra
+                quiet.problem(f"The tree-cover layer of {flight.name} could "
+                              "not be read: canopy cover is left out")
+                hints[canopy_key] = (f"the tree-cover layer of {flight.name} "
+                                     f"could not be read ({exc})")
+
+        # ---- flight height -------------------------------------------------- #
+        images = []
+        poses_path = os.path.join(flight.target_folder,
+                                  f"poses_{survey.modality}.json")
+        if os.path.isfile(poses_path):
+            with open(poses_path, "r", encoding="utf-8") as handle:
+                images = json.load(handle).get("images", [])
+        origin = agl_profile.dem_origin(
+            (flight.dem_path or "").strip(), (flight.dem or "").strip(),
+            flight.target_folder)
+        if not images:
+            hints[height_key] = (f"{flight.name} has no frame positions "
+                                 f"(poses_{survey.modality}.json)")
+        elif origin is None:
+            hints[height_key] = (
+                f"the DEM origin of {flight.name} is not known - set the "
+                "DEM on the flight's Input tab")
+        else:
+            for index, (entry, centre) in enumerate(zip(entries, centres)):
+                frame = entry.get(frame_key)
+                if frame is None or len(centre) < 3:
+                    continue
+                try:
+                    location = images[int(frame)].get("location") or []
+                    altitude = float(location[2]) + origin[2]
+                    height = altitude - float(centre[2])
+                except (IndexError, TypeError, ValueError):
+                    continue
+                if math.isfinite(height) and height > 0:
+                    conditions[index][height_key] = height
+        return conditions, hints
 
     def _distance_sampling_lines(self, flight, survey, area, fr_suffix,
                                  log_fn=None):

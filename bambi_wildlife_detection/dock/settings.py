@@ -431,6 +431,9 @@ class SettingsMixin:
             "ds_truncation": (
                 self.ds_truncation_spin.value()
                 if hasattr(self, 'ds_truncation_spin') else 0.0),
+            "ds_covariates": (
+                self.ds_covariates_check.isChecked()
+                if hasattr(self, 'ds_covariates_check') else False),
 
             # Survey analytics: transect population estimation
             "pop_truncation": (

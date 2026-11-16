@@ -174,14 +174,16 @@ def group_observations(animals: Sequence[dict], group_of=None
         animal seen: its distance from the line, the index of the line it
         was seen from (``None``: seen in transit), and - for placing the
         middle of a group - its own place and the point of the line nearest
-        to it, as ``(x, y)`` or ``None``
+        to it, as ``(x, y)`` or ``None``. With ``"covariates"`` - numbers by
+        name, ``None`` where not known - an observation carries the mean of
+        what is known of its members.
     :param group_of: ``group_of(id)`` - the group an animal is in; ``None``
         (or an animal it does not know) leaves the animal alone
     :return: ``(observations, in transit)`` - ``{"group", "size",
-        "distance_m", "line"}`` per group seen from a line, and how many
-        animals were seen in transit only. A group seen from a line counts
-        with all its members; it is on the line most of them were seen
-        from.
+        "distance_m", "line"}`` (and ``"covariates"`` where the animals
+        came with any) per group seen from a line, and how many animals
+        were seen in transit only. A group seen from a line counts with all
+        its members; it is on the line most of them were seen from.
     """
     members: Dict[object, List[dict]] = {}
     order: List[object] = []
@@ -209,13 +211,36 @@ def group_observations(animals: Sequence[dict], group_of=None
         for line in lines:
             counts[line] = counts.get(line, 0) + 1
         line = min(counts, key=lambda index: (-counts[index], index))
-        observations.append({
+        observation = {
             "group": key[1] if key[0] == "group" else of_group[0].get("id"),
             "size": len(of_group),
             "distance_m": _group_distance(of_group),
             "line": line,
-        })
+        }
+        covariates = _group_covariates(of_group)
+        if covariates:
+            observation["covariates"] = covariates
+        observations.append(observation)
     return observations, in_transit
+
+
+def _group_covariates(animals: Sequence[dict]) -> Dict[str, Optional[float]]:
+    """What is known of the conditions a group was seen in: per covariate
+    the mean over the members it is known for."""
+    names: List[str] = []
+    for animal in animals:
+        for name in animal.get("covariates") or {}:
+            if name not in names:
+                names.append(name)
+    found: Dict[str, Optional[float]] = {}
+    for name in names:
+        known = []
+        for animal in animals:
+            value = (animal.get("covariates") or {}).get(name)
+            if value is not None and math.isfinite(float(value)):
+                known.append(float(value))
+        found[name] = sum(known) / len(known) if known else None
+    return found
 
 
 def _group_distance(animals: Sequence[dict]) -> float:

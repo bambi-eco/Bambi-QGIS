@@ -422,6 +422,20 @@ class AnalyticsTabMixin:
         ds_params_row.addStretch()
         ds_layout.addLayout(ds_params_row)
 
+        self.ds_covariates_check = QCheckBox(
+            "Let canopy cover and flight height explain detectability")
+        self.ds_covariates_check.setToolTip(
+            "Fit, beside the plain models, detection functions whose width "
+            "depends on the canopy over an animal and on the height it was "
+            "flown over at, and use the one with the lowest AIC. A "
+            "condition that explains nothing is left out.\n"
+            "Canopy cover is the tree cover around the animal (within the "
+            "habitat sampling radius): it needs 'Land Cover' of the "
+            "Environmental Context on every flight. Flight height is the "
+            "camera's height above the animal: it needs the flight's DEM.\n"
+            "At least 20 observations are needed.")
+        ds_layout.addWidget(self.ds_covariates_check)
+
         ds_run_row = QHBoxLayout()
         self.distance_sampling_btn = QPushButton("→ Estimate Density (Distance Sampling)")
         self.distance_sampling_btn.clicked.connect(self.run_distance_sampling)
@@ -1474,6 +1488,7 @@ class AnalyticsTabMixin:
             if grouped else "")
         what = " groups" if grouped else ""
         of_animals = " of animals" if grouped else ""
+        detectability = self._distance_covariates_html(r.get("covariates"))
 
         html = f"""
         <h3>Distance-Sampling Estimate ({r.get('source', '')})</h3>
@@ -1502,6 +1517,7 @@ class AnalyticsTabMixin:
           <tr><td><b>Covered area</b></td>
               <td align='right'>{r.get('covered_area_km2', 0):.3f} km²</td></tr>
         </table>
+        {detectability}
         <h4>Model comparison</h4>
         <table cellpadding='4'>
           <tr><th align='left'>Model</th><th align='right'>ESW (m)</th>
@@ -1513,6 +1529,34 @@ class AnalyticsTabMixin:
         <p style='color:gray;font-size:11px'>Saved to: {result_file}</p>
         """
         return html
+
+    @staticmethod
+    def _distance_covariates_html(covariates) -> str:
+        """What canopy cover and flight height did to detectability
+        (core.detection_function); nothing where they were not asked for."""
+        if not covariates:
+            return ""
+        from ..core import detection_function
+
+        lines = [detection_function.effect_sentence(row)
+                 for row in covariates.get("effects") or []]
+        used = set(covariates.get("in_best_model") or [])
+        for name in covariates.get("considered") or {}:
+            if name not in used:
+                lines.append(
+                    f"{detection_function.label(name).capitalize()}: "
+                    "offered to the model, and the distances are described "
+                    "as well without it.")
+        for name, reason in (covariates.get("not_used") or {}).items():
+            lines.append(f"{detection_function.label(name).capitalize()} "
+                         f"is not used: {reason}.")
+        if not lines:
+            return ""
+        from html import escape
+
+        items = "".join(f"<li>{escape(line, quote=False)}</li>"
+                        for line in lines)
+        return f"<h4>What explains detectability</h4><ul>{items}</ul>"
 
     def run_population_estimation(self):
         """Run the transect population estimation over the survey's flights."""

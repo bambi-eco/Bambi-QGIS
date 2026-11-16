@@ -857,9 +857,19 @@ Up to 9.0 the whole flight log counted - take-off, the transit to the first tran
 
 **How sure the encounter rate is.** Animals are clumped and lines cross different ground, so the number seen per metre varies from line to line by more than chance alone. With two or more lines - transect legs, or several flights - that variation is measured between them (Buckland et al. 2001); a Poisson figure, which assumes evenly spread animals and is too small otherwise, is used only when there is a single line. The report says which was used, and lists every line with its length and count.
 
+**What explains detectability: canopy cover and flight height.** One detection function for everything says that the chance of seeing an animal falls off with its distance from the line the same way everywhere. From a drone it does not: under closed canopy an animal a few metres off the line is already hidden, and from twice the height it is half as many pixels. With **Let canopy cover and flight height explain detectability** ticked, the *width* of the detection function may depend on the conditions each animal was seen in (multiple-covariate distance sampling, Marques and Buckland 2003):
+
+- **canopy cover** - the tree cover (percent) around the animal, within the *sampling radius* of the [habitat settings](environment.md#habitat-context-survey-analytics). Needs **E2 Land Cover** of the Environmental Context on every flight;
+- **flight height** - how high the camera was above the animal on the frame its distance was measured on. Needs the flight's DEM (it is the frame's altitude less the ground the animal stood on).
+
+Beside the two plain models, each of them is fitted with canopy cover, with flight height and with both, and the model with the **lowest AIC** is used - so a condition that explains nothing is left out, and ticking the box can never make the result worse than the plain one by more than chance. A condition is only offered where it is known for **every** observation and differs between them, and only from **20 observations** on; the result says which were used, which were not and why (a flight without the land-cover step, a height that never changed).
+
+With a model that depends on the conditions, every observation stands for the animals its *own* strip width says it does - an animal found under the trees for more than one found in the open - and the density is their sum over the line surveyed. The effective strip width and the detection probability reported are the averages over the observations. The uncertainty is what the totals vary by between the lines (group sizes included) plus what not knowing the model's coefficients adds. The result window says what each condition does in the units of the survey - *"The more canopy cover, the less far animals are seen: the effective strip half-width is 38 m at 0 % and 11 m at 80 %"* - which is also what the next flight can be planned by: how close the lines have to be over forest, and what flying higher costs.
+
 | Setting | Description |
 |---------|-------------|
 | **Truncation (m)** | Discard observations beyond this perpendicular distance. `0` = automatic (95th percentile) |
+| **Let canopy cover and flight height explain detectability** | Off by default: the two plain detection functions. On: also the models whose width depends on the canopy over an animal and on the height it was flown over at; the lowest AIC decides (see above) |
 
 On completion a results dialog summarises n (the number of groups, with the animals in them and the mean group size where animals were together), the length of surveyed line, truncation, the selected model, ESW, detection probability, density and abundance with CIs, plus the model-comparison (AIC) table.
 
@@ -869,7 +879,7 @@ analytics_t/    # or analytics_w/
 └── distance_sampling_tracks.json   # or distance_sampling_detections.json
 ```
 
-The JSON also stores the fitted detection-function curve and the distance histogram for external plotting, and what the observations were: `n_groups`, `n_animals`, `mean_group_size` with its standard error and CV, `largest_group`, `group_density_per_km2` and the size-bias check (`group_size_bias`). Abundance is reported for the covered strip area (2·w·L); multiply the density estimate by your study-area size for a study-area abundance.
+The JSON also stores the fitted detection-function curve (with conditions in the model: the average over the observations) and the distance histogram for external plotting, what the observations were: `n_groups`, `n_animals`, `mean_group_size` with its standard error and CV, `largest_group`, `group_density_per_km2` and the size-bias check (`group_size_bias`), and - where they were asked for - `covariates`: the conditions offered (`considered`), those left out and why (`not_used`), those in the chosen model (`in_best_model`) and for each of these its coefficient per unit with standard error and p, and the strip half-width at a low and a high value (`effects`). Abundance is reported for the covered strip area (2·w·L); multiply the density estimate by your study-area size for a study-area abundance.
 
 ### Coverage map
 
