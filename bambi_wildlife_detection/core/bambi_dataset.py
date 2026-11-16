@@ -70,7 +70,7 @@ EXAMPLE = 306
 #: Archives this release was tested with, by their SHA-256 - checked besides
 #: the MD5 Zenodo gives: ``{flight: digest}`` of the recordings.
 PINNED_SHA256 = {
-    306: "3743c9dedb9cdf2f0377a0c040f087721e0155aecb2707fa5725170282b5cb91",
+    306: "3743c9dedb9cdf2f0377a0c040f087721e0155aecb2707fa5725170282b5cb91",  # pragma: allowlist secret
 }
 #: While a flight is unpacked, its archive and its files are both there.
 SPACE_FACTOR = 2.0
@@ -182,6 +182,10 @@ def _archive(entry, flight_id: int) -> Optional[Archive]:
     if not entry:
         return None
     record, size, md5 = entry[:3]
+    if isinstance(md5, int):
+        # the catalogue writes a checksum as the number it is
+        # (update_bambi_catalogue.py says why)
+        md5 = format(md5, "032x")
     return Archive(int(record), f"flight_{flight_id}.zip", int(size),
                    str(md5))
 

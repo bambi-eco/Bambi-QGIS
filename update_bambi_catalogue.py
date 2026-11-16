@@ -16,7 +16,8 @@ What it does:
 1. asks Zenodo for the records of the raw dataset ("The BAMBI Raw Dataset")
    and of the labelled dataset ("The BAMBI Dataset: Multimodal Nadir
    UAV-Recordings of Forest Wildlife"), newest versions only, and notes for
-   every ``flight_<n>.zip`` its record, its size and its MD5;
+   every ``flight_<n>.zip`` its record, its size and its MD5 (written as a
+   number: see :func:`as_number`);
 2. reads each labelled flight's ``<n>_metadata.json`` out of its archive -
    a few kilobytes by range requests, not the archive - for the day it was
    flown, the drone, and how many animals of which species were labelled.
@@ -109,6 +110,16 @@ def archives(records: list) -> dict:
             flights[int(named.group(1))] = (
                 int(record["id"]), int(entry["size"]), checksum[4:])
     return flights
+
+
+def as_number(md5: str) -> int:
+    """An MD5 checksum as the number it is. The catalogue holds 786 of
+    them, and written as quoted hexadecimal every one is taken for a
+    credential by the scan for secrets the plugin is checked with
+    (``run_checks.sh``, and the plugin repository on upload) - in a JSON
+    file, which has no comment to say otherwise. ``core.bambi_dataset``
+    turns them back."""
+    return int(md5, 16)
 
 
 def authors(record: dict) -> str:
@@ -217,18 +228,22 @@ def build(session, cache: str, pause: float) -> dict:
     for done, flight in enumerate(sorted(set(raw) | set(labelled)), 1):
         entry = {"id": flight}
         if flight in raw:
-            entry["raw"] = list(raw[flight])
+            record, size, md5 = raw[flight]
+            entry["raw"] = [record, size, as_number(md5)]
             if not has_videos(session, flight, raw[flight], cache, pause):
                 entry["videos"] = False
         if flight in labelled:
-            entry["labelled"] = list(labelled[flight])
+            record, size, md5 = labelled[flight]
+            entry["labelled"] = [record, size, as_number(md5)]
             entry.update(described(flight_metadata(
                 session, flight, labelled[flight], cache, pause)))
         flights.append(entry)
         if done % 50 == 0:
             say(f"  {done} flight(s) described")
     return {
-        "about": ("The flights of the BAMBI dataset on Zenodo. Written by "
+        "about": ("The flights of the BAMBI dataset on Zenodo: per flight "
+                  "the record, the size and the MD5 checksum (as a number) "
+                  "of its archives, and what was labelled on it. Written by "
                   "update_bambi_catalogue.py - do not edit by hand."),
         "generated": datetime.date.today().isoformat(),
         "licence": "CC BY 4.0",

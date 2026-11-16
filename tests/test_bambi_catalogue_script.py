@@ -89,6 +89,12 @@ def test_an_archive_without_a_checksum_stops_everything(script):
         script.archives(records)
 
 
+def test_a_checksum_is_written_as_the_number_it_is(script):
+    assert script.as_number("adce6a7336ff27414b02fa6b995c98a4") == \
+        0xadce6a7336ff27414b02fa6b995c98a4
+    assert script.as_number("00" * 15 + "ff") == 255
+
+
 def test_who_made_the_dataset(script):
     assert script.authors(record(1, RAW, [])) == \
         "Praschl, C., Schedl, D. C., et al."
@@ -167,6 +173,11 @@ def test_the_catalogue_from_zenodo_to_the_file(script, tmp_path):
         19047570, "flight_7.zip", len(raw[7]), "07" * 16)
     # the one that was published without its videos is told
     assert (seven.videos, twelve.videos) == (True, False)
+    # in the file a checksum is a number, not a string a scan stops at
+    with open(output, encoding="utf-8") as handle:
+        written = json.load(handle)
+    assert written["flights"][0]["raw"][2] == int("07" * 16, 16)
+    assert twelve.raw.md5 == "12" * 16
     assert seven.labelled.record == 21881459
     assert (seven.date, seven.animals, seven.boxes, seven.drone) == (
         "2024-11-19", 2, 5, "Matrice 30 Thermal")

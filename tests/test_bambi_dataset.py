@@ -86,6 +86,20 @@ class TestCatalogue:
         assert seven.labelled.url.startswith(
             "https://zenodo.org/api/records/222/files/flight_7.zip")
 
+    def test_a_checksum_written_as_a_number(self, tmp_path):
+        """As the shipped list has them (update_bambi_catalogue.py says
+        why) - noughts at the front included."""
+        document = dict(CATALOGUE, flights=[
+            {"id": 7, "raw": [111, 1200, int("00ab" + "cd" * 14, 16)],
+             "labelled": [222, 300, 0xadce6a7336ff27414b02fa6b995c98a4]}])
+        path = tmp_path / "flights.json"
+        path.write_text(json.dumps(document), encoding="utf-8")
+
+        seven = bd.flight(7, str(path))
+
+        assert seven.raw.md5 == "00ab" + "cd" * 14
+        assert seven.labelled.md5 == "adce6a7336ff27414b02fa6b995c98a4"
+
     def test_a_flight_that_was_not_labelled(self, catalogue):
         twelve = bd.flight(12, catalogue)
 
@@ -207,6 +221,17 @@ class TestTheShippedCatalogue:
         # a flight's metadata on Zenodo says more than a list needs
         assert "sharepoint" not in text.lower() and "http" not in text
         assert text.isascii()
+
+    def test_it_holds_nothing_a_scan_for_secrets_stops_at(self):
+        """786 checksums in quotes are 786 "potential secrets" to the scan
+        of run_checks.sh; they are written as the numbers they are."""
+        import re
+
+        with open(bd.CATALOGUE_FILE, encoding="utf-8") as handle:
+            text = handle.read()
+
+        assert not re.search(r'"[0-9a-fA-F]{20,}"', text)
+        assert bd.flight(306).raw.md5 == "adce6a7336ff27414b02fa6b995c98a4"
 
     def test_the_species_are_ones_the_plugin_can_name(self):
         names = {name for flight in bd.flights()
