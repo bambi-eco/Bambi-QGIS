@@ -93,9 +93,21 @@ class FeatureViewerDialog(ClosesOnce, QDialog):
 
     @classmethod
     def get_instance(cls, parent=None):
-        """Return the singleton instance, creating it if necessary."""
+        """Return the singleton instance, creating it if necessary.
+
+        The inspector is a child of the window it is first asked for in, so
+        Qt deletes it together with that window. It is then forgotten here,
+        and the next one to ask gets a new one instead of the dead one.
+        """
         if cls._instance is None:
-            cls._instance = cls(parent)
+            viewer = cls(parent)
+
+            def forget(*_args):
+                if cls._instance is viewer:
+                    cls._instance = None
+
+            viewer.destroyed.connect(forget)
+            cls._instance = viewer
         return cls._instance
 
     # ------------------------------------------------------------------

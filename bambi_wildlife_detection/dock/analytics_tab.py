@@ -1193,17 +1193,18 @@ class AnalyticsTabMixin:
         self._connect_viewer_signals()
 
     def _connect_viewer_signals(self):
-        """Follow the inspector's review actions; connected once, as the
-        viewer is a singleton."""
-        if getattr(self, "_viewer_signals_connected", False):
-            return
+        """Follow the inspector's review actions. The viewer is a singleton
+        and is connected once - once per viewer: should the one that was
+        followed be gone, the one that took its place is followed."""
         from ..bambi_feature_viewer import FeatureViewerDialog
 
         viewer = FeatureViewerDialog.get_instance(self.iface.mainWindow())
+        if getattr(self, "_viewer_followed", None) is viewer:
+            return
         viewer.trackDeleted.connect(self._on_viewer_track_deleted)
         viewer.detectionDeleted.connect(self._on_viewer_detection_deleted)
         viewer.trackApproved.connect(self._on_viewer_track_approved)
-        self._viewer_signals_connected = True
+        self._viewer_followed = viewer
 
     def _inventory_dialog_for(self, target_folder: str, modality: str):
         """``(dialog, flight name)`` when the open report shows this camera
