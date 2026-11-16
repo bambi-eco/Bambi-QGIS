@@ -435,6 +435,11 @@ class SettingsMixin:
                 self.ds_covariates_check.isChecked()
                 if hasattr(self, 'ds_covariates_check') else False),
 
+            # Survey analytics: reaction to the drone (dock/reaction.py)
+            "reaction_min_displacement_m": (
+                self.reaction_min_spin.value()
+                if hasattr(self, 'reaction_min_spin') else 3.0),
+
             # Survey analytics: transect population estimation
             "pop_truncation": (
                 self.pop_truncation_spin.value()

@@ -22,6 +22,7 @@ from .core.log_margin import resolve_margin_ms
 from .bambi_survey_analytics import SurveyAnalyticsMixin
 from .bambi_survey_grid import SurveyGridMixin
 from .bambi_survey_trend import SurveyTrendMixin
+from .bambi_survey_reaction import SurveyReactionMixin
 from .bambi_environment import ENVIRONMENT_STEPS, EnvironmentMixin
 from .core import quiet
 
@@ -237,6 +238,10 @@ class ProcessingWorker(QObject):
                     self.is_cancelled)
             elif self.step == "survey_trend":
                 self.processor.run_survey_trend(
+                    self.config, self.progress.emit, self.log.emit,
+                    self.is_cancelled)
+            elif self.step == "drone_reaction":
+                self.processor.run_drone_reaction(
                     self.config, self.progress.emit, self.log.emit,
                     self.is_cancelled)
             elif self.step == "census_summary":
@@ -657,7 +662,8 @@ class CancelledException(Exception):
 
 
 class BambiProcessor(SurveyAnalyticsMixin, SurveyGridMixin,
-                     SurveyTrendMixin, EnvironmentMixin):
+                     SurveyTrendMixin, SurveyReactionMixin,
+                     EnvironmentMixin):
     """Main processing class for BAMBI wildlife detection pipeline."""
 
     # Default detection models per modality: HuggingFace repo, path of the

@@ -136,6 +136,7 @@ class RunPanelMixin:
     #: Survey Analytics steps: they run on config["survey"] (core.survey).
     _SURVEY_STEPS = frozenset({
         "census_summary", "grid_density", "survey_trend", "track_inventory",
+        "drone_reaction",
         "density_heatmap",
         "coverage_map", "survey_orthomosaic", "distance_sampling",
         "population_estimation", "habitat_summary"})
@@ -220,6 +221,9 @@ class RunPanelMixin:
 
             if step == "survey_trend":
                 self.show_trend()
+
+            if step == "drone_reaction":
+                self.show_reaction()
 
             if step == "habitat_summary":
                 self.show_habitat_charts()
@@ -325,4 +329,7 @@ class RunPanelMixin:
         if hasattr(self, 'population_btn'):
             self.population_btn.setEnabled(enabled)
             self.add_transect_areas_btn.setEnabled(enabled)
+        for name in ('grid_btn', 'trend_btn', 'reaction_btn'):
+            if hasattr(self, name):
+                getattr(self, name).setEnabled(enabled)
         self._set_environment_buttons_enabled(enabled)

@@ -268,8 +268,8 @@ The Survey Analytics tab is not tied to the active flight. At its top you
 **tick the flights** that make up the survey, pick the survey's **camera** and
 a **survey folder**; every analytic - census summary, grid density, the
 comparison of visits, track inventory, density, coverage, survey
-orthomosaic, distance sampling, population estimation - then works on all
-ticked flights and writes into
+orthomosaic, distance sampling, the reaction to the drone, population
+estimation - then works on all ticked flights and writes into
 `<survey folder>/analytics_{t|w}/`. Each flight's DEM and settings are taken
 from the flight itself. See
 [Survey analytics](pipeline.md#survey-analytics).

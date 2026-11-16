@@ -38,6 +38,7 @@ from .dock.transect_layers import TransectLayersMixin
 from .dock.group_layers import GroupLayersMixin
 from .dock.grid_density import GridDensityMixin
 from .dock.trend import TrendMixin
+from .dock.reaction import ReactionMixin
 from .dock.accuracy import AccuracyMixin
 from .dock.review_queue import ReviewQueueMixin
 from .dock.result_layers import ResultLayersMixin
@@ -74,6 +75,7 @@ class BambiDockWidget(
         GroupLayersMixin,
         GridDensityMixin,
         TrendMixin,
+        ReactionMixin,
         AccuracyMixin,
         ReviewQueueMixin,
         ResultLayersMixin,

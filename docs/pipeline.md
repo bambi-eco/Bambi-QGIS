@@ -881,6 +881,38 @@ analytics_t/    # or analytics_w/
 
 The JSON also stores the fitted detection-function curve (with conditions in the model: the average over the observations) and the distance histogram for external plotting, what the observations were: `n_groups`, `n_animals`, `mean_group_size` with its standard error and CV, `largest_group`, `group_density_per_km2` and the size-bias check (`group_size_bias`), and - where they were asked for - `covariates`: the conditions offered (`considered`), those left out and why (`not_used`), those in the chosen model (`in_best_model`) and for each of these its coefficient per unit with standard error and p, and the strip half-width at a low and a high value (`effects`). Abundance is reported for the covered strip area (2·w·L); multiply the density estimate by your study-area size for a study-area abundance.
 
+### Reaction to the drone
+
+A drone that drives the animals it counts away is counting something else. Every tracked animal is a short film of where it was, frame by frame; **→ Read Reaction to the Drone** reads from each track of the ticked flights what the animal did while it was in view, and puts the animals together to see whether they fled.
+
+**What an animal did.** The positions of a track jitter - the camera's attitude is not known exactly, and a box does not sit on the same pixel of an animal twice - so adding up the steps from frame to frame gives every animal a path, standing or not (that is the *path length* of the track inventory). Here a **constant velocity is fitted through all positions** of the track instead; what the positions lie off it by is the jitter, and it says how well the velocity is known. An animal **moved** when that velocity carried it at least the set distance during its time in view *and* three times the standard error of that distance. Tracks of fewer than four positions or less than two seconds are *not judged*.
+
+| Setting | Description |
+|---------|-------------|
+| **Moved = went at least** | How far an animal has to have gone while in view to count as having moved (default 3 m). Below a few metres nobody can tell: positions jitter by a metre or two, and see *along the line* below. |
+
+**Relative to the line.** The direction the drone flew while the animal was in view is *the line*. What the animal covered is split into the part **away from the line** - to the side the animal was on; negative: towards the line - and the part **along** it, in the direction of flight. An animal that started under the line (within 2 m) has no side: whichever way it goes across, it goes away. The part across the line is the one to trust. A warm spot that is not at the height the terrain model has for it - on a bush, on a slope the DEM smooths over - seems to slide *along* the line as the camera passes over it, and never across; where most of the movement is along the line and all one way, the result says so rather than calling it a reaction. The line needs the flight's DEM (the frames' positions are stored relative to it); without it how far and how fast is read, and where to is not.
+
+**The animals together** - for all animals, per species and, for several flights, per flight:
+
+- how many **moved**, with an interval for the share, and how far and how fast those went (medians);
+- of those that went sideways, how many **away from the line** and how many **towards** it - without a reaction as many one way as the other (exact binomial test);
+- the **mean speed away from the line** over all animals judged, with a 95 % interval - nought without a reaction, since what the jitter adds goes either way;
+- whether the animals **nearer the line were the faster** ones (rank correlation of speed with the distance from the line).
+
+In a word: the animals *moved away from the line* - a reaction; they *moved, in no particular direction* - on the move, but not from the drone; *no sign of a reaction*; or *too little to tell* (fewer than five animals in view long enough).
+
+**Why it matters for the estimates.** Distance sampling takes an animal's distance from the line as the one it had before the drone came. Animals that move away first are found further out, the detection function looks wider than it is, and the density comes out **too low**. If the animals react, fly higher, or read the distance-sampling result as a minimum.
+
+**→ Show Reaction** opens the table; **→ Add Movements to QGIS** draws an arrow per animal that moved, from where it was first seen to where it was last seen (as the fitted motion has it): red away from the line, blue towards it, grey along it.
+
+**Outputs:**
+```
+analytics_t/    # or analytics_w/, in the survey folder
+├── drone_reaction.json          # settings, the animals together, every track
+└── drone_reaction_tracks.csv    # one row per tracked animal: status, direction, distance, speed, heading, jitter, ...
+```
+
 ### Coverage map
 
 Combines the exported per-frame GeoTIFFs on the same grid as the **Orthomosaic**, but instead of merging image content it counts, per output pixel, how many frames contain valid (non-nodata) data at that position. The result is a single-band raster where `1` means the ground was imaged once and `N` that it was seen in `N` overlapping frames - a map of survey effort/overlap. Run **Export Frames as GeoTIFF** for the chosen camera first.

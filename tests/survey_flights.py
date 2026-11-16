@@ -90,7 +90,9 @@ def make_flight(folder: str, tracks, modality: str = "t",
 
     :param tracks: ``{"id", "species", "at": (x, y) | None, "frames":
         (first, last)}``; ``at`` ``None`` = never geo-referenced. Optional
-        ``"sex"`` / ``"age"`` labels and ``"approved"``.
+        ``"sex"`` / ``"age"`` labels and ``"approved"``. An animal that
+        moved comes with ``"path": [(frame, x, y), ...]`` instead of ``at``
+        and ``frames``: one box where it was on each of those frames.
     :param loose_boxes: ``{"species", "at", "frame"}`` - boxes of no track
     :param seen: the ground the camera saw (:func:`write_footprints`);
         ``None`` = no field-of-view footprints at all
@@ -104,6 +106,11 @@ def make_flight(folder: str, tracks, modality: str = "t",
 
     boxes = []          # (frame, track id or None, place or None, species)
     for track in tracks:
+        if track.get("path") is not None:
+            # where the animal was, frame by frame
+            for frame, x, y in track["path"]:
+                boxes.append((frame, track["id"], (x, y), track["species"]))
+            continue
         first, last = track["frames"]
         at = track.get("at")
         # two boxes, either side of the place: their middle is the place
