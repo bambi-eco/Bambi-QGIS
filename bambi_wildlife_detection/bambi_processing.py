@@ -21,6 +21,7 @@ from .core.heading import (
 from .core.log_margin import resolve_margin_ms
 from .bambi_survey_analytics import SurveyAnalyticsMixin
 from .bambi_survey_grid import SurveyGridMixin
+from .bambi_survey_trend import SurveyTrendMixin
 from .bambi_environment import ENVIRONMENT_STEPS, EnvironmentMixin
 from .core import quiet
 
@@ -232,6 +233,10 @@ class ProcessingWorker(QObject):
                 )
             elif self.step == "grid_density":
                 self.processor.run_grid_density(
+                    self.config, self.progress.emit, self.log.emit,
+                    self.is_cancelled)
+            elif self.step == "survey_trend":
+                self.processor.run_survey_trend(
                     self.config, self.progress.emit, self.log.emit,
                     self.is_cancelled)
             elif self.step == "census_summary":
@@ -652,7 +657,7 @@ class CancelledException(Exception):
 
 
 class BambiProcessor(SurveyAnalyticsMixin, SurveyGridMixin,
-                     EnvironmentMixin):
+                     SurveyTrendMixin, EnvironmentMixin):
     """Main processing class for BAMBI wildlife detection pipeline."""
 
     # Default detection models per modality: HuggingFace repo, path of the

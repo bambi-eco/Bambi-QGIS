@@ -19,6 +19,8 @@ The tabs
     ``analytics_tab``            the Survey Analytics tab
     ``grid_density``             Survey Analytics > Grid Density, and the
                                  grid on the map
+    ``trend``                    Survey Analytics > Compare Visits: the same
+                                 ground, surveyed again
     ``review_queue``             Survey Analytics > Review Queue: the tracks
                                  in doubt, one after another
 

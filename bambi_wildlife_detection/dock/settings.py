@@ -406,6 +406,10 @@ class SettingsMixin:
             # below, from the grid panel)
             "grid_source": self._survey_source(),
 
+            # Survey analytics: the visits compared (dock/trend.py)
+            "trend_source": self._survey_source(),
+            **self._trend_values(),
+
             # Survey analytics: density heatmap
             "density_source": self._survey_source(),
             "density_cell_size": (
@@ -589,6 +593,8 @@ class SettingsMixin:
             self.survey_panel.reset()
         if hasattr(self, 'grid_panel'):
             self.grid_panel.reset()
+        if hasattr(self, 'trend_gap_spin'):
+            self._reset_trend_settings()
 
         self.log("Configuration reset to defaults")
 
@@ -746,6 +752,8 @@ class SettingsMixin:
             self.survey_panel.save(project)
         if hasattr(self, 'grid_panel'):
             self.grid_panel.save(project)
+        if hasattr(self, 'trend_gap_spin'):
+            self._save_trend_settings(project)
         project.writeEntry(PLUGIN_SCOPE, "Flights/Active",
                            str(getattr(self, "_active_flight_index", 0)))
 
@@ -776,6 +784,8 @@ class SettingsMixin:
                 self.survey_panel.load(project)
             if hasattr(self, 'grid_panel'):
                 self.grid_panel.load(project)
+            if hasattr(self, 'trend_gap_spin'):
+                self._load_trend_settings(project)
 
         # Prefer the active flight's own store; fall back to the QGIS project,
         # which is where projects written before 6.0 keep everything.

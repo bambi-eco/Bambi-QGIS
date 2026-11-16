@@ -168,6 +168,9 @@ class AnalyticsTabMixin:
         # ----- Grid Density (dock/grid_density.py) -----
         analytics_tab_layout.addWidget(self._build_grid_group())
 
+        # ----- Compare Visits (dock/trend.py) -----
+        analytics_tab_layout.addWidget(self._build_trend_group())
+
         # ----- Track Inventory -----
         inventory_group = QGroupBox("Track Inventory")
         inventory_layout = QVBoxLayout(inventory_group)

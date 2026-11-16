@@ -777,6 +777,40 @@ analytics_t/    # or analytics_w/, in the survey folder
 └── grid_density_tracks_by_flight.csv   # one row per cell and flight
 ```
 
+### Compare visits
+
+One survey of an area is a count. Several - weeks or years apart - say what is happening to the animals, if the visits are compared fairly. Tick the flights of **every** visit to the area in the Survey box; **→ Compare Visits** divides them into visits by the day they were flown, counts each visit, and says what changed.
+
+| Setting | Description |
+|---------|-------------|
+| **One visit: flights up to … day(s) apart** | A flight flown no more than this many days after the one before belongs to the same visit. The default, 0, makes the flights of one day one visit; a survey that takes three mornings is one visit with 1. |
+| **Ground compared** | **All the ground each visit saw** - every visit is taken as it was flown, its animals over its ground. **Only the ground every visit saw** - the like-for-like comparison where the visits did not cover the same part of the area: only the ground all of them saw is compared, and only the animals that stood on it. |
+
+Both are saved with the QGIS project.
+
+**The day is the local one** the frames were stamped with, so two flights at 00:30 and at 20:00 of the same day are one visit although the flight log's clock (UTC) has them on two. Flights less than six hours apart are one visit whatever the calendar says: a night survey does not end at midnight. A flight whose frames carry no capture time cannot be placed and is named.
+
+**What a visit counted** - per species and for all animals, as the [census](#census-summary) counts them (inside the survey area, if one is drawn): the animals, the [groups](#groups) they formed and the largest, sex and age, and the **density**: the animals over the ground the cameras looked at during the visit, summed over its flights. Two flights side by side are one count of both grounds; two flights over the same ground on one day give the mean of the two. With a survey area the density is also given as the **number in the survey area** (density times the area minus its exclusion zones; not where only common ground is compared). A flight without field-of-view footprints counts as having seen the whole survey area; without footprints *and* without an area the ground is not known, and the counts are compared as they are - fair only where every visit covered the same ground.
+
+**How sure a count is.** The 95 % interval of a density takes a group of animals as *one sighting*: ten deer in one herd are one piece of luck, not ten. (It is the gamma interval of Fay and Feuer for a sum of group sizes; for animals seen one by one that is the exact Poisson interval. A visit that found nothing still has an upper limit.)
+
+**From visit to visit** - the column *Since the visit before*, and below the table the first visit against the last: the change in percent and how likely a difference at least as large is between two counts of one and the same density (an exact test: given the animals of both visits together, how they would fall to the two by their shares of the ground looked at). Clumped animals are worth fewer sightings than there are animals, so thirty deer in three herds against ten singles is *three times as many, on the strength of four sightings* - within what chance explains.
+
+**The trend** - from two visits on, a constant rate of change is fitted to the counts (Poisson regression with the ground looked at as exposure), and given as the change over the time the visits span - and per year, once they span a year - with a 95 % interval: an *increase*, a *decrease*, or *no clear trend* where the interval includes no change. The interval allows for the groups and, from three visits on, for visits that lie further from the line than counting explains (it is then Student's, on the visits less two). A series that starts or ends with no animals at all has no rate; the visit-to-visit comparison says what there is to say.
+
+**→ Show Visits and Trend** opens the result: for the species chosen at the top a chart of every visit's density with its interval and the fitted trend, the table of visits, and the sentences above. Each visit is listed with its time of day and - where the [weather step](environment.md) was run - the air temperature, for a reason:
+
+> A count is of the animals **seen**. Canopy, season, time of day and weather change how many of the animals present that are, so a trend in counts is a trend in animals only as far as the visits were flown alike. Compare spring with spring and dawn with dawn; a leaf-off count against a leaf-on one mostly measures the leaves.
+
+Counting **boxes** instead of animals (the survey's *Count* setting) counts an animal once per frame it is on: the intervals are then far too narrow, and only the direction of a change means anything.
+
+**Outputs:**
+```
+analytics_t/    # or analytics_w/, in the survey folder
+├── trend_tracks.json           # or trend_detections...: the visits, the series per species, changes, trends
+└── trend_tracks_visits.csv     # one row per visit and species, with sex, age and weather
+```
+
 ### Density heatmap
 
 Generates a **kernel-density estimate raster** of animal locations. Points are binned to a grid and smoothed with a Gaussian kernel; each output pixel is the estimated density in **animals per hectare**.

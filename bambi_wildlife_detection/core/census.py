@@ -78,7 +78,7 @@ def tally(records: Sequence[dict], area=None) -> Dict[str, dict]:
     members: Dict[str, Dict[object, int]] = {}
     for record in records:
         species = record.get("species") or UNKNOWN
-        counts = out.setdefault(species, _empty())
+        counts = out.setdefault(species, empty())
         counts["counted"] += 1
         x, y = record.get("x"), record.get("y")
         if area is None:
@@ -110,7 +110,9 @@ def tally(records: Sequence[dict], area=None) -> Dict[str, dict]:
     return out
 
 
-def _merge(target: dict, source: dict) -> dict:
+def merge(target: dict, source: dict) -> dict:
+    """Add the counts of *source* (one species of one flight, as
+    :func:`tally` gives them) to *target*; returns *target*."""
     for key in ("counted", "inside", "outside", "unplaced", "approved",
                 "ungrouped"):
         target[key] = target.get(key, 0) + source.get(key, 0)
@@ -126,7 +128,8 @@ def _merge(target: dict, source: dict) -> dict:
     return target
 
 
-def _empty() -> dict:
+def empty() -> dict:
+    """Counts of nothing, to :func:`merge` into."""
     return {"counted": 0, "inside": 0, "outside": 0, "unplaced": 0,
             "approved": 0, "sex": {}, "age": {}, "group_sizes": [],
             "ungrouped": 0}
@@ -199,23 +202,23 @@ def build(flights: Sequence[dict], area=None,
                                                for c in covered_values)
                      else None)
     for flight_name, counts, covered_m2 in per_flight:
-        everything = _empty()
+        everything = empty()
         for species in species_seen:
             if species not in counts:
                 continue
             rows.append(row(flight_name, species, counts[species],
                             covered_m2, plot_m2))
-            _merge(everything, counts[species])
-            _merge(totals.setdefault(species, _empty()), counts[species])
+            merge(everything, counts[species])
+            merge(totals.setdefault(species, empty()), counts[species])
         rows.append(row(flight_name, ALL_SPECIES, everything, covered_m2,
                         plot_m2))
     if len(per_flight) > 1:
-        grand = _empty()
+        grand = empty()
         for species in species_seen:
             if species in totals:
                 rows.append(row(ALL_FLIGHTS, species, totals[species],
                                 total_covered, plot_m2))
-                _merge(grand, totals[species])
+                merge(grand, totals[species])
         rows.append(row(ALL_FLIGHTS, ALL_SPECIES, grand, total_covered,
                         plot_m2))
 

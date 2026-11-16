@@ -45,10 +45,12 @@ def species_id(folder: str, name: str) -> int:
 
 def write_poses(folder: str, n_frames: int, modality: str = "t",
                 seconds_per_frame: float = 1.0, timed: bool = True,
-                locations=None) -> str:
+                locations=None, start=None) -> str:
     """``poses_{m}.json`` for *n_frames* frames. *locations* gives the
     drone's place per frame (mesh-local metres); a line due east at 5 m per
-    frame otherwise."""
+    frame otherwise. *start* is when the first frame was taken
+    (:data:`START` unless given)."""
+    start = start or START
     images = []
     for frame in range(n_frames):
         if locations is not None:
@@ -58,7 +60,7 @@ def write_poses(folder: str, n_frames: int, modality: str = "t",
         image = {"imagefile": f"frame_{frame:06d}.jpg",
                  "location": [x, y, 80.0]}
         if timed:
-            image["epoch"] = (START + timedelta(
+            image["epoch"] = (start + timedelta(
                 seconds=frame * seconds_per_frame)).isoformat()
         images.append(image)
     path = os.path.join(folder, f"poses_{modality}.json")
@@ -83,7 +85,7 @@ def write_footprints(folder: str, boxes, modality: str = "t") -> None:
 def make_flight(folder: str, tracks, modality: str = "t",
                 seconds_per_frame: float = 1.0, timed: bool = True,
                 loose_boxes=(), n_frames=None, locations=None,
-                seen=None) -> str:
+                seen=None, start=None) -> str:
     """A processed flight: detections, their places, the tracks.
 
     :param tracks: ``{"id", "species", "at": (x, y) | None, "frames":
@@ -92,6 +94,7 @@ def make_flight(folder: str, tracks, modality: str = "t",
     :param loose_boxes: ``{"species", "at", "frame"}`` - boxes of no track
     :param seen: the ground the camera saw (:func:`write_footprints`);
         ``None`` = no field-of-view footprints at all
+    :param start: when the flight was flown (:data:`START` unless given)
     :return: *folder*
     """
     os.makedirs(folder, exist_ok=True)
@@ -170,7 +173,7 @@ def make_flight(folder: str, tracks, modality: str = "t",
 
     last = max([frame for frame, _t, _p, _s in boxes] or [0])
     write_poses(folder, n_frames or last + 1, modality, seconds_per_frame,
-                timed, locations)
+                timed, locations, start)
     if seen is not None:
         write_footprints(folder, seen, modality)
     return folder

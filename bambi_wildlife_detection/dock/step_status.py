@@ -396,6 +396,7 @@ class StepStatusMixin:
             "add_groups": self.add_groups_status,
             "grid_density": self.grid_status,
             "add_grid": self.add_grid_status,
+            "survey_trend": self.trend_status,
             "add_track_inventory": self.add_track_inventory_status,
             "population_estimation": self.population_status,
             "add_transect_areas": self.add_transect_areas_status,
