@@ -110,21 +110,23 @@ def test_the_tracks_in_doubt_are_listed_the_most_doubtful_first(review):
     assert dialog.windowTitle() == "Review Queue (Thermal)"
 
 
-def test_the_first_track_is_selected_and_shown_in_the_inspector(review):
+def test_the_first_track_is_selected(review):
     dialog = review.dialog()
 
     assert dialog.current()["track_id"] == 3
-    assert review.opened == [3]
 
 
-def test_the_inspector_can_be_left_alone(review):
+def test_selecting_a_track_opens_nothing(review):
+    """The inspector opens where it is asked for - on a track's number -
+    and not for every row that gets selected."""
     dialog = review.dialog()
-    dialog.inspector_check.setChecked(False)
 
     dialog.select_next()
+    dialog.table.selectRow(2)
 
-    assert dialog.current()["track_id"] == 2
-    assert review.opened == [3]
+    assert dialog.current()["track_id"] == 4
+    assert review.opened == []
+    assert not hasattr(dialog, "inspector_check")
 
 
 def _track_item(dialog, row):
@@ -149,28 +151,19 @@ def test_a_tracks_number_looks_like_the_link_it_is(review):
 
 def test_clicking_the_number_opens_the_track(review):
     dialog = review.dialog()
-    dialog.inspector_check.setChecked(False)     # selecting shows nothing
     index, _item = _track_item(dialog, 2)
 
     dialog.table.cellClicked.emit(2, index)
 
-    assert review.opened == [3, 4]
-    # another cell of the row is no link
-    dialog.table.cellClicked.emit(1, index + 1)
-    assert review.opened == [3, 4]
-
-
-def test_the_click_that_selects_a_track_opens_it_once(review):
-    dialog = review.dialog()                     # shows every selected track
-    index, _item = _track_item(dialog, 1)
-
-    dialog.table.selectRow(1)                    # the press: track 2 opens
-    dialog.table.cellClicked.emit(1, index)      # the release, on its number
-
-    assert review.opened == [3, 2]
-    # clicking the number of the track that is selected opens it again
-    dialog.table.cellClicked.emit(1, index)
-    assert review.opened == [3, 2, 2]
+    assert review.opened == [4]
+    # any other cell of a row is no link
+    for column in range(dialog.table.columnCount()):
+        if column != index:
+            dialog.table.cellClicked.emit(1, column)
+    assert review.opened == [4]
+    # ... and the number opens the track as often as it is clicked
+    dialog.table.cellClicked.emit(2, index)
+    assert review.opened == [4, 4]
 
 
 def test_a_survey_of_several_flights_says_which_flight(review):
@@ -209,7 +202,7 @@ def test_approving_takes_the_track_out_and_goes_on(review):
     assert review.said == [("approve", 3)]
     assert _tracks(dialog) == [2, 4]
     assert dialog.current()["track_id"] == 2
-    assert review.opened == [3, 2]
+    assert review.opened == []
     assert dialog.progress_label.text() == "2 left, 1 done"
 
 
@@ -412,6 +405,10 @@ def test_the_button_opens_the_queue_of_the_survey(dock, survey):
     # both tracks have two boxes: very short
     assert _tracks(dialog) == [1, 2]
     assert _cell(dialog, 0, "Why") == "only 2 boxes"
+    assert opened == []                      # nothing opens by itself
+    index = [dialog.table.horizontalHeaderItem(c).text()
+             for c in range(dialog.table.columnCount())].index("Track")
+    dialog.table.cellClicked.emit(0, index)
     assert opened == [(1, 1)]                # track 1, at its first frame
     assert [dialog.species_combo.itemText(i)
             for i in range(dialog.species_combo.count())][:3] == [

@@ -1069,7 +1069,7 @@ Nobody looks at every track of a survey. Most are plain - a confident detector, 
 
 A track somebody **approved**, a track that was **labelled by hand** and one already ruled out as `not-an-animal` are never listed. Doubts that change a count (a faint or very short track, one camera only) come before doubts that change a label (a narrow vote), and a track with several doubts before a track with one. The three limits can be changed at the top of the window; **Refresh** builds the queue again from the project as it is now.
 
-Selecting a row opens the track in the [inspector](tools.md#detection--track-selection) at its first frame (untick *Show in the inspector* to stop that). The track's number is a link - underlined and blue, like the first and last frame in the track inventory: a click on it opens the track in the inspector whether the box is ticked or not. Then say what it is:
+The track's number is a link - underlined and blue, like the first and last frame in the track inventory: a click on it opens the track in the [inspector](tools.md#detection--track-selection) at its first frame. Selecting a row does not open anything by itself. With the row selected, say what the track is:
 
 - **✓ Approve** (key **A**) - the track is right as it stands. It is ticked as approved, as in the inventory report, and leaves the queue.
 - **✗ Not an animal** (key **X**) - rules it out: the track and its boxes become `not-an-animal`, which no survey tool counts. Nothing is deleted, so the verdict can be taken back by choosing another species.

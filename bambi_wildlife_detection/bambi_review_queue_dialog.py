@@ -2,8 +2,8 @@
 """The review queue: the tracks worth a human look, one after another.
 
 A window on :mod:`core.review_queue`. It lists the tracks that are in doubt,
-the most doubtful first, each with why. Selecting one opens it in the
-inspector; the reviewer then says what it is - approve it as it stands, rule
+the most doubtful first, each with why. A click on a track's number opens
+it in the inspector; the reviewer then says what it is - approve it as it stands, rule
 it out as not an animal, or correct its species, sex or age - and goes on to
 the next. What is said here is written to the track at once and stands: a
 later classifier run leaves it alone (:mod:`core.track_review`).
@@ -15,7 +15,7 @@ load the queue and write the reviewer's word.
 from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtGui import QBrush, QColor, QFont, QKeySequence
 from qgis.PyQt.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+    QAbstractItemView, QComboBox, QDialog, QDialogButtonBox,
     QDoubleSpinBox, QHBoxLayout, QLabel, QPushButton, QSpinBox,
     QTableWidget, QTableWidgetItem, QVBoxLayout,
 )
@@ -71,8 +71,9 @@ class ReviewQueueDialog(QDialog):
         layout = QVBoxLayout(self)
 
         intro = QLabel(
-            "The tracks that are in doubt, the most doubtful first. Select "
-            "one to see it in the inspector, then say what it is: approve "
+            "The tracks that are in doubt, the most doubtful first. Click a "
+            "track's number to see it in the inspector, select it and say "
+            "what it is: approve "
             "it, rule it out, or correct its species, sex or age. What you "
             "say is written at once, and no classifier run changes it.")
         intro.setWordWrap(True)
@@ -130,9 +131,6 @@ class ReviewQueueDialog(QDialog):
         self.table.horizontalHeader().setStretchLastSection(False)
         self.table.itemSelectionChanged.connect(self._on_row_changed)
         self.table.cellClicked.connect(self._on_cell_clicked)
-        #: The row the inspector was opened for by selecting it: the click
-        #: that selected it does not open it a second time.
-        self._just_shown = None
         layout.addWidget(self.table)
 
         act = QHBoxLayout()
@@ -170,10 +168,6 @@ class ReviewQueueDialog(QDialog):
         layout.addLayout(act)
 
         foot = QHBoxLayout()
-        self.inspector_check = QCheckBox("Show the selected track in the "
-                                         "inspector")
-        self.inspector_check.setChecked(True)
-        foot.addWidget(self.inspector_check)
         foot.addStretch()
         self.progress_label = QLabel("")
         foot.addWidget(self.progress_label)
@@ -253,14 +247,13 @@ class ReviewQueueDialog(QDialog):
             self.table.setItem(r, c, item)
 
     def _on_cell_clicked(self, r: int, c: int) -> None:
-        """A click on a track's number shows the track in the inspector -
-        whether or not every selected track is shown there."""
+        """A click on a track's number shows the track in the inspector.
+        Nothing else does: selecting a row - by a click elsewhere in it,
+        by the keys, by going on to the next track - only selects it."""
         if self._columns[c] != self.LINK_COLUMN or not (
                 0 <= r < len(self._queue)):
             return
-        shown, self._just_shown = self._just_shown, None
-        if shown != r:
-            self._open_track(self._queue[r])
+        self._open_track(self._queue[r])
 
     def _show_progress(self) -> None:
         left = len(self._queue)
@@ -291,10 +284,6 @@ class ReviewQueueDialog(QDialog):
         if row is None:
             return
         self._fill_choices(row)
-        self._just_shown = None
-        if self.inspector_check.isChecked():
-            self._open_track(row)
-            self._just_shown = self.table.currentRow()
 
     def _fill_choices(self, row: dict) -> None:
         """Offer what this track's flight knows, on what the track is."""
