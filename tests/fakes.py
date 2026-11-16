@@ -300,3 +300,61 @@ def parse_glb(path):
     assert data[bin_offset + 4:bin_offset + 8] == b"BIN\x00"
     binary = data[bin_offset + 8:bin_offset + 8 + bin_length]
     return gltf, binary
+
+
+class RangeSession:
+    """A server that answers range requests for the files it was given -
+    ``{url: bytes}`` - and notes what was asked.
+
+    ``busy`` answers the next so many requests with 429 (``retry_after``
+    seconds, where given); ``whole`` ignores ranges and sends the file;
+    ``spoil(offset)`` flips a byte of what is served from then on.
+    """
+
+    class Response:
+        def __init__(self, status_code, content=b"", headers=None):
+            self.status_code = status_code
+            self.content = content
+            self.headers = headers or {}
+
+    def __init__(self, files, busy=0, retry_after=None, whole=False):
+        self.files = dict(files)
+        self.busy, self.retry_after, self.whole = busy, retry_after, whole
+        self.asked = []          # (url, first, last)
+        self.headers = {}
+        self.short = False       # send a byte less than asked for
+        self.shifted = False     # send another part than asked for
+        self.fails = None        # an exception to raise instead
+
+    def spoil(self, url, offset):
+        data = bytearray(self.files[url])
+        data[offset] ^= 0xFF
+        self.files[url] = bytes(data)
+
+    @property
+    def transferred(self):
+        return sum(last - first + 1 for _url, first, last in self.asked)
+
+    def get(self, url, headers=None, timeout=None, **_more):
+        if self.fails is not None:
+            raise self.fails
+        first, last = (int(part) for part in
+                       (headers or {})["Range"].split("=")[1].split("-"))
+        self.asked.append((url, first, last))
+        if self.busy:
+            self.busy -= 1
+            extra = {} if self.retry_after is None else {
+                "Retry-After": str(self.retry_after)}
+            return self.Response(429, headers=extra)
+        if url not in self.files:
+            return self.Response(404)
+        data = self.files[url]
+        if self.whole:
+            return self.Response(200, data)
+        last = min(last, len(data) - 1)
+        body = data[first:last + 1]
+        start = first + 1 if self.shifted else first
+        if self.short:
+            body = body[:-1]
+        return self.Response(206, body, {
+            "Content-Range": f"bytes {start}-{last}/{len(data)}"})
