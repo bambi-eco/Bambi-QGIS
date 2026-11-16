@@ -442,6 +442,8 @@ class SettingsMixin:
             "reaction_min_speed_ms": (
                 self.reaction_speed_spin.value()
                 if hasattr(self, 'reaction_speed_spin') else 0.0),
+            "reaction_species_thresholds": dict(
+                getattr(self, '_reaction_species', None) or {}),
 
             # Survey analytics: position uncertainty (dock/position.py)
             "position_source": self._survey_source(),

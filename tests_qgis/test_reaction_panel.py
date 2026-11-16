@@ -126,21 +126,80 @@ class TestGroup:
         assert dock.reaction_speed_spin.text() == "0.25 m/s or faster"
         assert dock.get_config()["reaction_min_speed_ms"] == 0.25
 
+    def test_a_species_can_have_thresholds_of_its_own(self, dock,
+                                                      monkeypatch):
+        from qgis.PyQt.QtWidgets import QDialog
+
+        from bambi_wildlife_detection.dock import reaction
+
+        assert dock.reaction_species_btn.text() == "Per Species…"
+        assert dock.reaction_species_label.text() == (
+            "every species by the two values above")
+        assert dock.get_config()["reaction_species_thresholds"] == {}
+        monkeypatch.setattr(dock, "_reaction_species_names",
+                            lambda: ["roe deer", "red deer"])
+        shown = []
+
+        def answer(dialog):
+            shown.append([dialog.table.item(row, 0).text()
+                          for row in range(dialog.table.rowCount())])
+            dialog.table.item(0, 1).setText("5")
+            dialog.table.item(0, 2).setText("0,3")
+            dialog.table.item(1, 2).setText("1")
+            return QDialog.DialogCode.Accepted
+
+        monkeypatch.setattr(reaction.SpeciesThresholdsDialog, "exec", answer)
+
+        dock.reaction_species_btn.click()
+
+        assert shown == [["roe deer", "red deer"]]
+        assert dock.get_config()["reaction_species_thresholds"] == {
+            "roe deer": {"min_displacement_m": 5.0, "min_speed_ms": 0.3},
+            "red deer": {"min_speed_ms": 1.0}}
+        assert dock.reaction_species_label.text() == (
+            "red deer: at least 3 m at 1 m/s or faster, roe deer: at least "
+            "5 m at 0.3 m/s or faster")
+
+    def test_the_table_shows_what_a_species_has_and_refuses_nonsense(self):
+        from bambi_wildlife_detection.dock import reaction
+
+        dialog = reaction.SpeciesThresholdsDialog(
+            ["roe deer", "fox"], {"roe deer": {"min_displacement_m": 5.0}},
+            3.0, 0.0)
+
+        assert dialog.table.item(0, 1).text() == "5"
+        assert dialog.table.item(0, 2).text() == ""
+        assert dialog.thresholds() == {
+            "roe deer": {"min_displacement_m": 5.0}}
+
+        dialog.table.item(1, 2).setText("fast")
+        dialog.accept()
+
+        assert dialog.result() != dialog.DialogCode.Accepted
+        assert dialog.problem_label.text() == (
+            "The speed for 'fox' is not a number ('fast').")
+        dialog.deleteLater()
+
     def test_both_thresholds_are_kept_with_the_project(self, dock):
         """Neither was: a project opened again asked for 3 m at any
         speed, whatever its results had been read with."""
         dock.reaction_min_spin.setValue(7.5)
         dock.reaction_speed_spin.setValue(0.25)
+        dock._reaction_species = {"hare": {"min_speed_ms": 2.0}}
         dock.save_config_to_project()
         dock.reaction_min_spin.setValue(3.0)
         dock.reaction_speed_spin.setValue(0.0)
+        dock._reaction_species = {}
 
         dock.load_config_from_project()
 
         assert dock.reaction_min_spin.value() == 7.5
         assert dock.reaction_speed_spin.value() == 0.25
+        assert dock._reaction_species == {"hare": {"min_speed_ms": 2.0}}
+        assert dock.reaction_species_label.text().startswith("hare: ")
 
         dock._reset_reaction_settings()
+        assert dock._reaction_species == {}
         assert dock.reaction_min_spin.value() == 3.0
         assert dock.reaction_speed_spin.value() == 0.0
 

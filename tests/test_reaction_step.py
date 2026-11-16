@@ -139,7 +139,7 @@ def test_the_animals_together(tmp_path, fleeing):
                                "towards it") for line in log)
     assert document["by_flight"] == {}
     assert document["settings"] == {
-        "min_displacement_m": 3.0, "min_speed_ms": 0.0,
+        "min_displacement_m": 3.0, "min_speed_ms": 0.0, "per_species": {},
         "min_duration_s": 2.0,
         "min_positions": 4, "sigmas": 3.0}
     assert (document["source"], document["camera"], document["crs"]) == (
@@ -189,6 +189,45 @@ def test_how_fast_counts_as_moving_can_be_set(tmp_path, fleeing):
     assert strict["settings"]["min_speed_ms"] == 0.6
     assert "at least 3 m, at 0.6 m/s or faster, during" in strict["notes"]
     assert "m/s or faster" not in loose["notes"]
+
+
+def test_a_species_is_judged_by_its_own_thresholds(tmp_path, fleeing):
+    """Red deer and roe deer that did the same: 0.6 m/s away from the
+    line. With a speed of its own, only the one species stayed."""
+    folder = str(tmp_path / "Forest")
+    dem = _flight(folder, [animal(n + 1, 100 + 120 * n, 15.0, (0.0, 0.6),
+                                  species="red deer") for n in range(6)])
+    survey = _survey(tmp_path, fleeing, (folder, dem))
+
+    document, _log, _out = _run(survey, reaction_species_thresholds={
+        "Red Deer": {"min_speed_ms": 1.0}})
+
+    by_species = {}
+    for row in document["tracks"]:
+        by_species.setdefault(row["species"], set()).add(row["status"])
+    assert by_species["red deer"] == {drone_reaction.STAYED}
+    assert drone_reaction.MOVED in by_species["roe deer"]
+    assert document["settings"]["per_species"] == {
+        "red deer": {"min_speed_ms": 1.0}}
+    assert document["notes"].endswith(
+        "Species with thresholds of their own - red deer: at least 3 m at "
+        "1 m/s or faster.")
+
+
+def test_a_distance_of_a_species_own(tmp_path, fleeing):
+    document, _log, _out = _run(
+        _survey(tmp_path, fleeing),
+        reaction_species_thresholds={"roe deer": {"min_displacement_m": 10}})
+
+    # 0.5 m/s for 19 s is 9.5 m: far enough for everyone, not for roe deer
+    assert _by_track(document)[8]["status"] == drone_reaction.STAYED
+    assert document["settings"]["min_displacement_m"] == 3.0
+
+
+def test_a_species_threshold_that_is_none_is_refused(tmp_path, fleeing):
+    with pytest.raises(RuntimeError, match="speed for 'roe deer'"):
+        _run(_survey(tmp_path, fleeing), reaction_species_thresholds={
+            "roe deer": {"min_speed_ms": -1}})
 
 
 @pytest.mark.parametrize("value", [-0.1, "fast"])

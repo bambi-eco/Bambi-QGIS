@@ -13,9 +13,11 @@ flew.
 import json
 import os
 
+from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtWidgets import (
-    QDoubleSpinBox, QGroupBox, QHBoxLayout, QLabel, QMessageBox,
-    QPushButton, QVBoxLayout,
+    QDialog, QDialogButtonBox, QDoubleSpinBox, QGroupBox, QHBoxLayout,
+    QHeaderView, QLabel, QMessageBox, QPushButton, QTableWidget,
+    QTableWidgetItem, QVBoxLayout,
 )
 from qgis.core import (
     QgsArrowSymbolLayer, QgsCategorizedSymbolRenderer, QgsFeature, QgsField,
@@ -98,6 +100,25 @@ class ReactionMixin:
         params_row.addWidget(self.reaction_speed_spin)
         params_row.addStretch()
         layout.addLayout(params_row)
+
+        species_row = QHBoxLayout()
+        self._reaction_species = {}
+        self.reaction_species_btn = QPushButton("Per Species…")
+        self.reaction_species_btn.setToolTip(
+            "Give a species a distance and a speed of its own: a hare "
+            "that went three metres has not done what a red deer that "
+            "went three metres has. The two values above are for every "
+            "species that has none of its own.")
+        self.reaction_species_btn.clicked.connect(
+            self.edit_reaction_species)
+        species_row.addWidget(self.reaction_species_btn)
+        self.reaction_species_label = QLabel("")
+        self.reaction_species_label.setStyleSheet(
+            "color: gray; font-size: 10px;")
+        self.reaction_species_label.setWordWrap(True)
+        species_row.addWidget(self.reaction_species_label, 1)
+        layout.addLayout(species_row)
+        self._refresh_reaction_species()
 
         run_row = QHBoxLayout()
         self.reaction_btn = QPushButton("→ Read Reaction to the Drone")
@@ -273,7 +294,8 @@ class ReactionMixin:
     def _save_reaction_settings(self, project) -> None:
         project.writeEntry(PLUGIN_SCOPE, ENTRY_REACTION, json.dumps({
             "min_displacement_m": self.reaction_min_spin.value(),
-            "min_speed_ms": self.reaction_speed_spin.value()}))
+            "min_speed_ms": self.reaction_speed_spin.value(),
+            "per_species": self._reaction_species}))
 
     def _load_reaction_settings(self, project) -> None:
         raw, ok = project.readEntry(PLUGIN_SCOPE, ENTRY_REACTION, "")
@@ -296,3 +318,118 @@ class ReactionMixin:
                 spin.setValue(float(values.get(key, default)))
             except (TypeError, ValueError):
                 spin.setValue(default)
+        try:
+            self._reaction_species = drone_reaction.species_thresholds(
+                values.get("per_species"))
+        except drone_reaction.ReactionError:
+            self._reaction_species = {}
+        self._refresh_reaction_species()
+
+    # ------------------------------------------------------------------ #
+    # A species' own thresholds
+    # ------------------------------------------------------------------ #
+
+    def _refresh_reaction_species(self) -> None:
+        own = self._reaction_species
+        if not own:
+            self.reaction_species_label.setText(
+                "every species by the two values above")
+            return
+        line = drone_reaction.describe_thresholds({
+            "min_displacement_m": self.reaction_min_spin.value(),
+            "min_speed_ms": self.reaction_speed_spin.value(),
+            "per_species": own})
+        self.reaction_species_label.setText(line.split("; ", 1)[1])
+
+    def _reaction_species_names(self) -> list:
+        """The species to offer: those of the survey's flights, and those
+        that have thresholds already."""
+        names = []
+        if hasattr(self, "survey_panel"):
+            try:
+                names = list(self.survey_panel.survey().species_names())
+            except Exception:  # noqa: BLE001 - then only those set before
+                names = []
+        known = {name.strip().lower() for name in names}
+        names += [name for name in sorted(self._reaction_species)
+                  if name not in known]
+        return names
+
+    def edit_reaction_species(self) -> None:
+        """Open the table of the species' own thresholds."""
+        dialog = SpeciesThresholdsDialog(
+            self._reaction_species_names(), self._reaction_species,
+            self.reaction_min_spin.value(), self.reaction_speed_spin.value(),
+            parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self._reaction_species = dialog.thresholds()
+        self._refresh_reaction_species()
+        self.save_config_to_project()
+
+
+class SpeciesThresholdsDialog(QDialog):
+    """A distance and a speed per species; an empty cell is everyone's."""
+
+    def __init__(self, species, own: dict, distance: float, speed: float,
+                 parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Moved, Species by Species")
+        self.resize(460, 360)
+        layout = QVBoxLayout(self)
+        pace = f"{speed:g} m/s" if speed else "any speed"
+        note = QLabel(
+            "What an animal has to have done to count as having moved, "
+            f"where it differs from the general {distance:g} m at {pace}. "
+            "Leave a cell empty for the general value.")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        self.table = QTableWidget(len(species), 3)
+        self.table.setHorizontalHeaderLabels(
+            ["Species", "Went at least (m)", "At (m/s) or faster"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch)
+        for row, name in enumerate(species):
+            label = QTableWidgetItem(name)
+            label.setFlags(label.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.table.setItem(row, 0, label)
+            values = own.get(name.strip().lower()) or {}
+            for column, key in ((1, drone_reaction.DISTANCE_KEY),
+                                (2, drone_reaction.SPEED_KEY)):
+                text = f"{values[key]:g}" if key in values else ""
+                self.table.setItem(row, column, QTableWidgetItem(text))
+        layout.addWidget(self.table, 1)
+        self.problem_label = QLabel("")
+        self.problem_label.setStyleSheet("color: #b00020;")
+        self.problem_label.setWordWrap(True)
+        layout.addWidget(self.problem_label)
+        buttons = QDialogButtonBox()
+        buttons.addButton(QDialogButtonBox.StandardButton.Ok)
+        buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _typed(self) -> dict:
+        raw = {}
+        for row in range(self.table.rowCount()):
+            name = self.table.item(row, 0).text()
+            raw[name] = {
+                key: self.table.item(row, column).text().strip().replace(
+                    ",", ".")
+                for column, key in ((1, drone_reaction.DISTANCE_KEY),
+                                    (2, drone_reaction.SPEED_KEY))}
+        return raw
+
+    def thresholds(self) -> dict:
+        """What was typed, checked (``core.drone_reaction``)."""
+        return drone_reaction.species_thresholds(self._typed())
+
+    def accept(self):
+        try:
+            self.thresholds()
+        except drone_reaction.ReactionError as exc:
+            self.problem_label.setText(str(exc))
+            return
+        super().accept()

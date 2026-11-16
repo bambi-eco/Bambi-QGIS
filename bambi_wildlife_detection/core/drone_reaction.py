@@ -17,7 +17,10 @@ is known. An animal **moved** when the distance that velocity carries it
 during its time in view is at least the set minimum (3 m by default) and
 three times its own standard error - and, where a minimum speed is set,
 when that velocity is at least as fast: a long track lets an animal that
-drifts cover the distance at a pace nobody would call moving. A track of too few positions or too
+drifts cover the distance at a pace nobody would call moving. Both
+thresholds are a species' own where it was given one
+(:func:`species_thresholds`): a hare that went three metres has not done
+what a red deer that went three metres has. A track of too few positions or too
 short a time is not judged.
 
 **Relative to the line.** The direction the drone flew while the animal was
@@ -86,6 +89,89 @@ TRACK_COLUMNS = [
 
 class ReactionError(RuntimeError):
     """The reaction cannot be read as asked."""
+
+
+# ---------------------------------------------------------------------------
+# What "moved" is, species by species
+# ---------------------------------------------------------------------------
+
+DISTANCE_KEY, SPEED_KEY = "min_displacement_m", "min_speed_ms"
+
+
+def species_thresholds(raw) -> Dict[str, Dict[str, float]]:
+    """A species' own thresholds, checked: ``{species name, lower case:
+    {"min_displacement_m": metres, "min_speed_ms": m/s}}`` with only the
+    values a species was given - the other one is everyone's.
+
+    :param raw: ``{species: {"min_displacement_m", "min_speed_ms"}}``;
+        ``None`` or an empty value = not given
+    :raises ReactionError: a distance that is not more than nothing, a
+        speed below nought, or something that is no number
+    """
+    cleaned: Dict[str, Dict[str, float]] = {}
+    if not raw:
+        return cleaned
+    if not isinstance(raw, dict):
+        raise ReactionError("The species' own thresholds are not a table "
+                            "of species.")
+    for species, values in raw.items():
+        name = str(species or "").strip().lower()
+        if not name or not isinstance(values, dict):
+            continue
+        own = {}
+        for key, what, least in ((DISTANCE_KEY, "distance", True),
+                                 (SPEED_KEY, "speed", False)):
+            value = values.get(key)
+            if value is None or value == "":
+                continue
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                raise ReactionError(
+                    f"The {what} for '{species}' is not a number "
+                    f"({values.get(key)!r}).") from None
+            too_little = value < 0 or (least and value == 0)
+            if not math.isfinite(value) or too_little:
+                needed = "more than nothing" if least else "nought or more"
+                raise ReactionError(
+                    f"The {what} for '{species}' has to be {needed}.")
+            own[key] = value
+        if own:
+            cleaned[name] = own
+    return cleaned
+
+
+def thresholds_of(species, per_species: Optional[dict],
+                  min_displacement: float, min_speed: float
+                  ) -> Tuple[float, float]:
+    """``(distance, speed)`` an animal of *species* has to have reached:
+    its species' own where it has them, everyone's otherwise."""
+    own = (per_species or {}).get(str(species or "").strip().lower()) or {}
+    return (own.get(DISTANCE_KEY, min_displacement),
+            own.get(SPEED_KEY, min_speed))
+
+
+def describe_thresholds(settings: dict) -> str:
+    """The thresholds of a result in a line: everyone's, then the species
+    that have their own."""
+    settings = settings or {}
+
+    def said(distance, speed) -> str:
+        text = f"at least {distance:g} m"
+        if speed:
+            text += f" at {speed:g} m/s or faster"
+        return text
+
+    general = (settings.get(DISTANCE_KEY), settings.get(SPEED_KEY) or 0.0)
+    if general[0] is None:
+        return ""
+    text = said(*general)
+    own = settings.get("per_species") or {}
+    if own:
+        text += "; " + ", ".join(
+            f"{species}: " + said(*thresholds_of(species, own, *general))
+            for species in sorted(own))
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -429,7 +515,8 @@ def flight_rows(flight_name, animals: Sequence[dict],
                 drone: Optional[Dict[int, Tuple[float, float]]] = None,
                 min_displacement: float = MIN_DISPLACEMENT_M,
                 min_duration: float = MIN_DURATION_S,
-                min_speed: float = MIN_SPEED_MS) -> List[dict]:
+                min_speed: float = MIN_SPEED_MS,
+                per_species: Optional[dict] = None) -> List[dict]:
     """One row per counted animal of a flight.
 
     :param animals: the survey's animals of the flight
@@ -438,6 +525,8 @@ def flight_rows(flight_name, animals: Sequence[dict],
     :param seconds: ``frame -> capture time`` in seconds
     :param drone: ``frame -> (x, y)`` of the camera, in the same
         coordinates; ``None`` = not known
+    :param per_species: a species' own distance and speed
+        (:func:`species_thresholds`); the two above are for the others
     """
     rows = []
     for animal in animals:
@@ -455,8 +544,10 @@ def flight_rows(flight_name, animals: Sequence[dict],
             ("flight", flight_name), ("track_id", track_id),
             ("species", animal.get("species")), ("sex", animal.get("sex")),
             ("age", animal.get("age"))])
-        row.update(describe_track(timed, above, min_displacement,
-                                  min_duration, min_speed=min_speed))
+        far, fast = thresholds_of(animal.get("species"), per_species,
+                                  min_displacement, min_speed)
+        row.update(describe_track(timed, above, far, min_duration,
+                                  min_speed=fast))
         rows.append(OrderedDict((key, row.get(key)) for key in TRACK_COLUMNS))
     return rows
 

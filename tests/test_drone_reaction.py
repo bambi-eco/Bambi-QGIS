@@ -489,3 +489,60 @@ class TestWritten:
         assert lines[1].endswith("m/s (medians)")
         assert lines[2].startswith(
             "  the nearer the line, the faster (rank correlation -")
+
+
+# ---------------------------------------------------------------------------
+# What "moved" is, species by species
+# ---------------------------------------------------------------------------
+
+class TestSpeciesThresholds:
+    def test_a_species_has_its_own_or_everyones(self):
+        own = dr.species_thresholds({
+            "Roe Deer": {"min_displacement_m": 5, "min_speed_ms": "0.3"},
+            "hare": {"min_displacement_m": "", "min_speed_ms": 1.5},
+            "fox": {"min_displacement_m": None, "min_speed_ms": None}})
+
+        assert own == {"roe deer": {"min_displacement_m": 5.0,
+                                    "min_speed_ms": 0.3},
+                       "hare": {"min_speed_ms": 1.5}}
+        assert dr.thresholds_of("roe deer", own, 3.0, 0.0) == (5.0, 0.3)
+        assert dr.thresholds_of("Hare", own, 3.0, 0.0) == (3.0, 1.5)
+        assert dr.thresholds_of("fox", own, 3.0, 0.1) == (3.0, 0.1)
+        assert dr.thresholds_of(None, own, 3.0, 0.1) == (3.0, 0.1)
+
+    @pytest.mark.parametrize("raw", [None, {}, "", {"": {"min_speed_ms": 1}},
+                                     {"fox": "fast"}])
+    def test_nothing_given_is_nothing(self, raw):
+        assert dr.species_thresholds(raw) == {}
+
+    @pytest.mark.parametrize("values, said", [
+        ({"min_displacement_m": 0}, "distance for 'fox' has to be more "
+                                    "than nothing"),
+        ({"min_displacement_m": -1}, "distance for 'fox'"),
+        ({"min_speed_ms": -0.1}, "speed for 'fox' has to be nought or more"),
+        ({"min_speed_ms": "fast"}, "speed for 'fox' is not a number"),
+        ({"min_displacement_m": float("inf")}, "distance for 'fox'"),
+    ])
+    def test_a_value_that_is_none_is_refused(self, values, said):
+        with pytest.raises(dr.ReactionError, match=said):
+            dr.species_thresholds({"fox": values})
+        with pytest.raises(dr.ReactionError, match="not a table"):
+            dr.species_thresholds(["fox"])
+
+    def test_a_zero_speed_is_a_speed(self):
+        assert dr.species_thresholds({"fox": {"min_speed_ms": 0}}) == {
+            "fox": {"min_speed_ms": 0.0}}
+
+    def test_said_in_a_line(self):
+        settings = {"min_displacement_m": 3.0, "min_speed_ms": 0.0}
+        assert dr.describe_thresholds(settings) == "at least 3 m"
+        settings["min_speed_ms"] = 0.2
+        assert dr.describe_thresholds(settings) == (
+            "at least 3 m at 0.2 m/s or faster")
+        settings["per_species"] = {"roe deer": {"min_displacement_m": 5.0},
+                                   "hare": {"min_speed_ms": 0.0}}
+        assert dr.describe_thresholds(settings) == (
+            "at least 3 m at 0.2 m/s or faster; hare: at least 3 m, "
+            "roe deer: at least 5 m at 0.2 m/s or faster")
+        assert dr.describe_thresholds({}) == ""
+        assert dr.describe_thresholds(None) == ""
