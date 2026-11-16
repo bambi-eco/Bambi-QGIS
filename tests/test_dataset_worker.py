@@ -23,10 +23,12 @@ def made(tmp_path, monkeypatch):
     calls, fate = [], {}
 
     def prepare_flight(entry, into, session, route=True, labels=True,
-                       correction=True, elevation=None, make_route=None,
-                       progress=None, cancelled=None, log=None):
+                       correction=True, videos=True, elevation=None,
+                       make_route=None, progress=None, cancelled=None,
+                       log=None, listings=None):
         calls.append({"flight": entry.id, "into": into, "route": route,
                       "labels": labels, "correction": correction,
+                      "videos": videos, "listings": listings,
                       "elevation": elevation, "make_route": make_route,
                       "agent": session.headers["User-Agent"],
                       "cancelled": cancelled()})
@@ -42,7 +44,10 @@ def made(tmp_path, monkeypatch):
 
     def make(flights=(306,), **more):
         worker = bambi_dataset_downloader.DatasetFlightsWorker(
-            flights, folder, **more)
+            [bambi_dataset.Flight(
+                number, bambi_dataset.Archive(111, f"flight_{number}.zip"),
+                bambi_dataset.Archive(222, f"flight_{number}.zip"))
+             for number in flights], folder, **more)
         for signal in ("finished", "progress", "log", "flight_started"):
             setattr(worker, signal, SignalRecorder())
         return worker
@@ -70,11 +75,21 @@ def test_a_flight_goes_into_a_folder_of_its_own(made):
 def test_what_was_ticked_is_what_is_taken(made):
     make, calls, _fate, _folder = made
 
-    make(route=False, labels=True, correction=False).run()
+    make(route=False, labels=True, correction=False, videos=False).run()
     make().run()
 
-    assert [(call["route"], call["labels"], call["correction"])
-            for call in calls] == [(False, True, False), (True, True, True)]
+    assert [(call["route"], call["labels"], call["correction"],
+             call["videos"]) for call in calls] == [
+        (False, True, False, False), (True, True, True, True)]
+
+
+def test_zenodo_is_asked_once_per_record_for_all_the_flights(made):
+    make, calls, _fate, _folder = made
+
+    make((306, 7)).run()
+
+    assert calls[0]["listings"] == {}
+    assert calls[0]["listings"] is calls[1]["listings"]
 
 
 def test_several_flights_one_after_the_other(made):
@@ -122,17 +137,6 @@ def test_when_no_flight_is_ready_it_says_why(made):
     assert worker.finished.calls == [
         (False, "Flight 306: flight_306.zip could not be downloaded: reset")]
     assert worker.prepared == []
-
-
-def test_a_flight_the_dataset_does_not_have(made):
-    make, calls, _fate, _folder = made
-    worker = make((99999,))
-
-    worker.run()
-
-    assert calls == []
-    assert worker.finished.calls == [
-        (False, "Flight 99999: The BAMBI dataset has no flight 99999.")]
 
 
 def test_nothing_asked_for(made):

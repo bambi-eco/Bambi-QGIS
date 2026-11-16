@@ -15,44 +15,27 @@ from qgis.PyQt.QtWidgets import QAbstractItemView, QFileDialog
 from bambi_wildlife_detection import bambi_dataset_dialog as module
 from bambi_wildlife_detection.core import bambi_dataset as bd
 
-MB = 1_000_000
+
+def flight(number, split="", labelled=True, raw=True):
+    def archive(record):
+        return bd.Archive(record, f"flight_{number}.zip")
+
+    return bd.Flight(number, archive(111) if raw else None,
+                     archive(222) if labelled else None, split)
 
 
-def flight(number, size, date="", species=(), labelled=True, drone="",
-           split="train", videos=True):
-    def archive(record, length):
-        return bd.Archive(record, f"flight_{number}.zip", length, "00" * 16)
-
-    return bd.Flight(
-        id=number, raw=archive(1, size),
-        labelled=archive(2, 5 * MB) if labelled else None, date=date,
-        species=tuple(species), animals=sum(n for _name, n in species),
-        boxes=10 * sum(n for _name, n in species), drone=drone, split=split,
-        videos=videos)
-
-
-FLIGHTS = [
-    flight(306, 122 * MB, "2024-11-19",
-           [("Capreolus capreolus (Roe deer)", 2)], drone="Matrice 30 Thermal",
-           split="val"),
-    flight(9, 900 * MB, "2023-07-27", [("Sus scrofa (Wild boar)", 29),
-                                       ("Unknown", 2)],
-           drone="Mavic 3 Thermal"),
-    flight(10, 4700 * MB, "2023-08-02", [], drone="Mavic 3 Thermal"),
-    flight(23, 1300 * MB, labelled=False),
-]
+FLIGHTS = [flight(306, "val"), flight(9, "train"), flight(10, "train"),
+           flight(23, labelled=False), flight(500, "test", raw=False)]
+RECORDS = {111: {"kind": "raw", "title": "The BAMBI Raw Dataset (Part 1)",
+                 "doi": "10.5281/zenodo.111"},
+           222: {"kind": "labelled", "title": "The BAMBI Dataset (Part 1)",
+                 "doi": "10.5281/zenodo.222"}}
 
 
 @pytest.fixture
-def free(monkeypatch):
-    room = {"bytes": 500_000 * MB}
-    monkeypatch.setattr(module, "free_bytes", lambda folder: room["bytes"])
-    return room
-
-
-@pytest.fixture
-def dialog(free):
-    made = module.DatasetFlightsDialog(FLIGHTS, folder="/data/flights")
+def dialog():
+    made = module.DatasetFlightsDialog(FLIGHTS, folder="/data/flights",
+                                       records=RECORDS)
     yield made
     made.deleteLater()
 
@@ -74,14 +57,12 @@ def tick(dialog, number, on=True):
 
 
 def test_every_flight_by_its_number(dialog):
-    assert column(dialog, 0) == ["9", "10", "23", "306"]      # as numbers
-    assert column(dialog, 1) == ["2023-07-27", "2023-08-02", "–",
-                                 "2024-11-19"]
-    assert column(dialog, 2) == ["29 wild boar, 2 unknown", "none",
-                                 "not labelled", "2 roe deer"]
-    assert column(dialog, 3) == ["900 MB", "4.7 GB", "1.3 GB", "122 MB"]
+    assert column(dialog, 0) == ["9", "10", "23", "306", "500"]   # numbers
+    assert column(dialog, 1) == ["train", "train", "–", "val", "test"]
+    assert column(dialog, 2) == ["yes", "yes", "–", "yes", "yes"]
+    assert column(dialog, 3) == ["yes", "yes", "yes", "yes", "–"]
     assert [dialog.table.horizontalHeaderItem(index).text()
-            for index in range(4)] == ["Flight", "Flown", "Labelled animals",
+            for index in range(4)] == ["Flight", "Split", "Labelled",
                                        "Recordings"]
 
 
@@ -97,43 +78,30 @@ def test_a_flight_has_a_box_to_tick(dialog):
 def test_the_example_is_ticked_to_begin_with(dialog):
     assert bd.EXAMPLE == 306
     assert dialog.selected_ids() == [306]
-    assert dialog.selected_size() == 122 * MB
-    assert dialog.summary_label.text() == (
-        "1 of 4 flight(s) ticked: 122 MB (500.0 GB free)")
+    assert dialog.selected_flights() == [FLIGHTS[0]]
+    assert dialog.summary_label.text() == "1 of 5 flight(s) ticked"
     assert dialog.download_btn.isEnabled()
     assert dialog.download_btn.text() == "Download"
 
 
-def test_the_ticked_flight_is_in_view_when_the_list_opens(free):
-    made = module.DatasetFlightsDialog(bd.flights(), folder="/data")
+def test_the_ticked_flight_is_in_view_when_the_list_opens():
+    many = [flight(number) for number in range(400)]
+    made = module.DatasetFlightsDialog(many, folder="/data")
     made.show()
     QgsApplication.instance().processEvents()
 
-    ticked = [row for row in range(made.table.rowCount())
-              if made.table.item(row, 0).text() == "306"][0]
     shown = made.table.viewport().rect()
     assert shown.intersects(made.table.visualItemRect(
-        made.table.item(ticked, 0)))
+        made.table.item(306, 0)))
     made.close()
     made.deleteLater()
-
-
-def test_ticking_flights_adds_them_up(dialog):
-    tick(dialog, 9)
-    tick(dialog, 10)
-
-    assert dialog.selected_ids() == [9, 10, 306]
-    assert dialog.selected_size() == (900 + 4700 + 122) * MB
-    assert dialog.summary_label.text().startswith(
-        "3 of 4 flight(s) ticked: 5.7 GB")
 
 
 def test_select_all(dialog):
     dialog.select_all_btn.click()
 
-    assert dialog.selected_ids() == [9, 10, 23, 306]
-    assert dialog.summary_label.text().startswith(
-        "4 of 4 flight(s) ticked: 7.0 GB")
+    assert dialog.selected_ids() == [9, 10, 23, 306, 500]
+    assert dialog.summary_label.text().startswith("5 of 5 flight(s) ticked")
 
 
 def test_select_none(dialog):
@@ -141,42 +109,39 @@ def test_select_none(dialog):
     dialog.select_none_btn.click()
 
     assert dialog.selected_ids() == []
-    assert dialog.summary_label.text() == "0 of 4 flight(s) ticked: 0 MB"
+    assert dialog.summary_label.text() == "0 of 5 flight(s) ticked"
     assert not dialog.download_btn.isEnabled()
 
 
 def test_the_list_can_be_narrowed(dialog):
-    dialog.filter_edit.setText("mavic 2023")
-
+    dialog.filter_edit.setText("train")
     assert column(dialog, 0) == ["9", "10"]
     assert dialog.summary_label.text() == (
-        "1 of 4 flight(s) ticked: 122 MB - 2 shown (500.0 GB free)")
+        "1 of 5 flight(s) ticked - 2 shown")
 
-    dialog.filter_edit.setText("roe deer")
+    dialog.filter_edit.setText("30")
     assert column(dialog, 0) == ["306"]
-    dialog.filter_edit.setText("capreolus")          # either name
+    dialog.filter_edit.setText("VAL 306")
     assert column(dialog, 0) == ["306"]
-    dialog.filter_edit.setText("not labelled")
-    assert column(dialog, 0) == ["23"]
     dialog.filter_edit.setText("ibex")
     assert column(dialog, 0) == []
     dialog.filter_edit.setText("")
-    assert column(dialog, 0) == ["9", "10", "23", "306"]
+    assert len(column(dialog, 0)) == 5
 
 
 def test_select_all_takes_the_flights_that_are_shown(dialog):
     dialog.select_none_btn.click()
-    dialog.filter_edit.setText("wild boar")
+    dialog.filter_edit.setText("train")
 
     dialog.select_all_btn.click()
 
-    assert dialog.selected_ids() == [9]
+    assert dialog.selected_ids() == [9, 10]
     dialog.filter_edit.setText("")
-    assert dialog.selected_ids() == [9]
+    assert dialog.selected_ids() == [9, 10]
 
 
 def test_select_none_also_unticks_what_is_not_shown(dialog):
-    dialog.filter_edit.setText("wild boar")       # 306 is ticked, and hidden
+    dialog.filter_edit.setText("train")       # 306 is ticked, and hidden
 
     dialog.select_none_btn.click()
 
@@ -184,19 +149,25 @@ def test_select_none_also_unticks_what_is_not_shown(dialog):
 
 
 def test_the_list_is_put_in_order_by_what_a_column_means(dialog):
-    dialog.table.sortItems(3, Qt.SortOrder.AscendingOrder)
-    assert column(dialog, 3) == ["122 MB", "900 MB", "1.3 GB", "4.7 GB"]
-
-    dialog.table.sortItems(2, Qt.SortOrder.AscendingOrder)
-    # the flights with most labelled animals first
-    assert column(dialog, 0)[:2] == ["9", "306"]
-
     dialog.table.sortItems(0, Qt.SortOrder.DescendingOrder)
-    assert column(dialog, 0) == ["306", "23", "10", "9"]
+    assert column(dialog, 0) == ["500", "306", "23", "10", "9"]
     assert dialog.selected_ids() == [306]            # the tick went along
 
+    dialog.table.sortItems(2, Qt.SortOrder.AscendingOrder)
+    assert column(dialog, 0)[-1] == "23"             # not labelled: last
 
-def test_what_else_is_taken(dialog):
+
+def test_the_videos_are_fetched_unless_unticked(dialog):
+    assert dialog.videos_check.text() == "Download video data"
+    assert dialog.download_videos() is True
+    assert "fast overview" in dialog.videos_check.toolTip()
+
+    dialog.videos_check.setChecked(False)
+
+    assert dialog.download_videos() is False
+
+
+def test_what_is_done_with_the_annotations(dialog):
     # the route and the correction unless unticked; labels when asked for
     assert dialog.route_check.text() == "Import flight route"
     assert dialog.labels_check.text() == "Import labels"
@@ -213,17 +184,43 @@ def test_what_else_is_taken(dialog):
     assert "between the key frames" in dialog.labels_check.toolTip()
 
 
-def test_how_it_opens_can_be_said(free):
+def test_how_it_opens_can_be_said():
     made = module.DatasetFlightsDialog(
-        FLIGHTS, ticked=(9, 10), route=False, labels=True, correction=False)
+        FLIGHTS, ticked=(9, 10), route=False, labels=True, correction=False,
+        videos=False)
 
     assert made.selected_ids() == [9, 10]
-    assert (made.import_route(), made.import_labels(),
-            made.use_correction()) == (False, True, False)
+    assert (made.import_route(), made.import_labels(), made.use_correction(),
+            made.download_videos()) == (False, True, False, False)
     made.deleteLater()
 
 
-def test_without_a_folder_nothing_can_be_downloaded(free):
+def test_a_ticked_flight_the_dataset_has_no_recordings_of_is_said(dialog):
+    tick(dialog, 500)
+
+    assert dialog.summary_label.text() == (
+        "2 of 5 flight(s) ticked; 1 without recordings")
+    assert "color" in dialog.summary_label.styleSheet()
+    assert dialog.summary_label.toolTip() == (
+        "The dataset has no recordings of flight(s) 500: they are left out.")
+
+    dialog.videos_check.setChecked(False)       # its annotations are there
+
+    assert dialog.summary_label.text() == "2 of 5 flight(s) ticked"
+    assert dialog.summary_label.styleSheet() == ""
+
+
+def test_without_the_videos_an_unlabelled_flight_has_nothing(dialog):
+    tick(dialog, 23)
+    assert dialog.summary_label.text() == "2 of 5 flight(s) ticked"
+
+    dialog.videos_check.setChecked(False)
+
+    assert dialog.summary_label.text() == (
+        "2 of 5 flight(s) ticked; 1 without poses or labels")
+
+
+def test_without_a_folder_nothing_can_be_downloaded():
     made = module.DatasetFlightsDialog(FLIGHTS)
 
     assert made.folder() == ""
@@ -255,89 +252,16 @@ def test_the_folder_can_be_browsed_for(dialog, monkeypatch):
     assert dialog.folder() == "/media/disk/bambi"
 
 
-def test_flights_that_do_not_fit_are_said_before_they_are_fetched(dialog,
-                                                                  free):
-    dialog.select_all_btn.click()            # 7.0 GB, the largest 4.7 GB
-    assert dialog.summary_label.styleSheet() == ""
-
-    free["bytes"] = 11_000 * MB              # not with the largest unpacking
-    dialog.folder_edit.setText("/small/disk")
-
-    assert dialog.summary_label.text() == (
-        "4 of 4 flight(s) ticked: 7.0 GB (11.0 GB free)")
-    assert "color" in dialog.summary_label.styleSheet()
-    assert "do not all fit" in dialog.summary_label.toolTip()
-    assert dialog.download_btn.isEnabled()   # those that fit are fetched
-
-
-def test_a_disk_nobody_can_measure(dialog, free):
-    free["bytes"] = None
-    dialog.folder_edit.setText("/somewhere/else")
-
-    assert dialog.summary_label.text() == "1 of 4 flight(s) ticked: 122 MB"
-    assert dialog.summary_label.styleSheet() == ""
-
-
-def test_a_row_says_more_when_pointed_at(dialog):
+def test_a_row_says_where_its_archives_are_published(dialog):
     tips = {dialog.table.item(row, 0).text():
-            dialog.table.item(row, 2).toolTip()
+            dialog.table.item(row, 1).toolTip()
             for row in range(dialog.table.rowCount())}
 
     assert tips["306"] == (
         "BAMBI flight 306\n"
-        "Flown on 2024-11-19 with a Matrice 30 Thermal\n"
-        "2 labelled animal(s), 20 boxes on key frames (val split)\n"
-        "Recordings: https://doi.org/10.5281/zenodo.1\n"
-        "Labelled: https://doi.org/10.5281/zenodo.2")
-    assert "Not in the labelled dataset: recordings only" in tips["23"]
-    assert "without an animal on it" in tips["10"]
-
-
-def test_a_flight_published_without_its_videos_cannot_be_ticked(free):
-    made = module.DatasetFlightsDialog(
-        FLIGHTS + [flight(397, 233594, "2024-11-22", videos=False)],
-        folder="/data", ticked=(306, 397))
-
-    assert column(made, 0) == ["9", "10", "23", "306", "397"]
-    assert column(made, 3)[-1] == "no video"
-    item = made.table.item(4, 0)
-    assert not item.flags() & Qt.ItemFlag.ItemIsUserCheckable
-    assert not item.flags() & Qt.ItemFlag.ItemIsEnabled
-    assert "Published without its videos" in item.toolTip()
-    assert made.selected_ids() == [306]
-
-    made.select_all_btn.click()
-
-    assert made.selected_ids() == [9, 10, 23, 306]
-    assert made.summary_label.text().startswith("4 of 4 flight(s) ticked")
-    made.deleteLater()
-
-
-def test_sizes_to_read():
-    assert module.size_text(121842908) == "122 MB"
-    assert module.size_text(4_672_127_147) == "4.7 GB"
-    assert module.size_text(2_154_000_000_000) == "2.15 TB"
-
-
-def test_the_room_of_a_folder_that_is_not_there_yet(tmp_path):
-    there = module.free_bytes(str(tmp_path))
-
-    assert there > 0
-    assert module.free_bytes(str(tmp_path / "not" / "yet")) == there
-    assert module.free_bytes("") is None
-
-
-def test_the_shipped_list_opens(free):
-    made = module.DatasetFlightsDialog(bd.flights(), folder="/data")
-
-    assert made.table.rowCount() == 400
-    assert made.selected_ids() == [306]
-    made.select_all_btn.click()
-    # all but the seven that were published without their videos
-    assert len(made.selected_ids()) == 393
-    assert not set(range(397, 404)) & set(made.selected_ids())
-    assert made.summary_label.text().startswith(
-        "393 of 393 flight(s) ticked: 2.15 TB")
-    made.filter_edit.setText("alpine ibex")
-    assert 0 < len(column(made, 0)) < 400
-    made.deleteLater()
+        "Recordings: The BAMBI Raw Dataset (Part 1), "
+        "https://doi.org/10.5281/zenodo.111\n"
+        "Labelled flight: The BAMBI Dataset (Part 1), "
+        "https://doi.org/10.5281/zenodo.222")
+    assert "Labelled flight: not in the dataset" in tips["23"]
+    assert "Recordings: not in the dataset" in tips["500"]

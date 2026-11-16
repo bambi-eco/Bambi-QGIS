@@ -130,22 +130,22 @@ def labelled_archive(flight: int = FLIGHT, gt: str = GT,
 
 def entry(flight: int = FLIGHT, raw: bytes = ARCHIVE, labelled=None,
           **more) -> bd.Flight:
-    """The flight as the catalogue has it - with the checksums of the
-    stand-in archives."""
+    """The flight as the dataset's repository lists it - with what Zenodo
+    says of the stand-in archives already asked (their link, size and
+    checksum), so that no test needs Zenodo's answer."""
     import hashlib
 
     def archive(record, data):
         if data is None:
             return None
-        return bd.Archive(record, f"flight_{flight}.zip", len(data),
-                          hashlib.md5(data).hexdigest())  # nosec B324
+        name = f"flight_{flight}.zip"
+        return bd.Archive(
+            record, name, len(data),
+            hashlib.md5(data).hexdigest(),  # nosec B324
+            f"https://zenodo.org/api/records/{record}/files/{name}/content")
 
-    values = dict(
-        id=flight, raw=archive(111, raw), labelled=archive(222, labelled),
-        date="2024-11-19",
-        species=(("Capreolus capreolus (Roe deer)", 1),
-                 ("Sus scrofa (Wild boar)", 1)),
-        animals=2, boxes=5, drone="Matrice 30 Thermal", split="val")
+    values = dict(id=flight, raw=archive(111, raw),
+                  labelled=archive(222, labelled), split="val")
     values.update(more)
     return bd.Flight(**values)
 

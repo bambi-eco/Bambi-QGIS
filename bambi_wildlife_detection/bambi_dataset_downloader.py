@@ -3,9 +3,10 @@
 :mod:`core.bambi_dataset`).
 
 :class:`DatasetFlightsWorker` takes the flights that were ticked, one after
-the other: fetches a flight's recordings into a folder of its own, builds
-its elevation model from the open worldwide models - the terrain model
-GEM-15 where it has the flight, else the Copernicus DEM
+the other: fetches a flight's recordings into a folder of its own - or,
+without the videos, only its annotations - builds its elevation model from
+the open worldwide models - the terrain model GEM-15 where it has the
+flight, else the Copernicus DEM
 (:mod:`copernicus_dem_downloader`) - and, as asked, takes its published
 route and labels out of the labelled dataset. A flight that fails does not
 cost the others: what went wrong is kept beside what is ready.
@@ -30,11 +31,15 @@ class DatasetFlightsWorker(QObject):
     log = pyqtSignal(str)
     flight_started = pyqtSignal(int, int, int)   # flight, which one, of how many
 
-    def __init__(self, flight_ids: Sequence[int], folder: str,
+    def __init__(self, flights: Sequence, folder: str,
                  route: bool = True, labels: bool = True,
-                 correction: bool = True, with_dem: bool = True):
+                 correction: bool = True, videos: bool = True,
+                 with_dem: bool = True):
         super().__init__()
-        self.flight_ids = [int(flight_id) for flight_id in flight_ids]
+        #: The flights to fetch (``core.bambi_dataset.Flight``), as the
+        #: dataset's repository lists them.
+        self.flights = list(flights)
+        self.videos = bool(videos)
         self.folder = folder
         self.route = bool(route)
         self.labels = bool(labels)
@@ -67,22 +72,25 @@ class DatasetFlightsWorker(QObject):
 
         stopped = (checked_download.Cancelled, environment.Cancelled,
                    remote_zip.Cancelled)
-        count = len(self.flight_ids)
+        count = len(self.flights)
+        # what Zenodo says a record holds: asked once for all its flights
+        listings = {}
         try:
             session = self._session()
-            for index, flight_id in enumerate(self.flight_ids):
+            for index, entry in enumerate(self.flights):
+                flight_id = entry.id
                 if self._cancelled:
                     raise checked_download.Cancelled("cancelled")
                 self.flight_started.emit(flight_id, index + 1, count)
                 self.progress.emit(int(100.0 * index / max(count, 1)))
                 try:
-                    entry = bambi_dataset.flight(flight_id)
                     self.log.emit(
                         f"--- {entry.name} ({index + 1} of {count}) ---")
                     self.prepared.append(bambi_dataset.prepare_flight(
                         entry, os.path.join(self.folder, entry.folder),
                         session, route=self.route, labels=self.labels,
-                        correction=self.correction,
+                        correction=self.correction, videos=self.videos,
+                        listings=listings,
                         elevation=self._elevation if self.with_dem else None,
                         make_route=self._route_files,
                         progress=self._progress_of(index, count),

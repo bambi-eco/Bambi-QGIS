@@ -27,11 +27,12 @@ BUTTON_TEXT = "Download Example Flights…"
 TITLE = "Example Flights"
 TOOLTIP = (
     "Fetch flights of the BAMBI dataset from Zenodo (CC BY 4.0) - tick them "
-    "by their number in a list; a short one of 122 MB is ticked to begin "
-    "with - each with its elevation model, and add them to this project, to "
-    "try every step without data of your own. A flight's published route, "
-    "its hand-labelled animals and its camera correction come along if you "
-    "ask for them.")
+    "by their number in the list the dataset's repository keeps; a short "
+    "one is ticked to begin with - each with its elevation model, and add "
+    "them to this project, to try every step without data of your own. A "
+    "flight's published route, its hand-labelled animals and its camera "
+    "correction come along if you ask for them - and without the videos "
+    "they are a fast overview.")
 #: More routes than this are not put on the map by themselves.
 ROUTES_SHOWN = 25
 
@@ -66,29 +67,45 @@ class ExampleFlightsMixin:
                 self, TITLE, "A step is running. Wait for it to finish first.")
             return
         try:
-            flights = bambi_dataset.flights()
+            known = self._dataset_flights()
         except bambi_dataset.DatasetError as exc:
-            QMessageBox.warning(self, TITLE, str(exc))
+            QMessageBox.warning(
+                self, TITLE,
+                "The list of flights could not be read from the dataset's "
+                f"repository:\n{exc}\n\nIt is read anew every time, so "
+                "that it is the dataset's current one - check the "
+                "connection and try again.")
             return
 
         from ..bambi_dataset_dialog import DatasetFlightsDialog
 
         dialog = DatasetFlightsDialog(
-            flights, self,
-            folder=QSettings().value(FOLDER_SETTING, "", type=str))
+            bambi_dataset.flights_of(known), self,
+            folder=QSettings().value(FOLDER_SETTING, "", type=str),
+            records=known["records"])
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        chosen, folder = dialog.selected_ids(), dialog.folder()
+        chosen, folder = dialog.selected_flights(), dialog.folder()
         if not chosen or not folder:
             return
         QSettings().setValue(FOLDER_SETTING, folder)
         self._start_example_flights(
             chosen, folder, dialog.import_route(), dialog.import_labels(),
-            dialog.use_correction())
+            dialog.use_correction(), dialog.download_videos())
 
-    def _start_example_flights(self, chosen: List[int], folder: str,
+    @staticmethod
+    def _dataset_flights() -> dict:
+        """The flights the dataset's repository lists now
+        (``core.bambi_dataset.fetch_catalogue``): two small files."""
+        import requests
+
+        session = requests.Session()
+        session.headers.update({"User-Agent": "bambi-qgis-plugin"})
+        return bambi_dataset.fetch_catalogue(session)
+
+    def _start_example_flights(self, chosen: list, folder: str,
                                route: bool, labels: bool,
-                               correction: bool) -> None:
+                               correction: bool, videos: bool = True) -> None:
         from ..bambi_dataset_downloader import DatasetFlightsWorker
 
         self._examples_busy = True
@@ -100,7 +117,8 @@ class ExampleFlightsMixin:
             "continued the next time.")
         self.examples_thread = QThread()
         self.examples_worker = DatasetFlightsWorker(
-            chosen, folder, route=route, labels=labels, correction=correction)
+            chosen, folder, route=route, labels=labels, correction=correction,
+            videos=videos)
         self.examples_worker.moveToThread(self.examples_thread)
         self.examples_thread.started.connect(self.examples_worker.run)
         self.examples_worker.finished.connect(self._on_examples_finished)
@@ -115,8 +133,9 @@ class ExampleFlightsMixin:
             ("route", route), ("labels", labels), ("correction", correction))
             if wanted]
         with_what = f" with their {', '.join(what)}" if what else ""
+        without = "" if videos else " (without the videos)"
         self.log(f"Fetching {len(chosen)} flight(s) of the BAMBI dataset"
-                 f"{with_what} into {folder}...")
+                 f"{with_what}{without} into {folder}...")
         self.examples_thread.start()
 
     def _cancel_example_flights(self) -> None:
@@ -207,9 +226,16 @@ class ExampleFlightsMixin:
             parts.append(
                 f"The labels of {waiting} flight(s) are put on the frames "
                 "when they are extracted.")
-        parts.append(
-            "Go on with Pre-Processing > Extract Frames, then the steps of "
-            "the Processing tab from top to bottom.")
+        bare = sum(1 for flight in prepared if not flight.get("videos", True))
+        if bare:
+            parts.append(
+                f"{bare} flight(s) are there without their videos: for the "
+                "steps from 'Extract Frames' on, ask for them again with "
+                "'Download video data' ticked.")
+        if bare < len(prepared):
+            parts.append(
+                "Go on with Pre-Processing > Extract Frames, then the steps "
+                "of the Processing tab from top to bottom.")
         return " ".join(parts)
 
     # -- into the project ----------------------------------------------------
@@ -242,12 +268,26 @@ class ExampleFlightsMixin:
                 save_config_entries(
                     values, *flights_core.config_writers(stored))
                 flights_core.save_config(target, stored)
-            elif self._lacks_correction(flight, stored):
-                settings = bambi_dataset.correction_settings(
-                    flight["correction"])
-                stored.update({key: str(value)
-                               for key, value in settings.items()})
-                flights_core.save_config(target, stored)
+            else:
+                # set up before: only what it lacks is added - a published
+                # correction, and recordings that were fetched since
+                added = {}
+                if self._lacks_correction(flight, stored):
+                    added.update(bambi_dataset.correction_settings(
+                        flight["correction"]))
+                arrived = bool(flight["files"].get("thermal_videos"))
+                if arrived and not stored.get("Input/ThermalVideoPaths"):
+                    fresh = {}
+                    save_config_entries(
+                        bambi_dataset.flight_configuration(
+                            flight, self._pristine_config, custom),
+                        *flights_core.config_writers(fresh))
+                    added.update({key: fresh[key] for key in fresh
+                                  if key in bambi_dataset.RECORDING_KEYS})
+                if added:
+                    stored.update({key: str(value)
+                                   for key, value in added.items()})
+                    flights_core.save_config(target, stored)
             index = flights_core.find_by_folder(listed, target)
             if index is None:
                 name = self._free_flight_name(flight["name"], listed)

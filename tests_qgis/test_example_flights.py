@@ -66,10 +66,10 @@ class Thread:
         pass
 
 
-def put_flight(folder, with_dem=True):
+def put_flight(folder, with_dem=True, recordings=True):
     """The recordings of a flight in *folder*, as a download leaves them."""
     os.makedirs(os.path.join(folder, "qgis"), exist_ok=True)
-    for name, data in MEMBERS.items():
+    for name, data in MEMBERS.items() if recordings else ():
         with open(os.path.join(folder, name), "wb") as handle:
             handle.write(data)
     if with_dem:
@@ -81,12 +81,12 @@ def put_flight(folder, with_dem=True):
 
 
 def prepared_flight(folder, number, route=True, correction=True,
-                    labels=None, notes=()):
+                    labels=None, notes=(), videos=True):
     """What ``core.bambi_dataset.prepare_flight`` returns for a flight."""
     from bambi_wildlife_detection.core import flight_archive
 
     flight = os.path.join(folder, f"flight_{number}")
-    put_flight(flight)
+    put_flight(flight, recordings=videos)
     target = os.path.join(flight, "qgis")
     imported = None
     if correction:
@@ -106,7 +106,9 @@ def prepared_flight(folder, number, route=True, correction=True,
         "route": {"poses": os.path.join(target, "poses_t.json"),
                   "frames": 12, "replaced": False} if route else None,
         "correction": imported, "labels": labels,
-        "labels_wanted": labels is not None, "notes": list(notes)}
+        "labels_wanted": labels is not None, "notes": list(notes),
+        "videos": flight_archive.is_complete(
+            flight_archive.flight_files(flight))}
 
 
 class Worker:
@@ -119,9 +121,10 @@ class Worker:
     notes = {}                   # flight: what there is to know
     labels = None                # what was placed, for every flight
 
-    def __init__(self, flight_ids, folder, route=True, labels=True,
-                 correction=True):
-        self.flight_ids, self.folder = list(flight_ids), folder
+    def __init__(self, flights, folder, route=True, labels=True,
+                 correction=True, videos=True):
+        self.flight_ids = [flight.id for flight in flights]
+        self.folder, self.videos = folder, videos
         self.route, self.labels, self.correction = route, labels, correction
         self.finished, self.progress, self.log = Signal(), Signal(), Signal()
         self.flight_started = Signal()
@@ -150,7 +153,7 @@ class Worker:
                 self.failures.append((number, Worker.fails[number]))
                 continue
             self.prepared.append(prepared_flight(
-                self.folder, number, route=self.route,
+                self.folder, number, route=self.route, videos=self.videos,
                 correction=self.correction,
                 labels=Worker.labels if self.labels else None,
                 notes=Worker.notes.get(number, ())))
@@ -184,18 +187,32 @@ def asked(dock, tmp_path, monkeypatch):
     said, shown, routes = [], [], []
     answers = {"flights": [306], "folder": str(tmp_path / "flights"),
                "route": True, "labels": False, "correction": True,
-               "accept": True}
+               "videos": True, "accept": True}
+    listed = bambi_dataset.catalogue_from(
+        [{"part": 1, "title": "The BAMBI Dataset (Part 1)",
+          "deposition_id": 222, "doi": "10.5281/zenodo.222",
+          "flights": ["7", "284", "306"]}],
+        [{"part": 1, "title": "The BAMBI Raw Dataset (Part 1)",
+          "deposition_id": 111, "doi": "10.5281/zenodo.111",
+          "flights": ["7", "23", "284", "306"]}], {"val": [306]})
+    monkeypatch.setattr(type(dock), "_dataset_flights",
+                        staticmethod(lambda: listed))
 
     class Dialog:
-        def __init__(self, flights, parent=None, folder=""):
-            shown.append({"flights": len(flights), "folder": folder})
+        def __init__(self, flights, parent=None, folder="", records=None):
+            shown.append({"flights": len(flights), "folder": folder,
+                          "records": sorted(records or {})})
 
         def exec(self):
             return (QDialog.DialogCode.Accepted if answers["accept"]
                     else QDialog.DialogCode.Rejected)
 
-        def selected_ids(self):
-            return list(answers["flights"])
+        def selected_flights(self):
+            return [listed["flights"][number]
+                    for number in answers["flights"]]
+
+        def download_videos(self):
+            return answers["videos"]
 
         def folder(self):
             return answers["folder"]
@@ -247,13 +264,14 @@ def test_the_input_tab_offers_the_flights(dock):
     assert dock.examples_btn.text() == "Download Example Flights…"
     assert "BAMBI dataset" in dock.examples_btn.toolTip()
     assert "CC BY 4.0" in dock.examples_btn.toolTip()
-    assert "122 MB" in dock.examples_btn.toolTip()
+    assert "dataset's repository" in dock.examples_btn.toolTip()
 
 
-def test_the_list_holds_every_flight_of_the_dataset(dock, asked):
+def test_the_list_is_the_one_the_datasets_repository_keeps(dock, asked):
     dock.examples_btn.click()
 
-    assert asked["shown"] == [{"flights": 400, "folder": ""}]
+    assert asked["shown"] == [{"flights": 4, "folder": "",
+                               "records": [111, 222]}]
 
 
 def test_what_was_ticked_is_what_is_fetched(dock, asked):
@@ -264,8 +282,8 @@ def test_what_was_ticked_is_what_is_fetched(dock, asked):
     (worker,) = Worker.made
     assert worker.flight_ids == [7, 306]
     assert worker.folder == asked["folder"]
-    assert (worker.route, worker.labels, worker.correction) == (
-        True, True, False)
+    assert (worker.route, worker.labels, worker.correction,
+            worker.videos) == (True, True, False, True)
     assert (f"Fetching 2 flight(s) of the BAMBI dataset with their route, "
             f"labels into {asked['folder']}...") in \
         dock.log_text.toPlainText()
@@ -301,16 +319,16 @@ def test_not_while_a_step_is_running(dock, asked, monkeypatch):
 
 def test_a_list_that_cannot_be_read_says_so(dock, asked, monkeypatch):
     def broken():
-        raise bambi_dataset.DatasetError("The catalogue of BAMBI flights "
-                                         "cannot be read (gone).")
+        raise bambi_dataset.DatasetError("no route to host")
 
-    monkeypatch.setattr(bambi_dataset, "flights", broken)
+    monkeypatch.setattr(type(dock), "_dataset_flights", staticmethod(broken))
 
     dock.examples_btn.click()
 
-    assert asked["said"] == [("warning", "Example Flights",
-                              "The catalogue of BAMBI flights cannot be "
-                              "read (gone).")]
+    ((kind, title, text),) = asked["said"]
+    assert (kind, title) == ("warning", "Example Flights")
+    assert text.startswith("The list of flights could not be read from the "
+                           "dataset's repository:\nno route to host")
     assert asked["shown"] == []
 
 
@@ -532,6 +550,51 @@ def test_a_correction_of_the_users_own_is_left_alone(dock, asked):
 
     assert dock.trans_z_spin.value() == pytest.approx(12.0)
     assert dock.rot_z_spin.value() == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Without the videos: a fast overview
+# ---------------------------------------------------------------------------
+
+def test_without_the_videos_the_flight_is_there_for_an_overview(dock, asked):
+    asked["answers"]["videos"] = False
+
+    dock.examples_btn.click()
+
+    assert Worker.made[0].videos is False
+    assert [flight["name"] for flight in dock._flights()] == [
+        "BAMBI flight 306"]
+    assert dock.thermal_video_paths_edit.text() == ""
+    assert dock.airdata_path_edit.text() == ""
+    assert dock.dem_path_edit.text().endswith("gem15_dem.glb")
+    assert dock.target_crs_edit.text() == "EPSG:32633"
+    assert dock.trans_z_spin.value() == pytest.approx(46.65)
+    assert asked["routes"] == [_target(asked, 306)]
+    done = asked["said"][-1][2]
+    assert ("1 flight(s) are there without their videos: for the steps "
+            "from 'Extract Frames' on, ask for them again with 'Download "
+            "video data' ticked.") in done
+    assert "Go on with Pre-Processing" not in done
+    assert "(without the videos)" in dock.log_text.toPlainText()
+
+
+def test_videos_fetched_later_are_filled_in(dock, asked):
+    asked["answers"]["videos"] = False
+    dock.examples_btn.click()
+    dock.confidence_spin.setValue(0.33)             # set up since
+
+    asked["answers"]["videos"] = True
+    dock.examples_btn.click()
+
+    assert [flight["name"] for flight in dock._flights()] == [
+        "BAMBI flight 306"]
+    assert _names(dock.thermal_video_paths_edit.text()) == [
+        "DJI_20241119101935_0003_T.MP4"]
+    assert dock.airdata_path_edit.text().endswith("air_data.csv")
+    assert dock.thermal_calibration_path_edit.text().endswith("T_calib.json")
+    assert dock.video_mode_check.isChecked()
+    assert dock.confidence_spin.value() == pytest.approx(0.33)
+    assert "Go on with Pre-Processing" in asked["said"][-1][2]
 
 
 # ---------------------------------------------------------------------------

@@ -150,9 +150,9 @@ class TestImportLabels:
         deer, boar = (by_dataset_track(target)[number]
                       for number in (4668, 4669))
         assert (deer.species, deer.sex, deer.age) == (
-            "roe deer", "male", "adult")
+            "roe deer", "female", "adult")
         assert (boar.species, boar.sex, boar.age) == (
-            "wild boar", "female", "juvenile")
+            "wild boar", "male", "juvenile")
         assert sorted(deer.keyframes) == [0, 4, 10]
         assert deer.keyframes[0] == {"x1": 570.0, "y1": 223.0, "x2": 619.0,
                                      "y2": 299.0, "occlusion": "occluded"}
@@ -773,8 +773,10 @@ class TestPrepareFlight:
         assert prepared["notes"] == [] and made.routes == []
         assert made.session.ranges.asked == []
         assert not os.path.exists(os.path.join(made.target, "poses_t.json"))
-        assert bd.read_state(made.target) == {"flight": 7}
+        assert bd.read_state(made.target) == {"flight": 7,
+                                              "elevation": "recording"}
         assert prepared["dem"]                  # the model all the same
+        assert prepared["videos"] is True
 
     def test_only_the_correction(self, made):
         prepared = made.prepare(route=False, labels=False)
@@ -782,10 +784,15 @@ class TestPrepareFlight:
         assert prepared["correction"]["convergence"] == pytest.approx(
             CONVERGENCE, abs=5e-3)
         assert (prepared["route"], prepared["labels"]) == (None, None)
-        # the poses are not fetched for it: the flight log says where
+        # the annotations are fetched whole, as the dataset's script does;
+        # only the correction is put into the flight
         assert sorted(os.listdir(os.path.join(
             made.target, "bambi_dataset"))) == [
-            "7_correction.json", "7_correction_qgis.json", "dataset.json"]
+            "7_correction.json", "7_correction_qgis.json", "7_gt.txt",
+            "7_matched_poses.json", "7_metadata.json",
+            "7_track_mapping.json", "dataset.json"]
+        assert not os.path.exists(os.path.join(made.target, "poses_t.json"))
+        assert not os.path.exists(os.path.join(made.target, "labels_t"))
 
     def test_labels_without_the_route_wait_for_the_frames(self, made):
         prepared = made.prepare(route=False)
@@ -852,10 +859,10 @@ class TestPrepareFlight:
 
         assert prepared["notes"] == [
             "The labelled flight 7 is not where it was published "
-            f"({made.flight.labelled.url}). Look for a newer version of "
-            "the plugin."]
+            f"({made.flight.labelled.url})."]
         assert prepared["files"]["thermal_videos"]
-        assert bd.read_state(made.target) == {"flight": 7}
+        assert bd.read_state(made.target) == {"flight": 7,
+                                              "elevation": "recording"}
 
     def test_a_labelled_flight_without_labels(self, tmp_path):
         made = Made(tmp_path, leave_out=("_gt.txt",))
@@ -899,15 +906,16 @@ class TestPrepareFlight:
             made.prepare()
 
     def test_stopped_while_the_published_files_arrive(self, made):
-        state = {"stop": False}
+        calls = []
 
-        def elevation(*args, **more):
-            state["stop"] = True               # the user presses cancel
-            return made.elevation(*args, **more)
+        def cancelled():                # once the recordings are there
+            calls.append(1)
+            return os.path.isfile(os.path.join(made.folder, "air_data.csv"))
 
         with pytest.raises(remote_zip.Cancelled):
-            made.prepare(elevation=elevation,
-                         cancelled=lambda: state["stop"])
+            made.prepare(cancelled=cancelled)
+
+        assert made.dems == []
 
     def test_asked_for_again_nothing_is_fetched_twice(self, made):
         made.prepare()
@@ -920,6 +928,96 @@ class TestPrepareFlight:
         assert len(made.session.ranges.asked) == asked
         assert len(made.dems) == 1
         assert prepared["labels"]["boxes"] == BOXES and prepared["notes"] == []
+
+
+class TestWithoutTheVideos:
+    """A fast overview: the poses and labels of a flight, and nothing of
+    its recordings."""
+
+    def test_only_the_annotations_are_fetched(self, made):
+        prepared = made.prepare(videos=False)
+
+        assert made.session.streamed == []
+        assert sorted(os.listdir(made.folder)) == [
+            "gem15_dem.glb", "gem15_dem.json", "qgis"]
+        assert prepared["videos"] is False
+        assert prepared["files"]["thermal_videos"] == []
+        assert prepared["notes"] == []
+
+    def test_the_route_and_the_labels_are_there_all_the_same(self, made):
+        prepared = made.prepare(videos=False)
+
+        assert prepared["route"]["frames"] == 12
+        assert prepared["labels"]["boxes"] == BOXES
+        assert prepared["correction"]["correction"]["translation"]["z"] == \
+            46.65
+        assert made.routes == [prepared]
+
+    def test_the_elevation_model_is_for_the_ground_under_the_poses(self,
+                                                                   made):
+        made.prepare(videos=False)
+
+        ((west, south, east, north), folder, crs), = made.dems
+        published = samples.published_poses()["images"]
+        assert (west, east) == (published[0]["lng"], published[-1]["lng"])
+        assert (south, north) == (published[-1]["lat"], published[0]["lat"])
+        assert (folder, crs) == (made.folder, "EPSG:32633")
+        assert bd.read_state(made.target)["elevation"] == "poses"
+
+    def test_the_videos_can_be_fetched_later(self, made):
+        made.prepare(videos=False)
+
+        prepared = made.prepare()
+
+        assert prepared["videos"] is True
+        assert prepared["files"]["airdata"].endswith("air_data.csv")
+        # the model is made anew, for the whole recording
+        assert len(made.dems) == 2
+        assert made.dems[1][0] == (15.9695, 47.0021, 15.9785, 47.0084)
+        assert bd.read_state(made.target)["elevation"] == "recording"
+        assert prepared["labels"]["boxes"] == BOXES
+        # ... once
+        made.prepare()
+        assert len(made.dems) == 2
+
+    def test_its_settings_name_no_recordings(self, made):
+        prepared = made.prepare(videos=False)
+
+        values = bd.flight_configuration(prepared, {})
+
+        assert values["Input/ThermalVideoPaths"] == ""
+        assert values["Input/AirdataPath"] == ""
+        assert values["Input/DemPath"].endswith("gem15_dem.glb")
+        assert values["Input/TargetCrs"] == "EPSG:32633"
+        assert values["Correction/TransZ"] == 46.65
+
+    def test_a_flight_that_was_not_labelled_has_nothing_to_fetch(self,
+                                                                 tmp_path):
+        made = Made(tmp_path, labelled=False)
+
+        with pytest.raises(bd.DatasetError, match="without its videos "
+                                                  "there is nothing"):
+            made.prepare(videos=False)
+
+        assert not os.path.exists(made.folder)
+
+    def test_annotations_out_of_reach_are_no_flight(self, made):
+        made.session.ranges.files.clear()
+
+        with pytest.raises(bd.DatasetError, match="not where it was "
+                                                  "published"):
+            made.prepare(videos=False)
+
+    def test_where_the_published_frames_were_taken(self):
+        poses = samples.published_poses(3)
+        poses["images"].append({"lat": "north"})
+
+        west, south, east, north = bd.poses_bounds(poses)
+
+        assert (west, east) == (15.9770, pytest.approx(15.97702))
+        assert (south, north) == (pytest.approx(47.00496), 47.0050)
+        assert bd.poses_bounds({"images": [{}]}) is None
+        assert bd.poses_bounds(None) is None
 
 
 # ---------------------------------------------------------------------------

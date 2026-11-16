@@ -180,10 +180,13 @@ def test_the_altitude_profile_says_what_is_under_the_mouse(shown):
 # ---------------------------------------------------------------------------
 
 def _dataset_flights():
-    """The list of flights that ships with the plugin."""
+    """Flights as the dataset's repository lists them."""
     from bambi_wildlife_detection.core import bambi_dataset
 
-    return bambi_dataset.flights()
+    return [bambi_dataset.Flight(
+        number, bambi_dataset.Archive(111, f"flight_{number}.zip"),
+        bambi_dataset.Archive(222, f"flight_{number}.zip"), "train")
+        for number in range(300, 320)]
 
 
 WINDOWS = [

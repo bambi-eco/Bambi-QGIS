@@ -6,7 +6,6 @@ has it - with made-up archives standing in for Zenodo, and no network.
 
 What happens to them inside a flight's folder is in
 tests/test_bambi_dataset_flight.py."""
-import hashlib
 import json
 import math
 import os
@@ -33,115 +32,132 @@ def serving(data=ARCHIVE, pieces=3):
 
 
 # ---------------------------------------------------------------------------
-# The catalogue
+# The flights, as the dataset's repository lists them
 # ---------------------------------------------------------------------------
 
-CATALOGUE = {
-    "generated": "2026-11-16", "authors": "Praschl, C., Schedl, D. C., et al.",
-    "records": {
-        "111": {"kind": "raw", "year": 2026,
-                "title": "The BAMBI Raw Dataset (Part 1)"},
-        "222": {"kind": "labelled", "year": 2026,
-                "title": "The BAMBI Dataset (Part 1)"}},
-    "flights": [
-        {"id": 12, "raw": [111, 500, "ab" * 16]},
-        {"id": 7, "raw": [111, 1200, "cd" * 16],
-         "labelled": [222, 300, "ef" * 16], "date": "2024-11-19",
-         "species": [["Sus scrofa (Wild boar)", 29], ["Unknown", 2]],
-         "animals": 31, "boxes": 375, "drone": "Matrice 30 Thermal",
-         "split": "train"}],
-}
+#: Two upload summaries, laid out as the repository's are
+#: (flight_metadata/zenodo_upload_summary*.json).
+LABELLED = [
+    {"part": 1, "title": "The BAMBI Dataset (Part 1)", "deposition_id": 222,
+     "doi": "10.5281/zenodo.222", "flights": ["7", "306"], "num_files": 2}]
+RAW = [
+    {"part": 1, "title": "The BAMBI Raw Dataset (Part 1)",
+     "deposition_id": 111, "doi": "10.5281/zenodo.111",
+     "flights": ["7", "12"], "num_files": 2},
+    {"part": 2, "title": "The BAMBI Raw Dataset (Part 2)",
+     "deposition_id": 112, "doi": "10.5281/zenodo.112", "flights": ["306"],
+     "num_files": 1}]
+SPLITS = {"train": [7], "val": [306], "test": []}
 
 
-@pytest.fixture
-def catalogue(tmp_path):
-    path = tmp_path / "flights.json"
-    path.write_text(json.dumps(CATALOGUE), encoding="utf-8")
-    return str(path)
+class Answers:
+    """A session that answers a URL with a JSON document - or with a
+    status, or by failing."""
+
+    class Response:
+        def __init__(self, document, status=200):
+            self.document, self.status_code = document, status
+
+        def json(self):
+            if isinstance(self.document, Exception):
+                raise self.document
+            return self.document
+
+    def __init__(self, documents):
+        self.documents, self.asked, self.headers = dict(documents), [], {}
+
+    def get(self, url, **more):
+        self.asked.append(url)
+        document = self.documents.get(url)
+        if isinstance(document, int):
+            return self.Response(None, document)
+        if isinstance(document, ConnectionError):
+            raise document
+        if document is None:
+            return self.Response(None, 404)
+        return self.Response(document)
 
 
-class TestCatalogue:
-    def test_the_flights_by_their_number(self, catalogue):
-        flights = bd.flights(catalogue)
+class TestTheDatasetsList:
+    def test_the_flights_by_their_number(self):
+        known = bd.catalogue_from(LABELLED, RAW, SPLITS)
 
-        assert [flight.id for flight in flights] == [7, 12]
+        flights = bd.flights_of(known)
+        assert [flight.id for flight in flights] == [7, 12, 306]
         seven = flights[0]
-        assert seven.name == "BAMBI flight 7"
-        assert seven.folder == "flight_7"
-        assert (seven.date, seven.drone, seven.split) == (
-            "2024-11-19", "Matrice 30 Thermal", "train")
-        assert seven.species == (("Sus scrofa (Wild boar)", 29),
-                                 ("Unknown", 2))
-        assert (seven.animals, seven.boxes) == (31, 375)
-        assert seven.species_text == "wild boar, unknown"
+        assert (seven.name, seven.folder, seven.split) == (
+            "BAMBI flight 7", "flight_7", "train")
+        assert known["flights"][306].split == "val"
 
-    def test_where_a_flight_lies(self, catalogue):
-        seven = bd.flight(7, catalogue)
+    def test_where_a_flight_lies_is_the_summarys_to_say(self):
+        seven = bd.catalogue_from(LABELLED, RAW)["flights"][7]
 
-        assert seven.raw == bd.Archive(111, "flight_7.zip", 1200, "cd" * 16)
+        assert seven.raw == bd.Archive(111, "flight_7.zip")
         assert seven.raw.url == ("https://zenodo.org/api/records/111/files/"
                                  "flight_7.zip/content")
         assert seven.raw.doi == "10.5281/zenodo.111"
-        assert seven.labelled.record == 222
-        assert seven.labelled.url.startswith(
-            "https://zenodo.org/api/records/222/files/flight_7.zip")
+        assert seven.labelled == bd.Archive(222, "flight_7.zip")
+        assert seven.split == ""
 
-    def test_a_checksum_written_as_a_number(self, tmp_path):
-        """As the shipped list has them (update_bambi_catalogue.py says
-        why) - noughts at the front included."""
-        document = dict(CATALOGUE, flights=[
-            {"id": 7, "raw": [111, 1200, int("00ab" + "cd" * 14, 16)],
-             "labelled": [222, 300, 0xadce6a7336ff27414b02fa6b995c98a4]}])
-        path = tmp_path / "flights.json"
-        path.write_text(json.dumps(document), encoding="utf-8")
+    def test_a_flight_that_was_not_labelled(self):
+        twelve = bd.catalogue_from(LABELLED, RAW)["flights"][12]
 
-        seven = bd.flight(7, str(path))
+        assert twelve.labelled is None and twelve.raw.record == 111
 
-        assert seven.raw.md5 == "00ab" + "cd" * 14
-        assert seven.labelled.md5 == "adce6a7336ff27414b02fa6b995c98a4"
+    def test_the_records_are_named_as_the_summary_names_them(self):
+        records = bd.catalogue_from(LABELLED, RAW)["records"]
 
-    def test_a_flight_that_was_not_labelled(self, catalogue):
-        twelve = bd.flight(12, catalogue)
+        assert records[222] == {"kind": "labelled",
+                                "title": "The BAMBI Dataset (Part 1)",
+                                "doi": "10.5281/zenodo.222"}
+        assert records[112]["kind"] == "raw"
 
-        assert twelve.labelled is None
-        assert (twelve.date, twelve.species, twelve.animals) == ("", (), 0)
+    def test_a_part_may_name_its_archives_its_own_way(self):
+        labelled = [dict(LABELLED[0], zip_prefix="owl_")]
 
-    def test_a_flight_published_without_its_videos(self, tmp_path):
-        document = dict(CATALOGUE, flights=[
-            {"id": 397, "raw": [111, 233594, "ab" * 16], "videos": False},
-            {"id": 7, "raw": [111, 1200, "cd" * 16]}])
-        path = tmp_path / "flights.json"
-        path.write_text(json.dumps(document), encoding="utf-8")
+        seven = bd.catalogue_from(labelled, RAW)["flights"][7]
 
-        assert bd.flight(397, str(path)).videos is False
-        assert bd.flight(7, str(path)).videos is True
+        assert seven.labelled.filename == "owl_7.zip"
 
-    def test_a_flight_the_dataset_does_not_have(self, catalogue):
-        with pytest.raises(bd.DatasetError, match="has no flight 99"):
-            bd.flight(99, catalogue)
-        with pytest.raises(bd.DatasetError, match="has no flight seven"):
-            bd.flight("seven", catalogue)
+    @pytest.mark.parametrize("summary", [
+        None, [], {}, "text", [{"flights": ["1"]}],
+        [{"deposition_id": "x", "flights": ["1"]}], [{"deposition_id": 1}]])
+    def test_a_summary_that_is_none(self, summary):
+        with pytest.raises(bd.DatasetError, match="summary"):
+            bd.catalogue_from(summary, RAW)
 
-    @pytest.mark.parametrize("text", ["", "not json", "{}", '{"flights": 3}',
-                                      '{"flights": [{"raw": [1, 2, "x"]}]}'])
-    def test_a_catalogue_that_cannot_be_read(self, tmp_path, text):
-        path = tmp_path / "broken.json"
-        path.write_text(text, encoding="utf-8")
+    def test_it_is_read_from_the_repository(self):
+        session = Answers({bd.SUMMARIES[bd.LABELLED]: LABELLED,
+                           bd.SUMMARIES[bd.RAW]: RAW, bd.SPLITS: SPLITS})
 
-        with pytest.raises(bd.DatasetError, match="cannot be read"):
-            bd.flights(str(path))
-        with pytest.raises(bd.DatasetError, match="cannot be read"):
-            bd.flights(str(tmp_path / "none.json"))
+        known = bd.fetch_catalogue(session)
 
-    def test_how_a_flight_is_cited(self, catalogue):
-        seven = bd.flight(7, catalogue)
+        assert session.asked == [
+            "https://raw.githubusercontent.com/bambi-eco/Dataset/main/"
+            "flight_metadata/zenodo_upload_summary.json",
+            "https://raw.githubusercontent.com/bambi-eco/Dataset/main/"
+            "flight_metadata/zenodo_upload_summary_raw.json",
+            "https://raw.githubusercontent.com/bambi-eco/Dataset/main/"
+            "flight_metadata/splits.json"]
+        assert sorted(known["flights"]) == [7, 12, 306]
+        assert known["flights"][7].split == "train"
 
-        assert bd.citation(seven.raw, catalogue) == (
-            "Praschl, C., Schedl, D. C., et al. (2026): The BAMBI Raw "
-            "Dataset (Part 1). Zenodo. https://doi.org/10.5281/zenodo.111 "
-            "(CC BY 4.0)")
-        assert "The BAMBI Dataset (Part 1)" in bd.citation(seven.labelled,
-                                                           catalogue)
+    def test_without_the_splits_the_flights_are_listed_all_the_same(self):
+        session = Answers({bd.SUMMARIES[bd.LABELLED]: LABELLED,
+                           bd.SUMMARIES[bd.RAW]: RAW})
+
+        known = bd.fetch_catalogue(session)
+
+        assert known["flights"][7].split == ""
+
+    @pytest.mark.parametrize("answer", [
+        404, ConnectionError("no route to host"), ValueError("not json")])
+    def test_a_repository_out_of_reach(self, answer):
+        session = Answers({bd.SUMMARIES[bd.LABELLED]: LABELLED,
+                           bd.SUMMARIES[bd.RAW]: answer})
+
+        with pytest.raises(bd.DatasetError, match="could not be read"):
+            bd.fetch_catalogue(session)
 
     @pytest.mark.parametrize("name, common, scientific", [
         ("Capreolus capreolus (Roe deer)", "roe deer", "Capreolus capreolus"),
@@ -156,92 +172,63 @@ class TestCatalogue:
         assert bd.scientific_name(name) == scientific
 
 
-class TestTheShippedCatalogue:
-    """The list that ships with the plugin, as update_bambi_catalogue.py
-    wrote it."""
+RECORD = {"files": [
+    {"key": "flight_7.zip", "size": 1200, "checksum": "md5:" + "cd" * 16,
+     "links": {"self": "https://zenodo.org/api/records/111/files/"
+                       "flight_7.zip/content"}},
+    {"filename": "flight_12.zip", "size": 500, "checksum": "sha1:abc",
+     "links": {"download": "https://zenodo.org/dl/flight_12.zip",
+               "self": "https://zenodo.org/api/x"}},
+    {"key": "broken.zip"}]}
 
-    def test_every_flight_of_the_dataset(self):
-        flights = bd.flights()
 
-        assert len(flights) == 400
-        assert [flight.id for flight in flights] == sorted(
-            {flight.id for flight in flights})
-        assert all(flight.raw is not None for flight in flights)
-        assert sum(1 for flight in flights if flight.labelled) == 386
-        for flight in flights:
-            for archive in (flight.raw, flight.labelled):
-                if archive is None:
-                    continue
-                assert archive.size > 0
-                assert len(archive.md5) == 32 and int(archive.md5, 16) >= 0
-                assert archive.filename == f"flight_{flight.id}.zip"
+class TestZenodo:
+    """Where an archive is, how large and which file exactly: asked of
+    Zenodo when a flight is fetched, as download_from_zenodo.py asks."""
 
-    def test_every_archive_is_in_a_record_that_is_named(self):
-        known = bd.catalogue()
+    def session(self):
+        return Answers({"https://zenodo.org/api/records/111": RECORD})
 
-        for flight in known["flights"].values():
-            assert known["records"][flight.raw.record]["kind"] == "raw"
-            if flight.labelled is not None:
-                assert known["records"][flight.labelled.record]["kind"] == \
-                    "labelled"
-        for record in known["records"].values():
-            assert record["title"].startswith("The BAMBI")
-            assert record["year"] >= 2026
-        assert known["authors"].startswith("Praschl, C., Schedl, D. C.")
+    def test_what_a_record_holds(self):
+        files = bd.deposition_files(self.session(), 111)
 
-    def test_the_example_is_the_flight_this_release_was_tested_with(self):
-        example = bd.flight(bd.EXAMPLE)
+        assert files == {
+            "flight_7.zip": ("https://zenodo.org/api/records/111/files/"
+                             "flight_7.zip/content", 1200, "cd" * 16),
+            "flight_12.zip": ("https://zenodo.org/dl/flight_12.zip", 500, "")}
 
-        assert example.id == 306
-        assert example.raw.size == 121842908
-        assert example.raw.url == ("https://zenodo.org/api/records/19047570/"
-                                   "files/flight_306.zip/content")
-        assert len(bd.PINNED_SHA256[306]) == 64
-        assert example.species == (("Capreolus capreolus (Roe deer)", 2),)
-        assert example.date == "2024-11-19"
-        assert "Part 27" in bd.citation(example.raw)
+    def test_an_archive_gets_its_link_size_and_checksum(self):
+        archive = bd.resolve(bd.Archive(111, "flight_7.zip"), self.session())
 
-    def test_seven_flights_were_published_without_their_videos(self):
-        without = [flight.id for flight in bd.flights() if not flight.videos]
+        assert (archive.size, archive.md5) == (1200, "cd" * 16)
+        assert archive.url.endswith("/files/flight_7.zip/content")
+        assert bd.resolve(bd.Archive(111, "flight_12.zip"),
+                          self.session()).url == \
+            "https://zenodo.org/dl/flight_12.zip"
 
-        assert without == [397, 398, 399, 400, 401, 402, 403]
-        # ... and no flight with videos is as small as they are
-        assert min(flight.raw.size for flight in bd.flights()
-                   if flight.videos) == bd.flight(bd.EXAMPLE).raw.size
-        assert max(bd.flight(number).raw.size for number in without) < 2e6
+    def test_a_record_is_asked_once_for_all_its_flights(self):
+        session, listings = self.session(), {}
 
-    def test_it_holds_what_the_list_shows_and_nothing_else(self):
-        with open(bd.CATALOGUE_FILE, encoding="utf-8") as handle:
-            text = handle.read()
-        document = json.loads(text)
+        bd.resolve(bd.Archive(111, "flight_7.zip"), session, listings)
+        bd.resolve(bd.Archive(111, "flight_12.zip"), session, listings)
 
-        allowed = {"id", "raw", "labelled", "date", "species", "animals",
-                   "boxes", "drone", "split", "videos"}
-        assert all(set(flight) <= allowed for flight in document["flights"])
-        # a flight's metadata on Zenodo says more than a list needs
-        assert "sharepoint" not in text.lower() and "http" not in text
-        assert text.isascii()
+        assert session.asked == ["https://zenodo.org/api/records/111"]
 
-    def test_it_holds_nothing_a_scan_for_secrets_stops_at(self):
-        """786 checksums in quotes are 786 "potential secrets" to the scan
-        of run_checks.sh; they are written as the numbers they are."""
-        import re
+    def test_an_archive_that_was_asked_is_not_asked_again(self):
+        session = Answers({})
+        known = bd.Archive(111, "flight_7.zip", 5, "", "https://there/f.zip")
 
-        with open(bd.CATALOGUE_FILE, encoding="utf-8") as handle:
-            text = handle.read()
+        assert bd.resolve(known, session) is known and session.asked == []
 
-        assert not re.search(r'"[0-9a-fA-F]{20,}"', text)
-        assert bd.flight(306).raw.md5 == "adce6a7336ff27414b02fa6b995c98a4"
+    def test_an_archive_the_record_does_not_hold(self):
+        with pytest.raises(bd.DatasetError, match="flight_99.zip is not in "
+                                                  "the Zenodo record"):
+            bd.resolve(bd.Archive(111, "flight_99.zip"), self.session())
 
-    def test_the_species_are_ones_the_plugin_can_name(self):
-        names = {name for flight in bd.flights()
-                 for name, _count in flight.species}
-
-        assert "Capreolus capreolus (Roe deer)" in names
-        for name in names:
-            assert bd.common_name(name)
-            assert bd.scientific_name(name) or \
-                bd.common_name(name) in bd.NO_SPECIES
+    def test_zenodo_out_of_reach(self):
+        with pytest.raises(bd.DatasetError, match="could not be read "
+                                                  r"\(HTTP 404\)"):
+            bd.resolve(bd.Archive(999, "flight_7.zip"), self.session())
 
 
 # ---------------------------------------------------------------------------
@@ -280,17 +267,6 @@ class TestArchive:
         assert bd.archive_problem(str(tmp_path / "none.zip"),
                                   samples.entry().raw).startswith(
             "it cannot be read")
-
-    def test_an_archive_this_release_was_tested_with_is_checked_twice(
-            self, tmp_path):
-        path = self._written(tmp_path, ARCHIVE)
-        raw = samples.entry().raw
-
-        assert bd.archive_problem(
-            path, raw, sha256=hashlib.sha256(ARCHIVE).hexdigest()) is None
-        assert bd.archive_problem(path, raw, sha256="00" * 32).startswith(
-            "its contents are not the ones this version of the plugin was "
-            "tested with (SHA-256 ")
 
     def test_checking_can_be_stopped(self, tmp_path):
         with pytest.raises(checked_download.Cancelled):
@@ -406,16 +382,6 @@ class TestRecordings:
 
         assert os.listdir(tmp_path / "f") == []
 
-    def test_the_tested_archive_has_to_be_the_tested_one(self, tmp_path,
-                                                         monkeypatch):
-        monkeypatch.setitem(bd.PINNED_SHA256, samples.FLIGHT, "00" * 32)
-
-        with pytest.raises(bd.DatasetError, match="not the file expected"):
-            bd.fetch_recordings(samples.entry(), str(tmp_path / "f"),
-                                serving(), **quiet_fetch())
-
-        assert os.listdir(tmp_path / "f") == []
-
     def test_a_flight_that_is_no_longer_published(self, tmp_path):
         session = FakeSession([FakeResponse(status_code=404)])
 
@@ -492,18 +458,6 @@ class TestRecordings:
             bd.fetch_recordings(samples.entry(raw=None), str(tmp_path / "f"),
                                 FakeSession([]))
 
-    def test_a_flight_published_without_its_videos_is_not_begun(
-            self, tmp_path):
-        session = FakeSession([])
-
-        with pytest.raises(bd.DatasetError, match="Flight 7 was published "
-                                                  "without its videos"):
-            bd.fetch_recordings(samples.entry(videos=False),
-                                str(tmp_path / "f"), session)
-
-        assert session.requested_urls == []
-        assert not os.path.exists(tmp_path / "f")
-
     def test_a_flight_that_does_not_fit_is_not_begun(self, tmp_path,
                                                      monkeypatch):
         monkeypatch.setattr(bd, "space_problem",
@@ -566,21 +520,36 @@ class TestPublishedFiles:
         flight = samples.entry(labelled=data)
         session = RangeSession({flight.labelled.url: data})
 
-        bd.fetch_published(flight, str(tmp_path / "qgis"), session,
-                           kinds=[bd.POSES, bd.LABELS, bd.CORRECTION])
+        bd.fetch_published(flight, str(tmp_path / "qgis"), session)
 
         assert len(data) > 3_000_000
         assert session.transferred < len(data) / 4
+        assert not [name for name in os.listdir(
+            tmp_path / "qgis" / "bambi_dataset") if name.endswith(".mp4")]
 
-    def test_only_what_is_asked_for(self, zenodo, tmp_path):
-        flight, session, _data = zenodo
+    def test_pictures_stay_there_too_and_whatever_else_is_taken(
+            self, tmp_path):
+        """As download_from_zenodo.py --annotations-only: all of the
+        archive that is no imagery, whatever a later version adds."""
+        import io
+        import zipfile
 
-        there = bd.fetch_published(flight, str(tmp_path / "qgis"), session,
-                                   kinds=[bd.CORRECTION])
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as bundle:
+            for name, content in (
+                    ("7_matched_poses.json", b"{}"), ("7_metadata.json", b"{}"),
+                    ("7_mask_t.png", b"png"), ("7_mask_w.PNG", b"png"),
+                    ("7_environment.json", b"{}"), ("sub/7_notes.txt", b"n")):
+                bundle.writestr(name, content)
+        data = buffer.getvalue()
+        flight = samples.entry(labelled=data)
 
-        assert list(there) == [bd.CORRECTION]
-        assert os.listdir(tmp_path / "qgis" / "bambi_dataset") == [
-            "7_correction.json"]
+        bd.fetch_published(flight, str(tmp_path / "qgis"),
+                           RangeSession({flight.labelled.url: data}))
+
+        assert sorted(os.listdir(tmp_path / "qgis" / "bambi_dataset")) == [
+            "7_environment.json", "7_matched_poses.json", "7_metadata.json",
+            "7_notes.txt"]
 
     def test_what_is_there_is_not_fetched_again(self, zenodo, tmp_path):
         flight, session, _data = zenodo
@@ -847,25 +816,17 @@ class TestLabelFile:
         assert len(labels) == 5
         assert labels[0] == bd.Label(
             frame=0, track=4668, x1=570.0, y1=223.0, x2=619.0, y2=299.0,
-            species="Capreolus capreolus (Roe deer)", sex="male",
+            species="Capreolus capreolus (Roe deer)", sex="female",
             age="adult", occluded=True)
-        assert labels[3].sex == "female" and labels[3].age == "juvenile"
+        assert labels[3].sex == "male" and labels[3].age == "juvenile"
         assert not labels[1].occluded
 
-    def test_one_is_female_and_two_is_male(self):
-        """As the dataset's notes on its second version say ("recorded as
-        gender=1 (Female)") - and not as the ``contains_male`` /
-        ``contains_female`` flags of a flight's metadata would have it.
-        Two rows of flight 104: a hind the review of that version called
-        female, and a stag it called male."""
-        hind, stag = bd.parse_labels(
-            "32,1821,1005,425,19,48,1.00,58,0.50,"
-            "Cervus elaphus (Red deer),1,1,0\n"
-            "1535,1825,996,375,28,40,1.00,12,0.50,"
-            "Cervus elaphus (Red deer),2,2,0\n")
-
-        assert (hind.sex, hind.age) == ("female", "juvenile")
-        assert (stag.sex, stag.age) == ("male", "adult")
+    def test_sex_and_age_are_read_as_the_dataset_documents_them(self):
+        """docs/annotation-format.md of the dataset's repository: gender
+        0 = unknown, 1 = male, 2 = female; age 0 = unknown, 1 = juvenile,
+        2 = adult. The plugin has no reading of its own."""
+        assert bd.SEX == {0: "unknown", 1: "male", 2: "female"}
+        assert bd.AGE == {0: "unknown", 1: "juvenile", 2: "adult"}
 
     def test_sex_and_age_that_are_not_known(self):
         (label,) = bd.parse_labels("0,1,10,10,5,5,1.0,3,1.0,Unknown,0,0,0\n")
@@ -1018,13 +979,13 @@ class TestLabelTracks:
         deer, boar = self.tracks()
 
         assert (deer["track"], deer["species"], deer["sex"], deer["age"]) == (
-            4668, "Capreolus capreolus (Roe deer)", "male", "adult")
+            4668, "Capreolus capreolus (Roe deer)", "female", "adult")
         assert sorted(deer["keyframes"]) == [0, 4, 10]
         assert deer["keyframes"][0] == {
             "box": (570.0, 223.0, 619.0, 299.0), "occluded": True}
         assert deer["keyframes"][4]["occluded"] is False
         assert (boar["track"], boar["species"], boar["sex"], boar["age"]) == (
-            4669, "Sus scrofa (Wild boar)", "female", "juvenile")
+            4669, "Sus scrofa (Wild boar)", "male", "juvenile")
         assert sorted(boar["keyframes"]) == [2, 8]
 
     def test_key_frames_go_where_the_flights_frames_are(self):
@@ -1071,7 +1032,7 @@ class TestLabelTracks:
         (track,) = self.tracks(labels)
 
         assert (track["species"], track["sex"], track["age"]) == (
-            "Cervus elaphus (Red deer)", "female", "adult")
+            "Cervus elaphus (Red deer)", "male", "adult")
 
     def test_an_animal_recognised_once_is_not_unknown(self):
         labels = bd.parse_labels(
@@ -1082,7 +1043,7 @@ class TestLabelTracks:
         (track,) = self.tracks(labels)
 
         assert (track["species"], track["sex"], track["age"]) == (
-            "Cervus elaphus (Red deer)", "female", "adult")
+            "Cervus elaphus (Red deer)", "male", "adult")
 
     def test_an_animal_nobody_recognised(self):
         labels = bd.parse_labels("0,1,10,10,5,5,1,1,1,Unknown,0,0,0\n"

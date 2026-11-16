@@ -13,11 +13,20 @@ the flights' numbers:
   *labelled* by hand on key frames, and the *correction* of the camera's
   position and angle that was found for the flight. 386 of the flights.
 
-This module knows the flights (:func:`flights`, from the catalogue shipped
-with the plugin), fetches a flight's recordings (:func:`fetch_recordings`)
-and - without the video they are published with - its poses, labels and
-correction (:func:`fetch_published`), and fits what was published to the
-flight as the plugin has it:
+Which flights there are, and where each one lies, is the dataset's own
+business: its repository (github.com/bambi-eco/Dataset) keeps a summary per
+version - ``flight_metadata/zenodo_upload_summary.json`` for the labelled
+flights, ``..._raw.json`` for the recordings - and a script,
+``download_from_zenodo.py``, that downloads by it. This module reads those
+summaries where the script reads them (:func:`fetch_catalogue`) and fetches
+as the script does: Zenodo is asked for a record's files, a flight's
+recordings are its whole archive (:func:`fetch_recordings`), and "the
+annotations only" are every file of the labelled archive that is no video
+and no picture, read out of it in place (:func:`fetch_published`). Nothing
+about the dataset is kept in the plugin, so a new part or a corrected label
+arrives without a new version of it.
+
+What was published is then fitted to the flight as the plugin has it:
 
 **Poses** (:func:`flight_poses`). Published poses say where a frame was
 taken as latitude, longitude and height above sea level, and relative to an
@@ -53,25 +62,31 @@ import math
 import os
 import re
 from datetime import datetime
-from functools import lru_cache
 from typing import (Callable, Dict, Iterable, List, NamedTuple, Optional,
                     Sequence, Tuple)
 
 from . import checked_download, flight_archive, quiet, remote_zip
 
-#: The catalogue of flights shipped with the plugin (see
-#: ``update_bambi_catalogue.py`` at the top of the repository).
-CATALOGUE_FILE = os.path.join(os.path.dirname(__file__), "bambi_flights.json")
 ZENODO = "https://zenodo.org"
-
-#: The flight that is ticked when the list opens: one of the shortest, with
-#: two roe deer on it - 122 MB.
-EXAMPLE = 306
-#: Archives this release was tested with, by their SHA-256 - checked besides
-#: the MD5 Zenodo gives: ``{flight: digest}`` of the recordings.
-PINNED_SHA256 = {
-    306: "3743c9dedb9cdf2f0377a0c040f087721e0155aecb2707fa5725170282b5cb91",  # pragma: allowlist secret
+#: The dataset's repository: where its summaries are read from.
+REPOSITORY = "https://raw.githubusercontent.com/bambi-eco/Dataset/main"
+#: The summaries ``download_from_zenodo.py`` downloads by, per version of
+#: the dataset: the labelled flights (its ``base``) and the recordings.
+LABELLED, RAW = "labelled", "raw"
+SUMMARIES = {
+    LABELLED: f"{REPOSITORY}/flight_metadata/zenodo_upload_summary.json",
+    RAW: f"{REPOSITORY}/flight_metadata/zenodo_upload_summary_raw.json",
 }
+SPLITS = f"{REPOSITORY}/flight_metadata/splits.json"
+#: As the script names a flight's archive, unless a part says otherwise.
+ZIP_PREFIX = "flight_"
+#: What "annotations only" leaves on Zenodo, as the script has it: anything
+#: that is imagery.
+MEDIA_SUFFIXES = frozenset({".mp4", ".mov", ".avi", ".mkv", ".png", ".jpg",
+                            ".jpeg", ".tif", ".tiff", ".bmp"})
+
+#: The flight that is ticked when the list opens: one of the shortest.
+EXAMPLE = 306
 #: While a flight is unpacked, its archive and its files are both there.
 SPACE_FACTOR = 2.0
 
@@ -100,13 +115,10 @@ PUBLISHED_SIZE = (1024, 1024)
 #: than this (a frame lasts 33 ms).
 SAME_MOMENT_S = 0.005
 
-#: How the labelled dataset writes sex and age, in this plugin's words.
-#: 1 is female: the dataset's notes on its second version say so ("recorded
-#: as gender=1 (Female)"), and the animals whose sex was reviewed for that
-#: version kept their number - 373 of 386 in the fourteen flights looked at.
-#: The ``contains_male`` / ``contains_female`` flags of a flight's
-#: ``metadata.json`` say it the other way round; they are not read here.
-SEX = {0: "unknown", 1: "female", 2: "male"}
+#: How the dataset writes sex and age, in this plugin's words - as its
+#: documentation has it (docs/annotation-format.md: gender 0 = unknown,
+#: 1 = male, 2 = female; age 0 = unknown, 1 = juvenile, 2 = adult).
+SEX = {0: "unknown", 1: "male", 2: "female"}
 AGE = {0: "unknown", 1: "juvenile", 2: "adult"}
 #: The custom field an imported label track carries: the number the track
 #: has in the dataset. It is how an earlier import is found again.
@@ -121,21 +133,24 @@ class DatasetError(RuntimeError):
 
 
 # ---------------------------------------------------------------------------
-# The catalogue
+# The flights, as the dataset's repository lists them
 # ---------------------------------------------------------------------------
 
 class Archive(NamedTuple):
-    """One archive on Zenodo, as the catalogue records it."""
+    """One archive on Zenodo. The summary says which record it is in;
+    its size, checksum and link are Zenodo's, once asked
+    (:func:`resolve`)."""
 
     record: int
     filename: str
-    size: int
-    md5: str
+    size: int = 0
+    md5: str = ""
+    link: str = ""
 
     @property
     def url(self) -> str:
-        return (f"{ZENODO}/api/records/{self.record}/files/{self.filename}/"
-                "content")
+        return self.link or (f"{ZENODO}/api/records/{self.record}/files/"
+                             f"{self.filename}/content")
 
     @property
     def doi(self) -> str:
@@ -150,18 +165,8 @@ class Flight(NamedTuple):
     #: has none.
     raw: Optional[Archive]
     labelled: Optional[Archive]
-    #: When it was flown (``YYYY-MM-DD``), ``""`` where not known.
-    date: str
-    #: ``((species as the dataset names it, labelled animals), ...)``
-    species: Tuple[Tuple[str, int], ...]
-    #: Labelled animals, and the boxes drawn around them on key frames.
-    animals: int
-    boxes: int
-    drone: str
-    split: str
-    #: ``False`` for a flight whose recordings were published without
-    #: their videos - the flight log and the calibrations only.
-    videos: bool = True
+    #: ``train``, ``val`` or ``test``; ``""`` for a flight in none.
+    split: str = ""
 
     @property
     def name(self) -> str:
@@ -173,86 +178,133 @@ class Flight(NamedTuple):
         """The folder a flight is put in, inside the one the user chose."""
         return f"flight_{self.id}"
 
-    @property
-    def species_text(self) -> str:
-        return ", ".join(common_name(name) for name, _count in self.species)
 
-
-def _archive(entry, flight_id: int) -> Optional[Archive]:
-    if not entry:
-        return None
-    record, size, md5 = entry[:3]
-    if isinstance(md5, int):
-        # the catalogue writes a checksum as the number it is
-        # (update_bambi_catalogue.py says why)
-        md5 = format(md5, "032x")
-    return Archive(int(record), f"flight_{flight_id}.zip", int(size),
-                   str(md5))
-
-
-@lru_cache(maxsize=4)
-def catalogue(path: str = CATALOGUE_FILE) -> dict:
-    """The catalogue: ``{"flights": {number: Flight}, "records": {record:
-    {"title", "year", "kind"}}, "authors", "generated"}``.
-
-    :raises DatasetError: the catalogue cannot be read
-    """
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            document = json.load(handle)
-        known: Dict[int, Flight] = {}
-        for entry in document["flights"]:
-            flight_id = int(entry["id"])
-            known[flight_id] = Flight(
-                id=flight_id,
-                raw=_archive(entry.get("raw"), flight_id),
-                labelled=_archive(entry.get("labelled"), flight_id),
-                date=str(entry.get("date") or ""),
-                species=tuple((str(name), int(count)) for name, count
-                              in entry.get("species") or []),
-                animals=int(entry.get("animals") or 0),
-                boxes=int(entry.get("boxes") or 0),
-                drone=str(entry.get("drone") or ""),
-                split=str(entry.get("split") or ""),
-                videos=entry.get("videos") is not False)
-        records = {int(record): dict(value) for record, value
-                   in (document.get("records") or {}).items()}
-    except (OSError, ValueError, KeyError, TypeError) as exc:
+def _parts(summary, what: str) -> list:
+    if not isinstance(summary, list) or not summary:
         raise DatasetError(
-            f"The catalogue of BAMBI flights cannot be read ({exc}).") from exc
-    return {"flights": known, "records": records,
-            "authors": str(document.get("authors") or ""),
-            "generated": str(document.get("generated") or "")}
+            f"The dataset's summary of its {what} flights is empty or not "
+            "what it used to be.")
+    return summary
 
 
-def flights(path: str = CATALOGUE_FILE) -> List[Flight]:
-    """Every flight of the dataset, by its number."""
-    known = catalogue(path)["flights"]
-    return [known[flight_id] for flight_id in sorted(known)]
+def catalogue_from(labelled, raw, splits=None) -> dict:
+    """The flights two upload summaries list - laid out as
+    ``download_from_zenodo.py`` reads them: per part a ``deposition_id``
+    and the ``flights`` in it, each in ``<zip_prefix><flight>.zip``.
 
-
-def flight(flight_id: int, path: str = CATALOGUE_FILE) -> Flight:
-    """The flight with a number.
-
-    :raises DatasetError: the dataset has no such flight
+    :return: ``{"flights": {number: Flight}, "records": {record: {"kind",
+        "title", "doi"}}}``
+    :raises DatasetError: a summary is not one
     """
+    archives: Dict[str, Dict[int, Archive]] = {LABELLED: {}, RAW: {}}
+    records: Dict[int, dict] = {}
     try:
-        return catalogue(path)["flights"][int(flight_id)]
-    except (KeyError, TypeError, ValueError):
+        for kind, summary in ((LABELLED, labelled), (RAW, raw)):
+            for part in _parts(summary, kind):
+                record = int(part["deposition_id"])
+                records[record] = {"kind": kind,
+                                   "title": str(part.get("title") or ""),
+                                   "doi": str(part.get("doi") or "")}
+                prefix = part.get("zip_prefix", ZIP_PREFIX)
+                for number in part["flights"]:
+                    if not str(number).isdigit():
+                        continue
+                    archives[kind][int(number)] = Archive(
+                        record, f"{prefix}{number}.zip")
+    except (KeyError, TypeError, ValueError) as exc:
         raise DatasetError(
-            f"The BAMBI dataset has no flight {flight_id}.") from None
+            "The dataset's summary of its flights is not what it used to "
+            f"be ({exc!r}). Look for a newer version of the plugin.") from exc
+    split_of: Dict[int, str] = {}
+    for name, numbers in (splits or {}).items() if isinstance(
+            splits, dict) else ():
+        for number in numbers or []:
+            if str(number).isdigit():
+                split_of[int(number)] = str(name)
+    known = {number: Flight(number, archives[RAW].get(number),
+                            archives[LABELLED].get(number),
+                            split_of.get(number, ""))
+             for number in set(archives[RAW]) | set(archives[LABELLED])}
+    return {"flights": known, "records": records}
 
 
-def citation(archive: Archive, path: str = CATALOGUE_FILE) -> str:
-    """How the Zenodo record an archive is part of is cited."""
-    known = catalogue(path)
-    record = known["records"].get(archive.record, {})
-    title = record.get("title") or "The BAMBI Dataset"
-    year = record.get("year") or ""
-    authors = known["authors"] or "Praschl, C., Schedl, D. C., et al."
-    when = f" ({year})" if year else ""
-    return (f"{authors}{when}: {title}. Zenodo. https://doi.org/"
-            f"{archive.doi} (CC BY 4.0)")
+def _get_json(session, url: str, timeout: float):
+    try:
+        response = session.get(url, timeout=timeout)
+        if response.status_code != 200:
+            raise DatasetError(
+                f"{url} could not be read (HTTP {response.status_code}).")
+        return response.json()
+    except DatasetError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - whatever the connection says
+        raise DatasetError(f"{url} could not be read ({exc}).") from exc
+
+
+def fetch_catalogue(session, timeout: float = 30.0) -> dict:
+    """The dataset's flights, read from its repository now
+    (:func:`catalogue_from`). The splits are an extra: without them the
+    flights are listed all the same.
+
+    :raises DatasetError: the repository could not be read
+    """
+    labelled = _get_json(session, SUMMARIES[LABELLED], timeout)
+    raw = _get_json(session, SUMMARIES[RAW], timeout)
+    try:
+        splits = _get_json(session, SPLITS, timeout)
+    except DatasetError:
+        quiet.detail("The dataset's splits could not be read")
+        splits = None
+    return catalogue_from(labelled, raw, splits)
+
+
+def flights_of(known: dict) -> List[Flight]:
+    """Every flight of a catalogue, by its number."""
+    return [known["flights"][number] for number in sorted(known["flights"])]
+
+
+def deposition_files(session, record: int, timeout: float = 60.0
+                     ) -> Dict[str, Tuple[str, int, str]]:
+    """What Zenodo says a record holds: ``{file name: (link, size,
+    md5)}`` - asked as ``download_from_zenodo.py`` asks.
+
+    :raises DatasetError: Zenodo could not be asked
+    """
+    data = _get_json(session, f"{ZENODO}/api/records/{int(record)}", timeout)
+    files: Dict[str, Tuple[str, int, str]] = {}
+    for entry in (data.get("files") or []) if isinstance(data, dict) else []:
+        name = entry.get("filename") or entry.get("key")
+        links = entry.get("links") or {}
+        link = links.get("download") or links.get("self")
+        if not name or not link:
+            continue
+        checksum = str(entry.get("checksum") or "")
+        md5 = checksum[4:] if checksum.startswith("md5:") else ""
+        files[str(name)] = (str(link), int(entry.get("size") or 0), md5)
+    return files
+
+
+def resolve(archive: Archive, session,
+            listings: Optional[Dict[int, dict]] = None) -> Archive:
+    """An archive with its link, size and checksum as Zenodo gives them.
+
+    :param listings: ``{record: its files}`` kept between calls, so that a
+        record is asked once for all its flights
+    :raises DatasetError: Zenodo could not be asked, or the record does
+        not hold the archive
+    """
+    if archive.link:
+        return archive
+    listings = {} if listings is None else listings
+    if archive.record not in listings:
+        listings[archive.record] = deposition_files(session, archive.record)
+    found = listings[archive.record].get(archive.filename)
+    if found is None:
+        raise DatasetError(
+            f"{archive.filename} is not in the Zenodo record the dataset "
+            f"names for it ({archive.doi}).")
+    link, size, md5 = found
+    return archive._replace(link=link, size=size, md5=md5)
 
 
 def common_name(species: str) -> str:
@@ -284,27 +336,22 @@ def md5_of(path: str, cancelled: Optional[Callable[[], bool]] = None) -> str:
 
 
 def archive_problem(path: str, archive: Archive,
-                    cancelled: Optional[Callable[[], bool]] = None,
-                    sha256: str = "") -> Optional[str]:
+                    cancelled: Optional[Callable[[], bool]] = None
+                    ) -> Optional[str]:
     """Why the file at *path* is not the published archive; ``None`` when
-    it is: as long as Zenodo says, with the checksum Zenodo gives - and,
-    where this release was tested with the archive, with its SHA-256."""
+    it is: as long as Zenodo says, and with the checksum Zenodo gives -
+    each where Zenodo gave one."""
     try:
         size = os.path.getsize(path)
     except OSError as exc:
         return f"it cannot be read ({exc})"
-    if size != archive.size:
+    if archive.size and size != archive.size:
         return f"it is {size} bytes long, not {archive.size}"
-    found = md5_of(path, cancelled)
-    if found != archive.md5:
-        return ("its contents are not the published ones (MD5 "
-                f"{found[:12]}... instead of {archive.md5[:12]}...)")
-    if sha256:
-        found = flight_archive.sha256_of(path, cancelled)
-        if found != sha256:
-            return ("its contents are not the ones this version of the "
-                    f"plugin was tested with (SHA-256 {found[:12]}... "
-                    f"instead of {sha256[:12]}...)")
+    if archive.md5:
+        found = md5_of(path, cancelled)
+        if found != archive.md5:
+            return ("its contents are not the published ones (MD5 "
+                    f"{found[:12]}... instead of {archive.md5[:12]}...)")
     return None
 
 
@@ -341,7 +388,8 @@ def fetch_recordings(entry: Flight, folder: str, session,
                      progress: Optional[Callable[[int], None]] = None,
                      cancelled: Optional[Callable[[], bool]] = None,
                      log: Optional[Callable[[str], None]] = None,
-                     keep_archive: bool = False, **fetching
+                     keep_archive: bool = False,
+                     listings: Optional[Dict[int, dict]] = None, **fetching
                      ) -> Dict[str, object]:
     """Make a flight's recordings ready in *folder*: fetch the archive,
     check it, unpack it - and say what is there
@@ -363,26 +411,20 @@ def fetch_recordings(entry: Flight, folder: str, session,
         if progress:
             progress(100)
         return files
-    archive = entry.raw
-    if archive is None:
+    if entry.raw is None:
         raise DatasetError(
             f"The BAMBI raw dataset has no recordings of flight {entry.id}.")
-    if not entry.videos:
-        raise DatasetError(
-            f"Flight {entry.id} was published without its videos - the "
-            "archive holds its flight log and calibrations only - so there "
-            "is nothing to extract frames from.")
+    archive = resolve(entry.raw, session, listings)
 
     def scaled(value: int) -> None:
         if progress:
             progress(int(value * 0.9))
 
-    pinned = PINNED_SHA256.get(entry.id, "")
     os.makedirs(folder, exist_ok=True)
     path = os.path.join(folder, archive.filename)
     have = False
     if os.path.isfile(path):
-        problem = archive_problem(path, archive, cancelled, pinned)
+        problem = archive_problem(path, archive, cancelled)
         if problem is None:
             say(f"{archive.filename} is already there")
             have = True
@@ -403,8 +445,7 @@ def fetch_recordings(entry: Flight, folder: str, session,
         try:
             checked_download.fetch(
                 session, archive.url, path,
-                check=lambda part: archive_problem(
-                    part, archive, cancelled, pinned),
+                check=lambda part: archive_problem(part, archive, cancelled),
                 cancelled=cancelled, progress=scaled, log=log, **fetching)
         except checked_download.Cancelled:
             raise
@@ -457,59 +498,69 @@ def published_path(target_folder: str, flight_id: int, kind: str) -> str:
                         PUBLISHED_FILES[kind].format(id=int(flight_id)))
 
 
-def fetch_published(entry: Flight, target_folder: str, session,
-                    kinds: Iterable[str] = (POSES, LABELS, CORRECTION,
-                                            METADATA, CLASSES),
-                    cancelled: Optional[Callable[[], bool]] = None,
-                    log: Optional[Callable[[str], None]] = None
-                    ) -> Dict[str, str]:
-    """Have the small files of a labelled flight in the flight's target
-    folder: ``{kind: path}`` for those of *kinds* the flight has.
+def _published(target_folder: str, flight_id: int) -> Dict[str, str]:
+    """``{kind: path}`` of the published files a flight's folder has."""
+    there = {kind: published_path(target_folder, flight_id, kind)
+             for kind in PUBLISHED_FILES}
+    return {kind: path for kind, path in there.items()
+            if os.path.isfile(path)}
 
-    Only these files are transferred - a megabyte or two out of an archive
-    of several hundred (:mod:`core.remote_zip`). A file that is there is
-    not fetched again.
+
+def fetch_published(entry: Flight, target_folder: str, session,
+                    cancelled: Optional[Callable[[], bool]] = None,
+                    log: Optional[Callable[[str], None]] = None,
+                    listings: Optional[Dict[int, dict]] = None
+                    ) -> Dict[str, str]:
+    """Have the annotations of a labelled flight in the flight's target
+    folder: ``{kind: path}`` of those this module knows by name.
+
+    As ``download_from_zenodo.py --annotations-only`` does it: every file
+    of the archive that is no video and no picture is read out of it in
+    place - a megabyte or two out of an archive of several hundred
+    (:mod:`core.remote_zip`) - and a flight whose poses and metadata are
+    there is not fetched again.
 
     :raises DatasetError: the dataset has no labelled version of the
         flight, or its archive could not be read
     :raises core.remote_zip.Cancelled: stopped by the user
     """
-    kinds = list(kinds)
-    there = {kind: published_path(target_folder, entry.id, kind)
-             for kind in kinds}
-    missing = [kind for kind in kinds if not os.path.isfile(there[kind])]
-    if missing:
-        archive = entry.labelled
-        if archive is None:
-            raise DatasetError(
-                f"The labelled BAMBI dataset has no flight {entry.id}: "
-                "neither poses nor labels were published for it.")
-        names = {PUBLISHED_FILES[kind].format(id=entry.id): kind
-                 for kind in missing}
-        try:
-            found = remote_zip.read_members(
-                session, archive.url, names, size=archive.size,
-                max_bytes=MAX_PUBLISHED_BYTES, cancelled=cancelled, log=log)
-        except remote_zip.Cancelled:
-            raise
-        except remote_zip.NotThere as exc:
-            raise DatasetError(
-                f"The labelled flight {entry.id} is not where it was "
-                f"published ({archive.url}). Look for a newer version of "
-                "the plugin.") from exc
-        except remote_zip.RemoteArchiveError as exc:
-            raise DatasetError(
-                f"The published files of flight {entry.id} could not be "
-                f"read: {exc}") from exc
-        os.makedirs(published_folder(target_folder), exist_ok=True)
-        for name, data in found.items():
-            path = there[names[name]]
-            temporary = path + ".part"
-            with open(temporary, "wb") as handle:
-                handle.write(data)
-            os.replace(temporary, path)
-    return {kind: path for kind, path in there.items()
-            if os.path.isfile(path)}
+    there = _published(target_folder, entry.id)
+    if POSES in there and METADATA in there:
+        return there
+    if entry.labelled is None:
+        raise DatasetError(
+            f"The labelled BAMBI dataset has no flight {entry.id}: "
+            "neither poses nor labels were published for it.")
+    archive = resolve(entry.labelled, session, listings)
+    try:
+        members = remote_zip.list_members(
+            session, archive.url, size=archive.size or None,
+            cancelled=cancelled)
+        wanted = sorted({
+            os.path.basename(name) for name, _size in members
+            if os.path.splitext(name)[1].lower() not in MEDIA_SUFFIXES})
+        found = remote_zip.read_members(
+            session, archive.url, wanted, size=archive.size or None,
+            max_bytes=MAX_PUBLISHED_BYTES, cancelled=cancelled, log=log)
+    except remote_zip.Cancelled:
+        raise
+    except remote_zip.NotThere as exc:
+        raise DatasetError(
+            f"The labelled flight {entry.id} is not where it was "
+            f"published ({archive.url}).") from exc
+    except remote_zip.RemoteArchiveError as exc:
+        raise DatasetError(
+            f"The published files of flight {entry.id} could not be "
+            f"read: {exc}") from exc
+    folder = published_folder(target_folder)
+    os.makedirs(folder, exist_ok=True)
+    for name, data in found.items():
+        path = os.path.join(folder, os.path.basename(name))
+        temporary = path + ".part"
+        with open(temporary, "wb") as handle:
+            handle.write(data)
+        os.replace(temporary, path)
+    return _published(target_folder, entry.id)
 
 
 def read_state(target_folder: str) -> dict:
@@ -1216,8 +1267,8 @@ def import_route(target_folder: str, flight_id: int, dem_metadata_path: str,
                 "ones are not put in their place")
         return result
     source = {"dataset": "BAMBI", "flight": int(flight_id)}
-    if _known(flight_id) and flight(flight_id).labelled is not None:
-        source["doi"] = flight(flight_id).labelled.doi
+    if read_state(target_folder).get("doi"):
+        source["doi"] = str(read_state(target_folder)["doi"])
     poses = flight_poses(published, origin, epsg, source)
     result["poses"] = write_poses(target_folder, poses, modality)
     result["replaced"] = own is not None
@@ -1288,14 +1339,6 @@ def import_correction(target_folder: str, flight_id: int, epsg: int,
             f"degrees, {correction['translation']['z']:+.2f} m in height")
     return {"correction": correction, "path": path,
             "convergence": float(convergence)}
-
-
-def _known(flight_id: int) -> bool:
-    try:
-        flight(flight_id)
-    except DatasetError:
-        return False
-    return True
 
 
 def after_extraction(target_folder: str, modality: str = "t",
@@ -1387,18 +1430,39 @@ def _epsg_of(metadata_path: str) -> Optional[int]:
     return int(found.group(1)) if found else None
 
 
+def poses_bounds(poses: dict) -> Optional[Tuple[float, float, float, float]]:
+    """``(west, south, east, north)`` of where published poses were
+    taken; ``None`` where none says."""
+    places = []
+    for image in (poses or {}).get("images") or []:
+        try:
+            places.append((float(image["lng"]), float(image["lat"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+    if not places:
+        return None
+    return (min(p[0] for p in places), min(p[1] for p in places),
+            max(p[0] for p in places), max(p[1] for p in places))
+
+
 def prepare_flight(entry: Flight, folder: str, session,
                    route: bool = True, labels: bool = True,
-                   correction: bool = True,
+                   correction: bool = True, videos: bool = True,
                    elevation: Optional[Callable[..., dict]] = None,
                    make_route: Optional[Callable[[dict], None]] = None,
                    progress: Optional[Callable[[int], None]] = None,
                    cancelled: Optional[Callable[[], bool]] = None,
                    log: Optional[Callable[[str], None]] = None,
+                   listings: Optional[Dict[int, dict]] = None,
                    **fetching) -> dict:
-    """Make one flight of the dataset ready in *folder*: its recordings,
-    its elevation model, and - as asked - its published route, labels and
-    camera correction.
+    """Make one flight of the dataset ready in *folder*: its recordings
+    (with *videos*), its elevation model, and - as asked - its published
+    route, labels and camera correction.
+
+    Without *videos* only the annotations are fetched - poses, labels,
+    correction, a megabyte or two: enough for the route and the labelled
+    animals, a fast overview. The recordings can be fetched later by
+    asking for the flight again.
 
     :param elevation: makes the elevation model - called with ``(bounds,
         folder, crs, log=, progress=, cancelled=)``, returns ``{"mesh",
@@ -1406,13 +1470,14 @@ def prepare_flight(entry: Flight, folder: str, session,
         it a flight gets none
     :param make_route: called with the result once the published poses are
         the flight's own - to write the route's files
+    :param listings: ``{record: its files}`` kept between flights
     :return: ``{"flight", "name", "folder", "target_folder", "files",
         "epsg", "dem", "dem_metadata", "route", "correction", "labels",
-        "labels_wanted", "notes"}`` - *route*, *correction* and *labels*
-        are what :func:`import_route`, :func:`import_correction` and
-        :func:`place_labels` returned, ``None`` where nothing was done;
-        *notes* is what did not work, in sentences
-    :raises DatasetError: the recordings could not be made ready
+        "labels_wanted", "videos", "notes"}`` - *route*, *correction* and
+        *labels* are what :func:`import_route`, :func:`import_correction`
+        and :func:`place_labels` returned, ``None`` where nothing was
+        done; *notes* is what did not work, in sentences
+    :raises DatasetError: neither recordings nor annotations could be had
     :raises core.checked_download.Cancelled, core.remote_zip.Cancelled,
         core.environment.Cancelled: stopped by the user
     """
@@ -1420,14 +1485,23 @@ def prepare_flight(entry: Flight, folder: str, session,
     from .crs_utils import utm_epsg_for_position
 
     say = log or (lambda message: None)
+    listings = {} if listings is None else listings
 
     def part(low: int, high: int) -> Optional[Callable[[int], None]]:
         if not progress:
             return None
         return lambda value: progress(int(low + (high - low) * value / 100.0))
 
-    files = fetch_recordings(entry, folder, session, progress=part(0, 80),
-                             cancelled=cancelled, log=log, **fetching)
+    if videos:
+        files = fetch_recordings(
+            entry, folder, session, progress=part(0, 80),
+            cancelled=cancelled, log=log, listings=listings, **fetching)
+    else:
+        if entry.labelled is None:
+            raise DatasetError(
+                f"Flight {entry.id} is not in the labelled dataset: without "
+                "its videos there is nothing of it to fetch.")
+        files = flight_archive.flight_files(folder)
     target = os.path.join(folder, TARGET_SUBFOLDER)
     os.makedirs(target, exist_ok=True)
     notes: List[str] = []
@@ -1435,22 +1509,59 @@ def prepare_flight(entry: Flight, folder: str, session,
                 "target_folder": target, "files": files, "epsg": None,
                 "dem": "", "dem_metadata": "", "route": None,
                 "correction": None, "labels": None, "labels_wanted": False,
-                "notes": notes}
+                "videos": flight_archive.is_complete(files), "notes": notes}
 
-    # -- the elevation model ------------------------------------------------
+    # -- what the labelled dataset has of the flight -------------------------
+    wanted = route or labels or correction or not videos
+    there: Dict[str, str] = {}
+    if wanted and entry.labelled is None:
+        notes.append("The flight is not in the labelled dataset: neither "
+                     "a route nor labels nor a correction were published "
+                     "for it.")
+    elif wanted:
+        try:
+            there = fetch_published(entry, target, session, cancelled, log,
+                                    listings)
+        except DatasetError as exc:
+            if not videos:
+                raise
+            notes.append(str(exc))
+    if there:
+        asked = dict(read_state(target).get("labels") or {})
+        asked["wanted"] = bool(labels or asked.get("wanted"))
+        write_state(target, flight=entry.id, doi=entry.labelled.doi,
+                    labels=asked)
+        prepared["labels_wanted"] = bool(labels)
+    else:
+        write_state(target, flight=entry.id)
+    if progress:
+        progress(84)
+
+    # -- the elevation model: under the flight log, or under the poses ------
     bounds = flight_archive.recording_bounds(str(files.get("airdata") or ""))
+    under = "recording"
+    if bounds is None and POSES in there:
+        under = "poses"
+        try:
+            bounds = poses_bounds(read_poses(there[POSES]))
+        except DatasetError as exc:
+            notes.append(str(exc))
     if bounds is not None:
         prepared["epsg"] = utm_epsg_for_position(
             (bounds[1] + bounds[3]) / 2.0, (bounds[0] + bounds[2]) / 2.0)
     found = flight_files.detect_common_files(folder)
-    if "dem" not in found and elevation is not None:
+    # a model made for the published frames alone is too small for the
+    # whole recording, once that is there
+    small = read_state(target).get("elevation") == "poses"
+    outgrown = small and under == "recording" and bounds is not None
+    if ("dem" not in found or outgrown) and elevation is not None:
         if bounds is None:
-            notes.append("The flight log holds no position: no elevation "
-                         "model was made.")
+            notes.append("Where the flight took place is not known: no "
+                         "elevation model was made.")
         else:
             try:
                 elevation(bounds, folder, f"EPSG:{prepared['epsg']}",
-                          log=log, progress=part(80, 92),
+                          log=log, progress=part(84, 94),
                           cancelled=cancelled)
             except environment.Cancelled:
                 raise
@@ -1459,6 +1570,8 @@ def prepare_flight(entry: Flight, folder: str, session,
                     f"The elevation model could not be fetched ({exc}). "
                     "Fetch it with 'Download DEM (worldwide)' on the Input "
                     "tab.")
+            else:
+                write_state(target, elevation=under)
             found = flight_files.detect_common_files(folder)
     prepared["dem"] = found.get("dem", "")
     prepared["dem_metadata"] = found.get("dem_metadata", "")
@@ -1466,23 +1579,15 @@ def prepare_flight(entry: Flight, folder: str, session,
     if named:
         prepared["epsg"] = named
     if progress:
-        progress(92)
+        progress(94)
 
-    # -- what the labelled dataset has of the flight -------------------------
-    if not (route or labels or correction):
-        write_state(target, flight=entry.id)
-    elif entry.labelled is None:
-        write_state(target, flight=entry.id)
-        notes.append("The flight is not in the labelled dataset: neither "
-                     "a route nor labels nor a correction were published "
-                     "for it.")
-    else:
+    if there and (route or labels or correction):
         middle = None
         if bounds is not None:
             middle = ((bounds[1] + bounds[3]) / 2.0,
                       (bounds[0] + bounds[2]) / 2.0)
-        _from_labelled(entry, prepared, session, route, labels, correction,
-                       middle, make_route, cancelled, log)
+        _into_flight(entry, prepared, there, route, labels, correction,
+                     middle, make_route, log)
     if progress:
         progress(100)
     for note in notes:
@@ -1490,26 +1595,13 @@ def prepare_flight(entry: Flight, folder: str, session,
     return prepared
 
 
-def _from_labelled(entry: Flight, prepared: dict, session, route: bool,
-                   labels: bool, correction: bool, position, make_route,
-                   cancelled, log) -> None:
-    """The second half of :func:`prepare_flight`: poses, correction and
-    labels. What fails is noted - the recordings are there all the same."""
+def _into_flight(entry: Flight, prepared: dict, there: Dict[str, str],
+                 route: bool, labels: bool, correction: bool, position,
+                 make_route, log) -> None:
+    """The last part of :func:`prepare_flight`: poses, correction and
+    labels into the flight. What fails is noted - what was fetched is
+    there all the same."""
     target, notes = prepared["target_folder"], prepared["notes"]
-    kinds = [kind for kind, wanted in (
-        (POSES, route or labels), (CORRECTION, correction), (LABELS, labels))
-        if wanted]
-    try:
-        there = fetch_published(entry, target, session, kinds, cancelled, log)
-    except DatasetError as exc:
-        write_state(target, flight=entry.id)
-        notes.append(str(exc))
-        return
-    asked = dict(read_state(target).get("labels") or {})
-    asked["wanted"] = bool(labels or asked.get("wanted"))
-    write_state(target, flight=entry.id, doi=entry.labelled.doi,
-                labels=asked)
-    prepared["labels_wanted"] = bool(labels)
     if prepared["epsg"] is None:
         notes.append("Where the flight took place is not known: what was "
                      "published of it was fetched, and not put into the "
@@ -1543,7 +1635,7 @@ def _from_labelled(entry: Flight, prepared: dict, session, route: bool,
                     "extracted ('Extract Frames')")
     except DatasetError as exc:
         notes.append(str(exc))
-    except Exception as exc:  # noqa: BLE001 - said; the recordings stay
+    except Exception as exc:  # noqa: BLE001 - said; what was fetched stays
         quiet.problem(f"What was published of flight {entry.id} could not "
                       "be put into the flight")
         notes.append("What was published of the flight could not be put "
@@ -1601,6 +1693,16 @@ def flight_configuration(prepared: dict, defaults: Dict[str, object],
         values["Input/TargetCrs"] = f"EPSG:{int(prepared['epsg'])}"
     values.update(correction_settings(prepared.get("correction")))
     return values
+
+
+#: The settings that name a flight's recordings: what a flight that was
+#: fetched without its videos gets when they are fetched later.
+RECORDING_KEYS = frozenset({
+    "Input/VideoMode", "Input/EmbeddedSrt", "Input/ThermalVideoPaths",
+    "Input/ThermalSrtPaths", "Input/RgbVideoPaths", "Input/RgbSrtPaths",
+    "Input/AirdataPath", "Input/ThermalCalibrationPreset",
+    "Input/ThermalCalibrationPath", "Input/RgbCalibrationPreset",
+    "Input/RgbCalibrationPath"})
 
 
 def correction_settings(imported: Optional[dict]) -> Dict[str, object]:

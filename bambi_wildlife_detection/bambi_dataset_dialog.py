@@ -1,19 +1,17 @@
 # -*- coding: utf-8 -*-
 """Download Example Flights: the flights of the BAMBI dataset, to tick.
 
-A window over the list of flights that ships with the plugin
-(:mod:`core.bambi_dataset`): every flight by its number, with the day it
-was flown, the animals that were labelled on it and how large its
-recordings are. The flights that are ticked are fetched into a folder; two
-further ticks say what else is taken for them out of the labelled dataset -
-the route and the labels - and a third whether the camera correction that
-was published for a flight is used.
+A window over the flights the dataset's repository lists
+(:mod:`core.bambi_dataset`): every flight by its number, with the split it
+belongs to and what the dataset has of it - the recordings, the labelled
+flight. The flights that are ticked are fetched into a folder; a tick says
+whether their videos are fetched or only their annotations, and three more
+what is done with those: the route, the labels, the camera correction.
 
 This module only asks; :mod:`bambi_dataset_downloader` fetches.
 """
 
 import os
-import shutil
 from typing import Iterable, List, Optional, Sequence
 
 from qgis.PyQt.QtCore import Qt
@@ -26,46 +24,12 @@ from qgis.PyQt.QtWidgets import (
 from .core import bambi_dataset
 
 _SORT = Qt.ItemDataRole.UserRole
-_FLIGHT, _FLOWN, _LABELLED, _SIZE = range(4)
-_HEADERS = ("Flight", "Flown", "Labelled animals", "Recordings")
+_FLIGHT, _SPLIT, _LABELLED, _RECORDINGS = range(4)
+_HEADERS = ("Flight", "Split", "Labelled", "Recordings")
 
 
-def size_text(size: int) -> str:
-    """``122 MB``, ``4.7 GB``, ``2.15 TB`` - a number of bytes to read."""
-    if size >= 1e12:
-        return f"{size / 1e12:.2f} TB"
-    if size >= 1e9:
-        return f"{size / 1e9:.1f} GB"
-    return f"{size / 1e6:.0f} MB"
-
-
-def labelled_text(flight) -> str:
-    """What was labelled on a flight: ``2 roe deer``, ``29 wild boar, 2
-    unknown`` - ``none`` for a flight without an animal, and ``not
-    labelled`` for one the labelled dataset does not have."""
-    if flight.labelled is None:
-        return "not labelled"
-    if not flight.species:
-        return "none"
-    return ", ".join(f"{count} {bambi_dataset.common_name(name)}"
-                     for name, count in flight.species)
-
-
-def free_bytes(folder: str) -> Optional[int]:
-    """The free bytes where *folder* is, or would be made; ``None`` when
-    nobody can say."""
-    place = os.path.abspath(folder) if folder else ""
-    while place and not os.path.isdir(place):
-        parent = os.path.dirname(place)
-        if parent == place:
-            return None
-        place = parent
-    if not place:
-        return None
-    try:
-        return shutil.disk_usage(place).free
-    except OSError:
-        return None
+def _has(archive) -> str:
+    return "yes" if archive is not None else "–"
 
 
 class _Sorted(QTableWidgetItem):
@@ -91,14 +55,14 @@ class DatasetFlightsDialog(QDialog):
     def __init__(self, flights: Sequence, parent=None, folder: str = "",
                  ticked: Iterable[int] = (bambi_dataset.EXAMPLE,),
                  route: bool = True, labels: bool = False,
-                 correction: bool = True):
+                 correction: bool = True, videos: bool = True,
+                 records: Optional[dict] = None):
         super().__init__(parent)
         self.setWindowTitle("Download Example Flights")
-        self.resize(660, 720)
+        self.resize(600, 720)
         self._flights = {flight.id: flight for flight in flights}
-        #: The flights that can be ticked: those with videos to fetch.
-        self._fetchable = sum(1 for flight in flights
-                              if flight.raw is not None and flight.videos)
+        #: ``{record: {"title", "doi"}}``, for what a row says of itself.
+        self._records = dict(records or {})
         self._filling = False
 
         layout = QVBoxLayout(self)
@@ -106,9 +70,10 @@ class DatasetFlightsDialog(QDialog):
             "The BAMBI project publishes its flights on Zenodo (CC BY 4.0): "
             "thermal and RGB video as it came off the drone, with SRT "
             "files, flight log and camera calibrations - and for most "
-            "flights the animals that were labelled by hand. Tick the "
+            "flights the poses and the animals that were labelled by hand. "
+            "The list is the one the dataset's repository keeps. Tick the "
             "flights to fetch; each gets its elevation model and is added "
-            "to the project, ready for 'Extract Frames'.")
+            "to the project.")
         intro.setWordWrap(True)
         layout.addWidget(intro)
 
@@ -116,7 +81,7 @@ class DatasetFlightsDialog(QDialog):
         search.addWidget(QLabel("Show:"))
         self.filter_edit = QLineEdit()
         self.filter_edit.setPlaceholderText(
-            "all flights - or type: roe deer, 2024, mavic, a number")
+            "all flights - or type: a number, train, val, test")
         self.filter_edit.setClearButtonEnabled(True)
         self.filter_edit.textChanged.connect(self._apply_filter)
         search.addWidget(self.filter_edit)
@@ -131,11 +96,8 @@ class DatasetFlightsDialog(QDialog):
             QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setAlternatingRowColors(True)
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(
-            _LABELLED, QHeaderView.ResizeMode.Stretch)
-        for column in (_FLIGHT, _FLOWN, _SIZE):
-            header.setSectionResizeMode(
-                column, QHeaderView.ResizeMode.ResizeToContents)
+        for column in range(len(_HEADERS)):
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
         self._fill(flights, set(int(number) for number in ticked))
         self.table.itemChanged.connect(self._on_item_changed)
         layout.addWidget(self.table, 1)
@@ -155,7 +117,20 @@ class DatasetFlightsDialog(QDialog):
         choose.addWidget(self.summary_label, 1)
         layout.addLayout(choose)
 
-        extras = QGroupBox("Take from the labelled dataset as well")
+        self.videos_check = QCheckBox("Download video data")
+        self.videos_check.setChecked(bool(videos))
+        self.videos_check.setToolTip(
+            "Fetch a flight's recordings - thermal and RGB video, SRT "
+            "files, flight log, calibrations; hundreds of megabytes to "
+            "many gigabytes - which every step from 'Extract Frames' on "
+            "needs. Unticked, only the poses and labels of a flight are "
+            "fetched, a megabyte or two: its route and its labelled "
+            "animals for a fast overview in QGIS. The videos can be "
+            "fetched later by asking for the flight again.")
+        self.videos_check.toggled.connect(self._refresh_summary)
+        layout.addWidget(self.videos_check)
+
+        extras = QGroupBox("From the labelled dataset")
         extras_layout = QVBoxLayout(extras)
         self.route_check = QCheckBox("Import flight route")
         self.route_check.setChecked(bool(route))
@@ -175,7 +150,8 @@ class DatasetFlightsDialog(QDialog):
             "frames between the key frames. They are in the labelling tool "
             "and among the flight's detections, as labels drawn there and "
             "added to the detections are. Without the route they wait "
-            "until the frames are extracted.")
+            "until the frames are extracted. Sex and age are read as the "
+            "dataset documents them.")
         extras_layout.addWidget(self.labels_check)
         self.correction_check = QCheckBox("Use the published correction")
         self.correction_check.setChecked(bool(correction))
@@ -225,58 +201,32 @@ class DatasetFlightsDialog(QDialog):
         self.table.setRowCount(len(flights))
         for row, flight in enumerate(flights):
             number = _Sorted(str(flight.id), flight.id)
-            size = flight.raw.size if flight.raw is not None else 0
-            fetchable = bool(size) and flight.videos
-            if fetchable:
-                number.setFlags(
-                    number.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                number.setCheckState(
-                    Qt.CheckState.Checked if flight.id in ticked
-                    else Qt.CheckState.Unchecked)
-            else:
-                # a cell of a table can be ticked unless it is told not to
-                number.setFlags(
-                    number.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
+            number.setFlags(number.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            number.setCheckState(Qt.CheckState.Checked if flight.id in ticked
+                                 else Qt.CheckState.Unchecked)
             cells = (
                 number,
-                _Sorted(flight.date or "–", flight.date or ""),
-                _Sorted(labelled_text(flight), (-flight.animals,
-                                                labelled_text(flight))),
-                _Sorted(size_text(size) if fetchable else "no video", size),
+                _Sorted(flight.split or "–", flight.split or "~"),
+                _Sorted(_has(flight.labelled), flight.labelled is None),
+                _Sorted(_has(flight.raw), flight.raw is None),
             )
             tip = self._tooltip(flight)
             for column, cell in enumerate(cells):
                 cell.setToolTip(tip)
-                if not fetchable:
-                    # there, and not to be had: no box, and greyed
-                    cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEnabled)
                 self.table.setItem(row, column, cell)
-            cells[_SIZE].setTextAlignment(
-                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self._filling = False
 
-    @staticmethod
-    def _tooltip(flight) -> str:
+    def _tooltip(self, flight) -> str:
         lines = [f"BAMBI flight {flight.id}"]
-        if flight.date:
-            drone = f" with a {flight.drone}" if flight.drone else ""
-            lines.append(f"Flown on {flight.date}{drone}")
-        if not flight.videos:
-            lines.append("Published without its videos - the flight log and "
-                         "the calibrations only: it cannot be fetched.")
-        if flight.labelled is None:
-            lines.append("Not in the labelled dataset: recordings only - "
-                         "no route, no labels, no correction.")
-        elif flight.animals:
-            lines.append(f"{flight.animals} labelled animal(s), "
-                         f"{flight.boxes} boxes on key frames "
-                         f"({flight.split or 'no'} split)")
-        else:
-            lines.append("In the labelled dataset, without an animal on it.")
         for archive, what in ((flight.raw, "Recordings"),
-                              (flight.labelled, "Labelled")):
-            if archive is not None:
-                lines.append(f"{what}: https://doi.org/{archive.doi}")
+                              (flight.labelled, "Labelled flight")):
+            if archive is None:
+                lines.append(f"{what}: not in the dataset")
+                continue
+            record = self._records.get(archive.record) or {}
+            title = record.get("title") or "Zenodo"
+            lines.append(f"{what}: {title}, https://doi.org/"
+                         f"{record.get('doi') or archive.doi}")
         return "\n".join(lines)
 
     def _number_item(self, row: int) -> QTableWidgetItem:
@@ -286,15 +236,12 @@ class DatasetFlightsDialog(QDialog):
         return self._flights[int(self._number_item(row).data(_SORT))]
 
     def _apply_filter(self, text: str) -> None:
-        """Show the flights that have every word of *text* somewhere - in
-        their number, their day, what was labelled, the drone, the split."""
+        """Show the flights that have every word of *text* in their number
+        or their split."""
         words = [word for word in (text or "").lower().split() if word]
         for row in range(self.table.rowCount()):
             flight = self._row_flight(row)
-            about = " ".join((
-                str(flight.id), flight.date, labelled_text(flight),
-                flight.drone, flight.split,
-                " ".join(name for name, _count in flight.species))).lower()
+            about = f"{flight.id} {flight.split}".lower()
             self.table.setRowHidden(
                 row, not all(word in about for word in words))
         self._refresh_summary()
@@ -339,11 +286,9 @@ class DatasetFlightsDialog(QDialog):
         return sorted(int(item.data(_SORT)) for item in items
                       if item.checkState() == Qt.CheckState.Checked)
 
-    def selected_size(self) -> int:
-        """The bytes of the recordings that are ticked."""
-        return sum(self._flights[number].raw.size
-                   for number in self.selected_ids()
-                   if self._flights[number].raw is not None)
+    def selected_flights(self) -> list:
+        """The flights that are ticked, as the list was given them."""
+        return [self._flights[number] for number in self.selected_ids()]
 
     def folder(self) -> str:
         return self.folder_edit.text().strip()
@@ -357,32 +302,34 @@ class DatasetFlightsDialog(QDialog):
     def use_correction(self) -> bool:
         return self.correction_check.isChecked()
 
+    def download_videos(self) -> bool:
+        return self.videos_check.isChecked()
+
     def _refresh_summary(self, *_args) -> None:
         if self._filling:
             return
-        ticked = self.selected_ids()
-        size = self.selected_size()
+        ticked = self.selected_flights()
         shown = sum(1 for row in range(self.table.rowCount())
                     if not self.table.isRowHidden(row))
-        text = (f"{len(ticked)} of {self._fetchable} flight(s) ticked: "
-                f"{size_text(size)}")
+        text = f"{len(ticked)} of {self.table.rowCount()} flight(s) ticked"
         if shown != self.table.rowCount():
             text += f" - {shown} shown"
-        tight = False
-        free = free_bytes(self.folder())
-        if free is not None and ticked:
-            text += f" ({size_text(free)} free)"
-            # an archive and what is unpacked from it are there together
-            largest = max(self._flights[number].raw.size
-                          for number in ticked
-                          if self._flights[number].raw is not None)
-            tight = free < size + largest
+        # what the dataset does not have of a ticked flight
+        if self.download_videos():
+            lacking = [flight.id for flight in ticked if flight.raw is None]
+            what = "recordings"
+        else:
+            lacking = [flight.id for flight in ticked
+                       if flight.labelled is None]
+            what = "poses or labels"
+        if lacking:
+            text += f"; {len(lacking)} without {what}"
         self.summary_label.setText(text)
-        self.summary_label.setStyleSheet("color: #b00020;" if tight else "")
+        self.summary_label.setStyleSheet("color: #b00020;" if lacking else "")
+        numbers = ", ".join(str(number) for number in lacking[:20])
         self.summary_label.setToolTip(
-            "The flights that are ticked do not all fit into the folder: "
-            "they are fetched one after the other, and those that no "
-            "longer fit are left out." if tight else "")
+            f"The dataset has no {what} of flight(s) {numbers}: they are "
+            "left out." if lacking else "")
         self.download_btn.setEnabled(bool(ticked) and bool(self.folder()))
 
     def _browse(self) -> None:
