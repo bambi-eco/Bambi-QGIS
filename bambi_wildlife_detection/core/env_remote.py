@@ -85,14 +85,18 @@ def fetch_json(url: str, params: Optional[dict] = None,
             f"{what} did not answer with JSON.") from exc
 
 
-def read_to_grid(href: str, grid: Grid, resampling: str = "bilinear"):
+def read_to_grid(href: str, grid: Grid, resampling: str = "bilinear",
+                 fill=None):
     """The part of the raster at *href* under *grid*, on *grid*.
 
     :param resampling: ``"nearest"`` for classes, ``"bilinear"`` for
         measurements
+    :param fill: what cells the source does not cover are to carry, for a
+        source that names no no-data value of its own (``float("nan")``
+        for heights, where nought is a height like any other)
     :return: ``(array, nodata)`` - the raw values in the source's data type
-        (cells the source does not cover carry *nodata*, or 0 when the
-        source names none)
+        (cells the source does not cover carry *nodata* - *fill* where the
+        source names none and one is given, else 0)
     """
     import rasterio
     from rasterio.enums import Resampling
@@ -108,6 +112,13 @@ def read_to_grid(href: str, grid: Grid, resampling: str = "bilinear"):
         with rasterio.Env(**GDAL_ENV):
             with rasterio.open(href) as src:
                 nodata = src.nodata
+                if nodata is None and fill is not None:
+                    with WarpedVRT(
+                            src, crs=rasterio_crs(grid.epsg),
+                            transform=Affine(*grid.geotransform),
+                            width=grid.width, height=grid.height,
+                            resampling=method, nodata=fill) as vrt:
+                        return vrt.read(1), fill
                 with WarpedVRT(
                         src, crs=rasterio_crs(grid.epsg),
                         transform=Affine(*grid.geotransform),

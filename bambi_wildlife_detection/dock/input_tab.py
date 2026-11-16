@@ -621,6 +621,32 @@ class InputTabMixin:
         download_info_label.setWordWrap(True)
         auto_download_layout.addRow("", download_info_label)
 
+        # Anywhere else: the Copernicus DEM (copernicus_dem_downloader.py)
+        worldwide_row = QHBoxLayout()
+        self.copernicus_dem_btn = QPushButton("Download DEM (worldwide)")
+        self.copernicus_dem_btn.setToolTip(
+            "Fetch the Copernicus DEM (30 m) under the flight - anywhere on "
+            "earth, no account needed - and make the mesh and its metadata "
+            "from it. Only the part under the flight is transferred. The "
+            "flight's position is read from the AirData CSV or the SRT "
+            "files.\n"
+            "It is a surface model at 30 m: over forest it lies in the "
+            "canopy, and its heights are good to a few metres. Where there "
+            "is a terrain model, use that.")
+        self.copernicus_dem_btn.clicked.connect(self.download_copernicus_dem)
+        worldwide_row.addWidget(self.copernicus_dem_btn)
+        worldwide_row.addStretch()
+        auto_download_layout.addRow("", worldwide_row)
+
+        worldwide_info_label = QLabel(
+            "Outside Austria: the Copernicus DEM, a model of the earth's "
+            "land surface at 30 m. A few megabytes at most; written next to "
+            "the AirData CSV (or into the target folder) as "
+            "copernicus_dem.glb / .json / .tif. At least 150 m of ground is "
+            "kept around the flight.")
+        worldwide_info_label.setWordWrap(True)
+        auto_download_layout.addRow("", worldwide_info_label)
+
         self.geo_input_tabs.addTab(auto_download_tab, "Auto-Download")
 
         # ----- Tab 4: Flat Surface -----
@@ -986,15 +1012,11 @@ class InputTabMixin:
             # Try to auto-detect CRS from GPS coordinates (only if no DEM metadata)
             self._try_auto_detect_crs_silent()
 
-    def _generate_flat_surface_mesh(self):
-        """Generate flat_surface_dem.glb + .json from AirData/SRT GPS and set as DEM input."""
-        config = self.get_config()
-        target_folder = config.get("target_folder", "")
-        if not target_folder:
-            QMessageBox.warning(self, "Missing Target Folder", "Please set the target folder first.")
-            return
-
-        flat_msl = self.flat_surface_spin.value()
+    def _flight_gps_positions(self, config=None):
+        """``(latitudes, longitudes)`` of where the flight was: from the
+        AirData CSV (the rows while a video was recorded), else from the
+        SRT files - thermal first, then RGB. Empty where neither tells."""
+        config = config or self.get_config()
         lats, lons = [], []
 
         # Primary: AirData CSV (video rows only)
@@ -1036,6 +1058,18 @@ class InputTabMixin:
                                     lons.append(frame.longitude)
                 except Exception as e:
                     self.log(f"Warning: could not read SRT GPS: {e}")
+        return lats, lons
+
+    def _generate_flat_surface_mesh(self):
+        """Generate flat_surface_dem.glb + .json from AirData/SRT GPS and set as DEM input."""
+        config = self.get_config()
+        target_folder = config.get("target_folder", "")
+        if not target_folder:
+            QMessageBox.warning(self, "Missing Target Folder", "Please set the target folder first.")
+            return
+
+        flat_msl = self.flat_surface_spin.value()
+        lats, lons = self._flight_gps_positions(config)
 
         if not lats:
             QMessageBox.warning(self, "Missing GPS Data",
@@ -1220,6 +1254,131 @@ class InputTabMixin:
                 self, "DEM Download Failed",
                 f"Failed to download DEM:\n{message}"
             )
+
+    # =========================================================================
+    # Worldwide elevation: the Copernicus DEM
+    # =========================================================================
+    def download_copernicus_dem(self):
+        """Build the flight's elevation model from the Copernicus DEM
+        (copernicus_dem_downloader.py)."""
+        from ..core.crs_utils import utm_epsg_for_position
+
+        config = self.get_config()
+        lats, lons = self._flight_gps_positions(config)
+        if not lats:
+            QMessageBox.warning(
+                self, "Missing GPS Data",
+                "Nobody knows where the flight was yet.\n\n"
+                "Please select an AirData CSV or SRT files in the input "
+                "section first.")
+            return
+        bounds = (min(lons), min(lats), max(lons), max(lats))
+
+        # Where the files go: beside the AirData CSV, like the Austrian
+        # model - or into the target folder where there is no CSV.
+        airdata_path = self.airdata_path_edit.text()
+        if airdata_path and os.path.exists(airdata_path):
+            output_folder = os.path.dirname(airdata_path)
+        else:
+            output_folder = config.get("target_folder", "")
+        if not output_folder:
+            QMessageBox.warning(
+                self, "Missing Target Folder",
+                "Please set the target folder first: the elevation model "
+                "is written into it.")
+            return
+
+        # The mesh is in metres, in the UTM zone the flight lies in.
+        zone = utm_epsg_for_position(
+            (bounds[1] + bounds[3]) / 2.0, (bounds[0] + bounds[2]) / 2.0)
+        output_crs = self.target_crs_edit.text().strip().upper()
+        if output_crs and not output_crs.startswith("EPSG:"):
+            output_crs = f"EPSG:{output_crs}"
+        if output_crs != f"EPSG:{zone}":
+            current = output_crs if self._is_valid_utm_crs(output_crs) \
+                else None
+            keep = (f"\n\nNo keeps {current}." if current else
+                    "\n\nNo cancels: the elevation model needs a UTM CRS.")
+            reply = QMessageBox.question(
+                self, "Target CRS",
+                f"The flight lies in the UTM zone EPSG:{zone}; the target "
+                f"CRS is {output_crs or 'not set'}.\n\n"
+                f"Set the target CRS to EPSG:{zone}?{keep}",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes)
+            if reply == QMessageBox.StandardButton.Yes:
+                output_crs = f"EPSG:{zone}"
+                self.target_crs_edit.setText(output_crs)
+            elif current is None:
+                return
+
+        padding = float(self.dem_padding_spin.value())
+        reply = QMessageBox.question(
+            self, "Download DEM",
+            "Fetch the Copernicus DEM (30 m) under the flight?\n\n"
+            f"Flight: {bounds[1]:.5f}, {bounds[0]:.5f} to "
+            f"{bounds[3]:.5f}, {bounds[2]:.5f}\n"
+            f"Padding: {max(padding, 150.0):.0f} m\n"
+            f"Output CRS: {output_crs}\n"
+            f"Output folder: {output_folder}\n\n"
+            "It is a surface model: over forest it lies in the canopy, and "
+            "its heights are good to a few metres. Where there is a "
+            "terrain model of the area, use that.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes)
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        from ..copernicus_dem_downloader import CopernicusDEMWorker
+
+        self.copernicus_dem_btn.setEnabled(False)
+        self.copernicus_dem_btn.setText("Downloading...")
+        self.copernicus_dem_thread = QThread()
+        self.copernicus_dem_worker = CopernicusDEMWorker(
+            bounds, output_folder, output_crs, padding)
+        self.copernicus_dem_worker.moveToThread(self.copernicus_dem_thread)
+        self.copernicus_dem_thread.started.connect(
+            self.copernicus_dem_worker.run)
+        self.copernicus_dem_worker.finished.connect(
+            self._on_copernicus_dem_finished)
+        self.copernicus_dem_worker.progress.connect(
+            self._on_copernicus_dem_progress)
+        self.copernicus_dem_worker.log.connect(self.log)
+        self.copernicus_dem_worker.finished.connect(
+            self.copernicus_dem_thread.quit)
+        self.copernicus_dem_worker.finished.connect(
+            self.copernicus_dem_worker.deleteLater)
+        self.copernicus_dem_thread.finished.connect(
+            self.copernicus_dem_thread.deleteLater)
+        self.copernicus_dem_thread.start()
+        self.log("Starting the Copernicus DEM download...")
+
+    def _on_copernicus_dem_progress(self, percent: int):
+        self.copernicus_dem_btn.setText(f"Downloading... {percent}%")
+
+    def _on_copernicus_dem_finished(self, success: bool, message: str):
+        """The worldwide elevation model is there - or it is not."""
+        self.copernicus_dem_btn.setEnabled(True)
+        self.copernicus_dem_btn.setText("Download DEM (worldwide)")
+        if not success:
+            QMessageBox.warning(
+                self, "DEM Download Failed",
+                f"The elevation model could not be made:\n{message}")
+            return
+        mesh_path = message
+        self.dem_path_edit.setText(mesh_path)
+        json_path = os.path.splitext(mesh_path)[0] + ".json"
+        if os.path.exists(json_path):
+            self.dem_metadata_path_edit.setText(json_path)
+            self.log(f"Auto-detected DEM metadata: {json_path}")
+            self._try_auto_detect_crs_silent()
+        QMessageBox.information(
+            self, "DEM Download Complete",
+            "The elevation model was made from the Copernicus DEM.\n\n"
+            f"Mesh: {mesh_path}\n"
+            f"Metadata: {json_path}\n\n"
+            "It is a surface model at 30 m: allow for that under "
+            "'Position Uncertainty' (Terrain model), above all in forest.")
 
     # =========================================================================
     # GeoTIFF to Mesh Conversion Methods

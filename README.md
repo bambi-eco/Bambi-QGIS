@@ -57,7 +57,7 @@ Optional capabilities (GPU inference, BoxMOT trackers, camera calibration via Sf
 
 Upgrading from 5.x? Open your existing project and use **Migrate 5.x…** beside the target folder; the existing files are only read, never modified. See [Results, Flights and Export](docs/results-and-export.md).
 
-What you need as input: MP4 videos + SRT subtitle files (video mode) *or* a folder of still images (photo mode), an AirData flight log CSV, a camera calibration JSON, and a DEM. The plugin can download DEMs automatically (Austria), convert any GeoTIFF DEM, or generate a flat surface mesh for aquatic surveys, and the calibration JSON can be created with the built-in Camera Calibration Wizard.
+What you need as input: MP4 videos + SRT subtitle files (video mode) *or* a folder of still images (photo mode), an AirData flight log CSV, a camera calibration JSON, and a DEM. The plugin can download DEMs automatically - Austria's 1 m terrain model, and for anywhere else on earth the Copernicus DEM at 30 m - convert any GeoTIFF DEM, or generate a flat surface mesh for aquatic surveys, and the calibration JSON can be created with the built-in Camera Calibration Wizard.
 
 ## Documentation
 
@@ -67,7 +67,7 @@ What you need as input: MP4 videos + SRT subtitle files (video mode) *or* a fold
 | [Processing Pipeline](docs/pipeline.md) | Input modes and file formats, configuration, all processing steps, output folder structure |
 | [Results, Flights & Export](docs/results-and-export.md) | Where results are stored, migrating a 5.x project, several flights per project, how animals are drawn on the map (boxes, pins, species colours), the project schema (species, enums, custom fields), and the export formats |
 | [Environmental Context](docs/environment.md) | Sentinel-2 indices (NDVI, NDMI, NDWI, NDSI), ESA WorldCover land cover and tree cover, terrain wetness and weather for a flight's area and date; habitat tables and charts for the tracked animals |
-| [DEM Import & Conversion](docs/dem.md) | Automatic download (Austria), GeoTIFF conversion, manual DEMs, flat surface meshes for aquatic surveys |
+| [DEM Import & Conversion](docs/dem.md) | Automatic download (Austria; worldwide from the Copernicus DEM), GeoTIFF conversion, manual DEMs, flat surface meshes for aquatic surveys |
 | [Correction Wizard](docs/correction-wizard.md) | Finding per-flight positional/rotational correction factors |
 | [Camera Calibration Wizard](docs/camera-calibration.md) | Estimating camera intrinsics for single cameras (SfM) and stereo RGB+thermal setups |
 | [Custom Implementations](docs/custom-implementations.md) | Your own detector, tracker or classifier as a class in a .py file: interface, samples (YOLO, OWL, DroneMegaDetector, IoU tracker, crop and track-level classifiers), dependencies and safety |
