@@ -136,7 +136,7 @@ class RunPanelMixin:
     #: Survey Analytics steps: they run on config["survey"] (core.survey).
     _SURVEY_STEPS = frozenset({
         "census_summary", "grid_density", "survey_trend", "track_inventory",
-        "drone_reaction", "position_uncertainty",
+        "drone_reaction", "position_uncertainty", "survey_report",
         "density_heatmap",
         "coverage_map", "survey_orthomosaic", "distance_sampling",
         "population_estimation", "habitat_summary"})
@@ -199,6 +199,8 @@ class RunPanelMixin:
         self.set_buttons_enabled(True)
         self.abort_btn.setEnabled(False)  # Disable abort button when done
         self.steps.ended()
+        if step == "survey_report":
+            self._forget_report_canvas()
 
         if success:
             self.update_status(step, "🟢 Completed")
@@ -227,6 +229,9 @@ class RunPanelMixin:
 
             if step == "position_uncertainty":
                 self.show_position_uncertainty()
+
+            if step == "survey_report":
+                self.open_survey_report()
 
             if step == "habitat_summary":
                 self.show_habitat_charts()
@@ -276,6 +281,8 @@ class RunPanelMixin:
         self.set_buttons_enabled(True)
         self.abort_btn.setEnabled(False)  # Disable abort button on error
         self.steps.ended()
+        if step == "survey_report":
+            self._forget_report_canvas()
         self.update_status(step, "🔴 Error")
         self.log(f"ERROR: {error_msg}")
         QMessageBox.critical(self, "Processing Error", error_msg)
@@ -333,7 +340,7 @@ class RunPanelMixin:
             self.population_btn.setEnabled(enabled)
             self.add_transect_areas_btn.setEnabled(enabled)
         for name in ('grid_btn', 'trend_btn', 'reaction_btn',
-                     'position_btn'):
+                     'position_btn', 'report_btn'):
             if hasattr(self, name):
                 getattr(self, name).setEnabled(enabled)
         self._set_environment_buttons_enabled(enabled)

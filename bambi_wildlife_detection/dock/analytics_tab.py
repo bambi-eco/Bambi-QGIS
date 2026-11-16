@@ -592,6 +592,9 @@ class AnalyticsTabMixin:
 
         analytics_tab_layout.addWidget(pop_group)
         analytics_tab_layout.addWidget(self._build_habitat_group())
+
+        # ----- Survey Report (dock/report.py): what all of it found -----
+        analytics_tab_layout.addWidget(self._build_report_group())
         analytics_tab_layout.addStretch()
 
     def _on_pop_study_area_mode_changed(self, checked: bool):

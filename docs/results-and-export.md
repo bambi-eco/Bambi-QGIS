@@ -275,6 +275,11 @@ writes into
 from the flight itself. See
 [Survey analytics](pipeline.md#survey-analytics).
 
+What these tools found is put together by the
+[survey report](pipeline.md#survey-report): one HTML file in the same folder,
+`survey_report.html`, with the map, the tables and the charts in it - the
+thing to hand on, where the exports below are the data to work with.
+
 ---
 
 ## The project schema

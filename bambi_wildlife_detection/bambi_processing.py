@@ -24,6 +24,7 @@ from .bambi_survey_grid import SurveyGridMixin
 from .bambi_survey_trend import SurveyTrendMixin
 from .bambi_survey_reaction import SurveyReactionMixin
 from .bambi_survey_position import SurveyPositionMixin
+from .bambi_survey_report import SurveyReportMixin
 from .bambi_environment import ENVIRONMENT_STEPS, EnvironmentMixin
 from .core import quiet
 
@@ -247,6 +248,10 @@ class ProcessingWorker(QObject):
                     self.is_cancelled)
             elif self.step == "position_uncertainty":
                 self.processor.run_position_uncertainty(
+                    self.config, self.progress.emit, self.log.emit,
+                    self.is_cancelled)
+            elif self.step == "survey_report":
+                self.processor.run_survey_report(
                     self.config, self.progress.emit, self.log.emit,
                     self.is_cancelled)
             elif self.step == "census_summary":
@@ -668,7 +673,8 @@ class CancelledException(Exception):
 
 class BambiProcessor(SurveyAnalyticsMixin, SurveyGridMixin,
                      SurveyTrendMixin, SurveyReactionMixin,
-                     SurveyPositionMixin, EnvironmentMixin):
+                     SurveyPositionMixin, SurveyReportMixin,
+                     EnvironmentMixin):
     """Main processing class for BAMBI wildlife detection pipeline."""
 
     # Default detection models per modality: HuggingFace repo, path of the

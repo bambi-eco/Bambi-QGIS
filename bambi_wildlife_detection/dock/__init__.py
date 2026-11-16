@@ -29,6 +29,8 @@ The tabs
                                  the circles on the map
     ``review_queue``             Survey Analytics > Review Queue: the tracks
                                  in doubt, one after another
+    ``report``                   Survey Analytics > Survey Report: the survey
+                                 in one HTML file
 
 What they share
     ``run_panel``                starting a step, its progress, the log

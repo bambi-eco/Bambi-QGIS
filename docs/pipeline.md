@@ -1080,6 +1080,51 @@ Each of these is written to the project at once and logged. A track approved or 
 
 Environment values (satellite indices, land cover, tree cover, terrain wetness, weather) at the tracked animals, compared with the ground the flights monitored: a table per animal and per transect, and charts. Needs the *Environmental Context* steps of the Pre-Processing tab on each flight. See [Environmental Context](environment.md#habitat-context-survey-analytics).
 
+### Survey report
+
+Every tool above writes its own files - a census here, a grid there, a density with its interval in a third place. A report is what is handed on: to the land owner, the authority, the file. **→ Write Survey Report**, at the end of the tab, puts what the survey's tools found into **one HTML file that needs nothing else** - no pictures beside it, no style sheet, no script, no connection. It opens in any web browser, can be sent as it is, and prints (print it to a file to have a PDF).
+
+| Setting | Description |
+|---------|-------------|
+| **Title** | What the report is headed. Empty: *Survey report* and the name of the survey folder. |
+| **Include the map as it is shown in QGIS** | Beside the map the report draws itself, a picture of the map canvas as it is when the button is pressed - with your base map, orthomosaic and layers. Wider than 1400 px it is made smaller; arrange the map before you write the report. |
+
+Both are saved with the QGIS project. **→ Open Report** opens the report that was written last.
+
+**What is in it**, as far as the survey has it:
+
+| Part | From | Says |
+|------|------|------|
+| The figures at the top | census, distance sampling or grid | animals counted, species, the density with its interval, flights, dates, survey area |
+| **The survey** | the flights themselves | camera, what is counted (animals or boxes), species, coordinate system, survey area; per flight the date and time of its frames, frames, kilometres flown, animals, and the [weather](environment.md) where it was fetched |
+| **Map** | the flights themselves | survey area and exclusion zones, the ground the cameras saw, the routes flown and the animals counted, each in the colour of its species - drawn into the page, north up, with a scale bar |
+| **Counts** | [Census summary](#census-summary) | animals per species inside and outside the survey area, approved, [groups](#groups) with their mean and largest size; sex and age where anybody knows them; the flights one by one |
+| **Density** | census, [grid density](#grid-density), [distance sampling](#distance-sampling), [population estimation](#population-estimation-transects) | every density the survey has in one table - animals per km² with its 95 % interval, the number in the survey area, and what the figure rests on |
+| **Where the animals were** | grid density, [habitat context](#habitat-context) | clumping, share of cells with animals and hot spots; land cover and every environment layer at the animals against the ground looked at, as charts |
+| **Over time** | [Compare visits](#compare-visits) | the visits per species with their intervals, the fitted rate of change, and the change from visit to visit |
+| **Reaction to the drone** | [Reaction to the drone](#reaction-to-the-drone) | how many animals moved, where to relative to the line, and what that means |
+| **How good the places are** | [Position uncertainty](#position-uncertainty) | how far off a detection typically is, and the accuracies that was worked out from |
+| **Settings** | all of them, and each flight | group distances, grid, truncation and model, how visits were formed; per flight the detector's model, the tracker, the classifiers, the elevation model and the position correction; and the list of result files the report was made from, each with when it was written |
+| **How the figures were made** | all of them | the method notes of every result, to unfold |
+
+**The report computes nothing.** It reads the results that are there - so run the tools you want in it first - and lists what was not run as not run. The one exception is the census: the counts are what a report starts from, so it is built first where it is missing, or was made when other flights or species were chosen. Results are per camera and per what is counted (tracked animals, or boxes), as set at the top of the tab, and so is the report.
+
+**It says when it is not of one piece.** A result is read as it was written - perhaps when other flights were ticked, or another species filter was set. Its figures are then right for that survey and wrong beside the rest of the page. Such a result is named at the top of the page and in the log, and marked in the list of result files under *Settings*; run it again and write the report anew. A result file that cannot be read as this version writes it costs its own part of the page only, which says so.
+
+**Things to know when reading it:**
+
+- The counts are **minimum counts**: an animal that was there and was not found is not in them.
+- Where the flights were flown on **several days**, the counts are the animals of all of them together - an animal that was there each time is counted each time. The flights are listed one by one, *Over time* compares the visits, and the census density *over the survey area* is left out: the animals of three visits over one area would be three times too many. The same holds where the flights looked at clearly more ground than the survey area has.
+- The methods in the density table answer slightly different questions and will not agree to the last digit: the census figures are what was counted over an area, distance sampling allows for animals missed further from the line, the grid and the transects measure how much the counts vary over the ground.
+- The **route** of a flight is on the map only where the flight's elevation model is set: its camera positions are stored relative to it. The animals and the ground seen are placed without it.
+- A map of more than 4000 animals shows a regular selection of them, and the log says so; the counts are those of all.
+
+**Output:**
+```
+analytics_t/    # or analytics_w/, in the survey folder
+└── survey_report.html    # the whole report, in one file
+```
+
 ## Input file formats
 
 ### Calibration JSON
@@ -1215,7 +1260,8 @@ target_folder/
 │   ├── coverage_map.tif                    # Coverage map raster (overlapping frame count)
 │   ├── coverage_map.json                   # Coverage map stats
 │   ├── orthomosaic.tif                     # Survey orthomosaic (all ticked flights)
-│   └── orthomosaic.json                    # Survey orthomosaic info
+│   ├── orthomosaic.json                    # Survey orthomosaic info
+│   └── survey_report.html                  # Survey report: everything in one file
 └── analytics_w/
     └── ...
 ```

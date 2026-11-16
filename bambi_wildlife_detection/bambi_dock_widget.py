@@ -41,6 +41,7 @@ from .dock.grid_density import GridDensityMixin
 from .dock.trend import TrendMixin
 from .dock.reaction import ReactionMixin
 from .dock.position import PositionMixin
+from .dock.report import ReportMixin
 from .dock.accuracy import AccuracyMixin
 from .dock.review_queue import ReviewQueueMixin
 from .dock.result_layers import ResultLayersMixin
@@ -80,6 +81,7 @@ class BambiDockWidget(
         TrendMixin,
         ReactionMixin,
         PositionMixin,
+        ReportMixin,
         AccuracyMixin,
         ReviewQueueMixin,
         ResultLayersMixin,
