@@ -116,6 +116,34 @@ class TestGroup:
 
         assert dock.get_config()["reaction_min_displacement_m"] == 7.5
 
+    def test_the_speed_is_a_threshold_too(self, dock):
+        assert dock.reaction_speed_spin.value() == 0.0
+        assert dock.reaction_speed_spin.text() == "any speed"
+        assert dock.get_config()["reaction_min_speed_ms"] == 0.0
+
+        dock.reaction_speed_spin.setValue(0.25)
+
+        assert dock.reaction_speed_spin.text() == "0.25 m/s or faster"
+        assert dock.get_config()["reaction_min_speed_ms"] == 0.25
+
+    def test_both_thresholds_are_kept_with_the_project(self, dock):
+        """Neither was: a project opened again asked for 3 m at any
+        speed, whatever its results had been read with."""
+        dock.reaction_min_spin.setValue(7.5)
+        dock.reaction_speed_spin.setValue(0.25)
+        dock.save_config_to_project()
+        dock.reaction_min_spin.setValue(3.0)
+        dock.reaction_speed_spin.setValue(0.0)
+
+        dock.load_config_from_project()
+
+        assert dock.reaction_min_spin.value() == 7.5
+        assert dock.reaction_speed_spin.value() == 0.25
+
+        dock._reset_reaction_settings()
+        assert dock.reaction_min_spin.value() == 3.0
+        assert dock.reaction_speed_spin.value() == 0.0
+
     def test_the_button_starts_the_step(self, dock, monkeypatch):
         started = []
         survey = dock.current_survey()

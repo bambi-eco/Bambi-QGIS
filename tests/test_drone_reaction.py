@@ -120,6 +120,24 @@ class TestTrack:
         assert dr.describe_track(walk(velocity=(0.2, 0.0)),
                                  min_displacement=1.5)["status"] == dr.MOVED
 
+    def test_far_enough_but_too_slow_is_not_moving(self):
+        """Four metres - in twenty seconds: an animal that drifts."""
+        slow = walk(velocity=(0.4, 0.0))
+        found = dr.describe_track(slow, min_speed=0.5)
+
+        assert found["displacement_m"] == pytest.approx(4.0)
+        assert found["speed_ms"] == pytest.approx(0.4)
+        assert found["status"] == dr.STAYED and found["heading_deg"] is None
+        # at the threshold, and without one, it moved
+        assert dr.describe_track(slow, min_speed=0.4)["status"] == dr.MOVED
+        assert dr.describe_track(slow)["status"] == dr.MOVED
+        assert dr.MIN_SPEED_MS == 0.0
+
+    def test_fast_but_not_far_is_not_moving_either(self):
+        found = dr.describe_track(walk(velocity=(0.2, 0.0)), min_speed=0.1)
+
+        assert found["status"] == dr.STAYED            # 2 m of the 3
+
     def test_far_but_not_surely_is_not_moving(self):
         """Five metres in the fit - of positions that lie three metres off
         it: nobody can say this animal went anywhere."""

@@ -100,9 +100,12 @@ class ReactionDialog(QDialog):
         settings = document.get("settings") or {}
         facts = [f"Flights: {', '.join(document.get('flights', []))}"]
         if settings.get("min_displacement_m") is not None:
+            pace = ""
+            if settings.get("min_speed_ms"):
+                pace = f" at {settings['min_speed_ms']:g} m/s or faster"
             facts.append("moved = at least "
-                         f"{settings['min_displacement_m']:g} m while in "
-                         "view")
+                         f"{settings['min_displacement_m']:g} m{pace} while "
+                         "in view")
         header = QLabel(" · ".join(facts))
         header.setWordWrap(True)
         layout.addWidget(header)

@@ -139,7 +139,8 @@ def test_the_animals_together(tmp_path, fleeing):
                                "towards it") for line in log)
     assert document["by_flight"] == {}
     assert document["settings"] == {
-        "min_displacement_m": 3.0, "min_duration_s": 2.0,
+        "min_displacement_m": 3.0, "min_speed_ms": 0.0,
+        "min_duration_s": 2.0,
         "min_positions": 4, "sigmas": 3.0}
     assert (document["source"], document["camera"], document["crs"]) == (
         "tracks", "Thermal", "EPSG:32633")
@@ -174,6 +175,26 @@ def test_how_far_counts_as_moving_can_be_set(tmp_path, fleeing):
     assert rows[1]["status"] == drone_reaction.MOVED
     assert strict["settings"]["min_displacement_m"] == 10.0
     assert "at least 10 m" in strict["notes"]
+
+
+def test_how_fast_counts_as_moving_can_be_set(tmp_path, fleeing):
+    loose, _log, _out = _run(_survey(tmp_path, fleeing))
+    strict, _log, _out = _run(_survey(tmp_path, fleeing),
+                              reaction_min_speed_ms=0.6)
+
+    # 0.5 m/s is far enough over 19 s, and no longer fast enough
+    assert _by_track(loose)[8]["status"] == drone_reaction.MOVED
+    assert _by_track(strict)[8]["status"] == drone_reaction.STAYED
+    assert _by_track(strict)[8]["speed_ms"] == pytest.approx(0.5, abs=0.05)
+    assert strict["settings"]["min_speed_ms"] == 0.6
+    assert "at least 3 m, at 0.6 m/s or faster, during" in strict["notes"]
+    assert "m/s or faster" not in loose["notes"]
+
+
+@pytest.mark.parametrize("value", [-0.1, "fast"])
+def test_a_speed_that_is_none_is_refused(tmp_path, fleeing, value):
+    with pytest.raises(RuntimeError, match="speed an animal has to"):
+        _run(_survey(tmp_path, fleeing), reaction_min_speed_ms=value)
 
 
 @pytest.mark.parametrize("value", [0, -2, "far"])

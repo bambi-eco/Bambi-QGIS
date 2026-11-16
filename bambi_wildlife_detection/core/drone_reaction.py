@@ -15,7 +15,9 @@ not. Instead a constant velocity is fitted through all positions of the
 track; what is left over is the jitter, and it says how well the velocity
 is known. An animal **moved** when the distance that velocity carries it
 during its time in view is at least the set minimum (3 m by default) and
-three times its own standard error. A track of too few positions or too
+three times its own standard error - and, where a minimum speed is set,
+when that velocity is at least as fast: a long track lets an animal that
+drifts cover the distance at a pace nobody would call moving. A track of too few positions or too
 short a time is not judged.
 
 **Relative to the line.** The direction the drone flew while the animal was
@@ -48,6 +50,8 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 #: An animal moved when it covered at least this while in view ...
 MIN_DISPLACEMENT_M = 3.0
+#: ... at this speed or faster (0: at any speed) ...
+MIN_SPEED_MS = 0.0
 #: ... and that is this many of its standard errors.
 SIGMAS = 3.0
 #: Tracks shorter than this, or of fewer positions, are not judged.
@@ -150,8 +154,12 @@ def describe_track(points: Sequence[Tuple[float, float, float]],
                    drone: Optional[Sequence[Tuple[float, float, float]]] = None,
                    min_displacement: float = MIN_DISPLACEMENT_M,
                    min_duration: float = MIN_DURATION_S,
-                   min_positions: int = MIN_POSITIONS) -> dict:
+                   min_positions: int = MIN_POSITIONS,
+                   min_speed: float = MIN_SPEED_MS) -> dict:
     """What one animal did while it was in view.
+
+    :param min_speed: the fitted speed, in m/s, below which an animal did
+        not move however far it got; 0 = any speed
 
     :param points: ``(seconds, x, y)`` per position of the animal
     :param drone: ``(seconds, x, y)`` of the drone at the same moments (any
@@ -182,7 +190,9 @@ def describe_track(points: Sequence[Tuple[float, float, float]],
         covered_m = motion["displacement_m"]
         far_enough = covered_m >= min_displacement
         sure_enough = covered_m >= SIGMAS * motion["displacement_se_m"]
-        out["status"] = MOVED if far_enough and sure_enough else STAYED
+        fast_enough = motion["speed_ms"] >= min_speed
+        moved = far_enough and sure_enough and fast_enough
+        out["status"] = MOVED if moved else STAYED
         if out["status"] == MOVED:
             out["heading_deg"] = _heading(vx, vy)
 
@@ -418,7 +428,8 @@ def flight_rows(flight_name, animals: Sequence[dict],
                 seconds: Dict[int, float],
                 drone: Optional[Dict[int, Tuple[float, float]]] = None,
                 min_displacement: float = MIN_DISPLACEMENT_M,
-                min_duration: float = MIN_DURATION_S) -> List[dict]:
+                min_duration: float = MIN_DURATION_S,
+                min_speed: float = MIN_SPEED_MS) -> List[dict]:
     """One row per counted animal of a flight.
 
     :param animals: the survey's animals of the flight
@@ -445,7 +456,7 @@ def flight_rows(flight_name, animals: Sequence[dict],
             ("species", animal.get("species")), ("sex", animal.get("sex")),
             ("age", animal.get("age"))])
         row.update(describe_track(timed, above, min_displacement,
-                                  min_duration))
+                                  min_duration, min_speed=min_speed))
         rows.append(OrderedDict((key, row.get(key)) for key in TRACK_COLUMNS))
     return rows
 

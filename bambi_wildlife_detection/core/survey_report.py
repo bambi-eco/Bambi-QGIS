@@ -1151,9 +1151,11 @@ def section_settings(report: dict) -> str:
     reaction = first(results, "reaction")
     if reaction:
         minimum = (reaction.get("settings") or {}).get("min_displacement_m")
+        slowest = (reaction.get("settings") or {}).get("min_speed_ms")
+        pace = f" at {slowest:g} m/s or faster" if slowest else ""
         if minimum is not None:
-            facts.append(("Moved", f"went at least {minimum:g} m while in "
-                                   "view"))
+            facts.append(("Moved", f"went at least {minimum:g} m{pace} "
+                                   "while in view"))
     if facts:
         out.append(_table(["Of the survey", ""], facts))
     for flight in report.get("flights") or []:

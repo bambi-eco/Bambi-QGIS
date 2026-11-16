@@ -10,6 +10,7 @@ animal that moved, coloured by where it went relative to the line the drone
 flew.
 """
 
+import json
 import os
 
 from qgis.PyQt.QtWidgets import (
@@ -23,6 +24,7 @@ from qgis.core import (
 )
 
 from ..core import drone_reaction
+from ..gui_utils import PLUGIN_SCOPE
 from ..qgis_compat import FieldType
 
 #: What the arrows are drawn by, and in which colour: away from the line
@@ -37,6 +39,10 @@ DIRECTION_COLOURS = (
 )
 _TEXT_COLUMNS = ("flight", "species", "sex", "age", "status", "direction")
 _WHOLE_COLUMNS = ("track_id", "n_positions")
+
+
+#: Where the two thresholds are kept in the QGIS project.
+ENTRY_REACTION = "Survey/Reaction"
 
 
 class ReactionMixin:
@@ -74,6 +80,22 @@ class ReactionMixin:
             "nobody can tell. The distance also has to be three times its "
             "own standard error.")
         params_row.addWidget(self.reaction_min_spin)
+        params_row.addWidget(QLabel("at"))
+        self.reaction_speed_spin = QDoubleSpinBox()
+        self.reaction_speed_spin.setRange(0.0, 20.0)
+        self.reaction_speed_spin.setDecimals(2)
+        self.reaction_speed_spin.setSingleStep(0.05)
+        self.reaction_speed_spin.setValue(drone_reaction.MIN_SPEED_MS)
+        self.reaction_speed_spin.setSuffix(" m/s or faster")
+        self.reaction_speed_spin.setSpecialValueText("any speed")
+        self.reaction_speed_spin.setToolTip(
+            "How fast an animal has to have gone, at the least, to count "
+            "as having moved - the speed of the constant velocity fitted "
+            "through its track. Over a long track an animal that drifts "
+            "covers the distance too: 3 m in a minute is 0.05 m/s. A "
+            "grazing animal ambles at 0.1 to 0.3 m/s, a walking one does "
+            "about 1 m/s. At nought the distance alone decides.")
+        params_row.addWidget(self.reaction_speed_spin)
         params_row.addStretch()
         layout.addLayout(params_row)
 
@@ -243,3 +265,34 @@ class ReactionMixin:
                 value, symbol, value or "line not known"))
         layer.setRenderer(
             QgsCategorizedSymbolRenderer("direction", categories))
+
+    # ------------------------------------------------------------------ #
+    # The thresholds, kept with the project
+    # ------------------------------------------------------------------ #
+
+    def _save_reaction_settings(self, project) -> None:
+        project.writeEntry(PLUGIN_SCOPE, ENTRY_REACTION, json.dumps({
+            "min_displacement_m": self.reaction_min_spin.value(),
+            "min_speed_ms": self.reaction_speed_spin.value()}))
+
+    def _load_reaction_settings(self, project) -> None:
+        raw, ok = project.readEntry(PLUGIN_SCOPE, ENTRY_REACTION, "")
+        try:
+            values = json.loads(raw) if ok and raw else {}
+        except ValueError:
+            values = {}
+        self._set_reaction_values(values if isinstance(values, dict) else {})
+
+    def _reset_reaction_settings(self) -> None:
+        self._set_reaction_values({})
+
+    def _set_reaction_values(self, values: dict) -> None:
+        for spin, key, default in (
+                (self.reaction_min_spin, "min_displacement_m",
+                 drone_reaction.MIN_DISPLACEMENT_M),
+                (self.reaction_speed_spin, "min_speed_ms",
+                 drone_reaction.MIN_SPEED_MS)):
+            try:
+                spin.setValue(float(values.get(key, default)))
+            except (TypeError, ValueError):
+                spin.setValue(default)

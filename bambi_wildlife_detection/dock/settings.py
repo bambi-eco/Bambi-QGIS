@@ -439,6 +439,9 @@ class SettingsMixin:
             "reaction_min_displacement_m": (
                 self.reaction_min_spin.value()
                 if hasattr(self, 'reaction_min_spin') else 3.0),
+            "reaction_min_speed_ms": (
+                self.reaction_speed_spin.value()
+                if hasattr(self, 'reaction_speed_spin') else 0.0),
 
             # Survey analytics: position uncertainty (dock/position.py)
             "position_source": self._survey_source(),
@@ -610,6 +613,8 @@ class SettingsMixin:
             self.grid_panel.reset()
         if hasattr(self, 'trend_gap_spin'):
             self._reset_trend_settings()
+        if hasattr(self, 'reaction_speed_spin'):
+            self._reset_reaction_settings()
         if hasattr(self, 'position_gps_spin'):
             self._reset_position_settings()
         if hasattr(self, 'report_title_edit'):
@@ -773,6 +778,8 @@ class SettingsMixin:
             self.grid_panel.save(project)
         if hasattr(self, 'trend_gap_spin'):
             self._save_trend_settings(project)
+        if hasattr(self, 'reaction_speed_spin'):
+            self._save_reaction_settings(project)
         if hasattr(self, 'position_gps_spin'):
             self._save_position_settings(project)
         if hasattr(self, 'report_title_edit'):
@@ -809,6 +816,8 @@ class SettingsMixin:
                 self.grid_panel.load(project)
             if hasattr(self, 'trend_gap_spin'):
                 self._load_trend_settings(project)
+            if hasattr(self, 'reaction_speed_spin'):
+                self._load_reaction_settings(project)
             if hasattr(self, 'position_gps_spin'):
                 self._load_position_settings(project)
             if hasattr(self, 'report_title_edit'):

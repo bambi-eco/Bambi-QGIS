@@ -29,7 +29,8 @@ class SurveyReactionMixin:
 
         Settings (``config``): ``reaction_min_displacement_m`` - how far an
         animal has to have gone while in view to count as having moved
-        (default 3 m).
+        (default 3 m); ``reaction_min_speed_ms`` - how fast it has to have
+        gone at the least (default 0: at any speed).
         """
         from .bambi_processing import CancelledException
         from .core import census, drone_reaction, groups, store as _store
@@ -48,6 +49,17 @@ class SurveyReactionMixin:
             raise RuntimeError(
                 "The distance an animal has to have gone has to be more "
                 "than nothing.")
+        try:
+            slowest = float(config.get("reaction_min_speed_ms",
+                                       drone_reaction.MIN_SPEED_MS))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                "The speed an animal has to have had is a number of metres "
+                "per second.") from exc
+        if slowest < 0:
+            raise RuntimeError(
+                "The speed an animal has to have had cannot be less than "
+                "nothing.")
         if log_fn:
             log_fn(f"Reading the reaction to the drone ({survey.camera_label}"
                    f" tracks) of {self._flights_note(survey)}...")
@@ -96,7 +108,7 @@ class SurveyReactionMixin:
                 without_line.append(flight.name)
             of_flight = drone_reaction.flight_rows(
                 flight.name, animals, positions, seconds, drone,
-                min_displacement=minimum)
+                min_displacement=minimum, min_speed=slowest)
             rows.extend(of_flight)
             if log_fn:
                 moved = sum(1 for row in of_flight
@@ -130,6 +142,7 @@ class SurveyReactionMixin:
             "species_filter": survey.species,
             "settings": {
                 "min_displacement_m": minimum,
+                "min_speed_ms": slowest,
                 "min_duration_s": drone_reaction.MIN_DURATION_S,
                 "min_positions": drone_reaction.MIN_POSITIONS,
                 "sigmas": drone_reaction.SIGMAS,
@@ -137,7 +150,7 @@ class SurveyReactionMixin:
             "summary": summary,
             "by_flight": by_flight,
             "tracks": rows,
-            "notes": self._reaction_notes(minimum, without_line),
+            "notes": self._reaction_notes(minimum, without_line, slowest),
         }
         folder = survey.ensure_analytics_folder()
         json_path = drone_reaction.write_json(
@@ -185,15 +198,17 @@ class SurveyReactionMixin:
         return positions or None
 
     @staticmethod
-    def _reaction_notes(minimum: float, without_line) -> str:
+    def _reaction_notes(minimum: float, without_line,
+                        slowest: float = 0.0) -> str:
         from .core import drone_reaction
 
+        pace = f", at {slowest:g} m/s or faster," if slowest > 0 else ""
         notes = (
             "A constant velocity is fitted through all positions of a "
             "track; what the positions lie off it by is their jitter, and "
             "says how well the velocity is known. An animal moved when "
-            f"that velocity carried it at least {minimum:g} m during its "
-            f"time in view and {drone_reaction.SIGMAS:g} times the standard "
+            f"that velocity carried it at least {minimum:g} m{pace} during "
+            f"its time in view and {drone_reaction.SIGMAS:g} times the standard "
             "error of that distance. Tracks of fewer than "
             f"{drone_reaction.MIN_POSITIONS} positions or less than "
             f"{drone_reaction.MIN_DURATION_S:g} s are not judged. The line "
