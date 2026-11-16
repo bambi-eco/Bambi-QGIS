@@ -913,6 +913,39 @@ analytics_t/    # or analytics_w/, in the survey folder
 └── drone_reaction_tracks.csv    # one row per tracked animal: status, direction, distance, speed, heading, jitter, ...
 ```
 
+### Position uncertainty
+
+A detection's place on the map is where the line of sight through its pixel meets the terrain model. It is as good as what goes into that - and how much each part matters depends on the geometry of the one detection. **→ Estimate Position Uncertainty** works out, for every detection the survey counts, how far its place may be off.
+
+**What goes in** - each with the accuracy you set (one sigma; the *Known to* list offers ready-made values for a drone that knows its place from satellites alone and for one with RTK, and any value can be changed):
+
+| Setting | Default | What it stands for |
+|---------|---------|--------------------|
+| **Camera position** | 1.5 m (RTK 0.05 m) | How well the drone knows where it is over the ground. It moves the detection by as much. |
+| **Camera height** | 1.0 m (RTK 0.1 m) | How well it knows how high it is. Matters only for what is seen to the side. |
+| **Camera angle** | 1.0° | How well the direction the camera looked in is known - gimbal, compass, and what is left after the [Correction Wizard](correction-wizard.md). A degree is 1.4 m on the ground from 80 m up, and twice that at 45° to the side. |
+| **Terrain model** | 1.0 m | How far the terrain model may be off in height where the animal stood, and how far above it the warm spot was. |
+| **Pixel** | 2 px | How well the middle of a box marks the animal. |
+| **Timing** | 0.1 s | How far a frame and the camera position given for it may be apart in time: the drone covers its speed times this in between. |
+
+They are saved with the QGIS project.
+
+**The geometry of a detection** is read from the data: how high the camera was above the ground the animal stood on, how far to the side it looked, the drone's speed and direction at that frame, and the **slope** at the animal, read from the flight's DEM mesh - ground that falls away from the camera stretches every error along the line of sight, ground that rises towards it shortens them. Where the terrain all but runs along the line of sight the detection is marked (`grazing`): its place is hardly known. Without the mesh the terrain counts as level, and the result says so.
+
+**What comes out.** Per detection the error along the line from the camera to the animal and across it, and the two together: **typically** so many metres off (the root-mean-square distance between the true place and the mapped one - about two detections in three lie within it), and twice that, which holds 95 to 98 in a hundred. An animal is given the median of its boxes: what they have in common - where the drone took itself to be, a terrain model that is off - does not average out over a track. Over all detections, and per flight: the median, what nine in ten stay within, the worst, the share within 2 m and 5 m - and **what matters most**, which is the one thing worth improving: with satellite positioning and a low flight it is the camera's position, from higher up and to the side the camera's angle.
+
+**→ Show Position Uncertainty** opens the table; **→ Add Uncertainty to QGIS** draws a circle around every counted animal within which its true place almost certainly lies.
+
+These are the accuracies you set, not measured ones: the result says what follows from them. A constant offset - a camera mounted a degree off, a clock a second out - is not part of it; that is what the Correction Wizard removes. Use the figures to judge what the places are good for: whether two detections 3 m apart can be told to be two animals, how fine a [grid](#grid-density) the survey bears, how far a [group distance](#groups) below the uncertainty means anything.
+
+**Outputs:**
+```
+analytics_t/    # or analytics_w/, in the survey folder
+├── position_uncertainty_tracks.json         # or ..._detections...: the accuracies, the summaries, one entry per animal
+├── position_uncertainty_tracks_boxes.csv    # one row per detection: height, angle, range, slope, errors, what matters most
+└── position_uncertainty_tracks_tracks.csv   # one row per animal (where animals are counted)
+```
+
 ### Coverage map
 
 Combines the exported per-frame GeoTIFFs on the same grid as the **Orthomosaic**, but instead of merging image content it counts, per output pixel, how many frames contain valid (non-nodata) data at that position. The result is a single-band raster where `1` means the ground was imaged once and `N` that it was seen in `N` overlapping frames - a map of survey effort/overlap. Run **Export Frames as GeoTIFF** for the chosen camera first.

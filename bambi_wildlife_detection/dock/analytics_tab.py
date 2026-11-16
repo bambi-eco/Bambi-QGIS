@@ -454,6 +454,9 @@ class AnalyticsTabMixin:
         # ----- Reaction to the Drone (dock/reaction.py) -----
         analytics_tab_layout.addWidget(self._build_reaction_group())
 
+        # ----- Position Uncertainty (dock/position.py) -----
+        analytics_tab_layout.addWidget(self._build_position_group())
+
         # ----- Population Estimation (Transects) -----
         pop_group = QGroupBox("Population Estimation (Transects)")
         pop_layout = QVBoxLayout(pop_group)

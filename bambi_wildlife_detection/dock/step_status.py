@@ -399,6 +399,8 @@ class StepStatusMixin:
             "survey_trend": self.trend_status,
             "drone_reaction": self.reaction_status,
             "add_reaction": self.add_reaction_status,
+            "position_uncertainty": self.position_status,
+            "add_position": self.add_position_status,
             "add_track_inventory": self.add_track_inventory_status,
             "population_estimation": self.population_status,
             "add_transect_areas": self.add_transect_areas_status,
