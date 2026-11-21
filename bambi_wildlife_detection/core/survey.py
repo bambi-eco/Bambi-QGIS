@@ -123,6 +123,10 @@ class Survey:
     #: or ``"detections"``, every box - what a still-photo survey without
     #: tracking has.
     source: str = TRACKS
+    #: Count only animals that both cameras saw: tracks of the survey's
+    #: camera that the cross-modal matching paired with a track of the
+    #: other one. The survey's camera still says where an animal is.
+    confirmed: bool = False
 
     # -- (de)serialisation ------------------------------------------------- #
 
@@ -181,7 +185,39 @@ class Survey:
                 raise SurveyError(f"Flight '{flight.name}' is listed twice.")
             seen.add(flight.key)
         _ = self.epsg  # raises on a mixed CRS
+        unmatched = self.unmatched_flights() if self.confirmed else []
+        if unmatched:
+            raise SurveyError(
+                "Only animals that both cameras saw are counted, and the "
+                "tracks of these flights have not been matched between "
+                f"the cameras: {', '.join(unmatched)}. Run 'Match Tracks' "
+                "for them, untick them, or count all tracks.")
         return self
+
+    def unmatched_flights(self) -> List[str]:
+        """The flights that have tracks of the survey's camera and no
+        cross-modal matching run: nobody can say which of their animals
+        the other camera saw. A flight without tracks has none to
+        confirm, and is not one of these."""
+        from . import match_store, store
+
+        tracked = [flight for flight in self.flights
+                   if os.path.isfile(store.stage_path(
+                       flight.target_folder, store.TRACKS, self.modality))]
+        return [flight.name for flight in tracked
+                if match_store.active_run(flight.target_folder) is None]
+
+    @property
+    def counted_label(self) -> str:
+        """``"Thermal"``, or ``"Thermal, confirmed by RGB"``."""
+        if not self.confirmed:
+            return self.camera_label
+        other = CAMERA_LABELS["w" if self.modality == "t" else "t"]
+        return f"{self.camera_label}, confirmed by {other}"
+
+    @property
+    def other_modality(self) -> str:
+        return "w" if self.modality == "t" else "t"
 
     @property
     def epsg(self) -> Optional[int]:

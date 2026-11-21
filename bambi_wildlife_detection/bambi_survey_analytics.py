@@ -74,7 +74,8 @@ class SurveyAnalyticsMixin:
 
         return survey_rasters.looked_at_geometry(
             habitat.monitored_geometry(flight.target_folder,
-                                       survey.modality, area)
+                                       survey.modality, area,
+                                       survey.confirmed)
             for flight in survey.flights)
 
     @staticmethod
@@ -126,7 +127,7 @@ class SurveyAnalyticsMixin:
                 found, provenance = analytics_source.load_points(
                     flight.target_folder, survey.modality, source,
                     species_ids=ids, include_manual=survey.include_manual,
-                    area=area)
+                    area=area, confirmed=survey.confirmed)
             except analytics_source.AnalyticsError as exc:
                 raise RuntimeError(f"{flight.name}: {exc}") from exc
             provenance["flight"] = flight.name
@@ -140,6 +141,7 @@ class SurveyAnalyticsMixin:
         provenance = {
             "source": source,
             "modality": survey.modality,
+            "confirmed_by_other_camera": bool(survey.confirmed),
             "species": None if names is None else list(names),
             "n_points": len(points),
             "outside_survey_area": sum(
@@ -566,6 +568,15 @@ class SurveyAnalyticsMixin:
                 rows = track_inventory.build_inventory(
                     flight.target_folder, survey.modality,
                     epsg=int(epsg) if epsg else None, species_ids=ids)
+                if survey.confirmed:
+                    # only the animals the other camera saw too
+                    listed = len(rows)
+                    rows = [row for row in rows
+                            if row.get("matched_track") is not None]
+                    if log_fn and listed != len(rows):
+                        log_fn(f"{flight.name}: {listed - len(rows)} "
+                               "track(s) the other camera did not confirm "
+                               "are left out")
             folder = os.path.join(flight.target_folder,
                                   f"analytics_{survey.modality}")
             os.makedirs(folder, exist_ok=True)
@@ -659,10 +670,13 @@ class SurveyAnalyticsMixin:
                                 survey.modality, "Detect Animals")
         animals, facts = analytics_source.load_animals(
             flight.target_folder, survey.modality, source, ids,
-            survey.include_manual)
+            survey.include_manual, survey.confirmed)
         if log_fn and facts["excluded_not_an_animal"]:
             log_fn(f"{flight.name}: {facts['excluded_not_an_animal']} "
                    "labelled not-an-animal are not counted")
+        if log_fn and facts["unconfirmed"]:
+            log_fn(f"{flight.name}: {facts['unconfirmed']} that the other "
+                   "camera did not confirm are not counted")
         key = "track_id" if source == "tracks" else "detection_id"
         return [{"id": animal[key],
                  "group": None if found is None else found.of(animal[key]),
@@ -677,7 +691,8 @@ class SurveyAnalyticsMixin:
 
         try:
             return groups.for_flight(flight.target_folder, survey.modality,
-                                     source, survey.include_manual)
+                                     source, survey.include_manual,
+                                     survey.confirmed)
         except analytics_source.AnalyticsError:
             return None
 
@@ -699,8 +714,14 @@ class SurveyAnalyticsMixin:
         if not polygons:
             return None
         area_m2, geometry = merged_fov_area(polygons, sorted(polygons))
+        if survey.confirmed and geometry is not None:
+            # an animal could only be confirmed where both cameras looked
+            from .core import habitat
+            geometry = habitat.monitored_geometry(
+                flight.target_folder, survey.modality, None, both=True)
+            area_m2 = 0.0 if geometry is None else float(geometry.area)
         if area is not None:
-            geometry = area.clip(geometry)
+            geometry = None if geometry is None else area.clip(geometry)
             area_m2 = 0.0 if geometry is None else float(geometry.area)
         return area_m2
 
@@ -756,7 +777,7 @@ class SurveyAnalyticsMixin:
                               species_order=survey.species_names())
         result.update({
             "source": source,
-            "camera": survey.camera_label,
+            "camera": survey.counted_label,
             "crs": f"EPSG:{survey.epsg}" if survey.epsg else None,
             "survey_area": None if area is None else area.describe(),
             "species_filter": survey.species,
@@ -785,7 +806,7 @@ class SurveyAnalyticsMixin:
             group_rows, os.path.join(folder, f"groups_{source}.csv"))
         groups.write_table_json({
             "source": source,
-            "camera": survey.camera_label,
+            "camera": survey.counted_label,
             "crs": f"EPSG:{survey.epsg}" if survey.epsg else None,
             "survey_area": None if area is None else area.describe(),
             "species_filter": survey.species,
@@ -1646,7 +1667,9 @@ class SurveyAnalyticsMixin:
             entries, "track_id" if source == "tracks" else "det_idx",
             analytics_source.current_species(
                 target_folder, m, source, survey.include_manual),
-            survey.species_ids(flight, names))
+            survey.species_ids(flight, names),
+            only=(analytics_source.confirmed_ids(target_folder, m, source)
+                  if survey.confirmed else None))
         if n_false and log_fn:
             log_fn(f"  {flight.name}: {n_false} observation(s) labelled "
                    "not-an-animal since the distances were calculated are "
@@ -2233,7 +2256,7 @@ class SurveyAnalyticsMixin:
             )
 
         result.update({
-            "camera": camera_label,
+            "camera": survey.counted_label,
             "crs": f"EPSG:{target_epsg}",
             "truncation_m": truncation,
             "n_projects": len(entries),
@@ -2471,7 +2494,10 @@ class SurveyAnalyticsMixin:
             tracks, "track_id" if source == "tracks" else "detection_id",
             analytics_source.current_species(
                 target_folder, suffix, source, survey.include_manual),
-            survey.species_ids(flight, names))
+            survey.species_ids(flight, names),
+            only=(analytics_source.confirmed_ids(
+                target_folder, suffix, source)
+                if survey.confirmed else None))
         species_ids = survey.species_ids(flight, names)
         if n_false and log_fn:
             log_fn(f"{n_false} {unit} labelled not-an-animal since the "

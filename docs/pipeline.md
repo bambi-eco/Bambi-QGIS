@@ -608,6 +608,35 @@ The box at the top of the tab defines the survey every tool below works on:
 | **Count** | What every tool on the tab counts. **Animals (tracks)** - the default - counts each tracked animal once, at the centre of its boxes, with the species, sex and age of the track. **Boxes (detections)** counts every geo-referenced box: what a still-photo survey without tracking has - an animal on two photos counts twice. |
 | **Survey folder** | Where the survey results (`analytics_t/` / `analytics_w/`) and the survey area are stored. Empty = `bambi_survey` next to the QGIS project - next to the first ticked flight while the project has not been saved. **A survey folder that holds results stays where it is**: when saving the project (for the first time, or somewhere else) or ticking another flight first would move the default, the folder used so far is entered in the field instead, and the log says so. Empty the field to go to the new default, or enter another folder, to move the survey yourself. |
 
+#### Only animals confirmed by the other camera
+
+Below the row, **Only animals confirmed by the other camera** (off) makes
+every tool count only what both cameras saw: the tracks of the survey's
+camera that *Match Tracks* paired with a track of the other one. Under
+*Boxes (detections)* it is the boxes of those tracks. The survey's camera
+still says where an animal is - a matched animal has a track in each camera,
+a little apart.
+
+- **What it is for.** A warm stone in the thermal picture or a tree stump in
+  the RGB one rarely has a partner in the other camera, so the counts carry
+  fewer false positives.
+- **What it costs.** An animal only one camera could see - under canopy, at
+  dusk - is left out too. Counts and densities are a lower bound, and what
+  is left out depends on light and cover, not only on distance: read
+  distance sampling and the population estimate with that in mind.
+- **The ground.** An animal can only be confirmed where both cameras looked.
+  The covered area of the census, the grid, the trend and the report is the
+  overlap of both cameras' footprints (the survey camera's own where the
+  other has none). The transects of the population estimate keep the width
+  of the survey's camera.
+- **Every flight must have been matched.** A ticked flight that has tracks
+  and no matching run is refused, naming the flight - rather than counted
+  as having no animals.
+- **It is recorded.** Results name the camera as `Thermal, confirmed by RGB`.
+  The track inventory lists only the confirmed tracks; its *matched_track*
+  column says which track of the other camera each one is, with the filter
+  on or off.
+
 Four things hold for every tool:
 
 - **One CRS.** Pooled points, rasters and areas need the ticked flights to

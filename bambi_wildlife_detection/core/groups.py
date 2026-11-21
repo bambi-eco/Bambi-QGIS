@@ -435,7 +435,8 @@ def frame_seconds(target_folder: str, modality: str) -> Dict[int, float]:
 
 
 def for_flight(target_folder: str, modality: str, source: str = "tracks",
-               include_manual: bool = True) -> FlightGroups:
+               include_manual: bool = True,
+               confirmed: bool = False) -> FlightGroups:
     """Every counted animal of a flight - all species, wherever it is - in
     its group.
 
@@ -448,7 +449,7 @@ def for_flight(target_folder: str, modality: str, source: str = "tracks",
     from . import analytics_source
 
     animals, _facts = analytics_source.load_animals(
-        target_folder, modality, source, None, include_manual)
+        target_folder, modality, source, None, include_manual, confirmed)
     key = "track_id" if source == analytics_source.TRACKS else "detection_id"
     seconds = frame_seconds(target_folder, modality)
     records = []

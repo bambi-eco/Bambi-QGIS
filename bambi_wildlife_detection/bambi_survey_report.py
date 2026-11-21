@@ -192,7 +192,7 @@ class SurveyReportMixin:
             "title": title,
             "created": datetime.now().strftime("%Y-%m-%d %H:%M"),
             "plugin_version": plugin_version(),
-            "camera": survey.camera_label,
+            "camera": survey.counted_label,
             "source": source,
             "crs": f"EPSG:{survey.epsg}" if survey.epsg else None,
             "species_filter": survey.species,
@@ -296,7 +296,8 @@ class SurveyReportMixin:
             return None
         try:
             return habitat.monitored_geometry(
-                flight.target_folder, survey.modality, area)
+                flight.target_folder, survey.modality, area,
+                survey.confirmed)
         except Exception:  # noqa: BLE001 - the map does without
             quiet.problem(f"The footprints of {flight.name} could not be "
                           "read for the report's map")

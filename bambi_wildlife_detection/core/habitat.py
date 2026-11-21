@@ -300,7 +300,8 @@ def _stats(values) -> dict:
 def flight_tracks(target_folder: str, modality: str,
                   species_ids: Optional[Sequence[int]] = None,
                   include_manual: bool = True, area=None,
-                  source: str = "tracks") -> List[dict]:
+                  source: str = "tracks",
+                  confirmed: bool = False) -> List[dict]:
     """``[{track_id, detection_id, species, sex, age, x, y}]`` - one per
     counted animal, or per box when the survey counts boxes.
 
@@ -313,7 +314,8 @@ def flight_tracks(target_folder: str, modality: str,
     from . import analytics_source
 
     animals, _facts = analytics_source.load_animals(
-        target_folder, modality, source, species_ids, include_manual)
+        target_folder, modality, source, species_ids, include_manual,
+        confirmed)
     tracks = []
     for animal in animals:
         x, y = animal["x"], animal["y"]
@@ -331,19 +333,42 @@ def flight_tracks(target_folder: str, modality: str,
     return tracks
 
 
-def monitored_geometry(target_folder: str, modality: str, area=None):
-    """The ground a flight's camera saw (inside *area*), or ``None`` when no
-    field-of-view footprints exist - then the whole raster is "available"."""
+def _seen_by(target_folder: str, modality: str):
+    """The merged footprints of one camera, or ``None`` without any."""
     from . import fov_store, store
     from .population import merged_fov_area
 
     if not os.path.isfile(
             store.stage_path(target_folder, store.FOV, modality)):
-        return area.geometry if area is not None else None
+        return None
     polygons = fov_store.load_fov(target_folder, modality)
     _area_m2, geometry = merged_fov_area(polygons, sorted(polygons))
+    return geometry
+
+
+def monitored_geometry(target_folder: str, modality: str, area=None,
+                       both: bool = False):
+    """The ground a flight's camera saw (inside *area*), or ``None`` when no
+    field-of-view footprints exist - then the whole raster is "available".
+
+    :param both: the ground **both** cameras saw - where an animal could
+        have been confirmed by the other camera at all. A survey that
+        counts only confirmed animals has looked at no more than that;
+        over the wider ground of one camera its densities would be too
+        low. Where the other camera has no footprints the survey's own
+        are all there is to go by.
+    """
+    geometry = _seen_by(target_folder, modality)
     if geometry is None:
         return area.geometry if area is not None else None
+    if both:
+        other = _seen_by(target_folder, "w" if modality == "t" else "t")
+        if other is not None:
+            geometry = geometry.intersection(other)
+            if geometry.is_empty:
+                geometry = None
+    if geometry is None:
+        return None
     if area is not None:
         return area.clip(geometry)
     return geometry
@@ -451,7 +476,8 @@ def summarise_flight(name: str, target_folder: str, modality: str,
                      species_ids: Optional[Sequence[int]] = None,
                      include_manual: bool = True, area=None,
                      epsg: Optional[int] = None,
-                     source: str = "tracks") -> dict:
+                     source: str = "tracks",
+                     confirmed: bool = False) -> dict:
     """Everything the survey summary needs from one flight.
 
     *source* is what the survey counts: ``"tracks"`` (one row per animal)
@@ -467,7 +493,7 @@ def summarise_flight(name: str, target_folder: str, modality: str,
     layers = load_layers(target_folder)
     done = environment.status(target_folder)
     tracks = flight_tracks(target_folder, modality, species_ids,
-                           include_manual, area, source)
+                           include_manual, area, source, confirmed)
     sampled = sample_points(layers, [(t["x"], t["y"]) for t in tracks],
                             radius)
     weather = weather_values(target_folder)
@@ -490,7 +516,7 @@ def summarise_flight(name: str, target_folder: str, modality: str,
 
     # The ground, at the grain of the animals' values: each monitored cell
     # is described by its surroundings within the same radius.
-    geometry = monitored_geometry(target_folder, modality, area)
+    geometry = monitored_geometry(target_folder, modality, area, confirmed)
     available = {}
     for key, (array, grid) in layers.items():
         reach = radius / grid.resolution

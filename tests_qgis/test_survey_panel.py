@@ -429,3 +429,42 @@ def test_a_new_project_does_not_inherit_the_kept_folder(dock, two_flights,
 
     assert panel.folder() == ""
     assert panel.folder_edit.text() == ""
+
+
+# ---------------------------------------------------------------------------
+# Only what both cameras saw
+# ---------------------------------------------------------------------------
+
+def test_every_track_counts_by_default(dock, two_flights):
+    assert dock.survey_panel.confirmed() is False
+    assert dock._survey_config()["confirmed"] is False
+
+
+def test_the_filter_reaches_every_tool(dock, two_flights):
+    dock.survey_panel.confirmed_check.setChecked(True)
+
+    assert dock._survey_config()["confirmed"] is True
+
+
+def test_the_filter_is_saved_with_the_project(dock, two_flights):
+    panel = dock.survey_panel
+    panel.confirmed_check.setChecked(True)
+    dock.save_config_to_project()
+
+    panel.reset()
+    assert panel.confirmed() is False
+
+    panel.load(QgsProject.instance())
+    assert panel.confirmed() is True
+
+
+def test_a_project_saved_before_the_filter_counts_every_track(
+        dock, two_flights):
+    from bambi_wildlife_detection.bambi_survey_panel import ENTRY_CONFIRMED
+    from bambi_wildlife_detection.gui_utils import PLUGIN_SCOPE
+
+    dock.survey_panel.confirmed_check.setChecked(True)
+    dock.save_config_to_project()
+    QgsProject.instance().removeEntry(PLUGIN_SCOPE, ENTRY_CONFIRMED)
+    dock.survey_panel.load(QgsProject.instance())
+    assert dock.survey_panel.confirmed() is False

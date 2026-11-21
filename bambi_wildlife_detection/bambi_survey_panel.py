@@ -13,7 +13,8 @@ import os
 
 from qgis.PyQt.QtCore import Qt, pyqtSignal
 from qgis.PyQt.QtWidgets import (
-    QAbstractItemView, QApplication, QComboBox, QDialog, QDialogButtonBox,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
+    QDialogButtonBox,
     QFileDialog, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout,
 )
@@ -30,6 +31,7 @@ ENTRY_FLIGHTS = "Survey/Flights"
 ENTRY_CAMERA = "Survey/Camera"
 ENTRY_FOLDER = "Survey/Folder"
 ENTRY_SOURCE = "Survey/Source"
+ENTRY_CONFIRMED = "Survey/Confirmed"
 DEFAULT_FOLDER_NAME = survey_core.DEFAULT_FOLDER_NAME
 
 _FOLDER_ROLE = Qt.ItemDataRole.UserRole
@@ -110,6 +112,21 @@ class SurveyFlightsPanel(QGroupBox):
         row.addWidget(self.source_combo)
         row.addStretch()
         layout.addLayout(row)
+
+        self.confirmed_check = QCheckBox(
+            "Only animals confirmed by the other camera")
+        self.confirmed_check.setToolTip(
+            "Count only what both cameras saw: tracks of the camera chosen "
+            "above that 'Match Tracks' paired with a track of the other "
+            "camera. A warm stone or a tree stump rarely has a partner.\n"
+            "An animal only one camera could see - under canopy, at dusk - "
+            "is left out too, so counts and densities are a lower bound, "
+            "over the ground both cameras looked at. The camera above "
+            "still says where an animal is.\n"
+            "Every ticked flight with tracks must have been matched.")
+        self.confirmed_check.toggled.connect(
+            lambda _on: self._emit_changed())
+        layout.addWidget(self.confirmed_check)
 
         folder_row = QHBoxLayout()
         folder_row.addWidget(QLabel("Survey folder:"))
@@ -324,7 +341,12 @@ class SurveyFlightsPanel(QGroupBox):
         return Survey(folder=self.folder(), modality=self.modality(),
                       flights=self.survey_flights(), species=species,
                       per_species=per_species, include_manual=include_manual,
-                      area_enabled=area_enabled, source=self.source())
+                      area_enabled=area_enabled, source=self.source(),
+                      confirmed=self.confirmed())
+
+    def confirmed(self) -> bool:
+        """Whether only animals both cameras saw are counted."""
+        return self.confirmed_check.isChecked()
 
     def source(self) -> str:
         """What the survey's tools count: ``"tracks"`` or ``"detections"``."""
@@ -370,6 +392,8 @@ class SurveyFlightsPanel(QGroupBox):
         project.writeEntry(PLUGIN_SCOPE, ENTRY_FOLDER,
                            self.folder_edit.text().strip())
         project.writeEntry(PLUGIN_SCOPE, ENTRY_SOURCE, self.source())
+        project.writeEntry(PLUGIN_SCOPE, ENTRY_CONFIRMED,
+                           "1" if self.confirmed() else "0")
 
     def load(self, project):
         raw, ok = project.readEntry(PLUGIN_SCOPE, ENTRY_FLIGHTS, "")
@@ -383,8 +407,11 @@ class SurveyFlightsPanel(QGroupBox):
         folder, _ok = project.readEntry(PLUGIN_SCOPE, ENTRY_FOLDER, "")
         source, _ok = project.readEntry(
             PLUGIN_SCOPE, ENTRY_SOURCE, survey_core.TRACKS)
+        confirmed, _ok = project.readEntry(
+            PLUGIN_SCOPE, ENTRY_CONFIRMED, "0")
         self._default_in_use = ""
-        self._set_quietly(1 if camera == "w" else 0, folder or "", source)
+        self._set_quietly(1 if camera == "w" else 0, folder or "", source,
+                          confirmed == "1")
         self.refresh()
 
     def reset(self):
@@ -394,7 +421,8 @@ class SurveyFlightsPanel(QGroupBox):
         self.refresh()
 
     def _set_quietly(self, camera_index: int, folder: str,
-                     source: str = survey_core.TRACKS):
+                     source: str = survey_core.TRACKS,
+                     confirmed: bool = False):
         """Set camera, folder and source without the change signal - which
         would save them straight back into the project half-restored."""
         blocked = self.camera_combo.blockSignals(True)
@@ -404,6 +432,9 @@ class SurveyFlightsPanel(QGroupBox):
         self.source_combo.setCurrentIndex(
             max(0, self.source_combo.findData(source)))
         self.source_combo.blockSignals(blocked)
+        blocked = self.confirmed_check.blockSignals(True)
+        self.confirmed_check.setChecked(bool(confirmed))
+        self.confirmed_check.blockSignals(blocked)
         blocked = self.folder_edit.blockSignals(True)
         self.folder_edit.setText(folder)
         self.folder_edit.blockSignals(blocked)

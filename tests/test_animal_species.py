@@ -159,7 +159,7 @@ def test_animals_are_counted_once_and_for_one_species(flight):
     assert [(a["track_id"], a["species"], a["n_boxes"]) for a in animals] == [
         (1, ROE, 3), (2, CHAMOIS, 2), (4, RED, 2), (5, "animal", 1)]
     assert facts == {"excluded_not_an_animal": 1, "untracked_detections": 1,
-                     "unplaced": 0}
+                     "unplaced": 0, "unconfirmed": 0}
 
 
 def test_an_animal_is_where_all_its_boxes_are(flight):

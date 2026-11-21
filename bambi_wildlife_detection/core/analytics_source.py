@@ -84,14 +84,41 @@ def species_options(target_folder: str) -> List[dict]:
             if entry["species_id"] not in EXCLUDED_SPECIES]
 
 
+def confirmed_tracks(target_folder: str, modality: str) -> set:
+    """The tracks of *modality* that the other camera saw too: those the
+    cross-modal matching paired with a track of the other camera
+    (:func:`core.match_store.partner_tracks`, the active run). Empty where
+    the flight was never matched."""
+    from . import match_store
+
+    return {int(track) for track in match_store.partner_tracks(
+        target_folder, modality)}
+
+
+def confirmed_ids(target_folder: str, modality: str,
+                  source: str = TRACKS) -> set:
+    """What counts when only animals both cameras saw do: the ids of the
+    confirmed tracks (``tracks``), or of their boxes (``detections``)."""
+    tracks = confirmed_tracks(target_folder, modality)
+    if source == TRACKS or not tracks:
+        return tracks
+    return {int(row["detection_id"]) for row in common.load_detections(
+        target_folder, modality, include_not_an_animal=True)
+        if int(row.get("track_id") or -1) in tracks}
+
+
 def load_rows(target_folder: str, modality: str,
               species_ids: Optional[Sequence[int]] = None,
               include_manual: bool = True,
-              run_id: Optional[int] = None) -> Tuple[List[dict], dict]:
+              run_id: Optional[int] = None,
+              confirmed: bool = False) -> Tuple[List[dict], dict]:
     """Geo-referenced detections that count, plus the filter that produced them.
 
     Returns ``(rows, provenance)``. *provenance* is a plain dict meant to be
     written into the result document - it is what makes a number auditable.
+
+    :param confirmed: only the boxes of tracks the other camera saw too
+        (:func:`confirmed_tracks`)
     """
     det_path = store.stage_path(target_folder, store.DETECTIONS, modality)
     if not os.path.isfile(det_path):
@@ -118,6 +145,14 @@ def load_rows(target_folder: str, modality: str,
         selected_species = sorted(set(species_ids))
         rows = [row for row in rows if row["species_id"] in selected_species]
 
+    unconfirmed = 0
+    if confirmed:
+        both = confirmed_tracks(target_folder, modality)
+        kept = [row for row in rows
+                if int(row.get("track_id") or -1) in both]
+        unconfirmed = len(rows) - len(kept)
+        rows = kept
+
     active = track_store.active_run(target_folder, modality)
     manual = track_store.manual_run(target_folder, modality)
     manual_included = bool(include_manual) and manual is not None
@@ -136,6 +171,9 @@ def load_rows(target_folder: str, modality: str,
         "excluded_not_an_animal": excluded_species,
         "n_detections": len(rows),
     }
+    if confirmed:
+        provenance["confirmed_by_other_camera"] = True
+        provenance["unconfirmed"] = unconfirmed
     return rows, provenance
 
 
@@ -150,7 +188,8 @@ def counts(species_id) -> bool:
 
 def load_animals(target_folder: str, modality: str, source: str = TRACKS,
                  species_ids: Optional[Sequence[int]] = None,
-                 include_manual: bool = True) -> Tuple[List[dict], dict]:
+                 include_manual: bool = True,
+                 confirmed: bool = False) -> Tuple[List[dict], dict]:
     """What a survey counts on one flight, and as what.
 
     One record per tracked animal (``source='tracks'``) or per box
@@ -173,11 +212,16 @@ def load_animals(target_folder: str, modality: str, source: str = TRACKS,
     counts, it just cannot be placed. ``not-an-animal`` is left out, and
     *species_ids* (``None`` = every species) selects.
 
+    :param confirmed: only animals the other camera saw too - tracks the
+        cross-modal matching paired (:func:`confirmed_tracks`), and under
+        ``detections`` their boxes. A lone warm stone has no partner; an
+        animal only one camera could see has none either.
     :return: ``(records, facts)`` - *facts* is ``{"excluded_not_an_animal",
-        "untracked_detections", "unplaced"}``: how many records the false
-        positive rule removed, how many counting boxes belong to no track
-        (they are no animal under ``tracks``), how many records have no
-        position.
+        "untracked_detections", "unplaced", "unconfirmed"}``: how many
+        records the false positive rule removed, how many counting boxes
+        belong to no track (they are no animal under ``tracks``), how many
+        records have no position, how many the other camera did not
+        confirm.
     """
     if source not in (TRACKS, DETECTIONS):
         raise AnalyticsError(f"Unknown analytics source '{source}'.")
@@ -208,7 +252,8 @@ def load_animals(target_folder: str, modality: str, source: str = TRACKS,
         return resolved[track_id]
 
     facts = {"excluded_not_an_animal": 0, "untracked_detections": 0,
-             "unplaced": 0}
+             "unplaced": 0, "unconfirmed": 0}
+    both = confirmed_tracks(target_folder, modality) if confirmed else None
     records: List[dict] = []
 
     if source == DETECTIONS:
@@ -222,6 +267,9 @@ def load_animals(target_folder: str, modality: str, source: str = TRACKS,
                 track_id = None
                 facts["untracked_detections"] += 1
             if wanted is not None and species_id not in wanted:
+                continue
+            if both is not None and int(track_id or -1) not in both:
+                facts["unconfirmed"] += 1
                 continue
             own = common.resolve_attributes(row.get("attributes"),
                                             enum_labels)
@@ -260,6 +308,9 @@ def load_animals(target_folder: str, modality: str, source: str = TRACKS,
             facts["excluded_not_an_animal"] += 1
             continue
         if wanted is not None and species_id not in wanted:
+            continue
+        if both is not None and track_id not in both:
+            facts["unconfirmed"] += 1
             continue
         boxes = members[track_id]
         centres = [_centre(row) for row in boxes
@@ -308,7 +359,8 @@ def current_species(target_folder: str, modality: str, source: str = TRACKS,
 
 def select_entries(entries: Sequence[dict], id_key: str,
                    species_now: Dict[int, int],
-                   species_ids: Optional[Sequence[int]] = None
+                   species_ids: Optional[Sequence[int]] = None,
+                   only: Optional[set] = None
                    ) -> Tuple[List[dict], int]:
     """The entries of a perpendicular-distance file that count.
 
@@ -320,12 +372,20 @@ def select_entries(entries: Sequence[dict], id_key: str,
     were calculated applies, and both tools agree with the census. An entry
     whose id the store does not know keeps its ``class_id``.
 
+    :param only: the ids that count at all (:func:`confirmed_ids`, when
+        the survey counts what both cameras saw); ``None`` = every id
     :return: ``(kept, false positives dropped)``; each kept entry is a copy
         with ``class_id`` set to the species it counts as.
     """
     wanted = None if species_ids is None else {int(s) for s in species_ids}
     kept, dropped = [], 0
     for entry in entries:
+        if only is not None:
+            try:
+                if int(entry.get(id_key)) not in only:
+                    continue
+            except (TypeError, ValueError):
+                continue
         species_id = entry.get("class_id")
         try:
             species_id = species_now.get(int(entry.get(id_key)), species_id)
@@ -357,7 +417,7 @@ def load_points(target_folder: str, modality: str, source: str = DETECTIONS,
                 species_ids: Optional[Sequence[int]] = None,
                 include_manual: bool = True,
                 run_id: Optional[int] = None,
-                area=None,
+                area=None, confirmed: bool = False,
                 ) -> Tuple[List[Tuple[float, float]], dict]:
     """World-coordinate points for an analytic, plus its provenance.
 
@@ -371,7 +431,8 @@ def load_points(target_folder: str, modality: str, source: str = DETECTIONS,
         tracks the centroid decides, so a track is never half counted.
     """
     rows, provenance = load_rows(
-        target_folder, modality, species_ids, include_manual, run_id)
+        target_folder, modality, species_ids, include_manual, run_id,
+        confirmed)
 
     if source == DETECTIONS:
         points = [_centre(row) for row in rows]
@@ -385,9 +446,11 @@ def load_points(target_folder: str, modality: str, source: str = DETECTIONS,
     # The species filter chose boxes above; an animal is chosen by its own
     # species and placed by all its boxes (load_animals).
     animals, facts = load_animals(target_folder, modality, TRACKS,
-                                  species_ids, include_manual)
+                                  species_ids, include_manual, confirmed)
     points = [(animal["x"], animal["y"]) for animal in animals
               if animal["x"] is not None]
+    if confirmed:
+        provenance["unconfirmed"] = facts["unconfirmed"]
 
     provenance["source"] = TRACKS
     provenance["n_tracks"] = len(points)
@@ -526,6 +589,10 @@ def describe_filter(provenance: dict) -> str:
             f"{provenance['excluded_not_an_animal']} not-an-animal excluded")
     if provenance.get("species_filter"):
         parts.append(f"species {provenance['species_filter']}")
+    if provenance.get("confirmed_by_other_camera"):
+        parts.append(
+            "only what both cameras saw "
+            f"({provenance.get('unconfirmed', 0)} unconfirmed left out)")
     if provenance.get("survey_area"):
         parts.append(
             f"survey area applied ({provenance.get('outside_survey_area', 0)} "

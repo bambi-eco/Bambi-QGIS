@@ -65,7 +65,8 @@ class SurveyGridMixin:
             records = self._census_records(survey, flight, source, area,
                                            log_fn, found)
             seen = habitat.monitored_geometry(
-                flight.target_folder, survey.modality, area)
+                flight.target_folder, survey.modality, area,
+                survey.confirmed)
             if seen is None:
                 raise RuntimeError(
                     f"{flight.name}: no {survey.camera_label} field-of-view "
@@ -121,7 +122,7 @@ class SurveyGridMixin:
 
         document.update({
             "source": source,
-            "camera": survey.camera_label,
+            "camera": survey.counted_label,
             "crs": f"EPSG:{survey.epsg}" if survey.epsg else None,
             "survey_area": None if area is None else area.describe(),
             "species_filter": survey.species,

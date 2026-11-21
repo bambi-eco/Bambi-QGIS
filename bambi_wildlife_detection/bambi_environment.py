@@ -306,7 +306,8 @@ class EnvironmentMixin:
                     flight.name, flight.target_folder, survey.modality,
                     radius, species_ids=ids,
                     include_manual=survey.include_manual, area=area,
-                    epsg=survey.epsg, source=source)
+                    epsg=survey.epsg, source=source,
+                    confirmed=survey.confirmed)
             except analytics_source.AnalyticsError as exc:
                 raise RuntimeError(f"{flight.name}: {exc}") from exc
             results.append(result)

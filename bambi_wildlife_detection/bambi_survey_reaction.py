@@ -143,7 +143,7 @@ class SurveyReactionMixin:
 
         document = {
             "source": "tracks",
-            "camera": survey.camera_label,
+            "camera": survey.counted_label,
             "crs": f"EPSG:{survey.epsg}" if survey.epsg else None,
             "flights": [flight.name for flight in survey.flights],
             "survey_area": None if area is None else area.describe(),
