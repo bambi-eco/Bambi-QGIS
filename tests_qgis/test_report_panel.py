@@ -107,8 +107,9 @@ class TestGroup:
         dock.update_status("survey_report", "🟢 Completed")
         assert "Completed" in dock.report_status.text()
 
-    def test_it_is_the_last_of_the_tab(self, dock):
-        """A report is written when everything else has been run."""
+    def test_it_is_the_last_of_the_overview(self, dock):
+        """A report is written when everything else has been run: it
+        closes the sub tab that says what was found."""
         group = dock.report_btn.parentWidget()
         assert isinstance(group, QGroupBox)
         assert group.title() == "Survey Report"
@@ -117,7 +118,9 @@ class TestGroup:
                    for index in range(layout.count())
                    if layout.itemAt(index).widget() is not None]
         assert widgets[-1] is group
-        assert "Habitat" in widgets[-2].title()
+        assert widgets[-2].title() == "Track Inventory"
+        tabs = dock.analytics_sub_tabs
+        assert tabs.tabText(tabs.indexOf(group.parentWidget())) == "Overview"
 
     def test_the_settings_reach_the_step(self, dock):
         dock.report_title_edit.setText("  Roe deer in the Hintertal  ")

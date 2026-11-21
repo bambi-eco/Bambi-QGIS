@@ -6,6 +6,9 @@ counted - and the analyses that run on it: census, track inventory, density
 and coverage maps, the survey orthomosaic, distance sampling and the
 population estimate, each with the dialog that shows its result.
 
+The survey, the species and the survey area are at the top, for every
+analysis; the analyses are on sub tabs below (``ANALYTICS_PAGES``).
+
 The transect layers are in ``transect_layers``; the Habitat Context group is
 in ``bambi_environment_panel``.
 """
@@ -30,6 +33,22 @@ from ..qgis_compat import FieldType
 from ..bambi_survey_area import SurveyAreaPanel
 from ..bambi_survey_panel import CensusTableDialog, SurveyFlightsPanel
 from ..core import store as _store_kinds, quiet
+from ..gui_utils import FitTabWidget
+
+
+#: The sub tabs of the Survey Analytics tab, by the question they answer,
+#: and the sections on each, top to bottom.
+ANALYTICS_PAGES = (
+    # what was found
+    ("Overview", ("census", "inventory", "report")),
+    # where it was
+    ("Maps", ("density", "grid", "coverage", "orthomosaic")),
+    # how many there are, whether that changes, and how the animals live
+    ("Population && Behaviour",
+     ("distance", "population", "trend", "reaction", "habitat")),
+    # how far to trust it
+    ("Quality", ("review", "position")),
+)
 
 
 class AnalyticsTabMixin:
@@ -117,6 +136,11 @@ class AnalyticsTabMixin:
         self.survey_area_panel = SurveyAreaPanel(self)
         analytics_tab_layout.addWidget(self.survey_area_panel)
 
+        # What is above holds for every analysis; the analyses themselves
+        # are sorted by the question they answer (ANALYTICS_PAGES), each
+        # built below and put on its page at the end.
+        sections = {}
+
         # ----- Census Summary -----
         census_group = QGroupBox("Census Summary")
         census_layout = QVBoxLayout(census_group)
@@ -163,13 +187,13 @@ class AnalyticsTabMixin:
         groups_add_row.addWidget(self.add_groups_status)
         census_layout.addLayout(groups_add_row)
 
-        analytics_tab_layout.addWidget(census_group)
+        sections["census"] = census_group
 
         # ----- Grid Density (dock/grid_density.py) -----
-        analytics_tab_layout.addWidget(self._build_grid_group())
+        sections["grid"] = self._build_grid_group()
 
         # ----- Compare Visits (dock/trend.py) -----
-        analytics_tab_layout.addWidget(self._build_trend_group())
+        sections["trend"] = self._build_trend_group()
 
         # ----- Track Inventory -----
         inventory_group = QGroupBox("Track Inventory")
@@ -220,14 +244,6 @@ class AnalyticsTabMixin:
             "Open the inventory in a window: every individual with every "
             "column, sortable and filterable, with copy and save.")
         inventory_report_row.addWidget(self.track_inventory_report_btn)
-        self.review_queue_btn = QPushButton("→ Review Queue…")
-        self.review_queue_btn.clicked.connect(self.open_review_queue)
-        self.review_queue_btn.setToolTip(
-            "The tracks worth a human look - faint, very short, of no or "
-            "doubtful species, or seen differently by the two cameras - the "
-            "most doubtful first, to approve, rule out or correct one after "
-            "another in the inspector (dock/review_queue.py).")
-        inventory_report_row.addWidget(self.review_queue_btn)
         inventory_report_row.addStretch()
         inventory_layout.addLayout(inventory_report_row)
 
@@ -243,7 +259,7 @@ class AnalyticsTabMixin:
         inventory_add_row.addWidget(self.add_track_inventory_status)
         inventory_layout.addLayout(inventory_add_row)
 
-        analytics_tab_layout.addWidget(inventory_group)
+        sections["inventory"] = inventory_group
 
         # ----- Density Heatmap -----
         density_group = QGroupBox("Density Heatmap")
@@ -296,7 +312,7 @@ class AnalyticsTabMixin:
         density_add_row.addWidget(self.add_density_status)
         density_layout.addLayout(density_add_row)
 
-        analytics_tab_layout.addWidget(density_group)
+        sections["density"] = density_group
 
         # ----- Coverage Map -----
         coverage_group = QGroupBox("Coverage Map")
@@ -348,7 +364,7 @@ class AnalyticsTabMixin:
         coverage_add_row.addWidget(self.add_coverage_status)
         coverage_layout.addLayout(coverage_add_row)
 
-        analytics_tab_layout.addWidget(coverage_group)
+        sections["coverage"] = coverage_group
 
         # ----- Survey Orthomosaic -----
         survey_ortho_group = QGroupBox("Survey Orthomosaic")
@@ -391,7 +407,7 @@ class AnalyticsTabMixin:
         survey_ortho_add_row.addWidget(self.add_survey_ortho_status)
         survey_ortho_layout.addLayout(survey_ortho_add_row)
 
-        analytics_tab_layout.addWidget(survey_ortho_group)
+        sections["orthomosaic"] = survey_ortho_group
 
         # ----- Distance Sampling -----
         ds_group = QGroupBox("Distance Sampling")
@@ -449,13 +465,13 @@ class AnalyticsTabMixin:
         ds_run_row.addWidget(self.distance_sampling_status)
         ds_layout.addLayout(ds_run_row)
 
-        analytics_tab_layout.addWidget(ds_group)
+        sections["distance"] = ds_group
 
         # ----- Reaction to the Drone (dock/reaction.py) -----
-        analytics_tab_layout.addWidget(self._build_reaction_group())
+        sections["reaction"] = self._build_reaction_group()
 
         # ----- Position Uncertainty (dock/position.py) -----
-        analytics_tab_layout.addWidget(self._build_position_group())
+        sections["position"] = self._build_position_group()
 
         # ----- Population Estimation (Transects) -----
         pop_group = QGroupBox("Population Estimation (Transects)")
@@ -590,11 +606,45 @@ class AnalyticsTabMixin:
         pop_add_row.addWidget(self.add_transect_areas_status)
         pop_layout.addLayout(pop_add_row)
 
-        analytics_tab_layout.addWidget(pop_group)
-        analytics_tab_layout.addWidget(self._build_habitat_group())
+        sections["population"] = pop_group
+        sections["habitat"] = self._build_habitat_group()
 
         # ----- Survey Report (dock/report.py): what all of it found -----
-        analytics_tab_layout.addWidget(self._build_report_group())
+        sections["report"] = self._build_report_group()
+
+        # ----- Review Queue (dock/review_queue.py) -----
+        review_group = QGroupBox("Review Queue")
+        review_layout = QVBoxLayout(review_group)
+        review_desc = QLabel(
+            "The tracks worth a human look - faint, very short, of no or "
+            "doubtful species, or seen differently by the two cameras - "
+            "the most doubtful first. It reads the track inventory "
+            "(Overview).")
+        review_desc.setWordWrap(True)
+        review_desc.setStyleSheet("color: gray; font-size: 10px;")
+        review_layout.addWidget(review_desc)
+        review_row = QHBoxLayout()
+        self.review_queue_btn = QPushButton("→ Review Queue…")
+        self.review_queue_btn.clicked.connect(self.open_review_queue)
+        self.review_queue_btn.setToolTip(
+            "Open the queue, to approve, rule out or correct one track "
+            "after another in the inspector.")
+        review_row.addWidget(self.review_queue_btn)
+        review_row.addStretch()
+        review_layout.addLayout(review_row)
+        sections["review"] = review_group
+
+        # ----- The sub tabs -----
+        self.analytics_sub_tabs = FitTabWidget()
+        self.analytics_sections = sections
+        for title, held in ANALYTICS_PAGES:
+            page = QWidget()
+            page_layout = QVBoxLayout(page)
+            for name in held:
+                page_layout.addWidget(sections[name])
+            page_layout.addStretch()
+            self.analytics_sub_tabs.addTab(page, title)
+        analytics_tab_layout.addWidget(self.analytics_sub_tabs)
         analytics_tab_layout.addStretch()
 
     def _on_pop_study_area_mode_changed(self, checked: bool):

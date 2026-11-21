@@ -391,8 +391,10 @@ def survey(dock, tmp_path, monkeypatch):
     return folder, opened
 
 
-def test_the_inventory_group_has_the_button(dock):
+def test_the_quality_tab_has_the_button(dock):
     assert dock.review_queue_btn.text() == "→ Review Queue…"
+    assert dock.analytics_sections["review"].isAncestorOf(
+        dock.review_queue_btn)
 
 
 def test_the_button_opens_the_queue_of_the_survey(dock, survey):

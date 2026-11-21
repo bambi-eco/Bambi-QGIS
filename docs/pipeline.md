@@ -586,6 +586,17 @@ detections, tracks and exported frames into population-level products. It is
 **not tied to the flight selected on the other tabs**: a survey is a set of
 processed flights analysed together.
 
+The survey, the species and the survey area are at the top of the tab and
+hold for every tool. The tools themselves are on four sub tabs, by the
+question they answer:
+
+| Sub tab | Tools | |
+|---|---|---|
+| **Overview** | Census Summary, Track Inventory, Survey Report | What was found |
+| **Maps** | Density Heatmap, Grid Density, Coverage Map, Survey Orthomosaic | Where it was |
+| **Population & Behaviour** | Distance Sampling, Population Estimation (Transects), Compare Visits, Reaction to the Drone, Habitat Context | How many there are, whether that changes, and how the animals live |
+| **Quality** | Review Queue, Position Uncertainty | How far to trust it |
+
 ### The survey: flights, camera, folder
 
 The box at the top of the tab defines the survey every tool below works on:
@@ -1054,7 +1065,7 @@ One row per tracked individual of the chosen camera, with everything the project
 
 ### Review queue
 
-Nobody looks at every track of a survey. Most are plain - a confident detector, a long track, a classifier in no doubt, both cameras agreeing - and a few are not. **→ Review Queue…** (next to *Show Report*) lists the few for the flights and the camera chosen above, the most doubtful first, each with why it is in doubt:
+Nobody looks at every track of a survey. Most are plain - a confident detector, a long track, a classifier in no doubt, both cameras agreeing - and a few are not. **→ Review Queue…** (sub tab *Quality*) lists the few for the flights and the camera chosen above, the most doubtful first, each with why it is in doubt:
 
 | Why | A track is listed when |
 |-----|------------------------|

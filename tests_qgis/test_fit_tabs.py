@@ -78,7 +78,8 @@ def test_a_short_tab_is_not_followed_by_empty_space(shown):
     long_content = area.widget().height()
     _select(dock.main_tabs, "Pre-Processing")
     content = area.widget().height()
-    assert content < long_content - 800
+    # (the survey tools are on sub tabs of their own, each fitted too)
+    assert content < long_content - 400
     # the tab widget takes what its page asks for, and no more
     assert dock.main_tabs.height() <= dock.main_tabs.heightForWidth(
         dock.main_tabs.width())
