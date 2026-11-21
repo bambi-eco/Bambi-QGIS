@@ -16,8 +16,9 @@ from typing import Callable, Dict, Optional
 import numpy as np
 
 from ..core.flight_viewer import FrameCamera
-from ..core.view_camera import OrbitCamera
-from .qt import QOpenGLWidget, QtCore, QtGui, Signal
+from ..core.view_camera import OrbitCamera, view_bearing
+from .compass import MARGIN, Compass
+from .qt import QOpenGLWidget, QtCore, QtGui, QtWidgets, Signal
 
 _Qt = QtCore.Qt
 
@@ -91,6 +92,43 @@ class FlightViewport(QOpenGLWidget):
         self._pick: Optional[Callable] = None
         self._last_hover = 0.0
         self.gl_info = ""
+        #: Which way the view looks, over a corner of it.
+        self.compass = Compass(self)
+        self._place_compass()
+
+    def _place_compass(self):
+        self.compass.move(self.width() - self.compass.width() - MARGIN,
+                          MARGIN)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._place_compass()
+
+    def bearing(self) -> float:
+        """The map bearing the view looks in, degrees from north."""
+        return view_bearing(self.view_projection()[0])
+
+    def set_compass_visible(self, on: bool) -> None:
+        self.compass.setVisible(bool(on))
+
+    def grab_view(self):
+        """The view as a picture: the scene, and the compass over it where
+        it is shown - a picture of terrain says no more than the view did
+        about which way it looks."""
+        image = self.grabFramebuffer()
+        if self.compass.isHidden() or image.isNull():
+            return image
+        self.compass.set_bearing(self.bearing())
+        ratio = image.width() / float(max(self.width(), 1))
+        painter = QtGui.QPainter(image)
+        try:
+            painter.scale(ratio, ratio)
+            self.compass.render(
+                painter, self.compass.pos(), QtGui.QRegion(),
+                QtWidgets.QWidget.RenderFlag.DrawChildren)
+        finally:
+            painter.end()
+        return image
 
     # -- scene API (any thread-free caller, no GL context needed) ---------
 
@@ -286,6 +324,7 @@ class FlightViewport(QOpenGLWidget):
                     self.canvas_painted += 1
             self._canvas_paint = []
         view, proj = self.view_projection()
+        self.compass.set_bearing(view_bearing(view))
         ratio = self.devicePixelRatioF() if hasattr(self, "devicePixelRatioF") else 1.0
         size = (self.width() * ratio, self.height() * ratio)
         base = self.base_texture

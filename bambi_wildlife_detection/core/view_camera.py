@@ -109,3 +109,37 @@ class OrbitCamera:
         inv = np.linalg.inv(self.view())
         d = inv[:3, :3] @ np.array([nx * t * aspect, ny * t, -1.0])
         return inv[:3, 3].copy(), d / np.linalg.norm(d)
+
+
+# ---------------------------------------------------------------------------
+# Which way the view looks
+# ---------------------------------------------------------------------------
+
+COMPASS_POINTS = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
+
+
+def view_bearing(view: np.ndarray) -> float:
+    """The direction a view looks in, as a bearing on the map: degrees
+    clockwise from north (+y), 0 to 360.
+
+    A view that looks down at a slant looks towards where its horizontal
+    part points; one that looks straight down has no such part, and "the
+    direction it looks in" is what is up on the screen. The two agree
+    wherever both exist, so they are added: the bearing is that of the
+    horizontal part of *forward + up*.
+
+    :param view: a 4x4 view matrix as :func:`core.flight_viewer.look_at`
+        makes it (rows: right, up, backward)
+    """
+    view = np.asarray(view, dtype=np.float64)
+    ahead = -view[2, :2] + view[1, :2]
+    if not np.all(np.isfinite(ahead)) or float(np.hypot(*ahead)) < 1e-9:
+        return 0.0
+    bearing = math.degrees(math.atan2(ahead[0], ahead[1])) % 360.0
+    # a hair west of north is north, not 360
+    return 0.0 if bearing > 360.0 - 1e-9 else bearing
+
+
+def compass_point(bearing: float) -> str:
+    """``"NE"`` for 47 degrees: the nearest of the eight points."""
+    return COMPASS_POINTS[int(((float(bearing) % 360.0) + 22.5) // 45.0) % 8]

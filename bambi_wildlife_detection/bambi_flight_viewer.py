@@ -616,6 +616,14 @@ class FlightViewerDialog(ClosesOnce, QDialog):
         self.wire_check = QCheckBox("Wireframe")
         self.wire_check.toggled.connect(self._on_base_changed)
         f.addRow(self.wire_check)
+        self.compass_check = QCheckBox("Show compass")
+        self.compass_check.setChecked(True)
+        self.compass_check.setToolTip(
+            "A compass in the corner of the 3D view: its top is the "
+            "direction the view looks in, the red needle points to the "
+            "map's north, and the bearing is written below it.")
+        self.compass_check.toggled.connect(self._on_compass_toggled)
+        f.addRow(self.compass_check)
         lay.addWidget(base)
 
         row = QHBoxLayout()
@@ -700,7 +708,7 @@ class FlightViewerDialog(ClosesOnce, QDialog):
               "route_check", "poses_check", "history_spin", "step_spin",
               "loop_check", "dem_opacity_slider", "mask_check", "line_spin",
               "marker_spin", "seen_check", "seen_step_spin", "ann_width_spin",
-              "erosion_spin")
+              "erosion_spin", "compass_check")
     _SAVED_COMBOS = ("drape_combo", "annotation_combo", "speed_combo",
                      "texture_combo", "base_combo", "detail_combo", "trail_res_combo")
 
@@ -935,6 +943,10 @@ class FlightViewerDialog(ClosesOnce, QDialog):
         self.viewport.fit(lo, hi)
         if self.follow_check.isChecked():
             self.follow_check.setChecked(False)
+
+    def _on_compass_toggled(self, on):
+        if self.viewport is not None:
+            self.viewport.set_compass_visible(on)
 
     def _on_camera_changed(self):
         new = self.camera_combo.currentData()
@@ -1723,7 +1735,7 @@ class FlightViewerDialog(ClosesOnce, QDialog):
                                             f"view_{self.index:05d}.png"),
             "PNG image (*.png)")
         if path:
-            self.viewport.grabFramebuffer().save(path)
+            self.viewport.grab_view().save(path)
             self.status(f"Saved {path}")
 
     def _when_closed(self):

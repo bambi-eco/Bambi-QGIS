@@ -63,3 +63,68 @@ def test_ray_through_viewport_centre_hits_the_target():
     cam = OrbitCamera(target=(3, 4, 0), distance=50, azimuth=10, elevation=60)
     origin, direction = cam.ray(400, 300, 800, 600)
     np.testing.assert_allclose(origin + direction * 50, cam.target, atol=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# Which way the view looks (the compass of the 3D view)
+# ---------------------------------------------------------------------------
+
+class TestBearing:
+    """x is east and y north, as in the map the scene is drawn in."""
+
+    def looking(self, towards, up=(0.0, 0.0, 1.0), eye=(0.0, 0.0, 100.0)):
+        from bambi_wildlife_detection.core.flight_viewer import look_at
+
+        eye = np.array(eye, dtype=float)
+        return look_at(eye, eye + np.array(towards, dtype=float), up)
+
+    @pytest.mark.parametrize("towards, bearing", [
+        ((0, 1, 0), 0.0), ((1, 0, 0), 90.0), ((0, -1, 0), 180.0),
+        ((-1, 0, 0), 270.0), ((1, 1, 0), 45.0), ((-1, 1, 0), 315.0)])
+    def test_a_level_view_looks_where_it_is_pointed(self, towards, bearing):
+        from bambi_wildlife_detection.core.view_camera import view_bearing
+
+        assert view_bearing(self.looking(towards)) == pytest.approx(bearing)
+
+    def test_a_view_down_at_a_slant_looks_the_same_way(self):
+        from bambi_wildlife_detection.core.view_camera import view_bearing
+
+        assert view_bearing(self.looking((1, 1, -3))) == pytest.approx(45.0)
+        assert view_bearing(self.looking((0, -1, -0.01))) == pytest.approx(
+            180.0)
+
+    def test_straight_down_it_is_what_is_up_on_the_screen(self):
+        from bambi_wildlife_detection.core.view_camera import view_bearing
+
+        north_up = self.looking((0, 0, -1), up=(0, 1, 0))
+        east_up = self.looking((0, 0, -1), up=(1, 0, 0))
+
+        assert view_bearing(north_up) == pytest.approx(0.0)
+        assert view_bearing(east_up) == pytest.approx(90.0)
+
+    def test_the_orbit_camera_as_the_viewer_opens_it(self):
+        """Azimuth -90: the eye is south of the target, looking north."""
+        from bambi_wildlife_detection.core.view_camera import (
+            OrbitCamera, view_bearing)
+
+        camera = OrbitCamera(azimuth=-90.0, elevation=50.0)
+        assert view_bearing(camera.view()) == pytest.approx(0.0, abs=1e-6)
+        camera.orbit(90.0, 0.0)          # the eye goes round to the east
+        assert view_bearing(camera.view()) == pytest.approx(270.0)
+        camera.orbit(0.0, 39.0)          # nearly overhead: still west
+        assert view_bearing(camera.view()) == pytest.approx(270.0)
+
+    def test_a_matrix_that_says_nothing(self):
+        from bambi_wildlife_detection.core.view_camera import view_bearing
+
+        assert view_bearing(np.zeros((4, 4))) == 0.0
+        assert view_bearing(np.full((4, 4), np.nan)) == 0.0
+
+    @pytest.mark.parametrize("bearing, point", [
+        (0, "N"), (22.4, "N"), (22.6, "NE"), (47, "NE"), (90, "E"),
+        (135, "SE"), (180, "S"), (225, "SW"), (270, "W"), (315, "NW"),
+        (337.6, "N"), (359.9, "N"), (360, "N"), (-90, "W"), (450, "E")])
+    def test_the_nearest_of_eight_points(self, bearing, point):
+        from bambi_wildlife_detection.core.view_camera import compass_point
+
+        assert compass_point(bearing) == point
