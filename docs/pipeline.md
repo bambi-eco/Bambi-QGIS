@@ -633,6 +633,8 @@ a little apart.
 - **Every flight must have been matched.** A ticked flight that has tracks
   and no matching run is refused, naming the flight - rather than counted
   as having no animals.
+- **The dataset export follows it** (sub tab *Export*): only the boxes of
+  confirmed tracks are written.
 - **It is recorded.** Results name the camera as `Thermal, confirmed by RGB`.
   The track inventory lists only the confirmed tracks; its *matched_track*
   column says which track of the other camera each one is, with the filter

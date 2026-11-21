@@ -385,3 +385,94 @@ class TestStep:
         with pytest.raises(CancelledException):
             BambiProcessor().run_dataset_export(
                 self.config(survey, tmp_path), cancel_check=lambda: True)
+
+
+# ---------------------------------------------------------------------------
+# Only what both cameras saw
+# ---------------------------------------------------------------------------
+
+class TestConfirmed:
+    @pytest.fixture
+    def matched(self, survey):
+        """RGB saw the roe deer of North (its track 1) and nothing else."""
+        from bambi_wildlife_detection.core import match_store
+
+        north = survey[0]["target_folder"]
+        make_flight(north, [
+            {"id": 1, "species": "roe deer", "at": (10, 11),
+             "frames": (0, 2)}], modality="w")
+        match_store.record_matches(north, [
+            {"track_id_t": 1, "track_id_w": 1, "shared": 2,
+             "median_dist": 0.5, "pairs": []}])
+        return survey[:1]
+
+    def test_everything_without_the_filter(self, matched, tmp_path, sized):
+        output, summary, _log = exported(matched, tmp_path)
+
+        document = read(output, "train", de.COCO_FILE)
+        assert {a["track_id"] for a in document["annotations"]} == {1, 2}
+        assert summary["confirmed_by_other_camera"] is False
+
+    def test_only_the_boxes_of_confirmed_tracks(self, matched, tmp_path,
+                                                sized):
+        output, summary, _log = exported(matched, tmp_path, confirmed=True)
+
+        document = read(output, "train", de.COCO_FILE)
+        assert {a["track_id"] for a in document["annotations"]} == {1}
+        assert len(document["annotations"]) == 2
+        # the red deer nobody confirmed is no class of the dataset
+        assert summary["classes"] == ["roe deer"]
+        assert summary["confirmed_by_other_camera"] is True
+
+    def test_every_format_follows_it(self, matched, tmp_path):
+        output, _summary, _log = exported(matched, tmp_path, key="mot",
+                                          confirmed=True)
+
+        with open(os.path.join(output, "train", "North", "gt",
+                               "gt.txt")) as handle:
+            tracks = {line.split(",")[1] for line in handle}
+        assert tracks == {"1"}
+
+    def test_the_filter_ends_with_the_export(self, matched, tmp_path, sized):
+        from bambi_wildlife_detection.core.exporters import common
+
+        exported(matched, tmp_path, confirmed=True)
+
+        vocabulary = common.load_vocabulary(matched[0]["target_folder"])
+        rows, _animals = common.load_export_rows(
+            matched[0]["target_folder"], "t", vocabulary)
+        assert {row["track_id"] for row in rows} == {1, 2}
+
+    def test_the_step_takes_it_from_the_survey(self, matched, tmp_path,
+                                               sized):
+        from bambi_wildlife_detection.bambi_processing import BambiProcessor
+        from bambi_wildlife_detection.core.survey import Survey, SurveyFlight
+
+        survey = Survey(folder=str(tmp_path / "survey"), confirmed=True,
+                        flights=[SurveyFlight("North",
+                                              matched[0]["target_folder"],
+                                              32633)])
+        summary = BambiProcessor().run_dataset_export({
+            "survey": survey.to_dict(),
+            "dataset_export": {"format": "coco",
+                               "output": str(tmp_path / "dataset"),
+                               "splits": {"North": "train"},
+                               "include_images": False}})
+
+        assert summary["confirmed_by_other_camera"] is True
+        assert summary["classes"] == ["roe deer"]
+
+    def test_a_flight_never_matched_is_refused(self, survey, tmp_path):
+        from bambi_wildlife_detection.bambi_processing import BambiProcessor
+        from bambi_wildlife_detection.core.survey import Survey, SurveyFlight
+
+        described = Survey(folder=str(tmp_path / "survey"), confirmed=True,
+                           flights=[SurveyFlight("South",
+                                                 survey[1]["target_folder"],
+                                                 32633)])
+        with pytest.raises(RuntimeError, match="have not been matched"):
+            BambiProcessor().run_dataset_export({
+                "survey": described.to_dict(),
+                "dataset_export": {"format": "coco",
+                                   "output": str(tmp_path / "dataset"),
+                                   "splits": {"South": "train"}}})

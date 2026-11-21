@@ -40,9 +40,11 @@ class DatasetExportMixin:
             "goes into one split whole: frames of one flight are seconds "
             "apart and show the same animals, so a flight on both sides of "
             "a split would only test how well a model remembers. Exported "
-            "is what the flights hold for the survey's camera; the species "
-            "filter and the survey area do not apply. One flight alone is "
-            "exported on the Processing tab.")
+            "is what the flights hold for the survey's camera - with 'Only "
+            "animals confirmed by the other camera' ticked in the Survey "
+            "box, only what both cameras saw. The species filter and the "
+            "survey area do not apply. One flight alone is exported on the "
+            "Processing tab.")
         description.setWordWrap(True)
         description.setStyleSheet("color: gray; font-size: 10px;")
         layout.addWidget(description)

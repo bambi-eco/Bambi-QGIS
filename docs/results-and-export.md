@@ -549,9 +549,13 @@ generalises - so the splits are made of flights, never of frames or labels.
   every flight under `train`, `val` and `test`.
 - The other formats are a folder per flight inside its split - for **MOT**
   that is the layout of the benchmark itself (`train/<sequence>`).
-- **What is exported** is what the flights hold for the survey's camera. The
-  species filter, the survey area and *Only animals confirmed by the other
-  camera* are questions of an analysis and do not apply.
+- **What is exported** is what the flights hold for the survey's camera.
+  With *Only animals confirmed by the other camera* ticked in the Survey box,
+  only the boxes of tracks the other camera saw too are written - cleaner
+  labels, without the animals only one camera could see - and `dataset.json`
+  says so (`confirmed_by_other_camera`). Every flight must then have been
+  matched. The species filter and the survey area are questions of an
+  analysis and do not apply.
 - **Exporting again** into the same folder is fine while every flight is in
   the split it was in. A folder that holds an earlier export in which a
   flight was in another split is refused, naming the flight - otherwise it

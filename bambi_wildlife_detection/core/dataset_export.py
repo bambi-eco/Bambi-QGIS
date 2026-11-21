@@ -338,7 +338,7 @@ def export(key: str, flights: Sequence[dict], modality: str, output: str,
            progress: Optional[Callable[[int], None]] = None,
            cancelled: Optional[Callable[[], bool]] = None,
            log: Optional[Callable[[str], None]] = None,
-           run_export=None) -> dict:
+           run_export=None, confirmed: bool = False) -> dict:
     """Export the flights of a survey as one dataset.
 
     :param key: the format, a key of ``core.exporters.EXPORTERS``
@@ -346,6 +346,8 @@ def export(key: str, flights: Sequence[dict], modality: str, output: str,
         a flight whose split is none of :data:`SPLITS` is left out
     :param output: the dataset's folder
     :param run_export: stands in for ``core.exporters.run_export`` (tests)
+    :param confirmed: only what both cameras saw - the boxes of tracks
+        the cross-modal matching paired with a track of the other camera
     :return: the content of ``dataset.json``
     :raises DatasetExportError: when nothing is to export, the format is
         unknown, the output folder holds another export, or no flight
@@ -393,7 +395,8 @@ def export(key: str, flights: Sequence[dict], modality: str, output: str,
                 epsg=flight.get("epsg"),
                 include_not_an_animal=include_not_an_animal,
                 include_images=include_images,
-                log_fn=lambda message: log(f"  {message}"))
+                log_fn=lambda message: log(f"  {message}"),
+                **({"confirmed": True} if confirmed else {}))
         except exporters.ExportError as exc:
             failed.append({"name": flight["name"], "split": split,
                            "error": str(exc)})
@@ -420,6 +423,7 @@ def export(key: str, flights: Sequence[dict], modality: str, output: str,
     summary = {
         "format": key, "format_label": label,
         "camera": {"t": "thermal", "w": "rgb"}.get(modality, modality),
+        "confirmed_by_other_camera": bool(confirmed),
         "created": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "splits": by_split(exported),
         "classes": classes,

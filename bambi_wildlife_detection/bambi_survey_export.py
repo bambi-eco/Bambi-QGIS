@@ -26,10 +26,11 @@ class SurveyExportMixin:
         ``include_not_an_animal`` (``None``: as the format does by
         default).
 
-        What is exported is what the flights hold - every labelled box of
-        the survey's camera. The species filter, the survey area and "only
-        confirmed by the other camera" are questions of an analysis and do
-        not apply.
+        What is exported is what the flights hold for the survey's camera
+        - with "Only animals confirmed by the other camera" on in the
+        Survey box, only the boxes of tracks the other camera saw too. The
+        species filter and the survey area are questions of an analysis
+        and do not apply.
         """
         from .bambi_processing import CancelledException
         from .core import dataset_export, exporters
@@ -51,7 +52,7 @@ class SurveyExportMixin:
                    for flight in survey.flights]
         if log_fn:
             log_fn(f"Exporting {self._flights_note(survey)} "
-                   f"({survey.camera_label}) as {exporters.EXPORTERS[key][0]}"
+                   f"({survey.counted_label}) as {exporters.EXPORTERS[key][0]}"
                    f": {dataset_export.describe({f['name']: f['split'] for f in flights})}")
 
         stopped = []
@@ -67,7 +68,8 @@ class SurveyExportMixin:
                 (settings.get("output") or "").strip(),
                 include_images=settings.get("include_images"),
                 include_not_an_animal=settings.get("include_not_an_animal"),
-                progress=progress_fn, cancelled=cancelled, log=log_fn)
+                progress=progress_fn, cancelled=cancelled, log=log_fn,
+                confirmed=survey.confirmed)
         except dataset_export.DatasetExportError as exc:
             if stopped:
                 raise CancelledException("Dataset export cancelled") from exc

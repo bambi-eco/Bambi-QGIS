@@ -62,7 +62,7 @@ SUPPORTS_IMAGES = frozenset({"coco", "yolo", "mot", "camtrap"})
 
 def run_export(key: str, target_folder: str, modality: str, output: str,
                epsg=None, include_not_an_animal=None, image_size=None,
-               include_images=None, log_fn=None):
+               include_images=None, log_fn=None, confirmed=False):
     """Run one exporter, passing only the arguments it accepts.
 
     The formats differ in what they can carry, so the caller should not have to
@@ -74,6 +74,10 @@ def run_export(key: str, target_folder: str, modality: str, output: str,
     to probing an extracted frame, and say so clearly if there is none.
 
     *include_images* is ignored by formats that reference no image.
+
+    *confirmed* exports only what both cameras saw: the boxes of tracks
+    that the cross-modal matching paired with a track of the other camera
+    (``common.only_confirmed``).
     """
     if key not in EXPORTERS:
         raise ExportError(f"Unknown export format '{key}'.")
@@ -93,7 +97,9 @@ def run_export(key: str, target_folder: str, modality: str, output: str,
             include_not_an_animal = key not in TRAINING_FORMATS
         kwargs["include_not_an_animal"] = include_not_an_animal
 
-    return function(target_folder, modality, output, **kwargs)
+    from . import common
+    with common.only_confirmed(confirmed):
+        return function(target_folder, modality, output, **kwargs)
 
 
 __all__ = [

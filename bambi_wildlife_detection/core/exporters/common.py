@@ -22,6 +22,8 @@ the three decisions that would otherwise be made seven times live here:
   and checked by hand.
 """
 
+import contextlib
+import contextvars
 import json
 import os
 from datetime import datetime, timezone
@@ -226,6 +228,25 @@ def box_species(own: int, animal: Optional[dict]) -> int:
     return animal["species_id"]
 
 
+#: Whether the export running now writes only what both cameras saw
+#: (:func:`only_confirmed`). A setting of the run, not of a format: every
+#: exporter reads its rows through :func:`load_export_rows`.
+_ONLY_CONFIRMED = contextvars.ContextVar("bambi_export_confirmed",
+                                         default=False)
+
+
+@contextlib.contextmanager
+def only_confirmed(on: bool = True):
+    """While this is open, exports write only the boxes of tracks that the
+    cross-modal matching paired with a track of the other camera - and of
+    the animals only those."""
+    token = _ONLY_CONFIRMED.set(bool(on))
+    try:
+        yield
+    finally:
+        _ONLY_CONFIRMED.reset(token)
+
+
 def load_export_rows(target_folder: str, modality: str, vocabulary: dict,
                      include_not_an_animal: bool = False,
                      include_geo: bool = True
@@ -243,11 +264,22 @@ def load_export_rows(target_folder: str, modality: str, vocabulary: dict,
     * ``not-an-animal`` is decided on the exported species, so the boxes of
       a track marked as a false positive leave a training export with it.
 
+    Inside :func:`only_confirmed` only the boxes of tracks the other
+    camera saw too are returned, and only those animals.
+
     :return: ``(rows, animals)`` - *animals* is :func:`animals_by_track`
     """
     rows = load_detections(target_folder, modality,
                            include_not_an_animal=True, include_geo=include_geo)
     animals = animals_by_track(target_folder, modality, vocabulary)
+    if _ONLY_CONFIRMED.get():
+        from .. import match_store
+        both = {int(track) for track in match_store.partner_tracks(
+            target_folder, modality)}
+        rows = [row for row in rows
+                if int(row.get("track_id") or -1) in both]
+        animals = {track: animal for track, animal in animals.items()
+                   if track in both}
     for row in rows:
         animal = animals.get(row.get("track_id"))
         row["box_species_id"] = row["species_id"]
