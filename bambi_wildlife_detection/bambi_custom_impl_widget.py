@@ -176,11 +176,10 @@ def describe(spec: dict, kind: str, camera: str = "", task: str = "",
                          "gaps " + ("applicable" if impl.interpolate
                                     else "not applicable"))
         elif kind == custom_models.IMPORTER:
-            lines.append(
-                "Its boxes are in the pixels of the "
-                + ("raw video (undistorted on import)"
-                   if impl.import_space == custom_models.IMPORT_RAW
-                   else "extracted frames"))
+            where = ("raw video (undistorted on import)"
+                     if impl.import_space == custom_models.IMPORT_RAW
+                     else "extracted frames")
+            lines.append(f"Its boxes are in the pixels of the {where}")
         elif kind == custom_models.EMBEDDER:
             import numpy as np
             status("Test run on two black crops...")
