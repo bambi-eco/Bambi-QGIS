@@ -39,11 +39,12 @@ def no_trust(monkeypatch):
 
 def test_the_boxes_exist_and_start_off(dock):
     assert set(dock._custom_boxes) == {"detector_t", "detector_w", "tracker",
-                                       "embedder", "importer"}
+                                       "embedder", "importer", "exporter"}
     config = dock.get_config()["custom_implementations"]
     # the importer replaces nothing: it runs when its own button is pressed
     assert not any(custom_models.is_custom(spec)
-                   for key, spec in config.items() if key != "importer")
+                   for key, spec in config.items()
+                   if key not in ("importer", "exporter"))
     assert dock.custom_samples_btn is not None
 
 

@@ -338,7 +338,8 @@ def export(key: str, flights: Sequence[dict], modality: str, output: str,
            progress: Optional[Callable[[int], None]] = None,
            cancelled: Optional[Callable[[], bool]] = None,
            log: Optional[Callable[[str], None]] = None,
-           run_export=None, confirmed: bool = False) -> dict:
+           run_export=None, confirmed: bool = False,
+           custom: Optional[dict] = None) -> dict:
     """Export the flights of a survey as one dataset.
 
     :param key: the format, a key of ``core.exporters.EXPORTERS``
@@ -346,6 +347,8 @@ def export(key: str, flights: Sequence[dict], modality: str, output: str,
         a flight whose split is none of :data:`SPLITS` is left out
     :param output: the dataset's folder
     :param run_export: stands in for ``core.exporters.run_export`` (tests)
+    :param custom: the spec of the user's own exporter, for the format
+        ``core.exporters.CUSTOM``
     :param confirmed: only what both cameras saw - the boxes of tracks
         the cross-modal matching paired with a track of the other camera
     :return: the content of ``dataset.json``
@@ -396,7 +399,8 @@ def export(key: str, flights: Sequence[dict], modality: str, output: str,
                 include_not_an_animal=include_not_an_animal,
                 include_images=include_images,
                 log_fn=lambda message: log(f"  {message}"),
-                **({"confirmed": True} if confirmed else {}))
+                **({"confirmed": True} if confirmed else {}),
+                **({"custom": custom} if key == exporters.CUSTOM else {}))
         except exporters.ExportError as exc:
             failed.append({"name": flight["name"], "split": split,
                            "error": str(exc)})

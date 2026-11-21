@@ -1,8 +1,10 @@
 # Custom Implementations
 
 Detection, tracking, the embedding model and every classification stage can be
-replaced by your own code (since 9.0.0; the embedding model since 9.1.0), and
-detections or tracks made by another tool can be imported with it (9.1.0). A custom implementation is **one `.py` file with a class**
+replaced by your own code (since 9.0.0; the embedding model since 9.1.0).
+Detections or tracks made by another tool can be imported with it, and
+detections, tracks and segmentation masks exported in a format of your own
+(9.1.0). A custom implementation is **one `.py` file with a class**
 that follows a small interface; the plugin loads it, hands it frames,
 detections or crops, checks what it returns and keeps doing everything else -
 frame selection, storage, geo-referencing, voting, class mapping, layers and
@@ -14,6 +16,7 @@ exports.
 | Tracking (A2) | built-in / BoxMOT / geo-referenced trackers | "detections → tracks" |
 | Embeddings (C1) | DINOv3 | "cut-out animals → vectors" |
 | Classification (C2-C5) | triplet-net heads on DINOv3 embeddings | "frames of an animal → class" |
+| Export | COCO, YOLO, MOT, GeoJSON, Camtrap DP, … | "detections, tracks and masks → your files" |
 | Import (in place of A1 / A2) | the TRex tracklet import | "another tool's file → boxes, with or without tracks" |
 
 ## Getting started
@@ -28,6 +31,7 @@ exports.
    | `detector_dronemegadetector.py` | DroneMegaDetector (RF-DETR; person / animal / vehicle), with tiling for large frames |
    | `tracker_iou.py` | a small greedy IoU tracker, no extra packages |
    | `embedder_colour_histogram.py` | the smallest embedding model - a colour histogram per crop, no extra packages - with a torchvision ResNet as an example in its header |
+   | `exporter_csv.py` | exports detections, tracks and segmentation masks as CSV / JSON, no extra packages |
    | `importer_csv.py` | imports detections or tracks from a CSV file, no extra packages |
    | `classifier_embeddings_head.py` | the built-in kind of classifier: a TorchScript head on the DINOv3 embeddings |
    | `classifier_crops_torchscript.py` | an image classifier working on the cut-out boxes, no embeddings needed |
@@ -41,6 +45,10 @@ exports.
    - **Tracking**: *Configuration → Tracking → Custom tracker*.
    - **Embeddings**: *Configuration → Classification → Custom embedding
      model*.
+   - **Export**: choose the format **Custom exporter…** under *Processing →
+     Export* (one flight) or *Survey Analytics → Export* (several flights
+     with splits); the file is picked in the **Custom exporter** box of
+     *Processing → Export*.
    - **Import**: *Configuration → Tracking → Custom import*, with the file
      or folder to read as **Source**, then **Import now**.
    - **Classification**: in the model table of *Configuration →
@@ -258,6 +266,50 @@ interpolated boxes are not detections). Two things decide it:
   between two sightings would be wrong. Default: applicable.
 - the **Interpolate gaps in the tracks** tick box of the Custom tracker box
   switches it on or off where it is applicable.
+
+### Exporter
+
+An exporter writes the detections, tracks and segmentation masks of a flight
+in a format of your own. The plugin reads the store and hands everything
+over as plain Python - species and enum values as names, never ids - and the
+class writes its files:
+
+```python
+class MyExporter:
+    def setup(self, context):
+        return {"name": "My format"}
+
+    def run(self, data, output):
+        # output: a folder that exists and is yours to fill
+        for detection in data["detections"]:
+            ...
+```
+
+| `data[...]` | |
+|---|---|
+| `flight` | `name`, `folder`, `camera` (`"thermal"` / `"rgb"`), `crs` (`"EPSG:32633"` or `None`) |
+| `frames` | per extracted frame: `index`, `file`, `path`, `timestamp`, `duplicated` |
+| `frame_size` | `(width, height)`, or `None` when it could not be read |
+| `species` | the species names that occur |
+| `detections` | `detection_id`, `frame`, `box` = `(x1, y1, x2, y2)` in pixels, `confidence`, `species`, `track_id` (or `None`), `attributes` (sex, age, approved, custom fields), `world` = the box corners `(x1, y1, z1, x2, y2, z2)` in the project CRS, `lonlat` = `(lon, lat)` of its centre |
+| `tracks` | `track_id`, `species`, `attributes`, `detection_ids` (in frame order), `first_frame`, `last_frame` |
+| `segmentations` | `segment_id`, `detection_id` (or `None`), `frame`, `polygon` (rings of `[x, y]` in pixels), `world` (the same in the project CRS), `lonlat` (in WGS84), `attributes` |
+| `options` | `include_images`, `include_not_an_animal` - the export's tick boxes |
+
+- `world` and `lonlat` are `None` for what has not been geo-referenced;
+  `lonlat` also needs the target CRS to be set.
+- **What is in `data` follows the export**, as for every format: detections
+  labelled `not-an-animal` only when the box is ticked, and - in a survey
+  with *Only animals confirmed by the other camera* - only the boxes, tracks
+  and masks of confirmed animals. A mask of a detection that is not exported
+  is left out with it.
+- **Images** are the exporter's business: `options["include_images"]` says
+  whether they are wanted, `frame["path"]` where each one is.
+- **Several flights:** in *Survey Analytics → Export* the exporter runs once
+  per flight, into `<dataset>/<split>/<flight>/`; `splits.json` and
+  `dataset.json` are written by the plugin.
+- The segmentation tool keeps its own GeoJSON export; a custom exporter gets
+  the masks of the flight's camera with everything else.
 
 ### Importer
 

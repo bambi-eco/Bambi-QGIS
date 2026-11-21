@@ -69,7 +69,9 @@ class SurveyExportMixin:
                 include_images=settings.get("include_images"),
                 include_not_an_animal=settings.get("include_not_an_animal"),
                 progress=progress_fn, cancelled=cancelled, log=log_fn,
-                confirmed=survey.confirmed)
+                confirmed=survey.confirmed,
+                custom=(config.get("custom_implementations") or {}).get(
+                    "exporter"))
         except dataset_export.DatasetExportError as exc:
             if stopped:
                 raise CancelledException("Dataset export cancelled") from exc

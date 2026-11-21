@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """Custom implementations of the detection, tracking, embedding and
-classification stages, and of the import of detections and tracks made
-elsewhere (9.0.0; embedding and import 9.1.0).
+classification stages, of the import of detections and tracks made
+elsewhere, and of the export in a format of one's own (9.0.0; embedding,
+import and export 9.1.0).
 
 A custom implementation is **one ``.py`` file with a class** that follows
 the interface below. The file does not have to stand alone: its folder is
@@ -152,6 +153,24 @@ calibration, and ``run`` then has to say the video's size as
 ``raw_size``). The boxes are placed on the ground by the Geo-Reference
 step, as every other box.
 
+**Exporter** - the detections, tracks and segmentation masks of a flight
+written in a format of your own::
+
+    run(data, output)
+
+``output`` is a folder that exists and is the exporter's to fill.
+``data`` is everything the built-in formats are made from, as plain
+Python (``core.exporters.custom``): ``flight`` (name, folder, camera,
+crs), ``frames`` (index, file, path, timestamp), ``frame_size``,
+``species``, ``detections`` (id, frame, pixel ``box``, confidence,
+species, track_id, attributes, ``world`` corners, ``lonlat``), ``tracks``
+(id, species, attributes, detection_ids, first and last frame),
+``segmentations`` (id, detection_id, frame, ``polygon`` in pixels,
+``world`` and ``lonlat`` rings, attributes) and ``options``
+(include_images, include_not_an_animal). Species and enum values are
+names, never ids. ``setup`` may return ``name``, what the format is
+called in the log.
+
 Camera extrinsics
 -----------------
 Every kind is told where the camera was: a detector's ``frame.pose``, each
@@ -203,7 +222,8 @@ TRACKER = "tracker"
 CLASSIFIER = "classifier"
 EMBEDDER = "embedder"
 IMPORTER = "importer"
-KINDS = (DETECTOR, TRACKER, CLASSIFIER, EMBEDDER, IMPORTER)
+EXPORTER = "exporter"
+KINDS = (DETECTOR, TRACKER, CLASSIFIER, EMBEDDER, IMPORTER, EXPORTER)
 
 THERMAL, RGB, MATCHED = "thermal", "rgb", "matched"
 #: The inputs a kind can be asked to work on.
@@ -213,6 +233,7 @@ CAMERAS = {
     CLASSIFIER: (THERMAL, RGB, MATCHED),
     EMBEDDER: (THERMAL, RGB),
     IMPORTER: (THERMAL, RGB),
+    EXPORTER: (THERMAL, RGB),
 }
 
 INPUT_EMBEDDINGS, INPUT_CROPS = "embeddings", "crops"
@@ -231,6 +252,7 @@ _REQUIRED = {
     CLASSIFIER: ("setup",),
     EMBEDDER: ("setup", "run"),
     IMPORTER: ("setup", "run"),
+    EXPORTER: ("setup", "run"),
 }
 
 #: The source value that selects a custom implementation in a model spec.
@@ -820,6 +842,12 @@ class Implementation:
         return normalise_track_call(
             self.call("run_track", batch, items), len(self.class_names),
             self.label)
+
+    # -- exporter -----------------------------------------------------------
+
+    def export(self, data: dict, output: str):
+        """Let the user's class write *data* into the folder *output*."""
+        return self.call("run", data, output)
 
     # -- importer -----------------------------------------------------------
 

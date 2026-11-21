@@ -1574,6 +1574,9 @@ class ConfigurationTabMixin:
             return [custom.get("embedder")]
         if step == "custom_import":
             return [custom.get("importer")]
+        if step == "dataset_export":
+            chosen = (config.get("dataset_export") or {}).get("format")
+            return [custom.get("exporter")] if chosen == "custom" else []
         if step.startswith("classif") or step == "life_stage":
             specs = []
             for spec in (config.get("classification_models") or {}).values():

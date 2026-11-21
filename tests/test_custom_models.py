@@ -313,7 +313,8 @@ def _sample(name):
 def test_every_sample_holds_exactly_one_class_of_its_kind():
     names = cm.sample_files()
     assert {n.split("_")[0] for n in names} == \
-        {"detector", "tracker", "classifier", "embedder", "importer"}
+        {"detector", "tracker", "classifier", "embedder", "importer",
+         "exporter"}
     for name in names:
         kind = name.split("_")[0]
         # imports of torch / ultralytics / transformers happen in setup(),

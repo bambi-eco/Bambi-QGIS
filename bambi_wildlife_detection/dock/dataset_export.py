@@ -66,6 +66,13 @@ class DatasetExportMixin:
             self._on_dataset_format_changed)
         format_row.addWidget(self.dataset_format_combo, 1)
         layout.addLayout(format_row)
+        self.dataset_custom_label = QLabel(
+            "Each flight is written by your own exporter: the one chosen "
+            "on the Processing tab, under Export - Custom exporter.")
+        self.dataset_custom_label.setWordWrap(True)
+        self.dataset_custom_label.setStyleSheet(
+            "color: gray; font-size: 10px;")
+        layout.addWidget(self.dataset_custom_label)
 
         # ----- which flight goes where -----
         self._dataset_splits = {}        # normalised folder -> split
@@ -259,6 +266,7 @@ class DatasetExportMixin:
         self.dataset_false_positives_check.setChecked(
             key not in exporters.TRAINING_FORMATS and key != "dwca")
         self.dataset_false_positives_check.blockSignals(blocked)
+        self.dataset_custom_label.setVisible(key == exporters.CUSTOM)
         self._dataset_export_changed()
 
     def _browse_dataset_output(self):
@@ -387,6 +395,13 @@ class DatasetExportMixin:
         if not settings["output"]:
             QMessageBox.warning(
                 self, "Dataset Export", "Choose the folder to export into.")
+            return
+        if key == exporters.CUSTOM and not (
+                self.custom_export_box.spec().get("path")):
+            QMessageBox.warning(
+                self, "Dataset Export",
+                "Choose the .py file with your exporter on the Processing "
+                "tab, under Export - Custom exporter, first.")
             return
         if not any(split in dataset_export.SPLITS
                    for split in settings["splits"].values()):

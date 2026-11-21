@@ -510,6 +510,10 @@ Things worth knowing:
   `val` in `data.yaml` names the training images so the file is valid as
   written; split it before believing any validation number.
 
+A format that is not in the list can be written by a class of your own: the
+format **Custom exporter…** hands the flight's detections, tracks and
+segmentation masks to it ([Custom Implementations](custom-implementations.md#exporter)).
+
 ### Several flights as one dataset, with splits
 
 *Processing → Export* writes one flight. **Survey Analytics → Export →

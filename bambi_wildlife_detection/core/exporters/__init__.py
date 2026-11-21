@@ -17,11 +17,15 @@ Two families:
 
 from .biodiversity import export_darwin_core
 from .camtrap import export_camtrap_dp
+from .custom import export_custom
 from .common import ExportError
 from .detections import export_coco, export_mot, export_yolo
 from .geo import (
     export_geojson, export_segmentation_geojson, export_trex_npz,
 )
+
+#: The format that is the user's own exporter.
+CUSTOM = "custom"
 
 #: ``key -> (label, callable, output_is_folder)``, for the export UI.
 EXPORTERS = {
@@ -34,6 +38,8 @@ EXPORTERS = {
                              export_segmentation_geojson, False),
     "camtrap": ("Camtrap DP (survey package)", export_camtrap_dp, True),
     "dwca": ("Darwin Core Archive (GBIF)", export_darwin_core, True),
+    # the user's own format (core.custom_models, kind "exporter")
+    CUSTOM: ("Custom exporter…", export_custom, True),
 }
 
 #: Default file name offered for the single-file formats.
@@ -57,12 +63,13 @@ NEEDS_FRAME_SIZE = frozenset({"coco", "yolo"})
 #: but YOLO and MOT are folder layouts that do not resolve without them, and a
 #: Camtrap DP package is only self-contained with its media. GeoJSON and the
 #: TRex ``.npz`` reference no image at all and are absent for that reason.
-SUPPORTS_IMAGES = frozenset({"coco", "yolo", "mot", "camtrap"})
+SUPPORTS_IMAGES = frozenset({"coco", "yolo", "mot", "camtrap", CUSTOM})
 
 
 def run_export(key: str, target_folder: str, modality: str, output: str,
                epsg=None, include_not_an_animal=None, image_size=None,
-               include_images=None, log_fn=None, confirmed=False):
+               include_images=None, log_fn=None, confirmed=False,
+               custom=None, model_dir=""):
     """Run one exporter, passing only the arguments it accepts.
 
     The formats differ in what they can carry, so the caller should not have to
@@ -78,12 +85,17 @@ def run_export(key: str, target_folder: str, modality: str, output: str,
     *confirmed* exports only what both cameras saw: the boxes of tracks
     that the cross-modal matching paired with a track of the other camera
     (``common.only_confirmed``).
+
+    *custom* is the spec of the user's own exporter, for the format
+    :data:`CUSTOM`; it is handed the project CRS where one is known.
     """
     if key not in EXPORTERS:
         raise ExportError(f"Unknown export format '{key}'.")
     _label, function, _is_folder = EXPORTERS[key]
 
     kwargs = {"log_fn": log_fn}
+    if key == CUSTOM:
+        kwargs.update(custom=custom, epsg=epsg, model_dir=model_dir)
     if key in NEEDS_CRS:
         kwargs["epsg"] = epsg
     if key in NEEDS_FRAME_SIZE and image_size is not None:
@@ -105,6 +117,7 @@ def run_export(key: str, target_folder: str, modality: str, output: str,
 __all__ = [
     "DEFAULT_FILENAME", "EXPORTERS", "ExportError", "NEEDS_CRS",
     "NEEDS_FRAME_SIZE", "SUPPORTS_IMAGES", "TRAINING_FORMATS", "run_export",
+    "CUSTOM", "export_custom",
     "export_camtrap_dp", "export_coco", "export_darwin_core",
     "export_geojson", "export_mot", "export_segmentation_geojson",
     "export_trex_npz", "export_yolo",

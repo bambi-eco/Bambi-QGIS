@@ -175,6 +175,9 @@ def describe(spec: dict, kind: str, camera: str = "", task: str = "",
             lines.append(f"Works in {impl.space} space; interpolation of "
                          "gaps " + ("applicable" if impl.interpolate
                                     else "not applicable"))
+        elif kind == custom_models.EXPORTER:
+            lines.append("Writes detections, tracks and segmentation "
+                         "masks into the folder it is given")
         elif kind == custom_models.IMPORTER:
             where = ("raw video (undistorted on import)"
                      if impl.import_space == custom_models.IMPORT_RAW

@@ -122,7 +122,7 @@ def test_export_without_a_store_is_refused(tmp_path):
 def test_registry_lists_every_format():
     assert set(exporters.EXPORTERS) == {
         "coco", "yolo", "mot", "trex", "geojson", "geojson_segmentation",
-        "camtrap", "dwca"}
+        "camtrap", "dwca", "custom"}
 
 
 def test_the_two_geojson_formats_say_what_they_hold():
@@ -1174,8 +1174,10 @@ def test_trex_explains_an_empty_export(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_the_formats_that_can_carry_images_are_the_ones_that_name_them():
-    """GeoJSON and TRex reference no image, so the option would be a lie."""
-    assert exporters.SUPPORTS_IMAGES == {"coco", "yolo", "mot", "camtrap"}
+    """GeoJSON and TRex reference no image, so the option would be a lie.
+    A custom exporter is told the choice and copies the frames itself."""
+    assert exporters.SUPPORTS_IMAGES == {"coco", "yolo", "mot", "camtrap",
+                                         "custom"}
 
 
 def test_coco_puts_the_images_beside_the_json(survey, tmp_path):

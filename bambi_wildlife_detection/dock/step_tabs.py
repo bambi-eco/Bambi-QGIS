@@ -705,6 +705,37 @@ class StepTabsMixin:
         )
         export_layout.addWidget(self.export_images_check)
 
+        # ----- Custom exporter (core.custom_models, kind "exporter") -----
+        from ..bambi_custom_impl_widget import CustomImplementationBox
+        from ..core import custom_models as _custom_models
+
+        export_box = CustomImplementationBox(
+            "Custom exporter", _custom_models.EXPORTER, checkable=False)
+        export_box.setToolTip(
+            "A format of your own: a class with setup(context) and "
+            "run(data, output) that writes the detections, tracks and "
+            "segmentation masks it is handed into the output folder.")
+        export_box_info = QLabel(
+            "Used by the format <b>Custom exporter…</b> - here and in "
+            "Survey Analytics → Export. Write a class with "
+            "<code>setup(context)</code> and <code>run(data, output)</code>"
+            ": <code>data</code> holds the flight's frames, detections, "
+            "tracks and segmentation masks, with species as names and "
+            "positions in pixels, in the project CRS and as longitude / "
+            "latitude; the class writes its files into the folder "
+            "<code>output</code>. The sample <code>exporter_csv.py</code> "
+            "shows the interface.")
+        export_box_info.setWordWrap(True)
+        export_box_info.setTextFormat(Qt.TextFormat.RichText)
+        export_box_info.setStyleSheet("color: gray; font-size: 10px;")
+        export_box.layout().insertWidget(0, export_box_info)
+        export_box.changed.connect(self._on_custom_implementation_changed)
+        if not hasattr(self, "_custom_boxes"):
+            self._custom_boxes = {}
+        self._custom_boxes["exporter"] = export_box
+        self.custom_export_box = export_box
+        export_layout.addWidget(export_box)
+
         self.export_btn = QPushButton("Export…")
         self.export_btn.clicked.connect(self.run_export)
         export_layout.addWidget(self.export_btn)
@@ -940,6 +971,8 @@ class StepTabsMixin:
         # references no image at all rather than that the option was missed.
         self.export_images_check.setEnabled(
             key in exporters.SUPPORTS_IMAGES)
+        if hasattr(self, "custom_export_box"):
+            self.custom_export_box.setVisible(key == exporters.CUSTOM)
 
     def run_export(self):
         """Write the current project out in the selected format."""
@@ -967,6 +1000,25 @@ class StepTabsMixin:
                     "must be set before exporting.")
                 return
 
+        custom_spec = None
+        if key == exporters.CUSTOM:
+            label = "Custom export"
+            custom_spec = dict(self.custom_export_box.spec())
+            if not custom_spec.get("path"):
+                QMessageBox.warning(
+                    self, "Export",
+                    "Choose the .py file with your exporter in the Custom "
+                    "exporter box first.")
+                return
+            # the user's own code: ask before it runs here the first time
+            from ..bambi_custom_impl_widget import confirm_specs
+            if not confirm_specs(self, [custom_spec]):
+                self.log("Not exported: the custom exporter was not "
+                         "approved to run.")
+                return
+            epsg = self._parse_epsg_from_text(
+                self.target_crs_edit.text().strip().upper()) or None
+
         if is_folder:
             output = QFileDialog.getExistingDirectory(
                 self, f"Export {label} - choose a folder", folder)
@@ -987,7 +1039,8 @@ class StepTabsMixin:
                     self.export_false_positives_check.isChecked()
                     if self.export_false_positives_check.isEnabled() else None),
                 include_images=self.export_images_check.isChecked(),
-                log_fn=self.log)
+                log_fn=self.log, custom=custom_spec,
+                model_dir=BambiProcessor._get_default_model_dir())
         except exporters.ExportError as exc:
             QApplication.restoreOverrideCursor()
             self.log(f"Export failed: {exc}")
