@@ -448,6 +448,11 @@ class SettingsMixin:
             "reaction_species_thresholds": dict(
                 getattr(self, '_reaction_species', None) or {}),
 
+            # Survey analytics: dataset export (dock/dataset_export.py)
+            "dataset_export": (
+                self.dataset_export_settings()
+                if hasattr(self, 'dataset_format_combo') else {}),
+
             # Survey analytics: position uncertainty (dock/position.py)
             "position_source": self._survey_source(),
             **self._position_values(),
@@ -620,6 +625,8 @@ class SettingsMixin:
             self._reset_trend_settings()
         if hasattr(self, 'reaction_speed_spin'):
             self._reset_reaction_settings()
+        if hasattr(self, 'dataset_format_combo'):
+            self._reset_dataset_export_settings()
         if hasattr(self, 'position_gps_spin'):
             self._reset_position_settings()
         if hasattr(self, 'report_title_edit'):
@@ -785,6 +792,8 @@ class SettingsMixin:
             self._save_trend_settings(project)
         if hasattr(self, 'reaction_speed_spin'):
             self._save_reaction_settings(project)
+        if hasattr(self, 'dataset_format_combo'):
+            self._save_dataset_export_settings(project)
         if hasattr(self, 'position_gps_spin'):
             self._save_position_settings(project)
         if hasattr(self, 'report_title_edit'):
@@ -823,6 +832,8 @@ class SettingsMixin:
                 self._load_trend_settings(project)
             if hasattr(self, 'reaction_speed_spin'):
                 self._load_reaction_settings(project)
+            if hasattr(self, 'dataset_format_combo'):
+                self._load_dataset_export_settings(project)
             if hasattr(self, 'position_gps_spin'):
                 self._load_position_settings(project)
             if hasattr(self, 'report_title_edit'):

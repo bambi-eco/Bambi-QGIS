@@ -40,6 +40,7 @@ from .dock.group_layers import GroupLayersMixin
 from .dock.grid_density import GridDensityMixin
 from .dock.trend import TrendMixin
 from .dock.reaction import ReactionMixin
+from .dock.dataset_export import DatasetExportMixin
 from .dock.position import PositionMixin
 from .dock.report import ReportMixin
 from .dock.accuracy import AccuracyMixin
@@ -79,6 +80,7 @@ class BambiDockWidget(
         GroupLayersMixin,
         GridDensityMixin,
         TrendMixin,
+        DatasetExportMixin,
         ReactionMixin,
         PositionMixin,
         ReportMixin,

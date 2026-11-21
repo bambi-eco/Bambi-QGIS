@@ -400,6 +400,7 @@ class StepStatusMixin:
             "add_grid": self.add_grid_status,
             "survey_trend": self.trend_status,
             "drone_reaction": self.reaction_status,
+            "dataset_export": self.dataset_export_status,
             "add_reaction": self.add_reaction_status,
             "position_uncertainty": self.position_status,
             "add_position": self.add_position_status,

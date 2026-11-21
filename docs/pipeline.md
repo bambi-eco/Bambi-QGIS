@@ -587,7 +587,7 @@ detections, tracks and exported frames into population-level products. It is
 processed flights analysed together.
 
 The survey, the species and the survey area are at the top of the tab and
-hold for every tool. The tools themselves are on four sub tabs, by the
+hold for every tool. The tools themselves are on sub tabs, by the
 question they answer:
 
 | Sub tab | Tools | |
@@ -596,6 +596,7 @@ question they answer:
 | **Maps** | Density Heatmap, Grid Density, Coverage Map, Survey Orthomosaic | Where it was |
 | **Population & Behaviour** | Distance Sampling, Population Estimation (Transects), Compare Visits, Reaction to the Drone, Habitat Context | How many there are, whether that changes, and how the animals live |
 | **Quality** | Review Queue, Position Uncertainty | How far to trust it |
+| **Export** | Dataset Export | The flights as one dataset with train / validation / test splits ([Export](results-and-export.md#several-flights-as-one-dataset-with-splits)) |
 
 ### The survey: flights, camera, folder
 

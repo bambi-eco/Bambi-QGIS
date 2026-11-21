@@ -23,6 +23,7 @@ from .bambi_survey_analytics import SurveyAnalyticsMixin
 from .bambi_survey_grid import SurveyGridMixin
 from .bambi_survey_trend import SurveyTrendMixin
 from .bambi_survey_reaction import SurveyReactionMixin
+from .bambi_survey_export import SurveyExportMixin
 from .bambi_survey_position import SurveyPositionMixin
 from .bambi_survey_report import SurveyReportMixin
 from .bambi_environment import ENVIRONMENT_STEPS, EnvironmentMixin
@@ -248,6 +249,10 @@ class ProcessingWorker(QObject):
                     self.is_cancelled)
             elif self.step == "drone_reaction":
                 self.processor.run_drone_reaction(
+                    self.config, self.progress.emit, self.log.emit,
+                    self.is_cancelled)
+            elif self.step == "dataset_export":
+                self.processor.run_dataset_export(
                     self.config, self.progress.emit, self.log.emit,
                     self.is_cancelled)
             elif self.step == "position_uncertainty":
@@ -698,6 +703,7 @@ class CancelledException(Exception):
 
 class BambiProcessor(SurveyAnalyticsMixin, SurveyGridMixin,
                      SurveyTrendMixin, SurveyReactionMixin,
+                     SurveyExportMixin,
                      SurveyPositionMixin, SurveyReportMixin,
                      EnvironmentMixin):
     """Main processing class for BAMBI wildlife detection pipeline."""

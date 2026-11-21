@@ -26,13 +26,13 @@ def _groups(page):
             if isinstance(widget, QGroupBox)]
 
 
-def test_the_tools_are_on_four_sub_tabs(dock):
+def test_the_tools_are_on_sub_tabs(dock):
     tabs = dock.analytics_sub_tabs
 
     assert isinstance(tabs, FitTabWidget)
     # "&&" is how a tab says "&"
     assert _titles(tabs) == ["Overview", "Maps", "Population && Behaviour",
-                             "Quality"]
+                             "Quality", "Export"]
 
 
 def test_each_holds_the_tools_of_its_question(dock):
@@ -50,6 +50,7 @@ def test_each_holds_the_tools_of_its_question(dock):
         "Compare Visits", "Reaction to the Drone"]
     assert len(held["Population && Behaviour"]) == 5       # and the habitat
     assert held["Quality"] == ["Review Queue", "Position Uncertainty"]
+    assert held["Export"] == ["Dataset Export"]
 
 
 def test_every_section_is_on_one_page_and_one_only(dock):

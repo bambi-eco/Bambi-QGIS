@@ -48,6 +48,8 @@ ANALYTICS_PAGES = (
      ("distance", "population", "trend", "reaction", "habitat")),
     # how far to trust it
     ("Quality", ("review", "position")),
+    # the flights as a dataset, for training or publishing
+    ("Export", ("dataset",)),
 )
 
 
@@ -634,6 +636,9 @@ class AnalyticsTabMixin:
         review_layout.addLayout(review_row)
         sections["review"] = review_group
 
+        # ----- Dataset Export (dock/dataset_export.py) -----
+        sections["dataset"] = self._build_dataset_export_group()
+
         # ----- The sub tabs -----
         self.analytics_sub_tabs = FitTabWidget()
         self.analytics_sections = sections
@@ -678,6 +683,7 @@ class AnalyticsTabMixin:
             return
         self.refresh_analytics_species()
         self._refresh_survey_area()
+        self._refresh_dataset_flights()
         if not getattr(self, "_loading_config", False):
             try:
                 self.survey_panel.save(QgsProject.instance())

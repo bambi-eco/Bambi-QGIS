@@ -510,6 +510,58 @@ Things worth knowing:
   `val` in `data.yaml` names the training images so the file is valid as
   written; split it before believing any validation number.
 
+### Several flights as one dataset, with splits
+
+*Processing → Export* writes one flight. **Survey Analytics → Export →
+Dataset Export** writes the flights ticked in the Survey box as one dataset,
+in the same formats, and says for every flight whether it is trained on,
+validated on or tested on.
+
+**A flight goes into one split whole.** Its frames are seconds apart and show
+the same animals from almost the same place. Frames of one flight on both
+sides of a split measure how well a model remembers, not how well it
+generalises - so the splits are made of flights, never of frames or labels.
+
+| Setting | |
+|---|---|
+| **Format** | The formats of the single-flight export |
+| **Flight / Split** | The ticked flights, each with **Train**, **Validation**, **Test** or **Leave out** (in the survey, not in the dataset). A flight nobody placed is trained on. |
+| **Train / validation / test** and **Seed**, **Assign** | Deals every listed flight into the splits at random by these shares of the flights. The same seed deals the same way every time. Whole flights are dealt, so with few flights the shares are met only roughly; a split with a share gets at least one flight where there are enough. Single flights can be changed in the table afterwards. |
+| **Include detections labelled 'not-an-animal'**, **Include images** | As for one flight |
+| **Folder** | Where the dataset is written; empty = `dataset` in the survey folder |
+
+```
+<folder>/
+├── splits.json            {"train": [flight, ...], "val": [...], "test": [...]}
+├── dataset.json           format, camera, classes, what each flight gave
+├── train/<flight>/...     the flight as the single-flight export writes it
+├── val/<flight>/...
+└── test/<flight>/...
+```
+
+- **Classes are named alike in every flight.** Species ids are a flight's
+  own - roe deer may be 3 in one flight and 7 in the next - so for **COCO**
+  and **YOLO** the classes are numbered by species name over all flights.
+- **COCO** also gets one `annotations.json` per split with all its flights;
+  an image is `<flight>/images/<name>` and carries its `flight`, without
+  which a track id means nothing.
+- **YOLO** gets one `data.yaml` at the top that lists the image folders of
+  every flight under `train`, `val` and `test`.
+- The other formats are a folder per flight inside its split - for **MOT**
+  that is the layout of the benchmark itself (`train/<sequence>`).
+- **What is exported** is what the flights hold for the survey's camera. The
+  species filter, the survey area and *Only animals confirmed by the other
+  camera* are questions of an analysis and do not apply.
+- **Exporting again** into the same folder is fine while every flight is in
+  the split it was in. A folder that holds an earlier export in which a
+  flight was in another split is refused, naming the flight - otherwise it
+  would be left in both.
+- A flight that cannot be exported (no detections, say) is named in the log
+  and in `dataset.json` under `not_exported`; the others are written.
+
+The splits, shares and seed are saved with the QGIS project, per flight
+folder, so renaming a flight keeps its split.
+
 ### The Camtrap DP package
 
 The package follows **Camtrap DP 1.0**: `datapackage.json` names the profile

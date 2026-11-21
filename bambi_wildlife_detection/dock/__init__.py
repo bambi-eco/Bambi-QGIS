@@ -25,6 +25,9 @@ The tabs
                                  ground, surveyed again
     ``reaction``                 Survey Analytics > Reaction to the Drone,
                                  and the movements on the map
+    ``dataset_export``           Survey Analytics > Dataset Export: the
+                                 survey's flights as one dataset, each
+                                 flight in one split
     ``position``                 Survey Analytics > Position Uncertainty, and
                                  the circles on the map
     ``review_queue``             Survey Analytics > Review Queue: the tracks
