@@ -43,6 +43,7 @@ STEP_TO_METHOD = {
     "classify_life_stage": "run_classification",
     "life_stage": "run_life_stage",
     "trex_import": "run_trex_import",
+    "custom_import": "run_custom_import",
     "density_heatmap": "run_density_heatmap",
     "coverage_map": "run_coverage_map",
     "survey_orthomosaic": "run_survey_orthomosaic",

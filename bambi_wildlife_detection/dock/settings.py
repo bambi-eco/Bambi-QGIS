@@ -367,6 +367,9 @@ class SettingsMixin:
 
             # TRex import
             "trex_npz_dir": self.trex_npz_dir_edit.text() if hasattr(self, 'trex_npz_dir_edit') else "",
+            "custom_import_source": (
+                self.custom_import_source_edit.text().strip()
+                if hasattr(self, "custom_import_source_edit") else ""),
             "trex_already_undistorted": (
                 self.trex_undistorted_check.isChecked()
                 if hasattr(self, 'trex_undistorted_check') else False),

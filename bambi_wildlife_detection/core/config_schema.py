@@ -149,6 +149,8 @@ CONFIG_ENTRIES: List[ConfigEntry] = [
     ConfigEntry("Detection/SampleRate", "int_double", 1),
     # ===== TRex Settings =====
     ConfigEntry("TRex/NpzDir", "str"),
+    # what a custom importer reads (core.custom_models, kind "importer")
+    ConfigEntry("Import/Source", "str"),
     ConfigEntry("TRex/AlreadyUndistorted", "bool", False),
     # ===== Correction Settings =====
     ConfigEntry("Correction/RotationUnit", "int_double", 0),
@@ -343,6 +345,7 @@ WIDGET_BINDINGS: Dict[str, Tuple[str, str]] = {
     "Detection/SampleRate": ("detect_sample_rate_spin", "spin"),
     "TRex/NpzDir": ("trex_npz_dir_edit", "line"),
     "TRex/AlreadyUndistorted": ("trex_undistorted_check", "check"),
+    "Import/Source": ("custom_import_source_edit", "line"),
     "Correction/RotationUnit": ("rotation_unit_combo", "combo_index"),
     "Correction/TransX": ("trans_x_spin", "spin"),
     "Correction/TransY": ("trans_y_spin", "spin"),

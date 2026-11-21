@@ -1572,6 +1572,8 @@ class ConfigurationTabMixin:
             return [custom.get("tracker")]
         if step.startswith("embedding"):
             return [custom.get("embedder")]
+        if step == "custom_import":
+            return [custom.get("importer")]
         if step.startswith("classif") or step == "life_stage":
             specs = []
             for spec in (config.get("classification_models") or {}).values():

@@ -36,6 +36,7 @@ STAGE_DEPENDENCIES: Dict[str, Tuple[str, ...]] = {
     "flight_route": (FRAMES,),
     "detection": (FRAMES,),
     "trex_import": (FRAMES,),
+    "custom_import": (FRAMES,),
     "georeference": ("detection",),
     "tracking": ("georeference",),
     "calculate_fov": (FRAMES,),

@@ -215,6 +215,7 @@ class StepStatusMixin:
         "flight_route": "Generate Flight Route",
         "detection": "Detect Animals",
         "trex_import": "Import TRex Tracklets",
+        "custom_import": "Custom Import",
         "georeference": "Geo-Reference Detections",
         "tracking": "Track Animals",
         "calculate_fov": "Calculate Field of View",
@@ -384,6 +385,7 @@ class StepStatusMixin:
             # TRex import runs under the "Track Animals Or Import" step, so its
             # progress is reported on the tracking status label.
             "trex_import": self.track_status,
+            "custom_import": self.track_status,
             "density_heatmap": self.density_status,
             "add_density": self.add_density_status,
             "distance_sampling": self.distance_sampling_status,

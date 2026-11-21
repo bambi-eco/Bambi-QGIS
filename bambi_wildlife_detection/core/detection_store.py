@@ -27,6 +27,8 @@ from . import store
 #: Producer kinds that own detections.
 DETECTOR = "detector"
 TREX = "trex"
+#: Boxes read by a custom importer (core.custom_models, kind "importer").
+IMPORT = "import"
 MANUAL = "manual"
 
 

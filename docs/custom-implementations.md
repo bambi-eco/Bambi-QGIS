@@ -1,7 +1,8 @@
 # Custom Implementations
 
 Detection, tracking, the embedding model and every classification stage can be
-replaced by your own code (since 9.0.0; the embedding model since 9.1.0). A custom implementation is **one `.py` file with a class**
+replaced by your own code (since 9.0.0; the embedding model since 9.1.0), and
+detections or tracks made by another tool can be imported with it (9.1.0). A custom implementation is **one `.py` file with a class**
 that follows a small interface; the plugin loads it, hands it frames,
 detections or crops, checks what it returns and keeps doing everything else -
 frame selection, storage, geo-referencing, voting, class mapping, layers and
@@ -13,6 +14,7 @@ exports.
 | Tracking (A2) | built-in / BoxMOT / geo-referenced trackers | "detections → tracks" |
 | Embeddings (C1) | DINOv3 | "cut-out animals → vectors" |
 | Classification (C2-C5) | triplet-net heads on DINOv3 embeddings | "frames of an animal → class" |
+| Import (in place of A1 / A2) | the TRex tracklet import | "another tool's file → boxes, with or without tracks" |
 
 ## Getting started
 
@@ -26,6 +28,7 @@ exports.
    | `detector_dronemegadetector.py` | DroneMegaDetector (RF-DETR; person / animal / vehicle), with tiling for large frames |
    | `tracker_iou.py` | a small greedy IoU tracker, no extra packages |
    | `embedder_colour_histogram.py` | the smallest embedding model - a colour histogram per crop, no extra packages - with a torchvision ResNet as an example in its header |
+   | `importer_csv.py` | imports detections or tracks from a CSV file, no extra packages |
    | `classifier_embeddings_head.py` | the built-in kind of classifier: a TorchScript head on the DINOv3 embeddings |
    | `classifier_crops_torchscript.py` | an image classifier working on the cut-out boxes, no embeddings needed |
    | `classifier_track_level.py` | decides once per animal instead of per frame; runs without any model file |
@@ -38,6 +41,8 @@ exports.
    - **Tracking**: *Configuration → Tracking → Custom tracker*.
    - **Embeddings**: *Configuration → Classification → Custom embedding
      model*.
+   - **Import**: *Configuration → Tracking → Custom import*, with the file
+     or folder to read as **Source**, then **Import now**.
    - **Classification**: in the model table of *Configuration →
      Classification* choose **Custom implementation…** as the model of a
      task, then **…** to pick the file. For sex and age the same entry is
@@ -254,6 +259,54 @@ interpolated boxes are not detections). Two things decide it:
 - the **Interpolate gaps in the tracks** tick box of the Custom tracker box
   switches it on or off where it is applicable.
 
+### Importer
+
+An importer reads detections - or whole tracks - that another tool made,
+from whatever that tool wrote. It is to any format what the TRex tracklet
+import is to TRex:
+
+```python
+class MyImporter:
+    def setup(self, context):
+        return {"space": "frames"}         # or "raw": see below
+
+    def run(self, source, frames):
+        # source: the file or folder chosen as "Source"
+        # frames: the extracted frames (index, path, timestamp, pose)
+        return [{"frame": 12, "x1": 100, "y1": 80, "x2": 140, "y2": 130,
+                 "confidence": 0.9, "class": "roe deer", "track_id": 3},
+                ...]
+```
+
+- **A row** is a dict as above, or a tuple `(frame, x1, y1, x2, y2,
+  confidence, class, track_id)` with the last three optional. `frame` is the
+  index of the extracted frame; `frames` is there to translate a tool's own
+  frame names or times into indices. Defaults: confidence 1, class
+  `"animal"`, no track.
+- **Tracks or detections.** With a `track_id` on any row the tracks are
+  imported too and become the flight's tracks, as a tracker's would (a box
+  without one stays a box of no track). Without any, only detections are
+  imported and *Track Animals* can run on them with any tracker.
+- **Pixels.** By default the boxes are in the pixels of the extracted frames.
+  A tool that worked on the raw video returns `{"space": "raw"}` from `setup`
+  and `{"detections": rows, "raw_size": (width, height)}` from `run`; the
+  plugin undistorts the boxes with the camera's calibration (and the square
+  crop, unless the aspect ratio is preserved), as it does for TRex.
+- **What the plugin does with them.** The boxes are stored under a source of
+  their own, so a later detector run does not remove them - and an import
+  does not remove the detector's boxes: use one or the other for a camera, or
+  both knowingly. Importing again replaces the earlier import. The boxes are
+  then placed on the ground by *Geo-Reference Detections*, which the import
+  runs itself, so imported animals are on the map and counted by every survey
+  tool.
+- **Left out, and said in the log:** boxes on frames that were not extracted,
+  boxes without area, and boxes on duplicated (frozen) thermal frames.
+- **Species.** A class named exactly as a species of the project (whatever
+  its case) is that species. Any other class is `animal` until it is mapped
+  with **Edit Class Mapping…**.
+- The import works on the camera of the *Track* step and needs the frames
+  extracted and the DEM set.
+
 ### Embedder
 
 An embedder turns each cut-out animal into the vector the classifiers read -
@@ -349,5 +402,6 @@ camera of that frame).
 The plugin validates what comes back and names the file in the message: a box
 with a non-numeric coordinate, a result count that differs from the number of
 rows, a class index outside the class names, a probability outside 0-1 or not
-finite, embedding vectors of differing width or with NaN, a track id for a detection that was not passed in. Any exception in
+finite, embedding vectors of differing width or with NaN, an imported row without a
+frame or a coordinate, a track id for a detection that was not passed in. Any exception in
 your code stops the step with the exception's text.

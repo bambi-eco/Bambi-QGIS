@@ -230,6 +230,10 @@ class ProcessingWorker(QObject):
                 )
             elif self.step == "trex_import":
                 self.processor.run_trex_import(self.config, self.progress.emit, self.log.emit, self.is_cancelled)
+            elif self.step == "custom_import":
+                self.processor.run_custom_import(
+                    self.config, self.progress.emit, self.log.emit,
+                    self.is_cancelled)
             elif self.step == "density_heatmap":
                 self.processor.run_density_heatmap(
                     self.config, self.progress.emit, self.log.emit, self.is_cancelled
@@ -5308,6 +5312,216 @@ class BambiProcessor(SurveyAnalyticsMixin, SurveyGridMixin,
 
         if progress_fn:
             progress_fn(100)
+
+    def run_custom_import(self, config: Dict[str, Any], progress_fn=None,
+                          log_fn=None, cancel_check=None):
+        """Import detections - or whole tracks - made by another tool,
+        read by the user's own importer (core.custom_models, kind
+        "importer"): what the TRex import does for TRex, for any format.
+
+        The boxes are recorded under a source of their own, in the pixel
+        space of the extracted frames (boxes given on the raw video are
+        undistorted first); with track ids on them, the tracks as a run of
+        their own, which becomes the flight's active one; and the positions
+        by the Geo-Reference step itself.
+        """
+        from .core import (custom_models, detection_store,
+                           poses as poses_core, track_store, trex_tracklets)
+
+        camera = config.get("tracking_camera", "T")
+        camera_suffix = "t" if camera == "T" else "w"
+        camera_name = "Thermal" if camera == "T" else "RGB"
+        target_folder = config["target_folder"]
+        source = (config.get("custom_import_source") or "").strip()
+        spec = (config.get("custom_implementations") or {}).get("importer")
+        if not spec or not (spec.get("path") or "").strip():
+            raise ValueError(
+                "No importer is chosen. Select the .py file with your "
+                "importer under Configuration - Tracking - Custom import.")
+        if source and not os.path.exists(source):
+            raise FileNotFoundError(
+                f"The file or folder to import does not exist: {source}")
+
+        images = poses_core.load_images(target_folder, camera_suffix)
+        if not images:
+            raise RuntimeError(
+                f"No {camera_name} frames have been extracted. Run "
+                "'Extract Frames' for this camera first - imported boxes "
+                "are placed with the frames' poses.")
+        frames_folder = os.path.join(target_folder, f"frames_{camera_suffix}")
+        pose_of = self._pose_lookup(config, target_folder, images)
+        frames = [custom_models.Frame(
+            index=i,
+            path=os.path.join(frames_folder, img.get("imagefile") or ""),
+            camera=_modality_name(camera_suffix),
+            timestamp=img.get("timestamp", "") or "",
+            duplicated=bool(img.get("duplicated")),
+            pose=pose_of(i))
+            for i, img in enumerate(images)]
+
+        # ---- Step 1: the user's code reads what the other tool wrote ----
+        def reading(fraction):
+            if progress_fn:
+                progress_fn(int(15 * fraction))
+
+        importer = custom_models.open_implementation(
+            dict(spec, source=custom_models.SOURCE), custom_models.IMPORTER,
+            self._custom_context(config, custom_models.IMPORTER,
+                                 camera_suffix, log_fn, progress=reading))
+        try:
+            if log_fn:
+                origin = f" from: {source}" if source else ""
+                log_fn(f"Importing with {importer.label}{origin}")
+            found = importer.import_rows(source, frames)
+        finally:
+            importer.close()
+        rows = found["rows"]
+        if log_fn:
+            log_fn(f"Read {len(rows)} box(es)")
+            if found["left_out"]:
+                log_fn(f"Left out {found['left_out']} box(es) on frames "
+                       f"beyond the {len(frames)} that were extracted")
+            if found["empty"]:
+                log_fn(f"Left out {found['empty']} box(es) without area")
+        frozen = poses_core.flagged(target_folder, camera_suffix)
+        if frozen:
+            n_all = len(rows)
+            rows = [row for row in rows if row["frame"] not in frozen]
+            if log_fn and n_all != len(rows):
+                log_fn(f"Left out {n_all - len(rows)} box(es) on "
+                       "duplicated (frozen thermal) frames")
+        if not rows:
+            raise RuntimeError(
+                "The importer returned no box to import - none at all, or "
+                "none on a frame that was extracted.")
+        if cancel_check and cancel_check():
+            raise CancelledException("Import cancelled")
+        if progress_fn:
+            progress_fn(15)
+
+        # ---- Step 2: into the pixel space of the extracted frames --------
+        extraction_size = self._extracted_frame_size(
+            target_folder, camera_suffix)
+        if importer.import_space == custom_models.IMPORT_RAW:
+            raw_size = found["raw_size"]
+            if raw_size is None:
+                raise ValueError(
+                    f"{importer.label} gives its boxes on the raw video "
+                    "(space 'raw') but did not say how large that is. "
+                    "Return {'detections': rows, 'raw_size': (width, "
+                    "height)} from run().")
+            calibration = self._calibration_for(config, camera, camera_name)
+            frame_size = trex_tracklets.frame_size_for(
+                raw_size, extraction_size,
+                config.get("preserve_aspect_ratio", False))
+            undistorter = trex_tracklets.Undistorter(
+                calibration["mtx"], calibration["dist"], raw_size, frame_size)
+            if log_fn:
+                log_fn(f"Undistorting the boxes: {raw_size} -> {frame_size}")
+            rows = trex_tracklets.to_frames(rows, undistorter)
+        else:
+            frame_size = extraction_size
+            if frame_size is None:
+                raise ValueError(
+                    "Could not determine the extracted-frame resolution "
+                    "from frames or mask. Ensure frame extraction has been "
+                    "completed.")
+        if progress_fn:
+            progress_fn(20)
+
+        # ---- Step 3: boxes and tracks into the store ----------------------
+        self._map_imported_classes(
+            target_folder, importer.label, {row["class"] for row in rows},
+            log_fn)
+        detection_store.record_detections(
+            target_folder, camera_suffix,
+            [{"frame": row["frame"],
+              "x1": round(row["x1"], 2), "y1": round(row["y1"], 2),
+              "x2": round(row["x2"], 2), "y2": round(row["y2"], 2),
+              "confidence": round(row["confidence"], 4),
+              "source_class": row["class"]} for row in rows],
+            kind=detection_store.IMPORT, model=importer.label, log_fn=log_fn)
+        _record_stage(config, "detection", camera_suffix,
+                      row_count=len(rows), log_fn=log_fn)
+
+        ids = detection_store.detection_ids(
+            target_folder, camera_suffix, detection_store.IMPORT)
+        if len(ids) != len(rows):
+            raise RuntimeError(
+                f"The store holds {len(ids)} imported detection(s), the "
+                f"import produced {len(rows)} - the tracks cannot be "
+                "recorded.")
+        members = [{"track_id": row["track_id"], "detection_id": detection_id}
+                   for row, detection_id in zip(rows, ids)
+                   if row["track_id"] is not None]
+        if members:
+            track_store.record_tracks(
+                target_folder, camera_suffix, members,
+                kind=detection_store.IMPORT, tracker=importer.label,
+                log_fn=log_fn)
+        elif log_fn:
+            log_fn("The boxes carry no track ids: only detections were "
+                   "imported. Run 'Track Animals' to track them.")
+        if progress_fn:
+            progress_fn(30)
+
+        # ---- Step 4: positions ---------------------------------------------
+        def placing(percent):
+            if progress_fn:
+                progress_fn(30 + int(percent * 0.7))
+
+        self.run_georeference(
+            dict(config, georeference_camera=camera,
+                 input_resolution_width=frame_size[0],
+                 input_resolution_height=frame_size[1]),
+            placing, log_fn, cancel_check)
+
+        if members:
+            # Last, as for TRex: the imported tracks are the tracks of
+            # these boxes whatever their positions.
+            _record_stage(config, "tracking", camera_suffix,
+                          row_count=len({m["track_id"] for m in members}),
+                          log_fn=log_fn)
+        if progress_fn:
+            progress_fn(100)
+
+    @staticmethod
+    def _map_imported_classes(target_folder: str, model: str, names,
+                              log_fn=None) -> None:
+        """Connect an importer's class names to the project's species
+        where a species has that very name (whatever its case) and the
+        class is not mapped yet - "roe deer" need not be mapped by hand.
+        Anything else stays ``animal`` until it is mapped in the class
+        mapping."""
+        from .core import detection_store, store
+
+        project = store.open_store(
+            store.project_path(target_folder), store.PROJECT)
+        try:
+            with store.transaction(project):
+                source_id = detection_store.ensure_source(
+                    project, detection_store.IMPORT, model)
+                species = {str(row["name"]).strip().lower():
+                           int(row["species_id"]) for row in project.execute(
+                               "SELECT species_id, name FROM species")}
+                mapped = {str(row["source_class"]) for row in project.execute(
+                    "SELECT source_class FROM class_mapping "
+                    "WHERE source_id = ?", (source_id,))}
+                added = []
+                for name in sorted(names):
+                    key = str(name).strip().lower()
+                    if name in mapped or key not in species:
+                        continue
+                    project.execute(
+                        "INSERT INTO class_mapping (source_id, source_class, "
+                        "species_id) VALUES (?, ?, ?)",
+                        (source_id, str(name), species[key]))
+                    added.append(str(name))
+        finally:
+            project.close()
+        if added and log_fn:
+            names = ", ".join(added)
+            log_fn(f"Classes that are species of the project by name: {names}")
 
     @staticmethod
     def _extracted_frame_size(target_folder: str, camera_suffix: str):

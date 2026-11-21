@@ -887,6 +887,41 @@ class StepTabsMixin:
 
         self.start_worker("trex_import")
 
+    def run_custom_import(self):
+        """Import detections or tracks with the user's own importer
+        (Configuration > Tracking > Custom import)."""
+        config = self.get_config()
+        camera = config.get("tracking_camera", "T")
+        target_folder = config.get("target_folder", "")
+        spec = (config.get("custom_implementations") or {}).get(
+            "importer") or {}
+        if not (spec.get("path") or "").strip():
+            QMessageBox.warning(
+                self, "Missing Input",
+                "Choose the .py file with your importer under "
+                "Configuration - Tracking - Custom import.")
+            return
+        source = config.get("custom_import_source", "")
+        if source and not os.path.exists(source):
+            QMessageBox.warning(
+                self, "Missing Input",
+                f"The file or folder to import does not exist:\n{source}")
+            return
+
+        suffix = "t" if camera == "T" else "w"
+        if not os.path.isfile(os.path.join(target_folder,
+                                           f"poses_{suffix}.json")):
+            camera_name = "Thermal" if camera == "T" else "RGB"
+            QMessageBox.warning(
+                self, "Missing Prerequisites",
+                f"{camera_name} frame extraction has not been completed.\n"
+                f"Please run Step 1 (Extract Frames) for {camera_name} "
+                "first.")
+            return
+        if not self.validate_inputs(["dem_path"]):
+            return
+        self.start_worker("custom_import")
+
     def _on_export_format_changed(self):
         """Reflect the chosen format's own defaults in the options."""
         from ..core import exporters

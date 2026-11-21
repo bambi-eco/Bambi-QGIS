@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Custom implementations of the detection, tracking, embedding and
-classification stages (9.0.0; embedding 9.1.0).
+classification stages, and of the import of detections and tracks made
+elsewhere (9.0.0; embedding and import 9.1.0).
 
 A custom implementation is **one ``.py`` file with a class** that follows
 the interface below. The file does not have to stand alone: its folder is
@@ -121,6 +122,36 @@ DINOv3 and cannot read anything else: with a custom embedder every
 classifier has to be one of your own, trained on its vectors (a
 TorchScript file, or a custom classifier with ``input: "embeddings"``).
 
+**Importer** - detections, or whole tracks, made by another tool, read
+from whatever that tool wrote (as the TRex import does for TRex)::
+
+    run(source, frames) -> [row, ...]
+                           or {"detections": [row, ...],
+                               "raw_size": (width, height)}
+
+``source`` is the file or folder chosen next to the importer; ``frames``
+the extracted frames as :class:`Frame` objects (index, path, timestamp,
+pose), to translate the other tool's own frame names or times into frame
+indices. A row is a dict::
+
+    frame        index of the extracted frame the box is on
+    x1 y1 x2 y2  the box in pixels
+    confidence   0 - 1 (default 1)
+    class        what it is - a name (default "animal")
+    track_id     the track it belongs to; leave out (or None) for a box
+                 of no track
+
+or the same as a tuple ``(frame, x1, y1, x2, y2, confidence, class,
+track_id)``, the last three optional. With a ``track_id`` on any row the
+import records the tracks as well - they become the flight's tracks, as a
+tracker's would; without, only the boxes are imported and any tracker can
+run on them. ``setup`` may return ``space``: ``"frames"`` (default: the
+boxes are in the pixels of the extracted frames) or ``"raw"`` (in the
+pixels of the raw video; the plugin undistorts them with the camera's
+calibration, and ``run`` then has to say the video's size as
+``raw_size``). The boxes are placed on the ground by the Geo-Reference
+step, as every other box.
+
 Camera extrinsics
 -----------------
 Every kind is told where the camera was: a detector's ``frame.pose``, each
@@ -171,7 +202,8 @@ DETECTOR = "detector"
 TRACKER = "tracker"
 CLASSIFIER = "classifier"
 EMBEDDER = "embedder"
-KINDS = (DETECTOR, TRACKER, CLASSIFIER, EMBEDDER)
+IMPORTER = "importer"
+KINDS = (DETECTOR, TRACKER, CLASSIFIER, EMBEDDER, IMPORTER)
 
 THERMAL, RGB, MATCHED = "thermal", "rgb", "matched"
 #: The inputs a kind can be asked to work on.
@@ -180,11 +212,16 @@ CAMERAS = {
     TRACKER: (THERMAL, RGB),
     CLASSIFIER: (THERMAL, RGB, MATCHED),
     EMBEDDER: (THERMAL, RGB),
+    IMPORTER: (THERMAL, RGB),
 }
 
 INPUT_EMBEDDINGS, INPUT_CROPS = "embeddings", "crops"
 LEVEL_FRAME, LEVEL_TRACK = "frame", "track"
 SPACE_GEO, SPACE_PIXEL = "geo", "pixel"
+#: Where an importer's boxes are: the extracted frames, or the raw video.
+IMPORT_FRAMES, IMPORT_RAW = "frames", "raw"
+#: What an imported box is when its row does not say.
+IMPORT_CLASS = "animal"
 
 #: Methods a class needs to count as an implementation of a kind (a
 #: classifier needs ``run`` or ``run_track``, checked against its level).
@@ -193,6 +230,7 @@ _REQUIRED = {
     TRACKER: ("setup",),              # plus update (online) or run (offline)
     CLASSIFIER: ("setup",),
     EMBEDDER: ("setup", "run"),
+    IMPORTER: ("setup", "run"),
 }
 
 #: The source value that selects a custom implementation in a model spec.
@@ -621,6 +659,15 @@ class Implementation:
         self.batch_size = 0
         if kind == EMBEDDER:
             self._read_embedder_info()
+        #: importer: the pixel space of its boxes
+        self.import_space = IMPORT_FRAMES
+        if kind == IMPORTER:
+            self.import_space = str(_info_value(
+                self.instance, info, "space", IMPORT_FRAMES)).lower()
+            if self.import_space not in (IMPORT_FRAMES, IMPORT_RAW):
+                raise CustomModelError(
+                    f"{self.label}: space must be 'frames' or 'raw', not "
+                    f"'{self.import_space}'")
         if kind == CLASSIFIER:
             self._read_classifier_info()
         elif kind == TRACKER:
@@ -772,6 +819,15 @@ class Implementation:
                        ) -> Optional[Tuple[int, float]]:
         return normalise_track_call(
             self.call("run_track", batch, items), len(self.class_names),
+            self.label)
+
+    # -- importer -----------------------------------------------------------
+
+    def import_rows(self, source: str, frames: List[Frame]) -> dict:
+        """What the other tool made, checked: ``{"rows", "raw_size",
+        "left_out"}`` (:func:`normalise_imported`)."""
+        return normalise_imported(
+            self.call("run", source, frames), len(frames), self.class_names,
             self.label)
 
     # -- embedder -----------------------------------------------------------
@@ -953,6 +1009,130 @@ def normalise_detections(result, width: int, height: int,
                     "confidence": confidence, "class_index": index,
                     "class_name": name})
     return out
+
+
+_IMPORT_KEYS = ("frame", "x1", "y1", "x2", "y2", "confidence", "class",
+                "track_id")
+
+
+def _imported_row(entry, number: int, class_names: Sequence[str],
+                  who: str) -> dict:
+    """One row of an importer's answer as a dict with every key."""
+    if isinstance(entry, dict):
+        row = dict(entry)
+        if "box" in row and "x1" not in row:
+            try:
+                row["x1"], row["y1"], row["x2"], row["y2"] = row["box"]
+            except (TypeError, ValueError) as exc:
+                raise CustomModelError(
+                    f"{who}: row {number}: 'box' must be (x1, y1, x2, "
+                    "y2)") from exc
+        if "class" not in row and "class_name" in row:
+            row["class"] = row["class_name"]
+    elif isinstance(entry, (tuple, list)) and 5 <= len(entry) <= 8:
+        row = dict(zip(_IMPORT_KEYS, entry))
+    else:
+        raise CustomModelError(
+            f"{who}: row {number} must be a dict or a tuple (frame, x1, "
+            "y1, x2, y2[, confidence[, class[, track_id]]]), not "
+            f"{type(entry).__name__}")
+    missing = [key for key in _IMPORT_KEYS[:5] if row.get(key) is None]
+    if missing:
+        raise CustomModelError(
+            f"{who}: row {number} has no {', '.join(missing)}")
+    try:
+        frame = int(row["frame"])
+        box = [float(row[key]) for key in ("x1", "y1", "x2", "y2")]
+        confidence = (1.0 if row.get("confidence") is None
+                      else float(row["confidence"]))
+    except (TypeError, ValueError) as exc:
+        raise CustomModelError(
+            f"{who}: row {number} has a value that is not a number "
+            f"({exc})") from exc
+    if not all(_finite(value) for value in box + [confidence]):
+        raise CustomModelError(
+            f"{who}: row {number} has a coordinate or confidence that is "
+            "not finite")
+    if frame < 0:
+        raise CustomModelError(
+            f"{who}: row {number} is on frame {frame}; frames count from 0")
+    name = row.get("class")
+    if name is None or name == "":
+        name = IMPORT_CLASS
+    elif isinstance(name, (int,)) and not isinstance(name, bool) \
+            and class_names:
+        if not 0 <= name < len(class_names):
+            raise CustomModelError(
+                f"{who}: row {number} has class index {name}, and the "
+                f"importer names {len(class_names)} class(es)")
+        name = class_names[name]
+    track = row.get("track_id")
+    if track is not None:
+        try:
+            track = int(track)
+        except (TypeError, ValueError) as exc:
+            raise CustomModelError(
+                f"{who}: row {number} has a track_id that is no whole "
+                "number") from exc
+        if track < 0:
+            track = None
+    return {"frame": frame,
+            "x1": min(box[0], box[2]), "y1": min(box[1], box[3]),
+            "x2": max(box[0], box[2]), "y2": max(box[1], box[3]),
+            "confidence": min(1.0, max(0.0, confidence)),
+            "class": str(name), "track_id": track}
+
+
+def normalise_imported(result, n_frames: int = 0,
+                       class_names: Sequence[str] = (),
+                       who: str = "The importer") -> dict:
+    """What an importer's ``run`` returned, checked.
+
+    :param n_frames: how many frames were extracted; a box on a later
+        frame has no picture and no pose and is left out (0 = not known)
+    :return: ``{"rows": [{frame, x1, y1, x2, y2, confidence, class,
+        track_id}], "raw_size": (width, height) | None, "left_out": boxes
+        on frames that were not extracted, "empty": boxes without area}``
+        - the rows ordered by frame
+    """
+    raw_size = None
+    if isinstance(result, dict):
+        if result.get("raw_size") is not None:
+            try:
+                raw_size = (int(result["raw_size"][0]),
+                            int(result["raw_size"][1]))
+            except (TypeError, ValueError, IndexError) as exc:
+                raise CustomModelError(
+                    f"{who}: raw_size must be (width, height)") from exc
+            if min(raw_size) <= 0:
+                raise CustomModelError(
+                    f"{who}: raw_size must be (width, height) in pixels")
+        if "detections" not in result:
+            raise CustomModelError(
+                f"{who}: run() returned a dict without 'detections'")
+        result = result["detections"]
+    if result is None:
+        result = []
+    try:
+        entries = list(result)
+    except TypeError as exc:
+        raise CustomModelError(
+            f"{who}: run() must return a list of rows, not "
+            f"{type(result).__name__}") from exc
+
+    rows, left_out, empty = [], 0, 0
+    for number, entry in enumerate(entries):
+        row = _imported_row(entry, number, class_names, who)
+        if n_frames and row["frame"] >= n_frames:
+            left_out += 1
+            continue
+        if row["x2"] <= row["x1"] or row["y2"] <= row["y1"]:
+            empty += 1
+            continue
+        rows.append(row)
+    rows.sort(key=lambda row: row["frame"])
+    return {"rows": rows, "raw_size": raw_size, "left_out": left_out,
+            "empty": empty}
 
 
 def normalise_embeddings(result, rows: int, dim: int = 0,

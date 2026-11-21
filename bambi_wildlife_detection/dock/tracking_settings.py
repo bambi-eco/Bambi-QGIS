@@ -257,6 +257,64 @@ class TrackingSettingsMixin:
 
         tracking_tab_layout.addWidget(trex_group)
 
+        # ----- Custom import (core.custom_models, kind "importer") -----
+        # What the TRex import does for TRex, for any other tool: the
+        # user's own code reads the file, the plugin stores, undistorts
+        # and places what it returns.
+        import_box = CustomImplementationBox(
+            "Custom import (detections or tracks)",
+            _custom_models.IMPORTER, checkable=False)
+        import_box.setToolTip(
+            "Read detections - or whole tracks - made by another tool with "
+            "a class of your own: setup(context) and run(source, frames), "
+            "returning one row per box (frame, x1, y1, x2, y2, confidence, "
+            "class, track_id).")
+        import_info = QLabel(
+            "Detections or tracks made by another tool can be imported "
+            "with your own code, as the TRex import does for TRex: write "
+            "a class with <code>setup(context)</code> and "
+            "<code>run(source, frames)</code> that returns one row per box "
+            "- with a <code>track_id</code> to import tracks, without for "
+            "detections only. The sample <code>importer_csv.py</code> "
+            "reads a CSV file. The import uses the camera of the Track "
+            "step and replaces what an earlier import brought in; boxes "
+            "of the detector stay.")
+        import_info.setWordWrap(True)
+        import_info.setTextFormat(Qt.TextFormat.RichText)
+        import_info.setStyleSheet("color: gray; font-size: 10px;")
+        import_box.layout().insertWidget(0, import_info)
+
+        self.custom_import_source_edit = QLineEdit()
+        self.custom_import_source_edit.setPlaceholderText(
+            "The file or folder the importer reads")
+        self.custom_import_source_edit.setToolTip(
+            "Handed to the importer's run() as 'source': the other tool's "
+            "output - a file, or a folder of files.")
+        source_file_btn = QPushButton("File...")
+        source_file_btn.clicked.connect(self.browse_custom_import_file)
+        source_folder_btn = QPushButton("Folder...")
+        source_folder_btn.clicked.connect(self.browse_custom_import_folder)
+        source_row = QHBoxLayout()
+        source_row.addWidget(self.custom_import_source_edit)
+        source_row.addWidget(source_file_btn)
+        source_row.addWidget(source_folder_btn)
+        import_box.body.layout().insertRow(0, "Source:", source_row)
+
+        self.custom_import_btn = QPushButton("Import now")
+        self.custom_import_btn.setToolTip(
+            "Run the importer on the source for the camera of the Track "
+            "step: the boxes are stored, undistorted where they are on "
+            "the raw video, and placed on the ground (Geo-Reference).")
+        self.custom_import_btn.clicked.connect(self.run_custom_import)
+        import_row = QHBoxLayout()
+        import_row.addWidget(self.custom_import_btn)
+        import_row.addStretch()
+        import_box.body.layout().addRow("", import_row)
+        import_box.changed.connect(self._on_custom_implementation_changed)
+        self._custom_boxes["importer"] = import_box
+        self.custom_import_box = import_box
+        tracking_tab_layout.addWidget(import_box)
+
         # --- Cross-modal matching ---
         # Beside tracking rather than classification: it is a statement about
         # the tracks themselves - which two of them are one animal - and the
@@ -510,6 +568,20 @@ class TrackingSettingsMixin:
         """Get the currently selected ReID model."""
         index = self.reid_model_combo.currentIndex()
         return ["osnet", "bambi", "custom"][index]
+
+    def browse_custom_import_file(self):
+        path, _filter = QFileDialog.getOpenFileName(
+            self, "Select the file to import",
+            self.custom_import_source_edit.text())
+        if path:
+            self.custom_import_source_edit.setText(path)
+
+    def browse_custom_import_folder(self):
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select the folder to import",
+            self.custom_import_source_edit.text())
+        if folder:
+            self.custom_import_source_edit.setText(folder)
 
     def browse_trex_npz_dir(self):
         folder = QFileDialog.getExistingDirectory(self, "Select TRex NPZ Folder")
