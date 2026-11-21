@@ -143,3 +143,50 @@ def view_bearing(view: np.ndarray) -> float:
 def compass_point(bearing: float) -> str:
     """``"NE"`` for 47 degrees: the nearest of the eight points."""
     return COMPASS_POINTS[int(((float(bearing) % 360.0) + 22.5) // 45.0) % 8]
+
+
+# ---------------------------------------------------------------------------
+# How large what is seen is
+# ---------------------------------------------------------------------------
+
+def metres_per_pixel(distance: float, fovy: float, height_px: float) -> float:
+    """How much of the scene one pixel of the screen covers, at *distance*
+    in front of a camera with a vertical field of view of *fovy* degrees
+    in a view *height_px* high - metres, as the terrain model's own
+    coordinates are. ``0.0`` where there is no saying."""
+    values = (float(distance), float(fovy), float(height_px))
+    if not all(math.isfinite(value) and value > 0.0 for value in values):
+        return 0.0
+    if values[1] >= 180.0:
+        return 0.0
+    return 2.0 * values[0] * math.tan(math.radians(values[1]) / 2.0) / values[2]
+
+
+def scale_length(per_pixel: float, widest_px: float) -> float:
+    """The length a scale bar stands for: the largest round one - 1, 2 or
+    5 times a power of ten - that is no wider than *widest_px* on the
+    screen. ``0.0`` where there is no scale."""
+    per_pixel, widest_px = float(per_pixel), float(widest_px)
+    if not (math.isfinite(per_pixel) and per_pixel > 0.0 and widest_px > 0.0):
+        return 0.0
+    most = per_pixel * widest_px
+    power = math.floor(math.log10(most))
+    for exponent in (power, power - 1):
+        for step in (5.0, 2.0, 1.0):
+            length = step * 10.0 ** exponent
+            if length <= most * (1.0 + 1e-9):
+                return length
+    return 0.0
+
+
+def scale_text(length: float) -> str:
+    """``"50 m"``, ``"2 km"``, ``"20 cm"``: a scale bar's length, said in
+    the unit that needs no decimals."""
+    length = float(length)
+    if length >= 1000.0:
+        return f"{length / 1000.0:g} km"
+    if length >= 1.0:
+        return f"{length:g} m"
+    if length >= 0.01:
+        return f"{length * 100.0:g} cm"
+    return f"{length * 1000.0:g} mm"

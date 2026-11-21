@@ -128,3 +128,49 @@ class TestBearing:
         from bambi_wildlife_detection.core.view_camera import compass_point
 
         assert compass_point(bearing) == point
+
+
+class TestScale:
+    def test_a_pixel_covers_more_the_farther_the_terrain_is(self):
+        from bambi_wildlife_detection.core.view_camera import metres_per_pixel
+
+        # 90 degrees: the view is twice as high as the terrain is far
+        assert metres_per_pixel(100.0, 90.0, 400) == pytest.approx(0.5)
+        assert metres_per_pixel(200.0, 90.0, 400) == pytest.approx(1.0)
+        assert metres_per_pixel(100.0, 90.0, 800) == pytest.approx(0.25)
+
+    @pytest.mark.parametrize("distance, fovy, height", [
+        (0.0, 45.0, 400), (100.0, 0.0, 400), (100.0, 45.0, 0),
+        (float("nan"), 45.0, 400), (100.0, 180.0, 400)])
+    def test_no_scale_where_there_is_no_saying(self, distance, fovy, height):
+        from bambi_wildlife_detection.core.view_camera import metres_per_pixel
+
+        assert metres_per_pixel(distance, fovy, height) == 0.0
+
+    @pytest.mark.parametrize("per_pixel, length", [
+        (1.0, 100.0), (0.5, 50.0), (0.3, 20.0), (0.2, 20.0), (0.19, 10.0),
+        (12.0, 1000.0), (60.0, 5000.0), (0.004, 0.2), (0.01, 1.0)])
+    def test_the_bar_is_the_largest_round_length_that_fits(
+            self, per_pixel, length):
+        from bambi_wildlife_detection.core.view_camera import scale_length
+
+        found = scale_length(per_pixel, 100)
+
+        assert found == pytest.approx(length)
+        # never wider than allowed, never less than two fifths of it
+        assert 40.0 - 1e-6 <= found / per_pixel <= 100.0 + 1e-6
+
+    def test_no_bar_without_a_scale(self):
+        from bambi_wildlife_detection.core.view_camera import scale_length
+
+        assert scale_length(0.0, 100) == 0.0
+        assert scale_length(float("inf"), 100) == 0.0
+        assert scale_length(1.0, 0) == 0.0
+
+    @pytest.mark.parametrize("length, text", [
+        (50.0, "50 m"), (1.0, "1 m"), (1000.0, "1 km"), (5000.0, "5 km"),
+        (0.2, "20 cm"), (0.01, "1 cm"), (0.005, "5 mm")])
+    def test_its_length_is_said_without_decimals(self, length, text):
+        from bambi_wildlife_detection.core.view_camera import scale_text
+
+        assert scale_text(length) == text

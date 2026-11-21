@@ -624,6 +624,14 @@ class FlightViewerDialog(ClosesOnce, QDialog):
             "map's north, and the bearing is written below it.")
         self.compass_check.toggled.connect(self._on_compass_toggled)
         f.addRow(self.compass_check)
+        self.scale_check = QCheckBox("Show scale")
+        self.scale_check.setChecked(True)
+        self.scale_check.setToolTip(
+            "A scale bar in metres at the bottom of the 3D view. It holds "
+            "where the middle of the view meets the terrain - what is "
+            "nearer is drawn larger - and changes as the view zooms.")
+        self.scale_check.toggled.connect(self._on_scale_toggled)
+        f.addRow(self.scale_check)
         lay.addWidget(base)
 
         row = QHBoxLayout()
@@ -708,7 +716,7 @@ class FlightViewerDialog(ClosesOnce, QDialog):
               "route_check", "poses_check", "history_spin", "step_spin",
               "loop_check", "dem_opacity_slider", "mask_check", "line_spin",
               "marker_spin", "seen_check", "seen_step_spin", "ann_width_spin",
-              "erosion_spin", "compass_check")
+              "erosion_spin", "compass_check", "scale_check")
     _SAVED_COMBOS = ("drape_combo", "annotation_combo", "speed_combo",
                      "texture_combo", "base_combo", "detail_combo", "trail_res_combo")
 
@@ -947,6 +955,10 @@ class FlightViewerDialog(ClosesOnce, QDialog):
     def _on_compass_toggled(self, on):
         if self.viewport is not None:
             self.viewport.set_compass_visible(on)
+
+    def _on_scale_toggled(self, on):
+        if self.viewport is not None:
+            self.viewport.set_scale_visible(on)
 
     def _on_camera_changed(self):
         new = self.camera_combo.currentData()

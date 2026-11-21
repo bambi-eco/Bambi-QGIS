@@ -16,9 +16,10 @@ from typing import Callable, Dict, Optional
 import numpy as np
 
 from ..core.flight_viewer import FrameCamera
-from ..core.view_camera import OrbitCamera, view_bearing
+from ..core.view_camera import OrbitCamera, metres_per_pixel, view_bearing
 from .compass import MARGIN, Compass
 from .qt import QOpenGLWidget, QtCore, QtGui, QtWidgets, Signal
+from .scale_bar import ScaleBar
 
 _Qt = QtCore.Qt
 
@@ -94,11 +95,16 @@ class FlightViewport(QOpenGLWidget):
         self.gl_info = ""
         #: Which way the view looks, over a corner of it.
         self.compass = Compass(self)
+        #: How long a stretch of the terrain is, at the bottom of it.
+        self.scale_bar = ScaleBar(self)
         self._place_compass()
 
     def _place_compass(self):
         self.compass.move(self.width() - self.compass.width() - MARGIN,
                           MARGIN)
+        self.scale_bar.move(
+            (self.width() - self.scale_bar.width()) // 2,
+            self.height() - self.scale_bar.height() - MARGIN)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -111,21 +117,45 @@ class FlightViewport(QOpenGLWidget):
     def set_compass_visible(self, on: bool) -> None:
         self.compass.setVisible(bool(on))
 
+    def set_scale_visible(self, on: bool) -> None:
+        self.scale_bar.setVisible(bool(on))
+
+    def view_distance(self) -> float:
+        """How far the terrain in the middle of the view is from the eye;
+        where the view looks past the terrain, how far what it turns
+        about is."""
+        if self.follow is not None:
+            return self._follow_distance()
+        if self._pick is not None:
+            eye = self.orbit.eye()
+            hit = self._pick(eye, -self.orbit.direction())
+            if hit is not None:
+                return float(np.linalg.norm(np.asarray(hit) - eye))
+        return self.orbit.distance
+
+    def metres_per_pixel(self) -> float:
+        """What a pixel covers of the terrain in the middle of the view."""
+        fovy = self.follow.fovy if self.follow is not None else self.orbit.fovy
+        return metres_per_pixel(self.view_distance(), fovy, self.height())
+
     def grab_view(self):
-        """The view as a picture: the scene, and the compass over it where
-        it is shown - a picture of terrain says no more than the view did
-        about which way it looks."""
+        """The view as a picture: the scene, and the compass and the scale
+        over it where they are shown - a picture of terrain says no more
+        than the view did about which way it looks, or how large it is."""
         image = self.grabFramebuffer()
-        if self.compass.isHidden() or image.isNull():
+        shown = [over for over in (self.compass, self.scale_bar)
+                 if not over.isHidden()]
+        if not shown or image.isNull():
             return image
         self.compass.set_bearing(self.bearing())
+        self.scale_bar.set_scale(self.metres_per_pixel())
         ratio = image.width() / float(max(self.width(), 1))
         painter = QtGui.QPainter(image)
         try:
             painter.scale(ratio, ratio)
-            self.compass.render(
-                painter, self.compass.pos(), QtGui.QRegion(),
-                QtWidgets.QWidget.RenderFlag.DrawChildren)
+            for over in shown:
+                over.render(painter, over.pos(), QtGui.QRegion(),
+                            QtWidgets.QWidget.RenderFlag.DrawChildren)
         finally:
             painter.end()
         return image
@@ -325,6 +355,8 @@ class FlightViewport(QOpenGLWidget):
             self._canvas_paint = []
         view, proj = self.view_projection()
         self.compass.set_bearing(view_bearing(view))
+        if not self.scale_bar.isHidden():
+            self.scale_bar.set_scale(self.metres_per_pixel())
         ratio = self.devicePixelRatioF() if hasattr(self, "devicePixelRatioF") else 1.0
         size = (self.width() * ratio, self.height() * ratio)
         base = self.base_texture
