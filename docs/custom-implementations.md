@@ -1,7 +1,7 @@
 # Custom Implementations
 
-Detection, tracking and every classification stage can be replaced by your own
-code (since 9.0.0). A custom implementation is **one `.py` file with a class**
+Detection, tracking, the embedding model and every classification stage can be
+replaced by your own code (since 9.0.0; the embedding model since 9.1.0). A custom implementation is **one `.py` file with a class**
 that follows a small interface; the plugin loads it, hands it frames,
 detections or crops, checks what it returns and keeps doing everything else -
 frame selection, storage, geo-referencing, voting, class mapping, layers and
@@ -11,6 +11,7 @@ exports.
 |---|---|---|
 | Detection (A1) | Ultralytics YOLO | "image → boxes" |
 | Tracking (A2) | built-in / BoxMOT / geo-referenced trackers | "detections → tracks" |
+| Embeddings (C1) | DINOv3 | "cut-out animals → vectors" |
 | Classification (C2-C5) | triplet-net heads on DINOv3 embeddings | "frames of an animal → class" |
 
 ## Getting started
@@ -24,6 +25,7 @@ exports.
    | `detector_owl.py` | Microsoft's Overhead Wildlife Locator (MegaDetector-Overhead); locates points, turned into boxes of a size you set |
    | `detector_dronemegadetector.py` | DroneMegaDetector (RF-DETR; person / animal / vehicle), with tiling for large frames |
    | `tracker_iou.py` | a small greedy IoU tracker, no extra packages |
+   | `embedder_colour_histogram.py` | the smallest embedding model - a colour histogram per crop, no extra packages - with a torchvision ResNet as an example in its header |
    | `classifier_embeddings_head.py` | the built-in kind of classifier: a TorchScript head on the DINOv3 embeddings |
    | `classifier_crops_torchscript.py` | an image classifier working on the cut-out boxes, no embeddings needed |
    | `classifier_track_level.py` | decides once per animal instead of per frame; runs without any model file |
@@ -34,13 +36,16 @@ exports.
 2. Copy one, adapt it, and select it:
    - **Detection**: *Configuration → Detection → Custom detector*, per camera.
    - **Tracking**: *Configuration → Tracking → Custom tracker*.
+   - **Embeddings**: *Configuration → Classification → Custom embedding
+     model*.
    - **Classification**: in the model table of *Configuration →
      Classification* choose **Custom implementation…** as the model of a
      task, then **…** to pick the file. For sex and age the same entry is
      available per species (**Species…**).
 3. Press **Check**: it tests the implementation step by step and lists
    what happens in a log below the button - the required packages, the
-   import, `setup()`, and for a detector a test run on an empty image - and
+   import, `setup()`, for a detector a test run on an empty image and for an
+   embedder one on two black crops - and
    then what the class declares. It runs in the background, so QGIS stays
    usable while a model loads or is downloaded (the button counts the
    seconds; **Stop waiting** gives up on it). The log can be selected and
@@ -249,6 +254,40 @@ interpolated boxes are not detections). Two things decide it:
 - the **Interpolate gaps in the tracks** tick box of the Custom tracker box
   switches it on or off where it is applicable.
 
+### Embedder
+
+An embedder turns each cut-out animal into the vector the classifiers read -
+step C1, in place of DINOv3:
+
+```python
+class MyEmbedder:
+    def setup(self, context):
+        return {"dim": 768,            # width of the vectors (optional)
+                "batch_size": 32}      # crops per call (optional)
+
+    def run(self, crops, items):
+        # crops: list of H x W x 3 RGB uint8 arrays
+        return vectors                 # (N, D) array, one row per crop
+```
+
+- **Crops** are cut as the Classification tab says - crop size, padding,
+  letterbox and **Projection** - and arrive in batches of `batch_size`
+  (default: the tab's batch size). `items` holds one dict per crop with
+  `detection_id`, `track_id`, `frame` and `box` (the pixel box).
+- **Vectors**: an `(N, D)` NumPy array or torch tensor, every row finite and
+  of the same width. Without `dim` the plugin finds the width out with one
+  black crop before the run.
+- **Storage** is DINOv3's: per frame, resumable, only what is missing is
+  computed. The run is recorded under the file's name, class and hash, so a
+  changed file starts a new run instead of mixing two models' vectors.
+- **The classifiers have to match.** The published classifiers were trained
+  on DINOv3 vectors and are refused on anything else. With a custom embedder
+  every task needs a classifier trained on its vectors: a TorchScript model
+  file, or a custom classifier with `"input": "embeddings"`.
+- A *matched* classifier gets the thermal and the RGB vector of an animal
+  concatenated, as with DINOv3; the embedder itself sees one camera at a
+  time (`context.camera`).
+
 ### Classifier
 
 `setup` **must** say what the classifier reads and what it decides:
@@ -310,5 +349,5 @@ camera of that frame).
 The plugin validates what comes back and names the file in the message: a box
 with a non-numeric coordinate, a result count that differs from the number of
 rows, a class index outside the class names, a probability outside 0-1 or not
-finite, a track id for a detection that was not passed in. Any exception in
+finite, embedding vectors of differing width or with NaN, a track id for a detection that was not passed in. Any exception in
 your code stops the step with the exception's text.

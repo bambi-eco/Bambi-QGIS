@@ -103,6 +103,40 @@ class ClassificationSettingsMixin:
 
         classification_tab_layout.addWidget(hf_group)
 
+        # --- Custom embedding model (core.custom_models) ---
+        # In place of DINOv3: a class of the user's own that turns the
+        # cut-out animals into vectors. Kept with the other custom boxes
+        # (detectors, tracker), so it is saved and trusted as they are.
+        from ..bambi_custom_impl_widget import (
+            DEPENDENCY_NOTE, FOLDER_NOTE, CustomImplementationBox)
+        from ..core import custom_models
+
+        if not hasattr(self, "_custom_boxes"):
+            self._custom_boxes = {}
+        embedder_box = CustomImplementationBox(
+            "Custom embedding model", custom_models.EMBEDDER)
+        embedder_box.setToolTip(
+            "Step C1 with a model of your own in place of DINOv3: a class "
+            "with setup(context) and run(crops, items) that returns one "
+            "vector per crop.")
+        embedder_info = QLabel(
+            "Any model can produce the vectors the classifiers read: write "
+            "a class with <code>setup(context)</code> and "
+            "<code>run(crops, items)</code> - one vector per crop - in a "
+            ".py file and select it here; the sample "
+            "<code>embedder_colour_histogram.py</code> shows the "
+            "interface. The published classifiers read DINOv3 vectors "
+            "only, so every classifier below then has to be one trained "
+            "on these embeddings. " + FOLDER_NOTE + " " + DEPENDENCY_NOTE)
+        embedder_info.setWordWrap(True)
+        embedder_info.setTextFormat(Qt.TextFormat.RichText)
+        embedder_info.setStyleSheet("color: gray; font-size: 10px;")
+        embedder_box.layout().insertWidget(0, embedder_info)
+        embedder_box.changed.connect(self._on_custom_implementation_changed)
+        self._custom_boxes["embedder"] = embedder_box
+        self.custom_embedder_box = embedder_box
+        classification_tab_layout.addWidget(embedder_box)
+
         # --- Source imagery ---
         source_group = QGroupBox("Source Imagery")
         source_layout = QFormLayout(source_group)

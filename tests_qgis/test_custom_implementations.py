@@ -38,7 +38,8 @@ def no_trust(monkeypatch):
 
 
 def test_the_boxes_exist_and_start_off(dock):
-    assert set(dock._custom_boxes) == {"detector_t", "detector_w", "tracker"}
+    assert set(dock._custom_boxes) == {"detector_t", "detector_w", "tracker",
+                                       "embedder"}
     config = dock.get_config()["custom_implementations"]
     assert not any(custom_models.is_custom(spec) for spec in config.values())
     assert dock.custom_samples_btn is not None

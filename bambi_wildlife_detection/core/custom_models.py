@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-"""Custom implementations of the detection, tracking and classification
-stages (9.0.0).
+"""Custom implementations of the detection, tracking, embedding and
+classification stages (9.0.0; embedding 9.1.0).
 
 A custom implementation is **one ``.py`` file with a class** that follows
 the interface below. The file does not have to stand alone: its folder is
@@ -101,6 +101,26 @@ per-frame GeoTIFFs or the ALFS light-field integrals;
 ``context.projection`` says which ("perspective" / "orthographic" /
 "alfs").
 
+**Embedder** - what turns a cut-out animal into the vector the
+classifiers read (step C1), in place of DINOv3::
+
+    run(crops, items) -> an (N, D) float array, one row per crop
+
+``crops`` is a list of ``H x W x 3`` RGB ``uint8`` arrays, cut and padded
+as the Classification tab says (crop size, padding, letterbox, projection);
+``items`` is one dict per crop with ``detection_id``, ``track_id``,
+``frame`` and ``box`` (the pixel box). Every vector must have the same
+width D and be finite. ``setup`` may return ``dim`` (D; otherwise the
+plugin finds it out with one black crop) and ``batch_size`` (how many
+crops ``run`` is handed at most; default: the tab's batch size).
+
+The vectors are stored as DINOv3's are, per frame, and recorded under the
+file's name and hash - so a changed file starts a new run instead of
+mixing two models' vectors. The published classifiers were trained on
+DINOv3 and cannot read anything else: with a custom embedder every
+classifier has to be one of your own, trained on its vectors (a
+TorchScript file, or a custom classifier with ``input: "embeddings"``).
+
 Camera extrinsics
 -----------------
 Every kind is told where the camera was: a detector's ``frame.pose``, each
@@ -150,7 +170,8 @@ API_VERSION = 1
 DETECTOR = "detector"
 TRACKER = "tracker"
 CLASSIFIER = "classifier"
-KINDS = (DETECTOR, TRACKER, CLASSIFIER)
+EMBEDDER = "embedder"
+KINDS = (DETECTOR, TRACKER, CLASSIFIER, EMBEDDER)
 
 THERMAL, RGB, MATCHED = "thermal", "rgb", "matched"
 #: The inputs a kind can be asked to work on.
@@ -158,6 +179,7 @@ CAMERAS = {
     DETECTOR: (THERMAL, RGB),
     TRACKER: (THERMAL, RGB),
     CLASSIFIER: (THERMAL, RGB, MATCHED),
+    EMBEDDER: (THERMAL, RGB),
 }
 
 INPUT_EMBEDDINGS, INPUT_CROPS = "embeddings", "crops"
@@ -170,6 +192,7 @@ _REQUIRED = {
     DETECTOR: ("setup", "run"),
     TRACKER: ("setup",),              # plus update (online) or run (offline)
     CLASSIFIER: ("setup",),
+    EMBEDDER: ("setup", "run"),
 }
 
 #: The source value that selects a custom implementation in a model spec.
@@ -592,6 +615,12 @@ class Implementation:
             self.online = callable(getattr(self.instance, "update", None))
             self.wants_images = self.online and bool(_info_value(
                 self.instance, info, "images", False))
+        #: embedder: the width of its vectors (0 = not said) and how many
+        #: crops it takes at once (0 = as the plugin is set)
+        self.dim = 0
+        self.batch_size = 0
+        if kind == EMBEDDER:
+            self._read_embedder_info()
         if kind == CLASSIFIER:
             self._read_classifier_info()
         elif kind == TRACKER:
@@ -601,6 +630,19 @@ class Implementation:
                 raise CustomModelError(
                     f"{self.label}: space must be 'geo' or 'pixel', not "
                     f"'{self.space}'")
+
+    def _read_embedder_info(self):
+        for key in ("dim", "batch_size"):
+            value = _info_value(self.instance, self.info, key, 0)
+            try:
+                value = int(value or 0)
+            except (TypeError, ValueError) as exc:
+                raise CustomModelError(
+                    f"{self.label}: {key} must be a whole number") from exc
+            if value < 0:
+                raise CustomModelError(
+                    f"{self.label}: {key} must not be negative")
+            setattr(self, key, value)
 
     def _read_classifier_info(self):
         raw_input = _info_value(self.instance, self.info, "input")
@@ -732,6 +774,64 @@ class Implementation:
             self.call("run_track", batch, items), len(self.class_names),
             self.label)
 
+    # -- embedder -----------------------------------------------------------
+
+    def embed(self, crops, items: Optional[List[dict]] = None):
+        """One float32 vector per crop, checked."""
+        items = items if items is not None else [{} for _ in crops]
+        vectors = normalise_embeddings(
+            self.call("run", list(crops), items), len(crops), self.dim,
+            self.label)
+        if not self.dim and len(vectors):
+            self.dim = int(vectors.shape[1])
+        return vectors
+
+
+class Embedder:
+    """A custom embedder in the shape of ``classification.Backbone``, so
+    the embedding step treats DINOv3 and a custom model alike."""
+
+    def __init__(self, implementation: Implementation, crop_size: int = 0):
+        self.implementation = implementation
+        #: what the embedding run is recorded under: the file, the class
+        #: and the file's hash - another file is another run
+        self.model_id = implementation.label
+        self.crop_size = int(crop_size or DEFAULT_CROP_SIZE)
+
+    @property
+    def batch_size(self) -> int:
+        return self.implementation.batch_size
+
+    def load(self) -> None:
+        """Find out how wide the vectors are, where ``setup`` did not say:
+        one black crop through the model. Idempotent."""
+        if self.implementation.dim:
+            return
+        import numpy as np
+
+        size = self.crop_size
+        self.implementation.embed([np.zeros((size, size, 3), np.uint8)])
+        if not self.implementation.dim:
+            raise CustomModelError(
+                f"{self.implementation.label}: run() returned no vector "
+                "for a crop, so the width of its vectors is unknown")
+
+    @property
+    def dim(self) -> int:
+        return int(self.implementation.dim)
+
+    def embed(self, crops, items: Optional[List[dict]] = None):
+        return self.implementation.embed(crops, items)
+
+    def close(self) -> None:
+        self.implementation.close()
+
+
+def is_custom_backbone(name) -> bool:
+    """True when an embedding run was made by a custom embedder
+    (:func:`label`) rather than by a Hugging Face model."""
+    return str(name or "").startswith("custom:")
+
 
 class ClassifierHead:
     """A custom classifier in the shape of ``classification.Head``, so the
@@ -853,6 +953,47 @@ def normalise_detections(result, width: int, height: int,
                     "confidence": confidence, "class_index": index,
                     "class_name": name})
     return out
+
+
+def normalise_embeddings(result, rows: int, dim: int = 0,
+                         who: str = "The embedder"):
+    """What an embedder's ``run`` returned as an ``(rows, D)`` float32
+    array: one finite vector per crop, all of one width - *dim* where that
+    is known already."""
+    import numpy as np
+
+    if hasattr(result, "detach"):               # a torch tensor
+        result = result.detach().cpu().numpy()
+    try:
+        array = np.asarray(result, dtype=np.float32)
+    except (TypeError, ValueError) as exc:
+        raise CustomModelError(
+            f"{who}: run() must return one vector per crop, all of the "
+            f"same width ({exc})") from exc
+    if rows == 0 and array.size == 0:
+        return np.zeros((0, int(dim or 0)), dtype=np.float32)
+    if array.ndim == 1 and rows == 1:
+        array = array[None, :]
+    if array.ndim != 2:
+        raise CustomModelError(
+            f"{who}: run() must return an (N, D) array - one vector per "
+            f"crop - not one of shape {tuple(array.shape)}")
+    if array.shape[0] != rows:
+        raise CustomModelError(
+            f"{who}: run() returned {array.shape[0]} vector(s) for "
+            f"{rows} crop(s)")
+    if array.shape[1] < 1:
+        raise CustomModelError(f"{who}: run() returned empty vectors")
+    if dim and array.shape[1] != int(dim):
+        raise CustomModelError(
+            f"{who}: run() returned {array.shape[1]}-d vectors, not the "
+            f"{int(dim)}-d it returned (or declared) before")
+    if not np.isfinite(array).all():
+        bad = int((~np.isfinite(array).all(axis=1)).sum())
+        raise CustomModelError(
+            f"{who}: {bad} of {rows} vector(s) contain NaN or infinite "
+            "values")
+    return array
 
 
 def normalise_calls(result, rows: int, classes: int,

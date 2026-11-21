@@ -175,6 +175,16 @@ def describe(spec: dict, kind: str, camera: str = "", task: str = "",
             lines.append(f"Works in {impl.space} space; interpolation of "
                          "gaps " + ("applicable" if impl.interpolate
                                     else "not applicable"))
+        elif kind == custom_models.EMBEDDER:
+            import numpy as np
+            status("Test run on two black crops...")
+            size = custom_models.DEFAULT_CROP_SIZE
+            vectors = impl.embed(
+                [np.zeros((size, size, 3), np.uint8) for _ in range(2)])
+            lines.append(f"Test run on two black crops: {vectors.shape[1]}"
+                         "-d vectors")
+            if impl.batch_size:
+                lines.append(f"Takes {impl.batch_size} crop(s) at once")
         elif kind == custom_models.DETECTOR:
             import numpy as np
             status("Test run on an empty image...")

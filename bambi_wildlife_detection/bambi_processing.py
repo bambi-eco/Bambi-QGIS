@@ -2373,8 +2373,7 @@ class BambiProcessor(SurveyAnalyticsMixin, SurveyGridMixin,
     def _embed_modality(self, config: Dict[str, Any], suffix: str,
                         progress_fn=None, log_fn=None, cancel_check=None):
         """Embed one camera's tracked crops."""
-        from .core import (classification, classification_store,
-                           embedding_files, geo_crops, track_store)
+        from .core import classification, track_store
 
         camera_name = _modality_label(suffix)
         target_folder = config["target_folder"]
@@ -2424,13 +2423,48 @@ class BambiProcessor(SurveyAnalyticsMixin, SurveyGridMixin,
             size=int(config.get("classification_crop_size", 224)),
             letterbox=bool(config.get("classification_letterbox", True)))
 
-        backbone = classification.Backbone(
-            model_id=config.get("classification_backbone", ""),
-            models_dir=self._get_default_model_dir(),
-            token=config.get("hf_token", ""),
-            device=config.get("classification_device", "auto"),
-            fp16=bool(config.get("classification_fp16", True)),
-            log_fn=log_fn)
+        # A custom embedder (core.custom_models) stands in for DINOv3;
+        # cropping, storage and resuming stay the same.
+        from .core import custom_models
+        custom_spec = (config.get("custom_implementations") or {}).get(
+            "embedder")
+        custom_embedder = custom_models.is_custom(custom_spec)
+        if custom_embedder:
+            backbone = custom_models.Embedder(
+                custom_models.open_implementation(
+                    custom_spec, custom_models.EMBEDDER,
+                    self._custom_context(config, custom_models.EMBEDDER,
+                                         suffix, log_fn)),
+                crop_size=crop_config.size)
+        else:
+            backbone = classification.Backbone(
+                model_id=config.get("classification_backbone", ""),
+                models_dir=self._get_default_model_dir(),
+                token=config.get("hf_token", ""),
+                device=config.get("classification_device", "auto"),
+                fp16=bool(config.get("classification_fp16", True)),
+                log_fn=log_fn)
+        try:
+            self._embed_with(
+                backbone, config, suffix, rows, images, image_of_frame,
+                frames_folder, rasters, geo_boxes, crop_config, projection,
+                progress_fn, log_fn, cancel_check)
+        finally:
+            if custom_embedder:
+                backbone.close()
+
+    def _embed_with(self, backbone, config, suffix, rows, images,
+                    image_of_frame, frames_folder, rasters, geo_boxes,
+                    crop_config, projection, progress_fn=None, log_fn=None,
+                    cancel_check=None):
+        """Embed *rows* with *backbone* - DINOv3
+        (``classification.Backbone``) or a custom embedder
+        (``custom_models.Embedder``)."""
+        from .core import (classification, classification_store,
+                           embedding_files, geo_crops)
+
+        camera_name = _modality_label(suffix)
+        target_folder = config["target_folder"]
 
         if log_fn:
             log_fn(f"Embedding {camera_name} crops with "
@@ -2518,7 +2552,9 @@ class BambiProcessor(SurveyAnalyticsMixin, SurveyGridMixin,
             log_fn(f"{len(pending)} of {len(rows)} detection(s) still need "
                    f"embedding, across {len(by_frame)} frame(s)")
 
-        batch_size = int(config.get("classification_batch_size", 16))
+        batch_size = int(getattr(backbone, "batch_size", 0) or config.get(
+            "classification_batch_size", 16))
+        with_items = hasattr(backbone, "implementation")
         done = 0
         skipped_frames = 0
         frozen_frames = 0
@@ -2587,7 +2623,17 @@ class BambiProcessor(SurveyAnalyticsMixin, SurveyGridMixin,
             vectors = {}
             for start in range(0, len(crops), batch_size):
                 chunk = crops[start:start + batch_size]
-                embedded = backbone.embed(chunk)
+                if with_items:
+                    # a custom embedder is told what each crop is
+                    embedded = backbone.embed(chunk, [
+                        {"detection_id": detection_id,
+                         "track_id": boxes[detection_id].get("track_id"),
+                         "frame": frame,
+                         "box": tuple(boxes[detection_id].get(key)
+                                      for key in ("x1", "y1", "x2", "y2"))}
+                        for detection_id in ids[start:start + batch_size]])
+                else:
+                    embedded = backbone.embed(chunk)
                 for offset, vector in enumerate(embedded):
                     vectors[ids[start + offset]] = vector
 
@@ -2705,6 +2751,12 @@ class BambiProcessor(SurveyAnalyticsMixin, SurveyGridMixin,
         # (_open_head) rather than up front.
         run = classification_store.active_embedding_run(target_folder, suffix)
         projection = run["projection"] if run is not None else None
+        if run is not None:
+            # The classifiers read the vectors that are there: their width
+            # and who made them (_open_head).
+            config = dict(config,
+                          classification_backbone_dim=int(run["dim"]),
+                          classification_embedded_by=run["backbone"])
         rows = track_store.load_pixel_tracks(target_folder, suffix)
         if not rows:
             raise ValueError(f"No {camera_name} tracks found.")
@@ -3741,6 +3793,15 @@ class BambiProcessor(SurveyAnalyticsMixin, SurveyGridMixin,
             if not os.path.isfile(path):
                 raise FileNotFoundError(f"{task} classifier not found: {path}")
         else:
+            made_by = config.get("classification_embedded_by", "")
+            if custom_models.is_custom_backbone(made_by):
+                raise ValueError(
+                    f"The embeddings were computed by {made_by}, and the "
+                    f"published {task} classifier reads DINOv3 vectors. "
+                    "Choose a classifier trained on these embeddings for "
+                    f"{task} in the Classification tab (a custom model or "
+                    "a custom implementation), or compute the embeddings "
+                    "with DINOv3.")
             repo = hf_access.default_head_repo(task)
             if not repo:
                 raise ValueError(

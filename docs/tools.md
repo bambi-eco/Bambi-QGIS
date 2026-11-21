@@ -16,7 +16,7 @@ Documented on their own pages: the [Correction Wizard](correction-wizard.md),
 the [Camera Calibration Wizard](camera-calibration.md), the
 [Flight Strategy Planner](flight-planner.md), the
 [Dependency Manager](installation.md) and
-[custom detectors, trackers and classifiers](custom-implementations.md).
+[custom detectors, trackers, embedding models and classifiers](custom-implementations.md).
 
 ## 3D Flight Viewer
 
