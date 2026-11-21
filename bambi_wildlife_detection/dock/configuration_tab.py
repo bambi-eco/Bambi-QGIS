@@ -123,6 +123,33 @@ class ConfigurationTabMixin:
         symbols_layout.addRow("", self.map_restyle_btn)
 
         project_tab_layout.addWidget(symbols_group)
+
+        # Samples of every kind of custom implementation (core.custom_models).
+        # Here rather than with one stage: they cover all of them.
+        samples_group = QGroupBox("Custom Implementations")
+        samples_layout = QVBoxLayout(samples_group)
+        samples_info = QLabel(
+            "Detection, tracking, the embedding model and every "
+            "classification stage can be replaced by a class of your own, "
+            "detections or tracks made elsewhere imported with one, and "
+            "detections, tracks and segmentation masks exported in a format "
+            "of your own. Each is chosen where its stage is configured: the "
+            "Detection, Tracking and Classification tabs here, and the "
+            "Export box of the Processing tab. The samples show every "
+            "interface and are ready to copy and change.")
+        samples_info.setWordWrap(True)
+        samples_info.setStyleSheet("color: gray; font-size: 10px;")
+        samples_layout.addWidget(samples_info)
+        self.custom_samples_btn = QPushButton(
+            "Download sample implementations…")
+        self.custom_samples_btn.setToolTip(
+            "Save ready-to-edit sample files into a folder of your choice: "
+            "detectors, a tracker, classifiers, an embedding model, an "
+            "importer and an exporter. Files that are already there are "
+            "kept.")
+        self.custom_samples_btn.clicked.connect(self.download_custom_samples)
+        samples_layout.addWidget(self.custom_samples_btn)
+        project_tab_layout.addWidget(samples_group)
         project_tab_layout.addStretch()
 
     def _build_extraction_settings(self, config_sub_tabs):
@@ -740,7 +767,8 @@ class ConfigurationTabMixin:
             "Any detector can stand in for the built-in Ultralytics YOLO "
             "model: write a class with <code>setup(context)</code> and "
             "<code>run(image, frame)</code> in a .py file and select it "
-            "here. The sample implementations show the interface - the "
+            "here. The sample implementations (Configuration → Project → "
+            "Download sample implementations…) show the interface - the "
             "built-in detector itself, Microsoft's Overhead Wildlife "
             "Locator (OWL) and DroneMegaDetector. " + FOLDER_NOTE + " "
             + DEPENDENCY_NOTE)
@@ -756,13 +784,6 @@ class ConfigurationTabMixin:
             box.changed.connect(self._on_custom_implementation_changed)
             self._custom_boxes[key] = box
             custom_det_layout.addWidget(box)
-        self.custom_samples_btn = QPushButton(
-            "Download sample implementations…")
-        self.custom_samples_btn.setToolTip(
-            "Save ready-to-edit sample files for detectors, trackers and "
-            "classifiers into a folder of your choice.")
-        self.custom_samples_btn.clicked.connect(self.download_custom_samples)
-        custom_det_layout.addWidget(self.custom_samples_btn)
         detect_tab_layout.addWidget(custom_det_group)
 
         # The mapping belongs with the model rather than with the project's

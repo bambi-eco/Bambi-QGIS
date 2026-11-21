@@ -311,7 +311,8 @@ class CustomImplementationBox(QGroupBox):
         self.enable_check = QCheckBox("Use a custom implementation")
         self.enable_check.setToolTip(
             "Replace the built-in method of this stage by a class from "
-            "your own .py file (see \"Download sample implementations\").")
+            "your own .py file (see \"Download sample implementations\" "
+            "under Configuration - Project).")
         self.enable_check.setVisible(checkable)
         self.enable_check.setChecked(not checkable)
         layout.addWidget(self.enable_check)

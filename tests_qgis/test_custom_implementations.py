@@ -48,6 +48,27 @@ def test_the_boxes_exist_and_start_off(dock):
     assert dock.custom_samples_btn is not None
 
 
+def test_the_samples_are_handed_out_on_the_project_tab(dock, tmp_path,
+                                                       monkeypatch):
+    """They cover every kind of custom code, not detection alone."""
+    from qgis.PyQt.QtWidgets import QFileDialog, QMessageBox
+
+    tabs = dock.config_sub_tabs
+    pages = [tabs.tabText(index) for index in range(tabs.count())
+             if tabs.widget(index).isAncestorOf(dock.custom_samples_btn)]
+    assert pages == ["Project"]
+
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory",
+                        lambda *a, **k: str(tmp_path))
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    dock.custom_samples_btn.click()
+
+    kinds = {name.split("_")[0] for name in os.listdir(tmp_path)
+             if name.endswith(".py")}
+    assert kinds == {"detector", "tracker", "classifier", "embedder",
+                     "importer", "exporter"}
+
+
 def test_a_box_is_mirrored_into_the_configuration(dock, impl):
     box = dock._custom_boxes["detector_t"]
     box.enable_check.setChecked(True)

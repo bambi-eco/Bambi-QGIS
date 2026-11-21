@@ -21,7 +21,7 @@ exports.
 
 ## Getting started
 
-1. **Configuration → Detection → Download sample implementations…** saves
+1. **Configuration → Project → Download sample implementations…** saves
    ready-to-edit files into a folder of your choice:
 
    | File | What it is |
